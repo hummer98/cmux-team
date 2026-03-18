@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Per-project state (not part of this repo)
+.team/output/
+.team/prompts/
+.team/docs-snapshot/
