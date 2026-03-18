@@ -157,27 +157,60 @@ Conductor は以下の手順でエージェントプロンプトを生成する:
 
 ## 5. レイアウト戦略
 
-### Small (1+3): 縦分割
-```
-[Conductor] | [Agent A] | [Agent B] | [Agent C]
-```
+**重要: Conductor のペインは十分な幅を維持すること。**
+サブエージェントと同一ワークスペースに詰め込むと、Conductor のペインが狭くなり
+`cmux send` や `cmux read-screen` の出力が崩れて操作に失敗する。
 
-### Medium (1+5): グリッド
-```
-[Conductor] | [Agent A] | [Agent B]
-            | [Agent C] | [Agent D] | [Agent E]
-```
-→ 1+5 以上は別ワークスペースを使用:
+### 推奨: Conductor は単独ペイン、サブエージェントは別ワークスペース
+
+すべての構成で、サブエージェントは**別ワークスペース**に配置する:
+
 ```bash
+# サブエージェント用ワークスペースを作成
 cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
 ```
 
-### Large (1+7): ワークスペース分散
+### Small (1+3)
+```
+workspace:1 → Conductor（ユーザーと対話）
+workspace:2 → Agent A, Agent B, Agent C (3-way split)
+```
+
+### Medium (1+5)
+```
+workspace:1 → Conductor
+workspace:2 → Agent A, Agent B (split)
+workspace:3 → Agent C, Agent D, Agent E (3-way split)
+```
+
+### Large (1+7)
 ```
 workspace:1 → Conductor
 workspace:2 → Agent A, Agent B (split)
 workspace:3 → Agent C, Agent D (split)
 workspace:4 → Agent E, Agent F, Agent G (3-way split)
+```
+
+### エージェント用ワークスペースの作成パターン
+
+```bash
+# 1. ワークスペース作成 → 最初のサーフェスが返る
+cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
+
+# 2. そのワークスペース内で分割
+cmux new-split right --workspace workspace:N  # → surface:M+1
+cmux new-split right --workspace workspace:N  # → surface:M+2
+
+# 3. ワークスペースに名前を付ける（サイドバーで識別しやすくなる）
+cmux rename-workspace --workspace workspace:N "Researchers"
+```
+
+### NG パターン（避けること）
+
+```
+# NG: 同一ワークスペースに全員を詰め込む
+[Conductor] | [Agent A] | [Agent B] | [Agent C]
+# → Conductor のペインが狭くなり cmux コマンドが失敗する
 ```
 
 ## 6. 進捗トラッキング
