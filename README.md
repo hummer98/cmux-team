@@ -1,26 +1,43 @@
 # cmux-team
 
-Claude Code + cmux によるマルチエージェントオーケストレーション。
+Claude Code + cmux によるマルチエージェント開発オーケストレーション。
 
-Conductor（親 Claude セッション）が cmux の分割ペインを使って複数のサブエージェント Claude を並列起動・監視・統合します。
+## なぜ cmux-team?
 
-## 概要
+Claude Code の組み込みサブエージェント（Agent ツール）は便利ですが、**中で何をしているか見えません**。結果だけが返ってきて、途中経過はブラックボックスです。
+
+cmux-team は、cmux のターミナル分割を使ってサブエージェントを**目に見える形で**並列実行します。
+
+### Before（組み込み Agent）
 
 ```
-Human ←→ Conductor (親 Claude)
-              ├── cmux send → Agent A (Researcher)
-              ├── cmux send → Agent B (Architect)
-              ├── cmux send → Agent C (Implementer)
-              ├── cmux read-screen → 進捗監視
-              ├── cmux wait-for → 完了同期
-              └── .team/output/* → 結果統合
+あなた → Claude → [見えない箱] → 結果だけ返ってくる
+                   何を読んでる？
+                   何を書いてる？
+                   止まってない？
 ```
+
+### After（cmux-team）
+
+```
+┌──────────────┬──────────────┬──────────────┬──────────────┐
+│ Conductor    │ Researcher   │ Architect    │ Reviewer     │
+│ (あなたと    │ (調査中...)  │ (設計書     │ (レビュー   │
+│  会話中)     │ ファイル読み │  生成中)     │  コメント   │
+│              │ 中...        │              │  作成中)     │
+│ > 進捗は？   │ ✶ Stewing... │ ✢ Writing... │ ✻ Reading.. │
+└──────────────┴──────────────┴──────────────┴──────────────┘
+  サイドバー: 🔨 researcher: reading files | ✨ architect: done
+```
+
+**あなたがやること**: Claude に自然言語で指示するだけ。
+**Claude がやること**: cmux でペインを分割し、サブエージェントを起動・監視・統合。
 
 ## 前提条件
 
-- [Claude Code](https://claude.ai/claude-code) がインストール済み (`~/.claude/` が存在)
-- [cmux](https://github.com/anthropics/cmux) がインストール済み
-- cmux セッション内で Claude Code を実行していること
+- [Claude Code](https://claude.ai/claude-code) がインストール済み
+- [cmux](https://github.com/manaflow-ai/cmux) がインストール済み
+- cmux 内で Claude Code を実行していること
 
 ## インストール
 
@@ -30,146 +47,134 @@ cd cmux-team
 ./install.sh
 ```
 
-### 確認
-
 ```bash
+# インストール状態を確認
 ./install.sh --check
-```
 
-### アンインストール
-
-```bash
+# アンインストール
 ./install.sh --uninstall
 ```
 
-## クイックスタート
+## 使い方
 
-```bash
-# 1. cmux セッションを起動
-cmux
+### 基本的な流れ
 
-# 2. Claude Code を起動
-claude
+cmux を起動し、その中で Claude Code を起動します。あとは Claude に話しかけるだけです。
 
-# 3. チームを初期化
-/team-init プロジェクトの説明
+```
+あなた: /team-init TODO アプリを作りたい
+Claude: .team/ を初期化しました。次は /team-spec で要件を決めましょう。
 
-# 4. 要件を策定
-/team-spec
+あなた: /team-spec
+Claude: どんな機能が必要ですか？（対話が始まる）
+  ...壁打ちの後...
+Claude: requirements.md を生成しました。
 
-# 5. リサーチ（並列3エージェント）
-/team-research 認証方式, セッション管理, トークン設計
+あなた: /team-research React vs Vue vs Svelte
+Claude: 3つのリサーチャーを起動します。
+  → 右にペインが3つ開き、それぞれが並列で調査開始
+  → 調査の様子がリアルタイムで見える
+  → 全員完了したら結果を統合して報告
 
-# 6. 設計（アーキテクト + レビュアー）
-/team-design
+あなた: /team-design
+Claude: アーキテクトとレビュアーを起動します。
+  → 設計 → レビュー → フィードバック反映 を自動で実行
 
-# 7. 実装（並列エージェント）
-/team-impl all
+あなた: /team-impl all
+Claude: タスクを分割して実装エージェントを並列起動します。
+  → 各エージェントがコードを書いている様子が見える
 
-# 8. レビュー
-/team-review
+あなた: /team-status
+Claude: 現在の状態を表示（各エージェントの進捗、イシュー数など）
 
-# 9. テスト
-/team-test all
-
-# 10. ドキュメント同期
-/team-sync-docs
-
-# 11. 完了後にチーム解散
-/team-disband
+あなた: /team-disband
+Claude: 全エージェントを終了しました。
 ```
 
-## コマンドリファレンス
+### コマンド一覧
 
-### コアコマンド
+| コマンド | やること | いつ使う |
+|---------|---------|---------|
+| `/team-init [説明]` | `.team/` を初期化 | プロジェクト開始時に1回 |
+| `/team-spec [概要]` | 要件をブレスト | 何を作るか決める時 |
+| `/team-research <トピック>` | 並列リサーチ（3エージェント） | 技術調査が必要な時 |
+| `/team-design` | 設計 + レビュー | 要件が固まった後 |
+| `/team-impl [タスク\|all]` | 並列実装 | 設計が固まった後 |
+| `/team-review` | 実装レビュー | 実装が終わった後 |
+| `/team-test [scope\|all]` | テスト作成・実行 | 実装・レビュー後 |
+| `/team-sync-docs` | ドキュメント同期 | 仕様変更時 |
+| `/team-issue [操作]` | イシュー管理 | 設計判断・課題の記録 |
+| `/team-status` | チーム状態表示 | いつでも |
+| `/team-disband [force]` | 全エージェント終了 | 作業完了時 |
 
-| コマンド | 説明 |
-|---------|------|
-| `/team-init [説明]` | チームを初期化し `.team/` ディレクトリ構造を作成 |
-| `/team-status` | チームの現在の状態・エージェント一覧・イシュー状況を表示 |
-| `/team-disband [force]` | 全サブエージェントを終了（`force` でグレースフル終了をスキップ） |
+### コマンドを使わなくても動く
 
-### ワークフローコマンド
+スラッシュコマンドは必須ではありません。自然言語で指示すれば、Claude が適切なワークフローを判断します：
 
-| コマンド | 説明 |
-|---------|------|
-| `/team-research <トピック>` | リサーチャー最大3名を起動しトピックを並列調査 |
-| `/team-spec [概要]` | ユーザーと対話的に要件をブレストし仕様を策定 |
-| `/team-design` | アーキテクト + レビュアーで設計フェーズを実行 |
-| `/team-impl [タスク番号\|all]` | 実装エージェントを起動しコーディングタスクを並列実行 |
-| `/team-review` | レビューエージェントを起動し実装をレビュー |
-| `/team-test [unit\|integration\|e2e\|all]` | テストエージェントを起動しテストを作成・実行 |
+```
+あなた: 認証機能の設計をして、レビューも並列でやって
+あなた: このリポジトリのテスト構成を3人で調べて
+あなた: 全エージェント止めて
+```
 
-### サポートコマンド
+## 人間の操作ポイント
 
-| コマンド | 説明 |
-|---------|------|
-| `/team-sync-docs` | `docs/` を `.team/specs/` と同期 |
-| `/team-issue [create\|close\|show] [引数]` | イシューの作成・一覧・クローズ・表示 |
+### あなたがやること
 
-## アーキテクチャ
+1. **cmux を起動して Claude Code を立ち上げる**
+2. **やりたいことを伝える**（自然言語 or スラッシュコマンド）
+3. **右のペインでサブエージェントの動きを見る**（見てるだけでOK）
+4. **結果の報告を受け取る**
 
-### プロジェクト内の状態管理
+### 介入が必要な場面
 
-`/team-init` で作成される `.team/` ディレクトリ:
+- **サブエージェントが止まっている**: cmux のペインをクリックして直接操作できます
+- **方向性がおかしい**: Conductor（左ペイン）に「やめて」「方向転換して」と伝える
+- **パーミッション確認が出た**: 後述のトラブルシューティング参照
+
+### やらなくていいこと
+
+- cmux コマンドを自分で打つ必要はありません（Claude が打ちます）
+- サブエージェントの出力ファイルを読む必要はありません（Claude が統合します）
+- team.json を編集する必要はありません
+
+## プロジェクト内に作られるもの
+
+`/team-init` を実行すると、プロジェクトに `.team/` ディレクトリが作られます：
 
 ```
 .team/
-├── team.json          # チーム状態（エージェント一覧、フェーズ等）
-├── specs/             # 要件・設計ドキュメント（git tracked）
+├── team.json          # チーム状態（自動管理、手動編集不要）
+├── specs/             # 仕様書（git tracked ← 残す価値あり）
 │   ├── requirements.md
-│   ├── research.md
 │   ├── design.md
 │   └── tasks.md
-├── output/            # エージェントの出力（gitignore）
-├── issues/            # イシュー管理（git tracked）
+├── issues/            # 設計判断・課題の記録（git tracked）
 │   ├── open/
 │   └── closed/
-├── prompts/           # 生成されたプロンプト（gitignore）
-└── docs-snapshot/     # ドキュメント同期用スナップショット（gitignore）
+├── output/            # エージェント出力（一時的、gitignore）
+├── prompts/           # 生成プロンプト（一時的、gitignore）
+└── docs-snapshot/     # 同期用（一時的、gitignore）
 ```
 
-### スキル構成
+`specs/` と `issues/` は git に含まれるので、設計判断の履歴が残ります。
 
-| スキル | 対象 | 説明 |
-|--------|------|------|
-| `cmux-team` | Conductor（親セッション） | オーケストレーション: エージェント起動・監視・統合 |
-| `cmux-agent-role` | サブエージェント | 行動規範: 出力プロトコル・ステータス報告・完了シグナル |
+## 並列構成
 
-### 並列構成（Tier）
+同時に動くエージェント数は用途に応じて自動調整されます：
 
-| Tier | 構成 | 用途 |
-|------|------|------|
-| Small | 1+3 (4 total) | リサーチ、デザインレビュー |
-| Medium | 1+5 (6 total) | 実装 + レビュー |
-| Large | 1+7 (8 total) | フルチーム: 実装 + レビュー + テスト + ドキュメント |
+| 構成 | エージェント数 | 使用場面 | 画面レイアウト |
+|------|-------------|---------|--------------|
+| Small | 1+3 (4体) | リサーチ、レビュー | 同一ワークスペース内の分割ペイン |
+| Medium | 1+5 (6体) | 実装 + レビュー | 2ワークスペースに分散 |
+| Large | 1+7 (8体) | フルチーム | 3-4ワークスペースに分散 |
 
-### エージェントロール
-
-| ロール | 説明 |
-|--------|------|
-| Researcher | トピックの調査・事実収集 |
-| Architect | 要件に基づく技術設計 |
-| Reviewer | 成果物のレビュー・品質チェック |
-| Implementer | 設計に基づくコーディング |
-| Tester | テスト作成・実行 |
-| DocKeeper | ドキュメント管理・同期 |
-| IssueManager | イシューの監視・分類・要約 |
-
-### 通信モデル
-
-```
-Conductor ──cmux send──→ Sub-agent
-Conductor ←─file read──← Sub-agent (.team/output/)
-Conductor ←─cmux wait──← Sub-agent (completion signal)
-Conductor ←─read-screen← Sub-agent (screen scraping, fallback)
-```
-
-サブエージェント同士は直接通信せず、すべて `.team/` の共有ファイルまたは Conductor を介して連携します。
+Small 構成（1+3）では全エージェントが1画面に並ぶので、すべて同時に見えます。
+Medium 以上ではワークスペース（cmux のタブ）に分散し、タブ切り替えで確認します。
 
 ## Hooks 設定（推奨）
 
-`~/.claude/settings.json` に以下を追加すると、エージェントの完了通知を受け取れます:
+`~/.claude/settings.json` に以下を追加すると、エージェントの完了時に cmux の通知リングが光ります：
 
 ```json
 {
@@ -200,6 +205,94 @@ Conductor ←─read-screen← Sub-agent (screen scraping, fallback)
 }
 ```
 
+## トラブルシューティング
+
+### サブエージェントでパーミッション確認が出る
+
+`--dangerously-skip-permissions` で起動しても、`.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが表示されます。
+
+**対処**: 最初の確認で **「2. Yes, and allow Claude to edit its own settings for this session」** を選択してください。以降のセッション中は確認が出なくなります。
+
+### `cmux read-screen` が「Surface is not a terminal」エラー
+
+ワークスペース作成直後に発生することがあります。
+
+**対処**: `cmux refresh-surfaces` を実行してからリトライしてください。
+
+### サブエージェントが応答しない
+
+API の過負荷（overloaded）でリトライ中の可能性があります。
+
+**対処**:
+1. cmux のペインをクリックして画面を確認
+2. 「Retrying...」と表示されていれば待つ
+3. 完全に止まっていれば Esc でキャンセルし、`/team-disband` → 再実行
+
+### サブエージェントのペインが増えすぎた
+
+**対処**: `/team-disband` で全エージェントを一括終了できます。`/team-disband force` で強制終了。
+
+### cmux 外で実行してしまった
+
+cmux-team は cmux 内でのみ動作します。通常のターミナルで実行すると、ペイン分割や画面読み取りができません。
+
+**対処**: cmux を起動してから Claude Code を立ち上げ直してください。
+
+## 制約・既知の問題
+
+- **API レート制限**: 複数エージェントが同時に API を叩くため、過負荷になりやすい。Claude Max 推奨。
+- **`cmux send` の改行**: `\n` でプロンプト確定できない場合があり、`cmux send-key Return` の併用が必要なことがある。
+- **初回起動時の信頼確認**: 新しいディレクトリで Claude を起動すると「Trust this folder?」確認が出る。サブエージェント側でも同様。
+- **セッション復帰**: サブエージェントがクラッシュした場合、`claude --resume <session-id>` で復帰可能だが、Conductor 側での自動検知は完全ではない。
+
+## アーキテクチャ詳細
+
+### スキル構成
+
+| スキル | 誰が使う | 何をする |
+|--------|---------|---------|
+| `cmux-team` | Conductor（親 Claude） | エージェント起動・監視・結果統合の方法を知っている |
+| `cmux-agent-role` | サブエージェント | 出力先・完了シグナル・ステータス報告の方法を知っている |
+
+### 通信モデル
+
+```
+あなた ←── 自然言語 ──→ Conductor (親 Claude)
+                            │
+                ┌───────────┼───────────┐
+                │           │           │
+           cmux send    cmux send   cmux send
+                │           │           │
+                ▼           ▼           ▼
+           Agent A      Agent B     Agent C
+                │           │           │
+           ファイル書出  ファイル書出 ファイル書出
+                │           │           │
+                └───────────┼───────────┘
+                            │
+                    .team/output/
+                            │
+                    Conductor が読み取り
+                            │
+                    結果を統合して報告
+                            ▼
+                         あなた
+```
+
+サブエージェント同士は直接通信しません。すべて `.team/` の共有ファイルか Conductor を介します。
+
+### エージェントロール
+
+| ロール | 担当 | 出力例 |
+|--------|-----|--------|
+| Researcher | 技術調査・事実収集 | 比較表、推奨事項 |
+| Architect | 技術設計 | 設計書、Mermaid 図 |
+| Reviewer | 品質チェック | Approved / Changes Requested |
+| Implementer | コーディング | コード、変更ファイル一覧 |
+| Tester | テスト作成・実行 | テストコード、実行結果 |
+| DocKeeper | ドキュメント管理 | docs/ の更新差分 |
+| IssueManager | 課題管理 | イシュー分類・要約 |
+
 ## 開発
 
 ### リポジトリ構造
@@ -209,24 +302,16 @@ cmux-team/
 ├── .claude/
 │   ├── skills/
 │   │   ├── cmux-team/
-│   │   │   ├── SKILL.md
-│   │   │   └── templates/     # エージェントプロンプトテンプレート
+│   │   │   ├── SKILL.md           # Conductor 向けオーケストレーション知識
+│   │   │   └── templates/         # エージェントプロンプトテンプレート (8個)
 │   │   └── cmux-agent-role/
-│   │       └── SKILL.md
-│   └── commands/              # スラッシュコマンド定義
-├── docs/seeds/                # 設計シードドキュメント
-├── install.sh
-├── LICENSE
+│   │       └── SKILL.md           # サブエージェント行動規範
+│   └── commands/                  # スラッシュコマンド定義 (11個)
+├── docs/seeds/                    # 設計シードドキュメント
+├── install.sh                     # インストーラ (--check, --uninstall 対応)
+├── LICENSE                        # MIT
 └── README.md
 ```
-
-### 規約
-
-- ドキュメント・コメント: 日本語
-- コード: 英語
-- スキルは YAML フロントマター + Markdown
-- コマンドはスキルを `$instructions` で参照
-- テンプレートは `{{VARIABLE}}` プレースホルダーを使用
 
 ## ライセンス
 
