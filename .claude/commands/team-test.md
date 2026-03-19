@@ -74,24 +74,48 @@ find . -name "*test*" -o -name "*spec*" | head -20
 
 ### 6. テストエージェント起動
 
-各エージェントに対して:
+**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
 
 ```bash
-# a. ペイン作成
-cmux new-split right  # → surface:N
+# エージェント用ワークスペースを作成
+cmux new-workspace --cwd $(pwd)  # → workspace:W, surface:S
+cmux rename-workspace --workspace workspace:W "Test"
+# 複数テスターの場合は分割
+# cmux new-split right --workspace workspace:W  # → surface:S2
+```
 
-# b. team.json にエージェント登録
-# c. ステータス設定
+各テスターに対して（**1体ずつ、cmux-team SKILL.md §2.1 の手順に従う**）:
+
+```bash
+# a. team.json にエージェント登録
+# b. ステータス設定
 cmux set-status tester-<scope> "spawning" --icon sparkle --color "#ffcc00"
 
-# d. Claude 起動
-cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
+# c. Claude 起動（シェルコマンドは \n で送信可能）
+cmux send --surface surface:S --workspace workspace:W "claude --dangerously-skip-permissions\n"
 
-# e. 起動完了を待つ
-# f. プロンプト送信
-cmux send --surface surface:N "$(pwd)/.team/prompts/tester-<scope>.md を読んで指示に従ってください。\n"
+# d. 起動完了を待つ（Trust確認 or ❯ プロンプトをポーリング、SKILL.md §2.1 Step 5 参照）
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:S --workspace workspace:W 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    cmux send-key --surface surface:S --workspace workspace:W "return"
+    sleep 5; break
+  elif echo "$SCREEN" | grep -q '❯'; then
+    break
+  fi
+  sleep 3
+done
 
-# g. ステータス更新
+# e. プロンプト送信（単一行指示 → \n で送信可能）
+cmux send --surface surface:S --workspace workspace:W ".team/prompts/tester-<scope>.md を読んで指示に従ってください。\n"
+
+# f. 送信確認 + ステータス更新
+sleep 3
+SCREEN=$(cmux read-screen --surface surface:S --workspace workspace:W 2>&1)
+if ! echo "$SCREEN" | grep -qE '(Stewing|Thinking|Reading|Searching|Ideating)'; then
+  cmux send-key --surface surface:S --workspace workspace:W "return"
+  sleep 3
+fi
 cmux set-status tester-<scope> "running" --icon hammer --color "#0099ff"
 ```
 
