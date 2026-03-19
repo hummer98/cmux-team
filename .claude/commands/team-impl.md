@@ -73,28 +73,50 @@ description: "実装エージェントを起動しコーディングタスクを
 
 ### 6. エージェント起動
 
-レイアウト戦略:
-- 3 エージェント以下: `cmux new-split right` で同一ワークスペースに配置
-- 4 エージェント以上: `cmux new-workspace --cwd $(pwd)` で別ワークスペースを使用
-
-各エージェントに対して:
+**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
 
 ```bash
-# a. ペイン作成（レイアウトに応じて new-split または new-workspace）
-cmux new-split right  # → surface:N
+# エージェント用ワークスペースを作成
+cmux new-workspace --cwd $(pwd)  # → workspace:W, surface:S1
+cmux rename-workspace --workspace workspace:W "Implementers"
 
-# b. team.json にエージェント登録
-# c. ステータス設定
+# 追加ペインを分割（エージェント数に応じて）
+cmux new-split right --workspace workspace:W  # → surface:S2
+# ...必要に応じて追加
+```
+
+各エージェントに対して（**1体ずつ確実に起動、cmux-team SKILL.md §2.1 の手順に従う**）:
+
+```bash
+# a. team.json にエージェント登録
+# b. ステータス設定
 cmux set-status implementer-N "spawning" --icon sparkle --color "#ffcc00"
 
-# d. Claude 起動
-cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
+# c. Claude 起動（シェルコマンドは \n で送信可能）
+cmux send --surface surface:SN --workspace workspace:W "claude --dangerously-skip-permissions\n"
 
-# e. 起動完了を待つ
-# f. プロンプト送信
-cmux send --surface surface:N "$(pwd)/.team/prompts/implementer-N.md を読んで指示に従ってください。\n"
+# d. 起動完了を待つ（Trust確認 or ❯ プロンプトをポーリング、SKILL.md §2.1 Step 5 参照）
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:SN --workspace workspace:W 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    cmux send-key --surface surface:SN --workspace workspace:W "return"
+    sleep 5; break
+  elif echo "$SCREEN" | grep -q '❯'; then
+    break
+  fi
+  sleep 3
+done
 
-# g. ステータス更新
+# e. プロンプト送信（単一行指示 → \n で送信可能）
+cmux send --surface surface:SN --workspace workspace:W ".team/prompts/implementer-N.md を読んで指示に従ってください。\n"
+
+# f. 送信確認 + ステータス更新
+sleep 3
+SCREEN=$(cmux read-screen --surface surface:SN --workspace workspace:W 2>&1)
+if ! echo "$SCREEN" | grep -qE '(Stewing|Thinking|Reading|Searching|Ideating)'; then
+  cmux send-key --surface surface:SN --workspace workspace:W "return"
+  sleep 3
+fi
 cmux set-status implementer-N "running" --icon hammer --color "#0099ff"
 ```
 

@@ -35,27 +35,94 @@ cmux tree --all --json
 
 ### 2.1 スポーン（起動）
 
+**重要**: サブエージェントは必ず別ワークスペースに配置すること（§5 レイアウト戦略参照）。
+
+#### Step 1: エージェント用ワークスペースとペインを作成
+
 ```bash
-# 1. ペインを作成
-cmux new-split right  # → surface:N
+# 別ワークスペースを作成（初回のみ）
+cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
+cmux rename-workspace --workspace workspace:N "Agents"
 
-# 2. team.json にエージェントを登録
-# { "agents": [{ "role": "<role-id>", "surface": "surface:N", "status": "spawning" }] }
+# 追加のペインが必要なら分割
+cmux new-split right --workspace workspace:N  # → surface:M+1
+```
 
-# 3. サイドバーにステータスを設定
+#### Step 2: team.json にエージェントを登録
+
+```bash
+# team.json の agents 配列にエントリを追加
+# { "id": "<role-id>", "role": "<role>", "surface": "surface:M", "status": "spawning", ... }
+```
+
+#### Step 3: サイドバーにステータスを設定
+
+```bash
 cmux set-status <role-id> "spawning" --icon sparkle --color "#ffcc00"
+```
 
-# 4. 自律型 Claude を起動
-cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
+#### Step 4: Claude を起動（シェルコマンドなので \n で送信される）
 
-# 5. Claude のブート完了を待つ（プロンプト ❯ を検出）
-# ポーリング: cmux read-screen --surface surface:N | grep '❯'
+```bash
+cmux send --surface surface:M --workspace workspace:N "claude --dangerously-skip-permissions\n"
+```
 
-# 6. タスクプロンプトを送信
-cmux send --surface surface:N "<プロンプト内容>\n"
+#### Step 5: Claude のブート完了を待つ
 
-# 7. ステータス更新
-cmux set-status <role-id> "running" --icon hammer --color "#0099ff"
+「Trust this folder?」確認または ❯ プロンプトが表示されるまでポーリング:
+
+```bash
+# 最大30秒、3秒間隔でポーリング
+# 検出パターン: "Yes, I trust" (Trust確認) または "❯" (プロンプト)
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:M --workspace workspace:N 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    # Trust 確認が出ている → Enter で承認
+    cmux send-key --surface surface:M --workspace workspace:N "return"
+    sleep 5  # Claude 起動待ち
+    break
+  elif echo "$SCREEN" | grep -q '❯'; then
+    # プロンプトが表示された → 準備完了
+    break
+  fi
+  sleep 3
+done
+```
+
+#### Step 6: タスクプロンプトを送信
+
+**重要: 複数行テキストは `cmux send` の `\n` では送信されない。
+`cmux send` でテキストを入力した後、`cmux send-key return` で明示的に送信すること。**
+
+```bash
+# プロンプトファイルの内容を送信
+PROMPT=$(cat .team/prompts/<role-id>.md)
+cmux send --surface surface:M --workspace workspace:N "${PROMPT}"
+# ↑ \n を付けない！複数行テキストでは改行が入力欄に追加されるだけ
+
+# 明示的に Enter を送信
+sleep 0.5
+cmux send-key --surface surface:M --workspace workspace:N "return"
+```
+
+**注意: 単一行テキスト（シェルコマンドなど）は `\n` で送信可能。
+複数行テキスト（プロンプトなど）は `send-key return` が必要。**
+
+#### Step 7: 送信確認とステータス更新
+
+```bash
+# 3秒後に画面を確認し、Claude が処理を開始したか検証
+sleep 3
+SCREEN=$(cmux read-screen --surface surface:M --workspace workspace:N 2>&1)
+if echo "$SCREEN" | grep -qE '(Stewing|Thinking|Reading|Writing|Searching)'; then
+  # 処理開始を確認
+  cmux set-status <role-id> "running" --icon hammer --color "#0099ff"
+else
+  # 入力欄にテキストが残っている場合は再度 send-key return
+  cmux send-key --surface surface:M --workspace workspace:N "return"
+  sleep 3
+  cmux set-status <role-id> "running" --icon hammer --color "#0099ff"
+fi
 ```
 
 ### 2.2 モニタリング

@@ -44,37 +44,73 @@ description: "リサーチエージェントを起動しトピックを並列調
    - `{{COMMON_HEADER}}` → 展開済み共通ヘッダー
 4. `.team/prompts/researcher-{1,2,3}.md` に書き出す
 
-### 4. エージェント起動（1+3 レイアウト）
+### 4. エージェント起動
 
-各リサーチャーに対して順次:
+**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
+
+#### 4a. エージェント用ワークスペースを作成
 
 ```bash
-# a. ペインを作成
-cmux new-split right
-# → surface:N を取得（出力をパース）
+# ワークスペース作成（初回のみ）→ 出力をパースして workspace:W, surface:S1 を取得
+cmux new-workspace --cwd $(pwd)
+cmux rename-workspace --workspace workspace:W "Researchers"
 
-# b. team.json にエージェントを登録
-# agents 配列に追加: { "id": "researcher-N", "role": "researcher", "surface": "surface:X", "status": "spawning", "task": "<サブ質問>", "started_at": "<ISO 8601>" }
+# 追加ペインを分割（2体目、3体目）
+cmux new-split right --workspace workspace:W  # → surface:S2
+cmux new-split right --workspace workspace:W  # → surface:S3
+```
 
-# c. サイドバーステータス設定
+#### 4b. 各リサーチャーを1体ずつ起動
+
+**1体ずつ確実に起動すること。全員同時にやらない。**
+
+各リサーチャー（N=1,2,3）に対して:
+
+```bash
+# team.json にエージェントを登録
+# agents 配列に追加: { "id": "researcher-N", "role": "researcher",
+#   "surface": "surface:SN", "workspace": "workspace:W",
+#   "status": "spawning", "task": "<サブ質問>", "started_at": "<ISO 8601>" }
+
+# サイドバーステータス設定
 cmux set-status researcher-N "spawning" --icon sparkle --color "#ffcc00"
 
-# d. Claude を起動
-cmux send --surface surface:X "claude --dangerously-skip-permissions\n"
+# Claude を起動（シェルコマンドは \n で送信可能）
+cmux send --surface surface:SN --workspace workspace:W "claude --dangerously-skip-permissions\n"
 
-# e. Claude の起動完了を待つ
-# 最大 30 秒、2 秒間隔でポーリング:
-cmux read-screen --surface surface:X --lines 10
-# 出力に '❯' または '$' が含まれるまで待つ
+# Claude の起動完了を待つ（最大30秒ポーリング）
+# "Yes, I trust" → send-key return で承認
+# "❯" → プロンプト送信可能
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:SN --workspace workspace:W 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    cmux send-key --surface surface:SN --workspace workspace:W "return"
+    sleep 5; break
+  elif echo "$SCREEN" | grep -q '❯'; then
+    break
+  fi
+  sleep 3
+done
 
-# f. プロンプトを送信
-# .team/prompts/researcher-N.md の内容を cmux send で送信
-# 注意: 長いプロンプトは改行を含むため、ファイルパスを指示する方式を使う:
-cmux send --surface surface:X "以下の指示に従ってください。指示ファイル: $(pwd)/.team/prompts/researcher-N.md を読んで実行してください。\n"
+# プロンプトを送信（単一行指示 → \n で送信可能）
+cmux send --surface surface:SN --workspace workspace:W ".team/prompts/researcher-N.md を読んで、その指示に従って作業してください。\n"
 
-# g. ステータス更新
-cmux set-status researcher-N "running" --icon hammer --color "#0099ff"
+# 送信確認（3秒後に処理開始を検出）
+sleep 3
+SCREEN=$(cmux read-screen --surface surface:SN --workspace workspace:W 2>&1)
+if echo "$SCREEN" | grep -qE '(Stewing|Thinking|Reading|Searching|Ideating)'; then
+  cmux set-status researcher-N "running" --icon hammer --color "#0099ff"
+else
+  # 入力欄に残っている場合は再度 Enter
+  cmux send-key --surface surface:SN --workspace workspace:W "return"
+  sleep 3
+  cmux set-status researcher-N "running" --icon hammer --color "#0099ff"
+fi
 ```
+
+**ポイント**:
+- プロンプト送信は「ファイルパスを読んで実行して」の単一行指示を推奨
+- 複数行テキストを直接送る場合は `cmux send` + `cmux send-key return` の2段階が必要
 
 ### 5. 進捗トラッキング
 
