@@ -79,6 +79,14 @@ do_check() {
     has_error=1
   fi
 
+  # using-cmux skill (依存スキル)
+  if [[ -f "${CLAUDE_DIR}/skills/using-cmux/SKILL.md" ]]; then
+    ok "using-cmux skill がインストール済み"
+  else
+    warn "using-cmux skill が未インストール (cmux-team の動作に必要です)"
+    has_error=1
+  fi
+
   # cmux
   if command -v cmux >/dev/null 2>&1; then
     ok "cmux が利用可能です ($(command -v cmux))"
@@ -166,8 +174,14 @@ do_install() {
   done
   ok "インストール: コマンド ${cmd_count} 個"
 
-  # cmux チェック
+  # 依存チェック
   echo ""
+  if [[ -f "${CLAUDE_DIR}/skills/using-cmux/SKILL.md" ]]; then
+    ok "using-cmux skill がインストール済み"
+  else
+    warn "using-cmux skill が未インストールです。cmux-team の動作に必要です。"
+  fi
+
   if command -v cmux >/dev/null 2>&1; then
     ok "cmux が利用可能です"
   else
