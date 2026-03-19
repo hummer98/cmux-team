@@ -1,3 +1,5 @@
+![cmux-team](banner.jpeg)
+
 # cmux-team
 
 Claude Code + cmux によるマルチエージェント開発オーケストレーション。
