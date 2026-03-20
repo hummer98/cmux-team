@@ -37,6 +37,14 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 /plugin install cmux-team@hummer98-plugins
 ```
 
+### Skills Only (via Agent Skills)
+
+```bash
+npx skills add hummer98/cmux-team
+```
+
+> **Note**: This installs skills only (no slash commands). You can still use all features via natural language (e.g. "research React vs Vue"), but `/team-*` commands won't be available. Use the plugin install above for the full experience.
+
 ### Manual Install (Legacy)
 
 ```bash
