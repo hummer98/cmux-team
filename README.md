@@ -27,6 +27,18 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 
 ## Installation
 
+### As a Plugin (Recommended)
+
+```
+# Add marketplace
+/plugin marketplace add hummer98/cmux-team
+
+# Install
+/plugin install cmux-team@hummer98-plugins
+```
+
+### Manual Install (Legacy)
+
 ```bash
 git clone https://github.com/hummer98/cmux-team.git
 cd cmux-team
@@ -276,18 +288,21 @@ New directories trigger a trust confirmation in Claude. Sub-agents may also show
 
 ```
 cmux-team/
-├── .claude/
-│   ├── skills/
-│   │   ├── cmux-team/
-│   │   │   ├── SKILL.md           # Orchestration knowledge for Conductor
-│   │   │   └── templates/         # Agent prompt templates (8)
-│   │   └── cmux-agent-role/
-│   │       └── SKILL.md           # Sub-agent behavior protocol
-│   └── commands/                  # Slash command definitions (11)
+├── .claude-plugin/
+│   ├── plugin.json                # Plugin manifest
+│   └── marketplace.json           # Marketplace catalog
+├── skills/
+│   ├── cmux-team/
+│   │   ├── SKILL.md               # Orchestration knowledge for Conductor
+│   │   └── templates/             # Agent prompt templates (8)
+│   └── cmux-agent-role/
+│       └── SKILL.md               # Sub-agent behavior protocol
+├── commands/                      # Slash command definitions (11)
 ├── docs/seeds/                    # Design seed documents
-├── install.sh                     # Installer (--check, --uninstall)
+├── install.sh                     # Legacy installer (for non-plugin environments)
 ├── LICENSE                        # MIT
-└── README.md
+├── README.md                      # English
+└── README.ja.md                   # Japanese
 ```
 
 ## License

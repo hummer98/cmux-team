@@ -7,9 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
 
 # インストール対象
-SKILL_TEAM_SRC="${SCRIPT_DIR}/.claude/skills/cmux-team"
-SKILL_AGENT_SRC="${SCRIPT_DIR}/.claude/skills/cmux-agent-role"
-COMMANDS_SRC="${SCRIPT_DIR}/.claude/commands"
+SKILL_TEAM_SRC="${SCRIPT_DIR}/skills/cmux-team"
+SKILL_AGENT_SRC="${SCRIPT_DIR}/skills/cmux-agent-role"
+COMMANDS_SRC="${SCRIPT_DIR}/commands"
 
 SKILL_TEAM_DST="${CLAUDE_DIR}/skills/cmux-team"
 SKILL_AGENT_DST="${CLAUDE_DIR}/skills/cmux-agent-role"

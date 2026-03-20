@@ -1,0 +1,22 @@
+{
+  "name": "hummer98-plugins",
+  "owner": {
+    "name": "hummer98",
+    "url": "https://github.com/hummer98"
+  },
+  "metadata": {
+    "description": "Claude Code plugins by hummer98",
+    "version": "1.0"
+  },
+  "plugins": [
+    {
+      "name": "cmux-team",
+      "source": ".",
+      "description": "Multi-agent development orchestration with Claude Code + cmux",
+      "version": "1.0.0",
+      "author": {
+        "name": "hummer98"
+      }
+    }
+  ]
+}

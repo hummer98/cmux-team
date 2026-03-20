@@ -1,0 +1,15 @@
+{
+  "name": "cmux-team",
+  "version": "1.0.0",
+  "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
+  "author": {
+    "name": "hummer98",
+    "url": "https://github.com/hummer98"
+  },
+  "homepage": "https://github.com/hummer98/cmux-team",
+  "repository": "https://github.com/hummer98/cmux-team",
+  "license": "MIT",
+  "keywords": ["cmux", "multi-agent", "orchestration", "parallel", "team"],
+  "skills": "./skills/",
+  "commands": "./commands/"
+}
