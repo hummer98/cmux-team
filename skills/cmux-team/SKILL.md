@@ -39,10 +39,15 @@ cmux tree --all --json
 
 #### Step 1: エージェント用ワークスペースとペインを作成
 
+**重要: ワークスペースには必ず用途がわかる名前を付けること。**
+「✳ Claude Code」のままでは、どのワークスペースが何をしているか判別できない。
+
 ```bash
 # 別ワークスペースを作成（初回のみ）
 cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
-cmux rename-workspace --workspace workspace:N "Agents"
+
+# 用途がわかる名前を付ける（フェーズ名 or ロール名）
+cmux rename-workspace --workspace workspace:N "Research"  # 例: Research, Design, Impl-1
 
 # 追加のペインが必要なら分割
 cmux new-split right --workspace workspace:N  # → surface:M+1
@@ -56,6 +61,8 @@ cmux new-split right --workspace workspace:N  # → surface:M+1
 ```
 
 #### Step 3: サイドバーにステータスを設定
+
+「何が行われているか見える」ための必須ステップ。サイドバーで全エージェントの状態を一目で把握できる。
 
 ```bash
 cmux set-status <role-id> "spawning" --icon sparkle --color "#ffcc00"
@@ -146,6 +153,9 @@ cat .team/output/<role-id>.md
 
 # 方法 B: スクリーンスクレイピング（フォールバック）
 cmux read-screen --surface surface:N --scrollback
+
+# ステータスを完了に更新
+cmux set-status <role-id> "done" --icon sparkle --color "#00cc66"
 ```
 
 ### 2.4 完了同期
@@ -164,9 +174,10 @@ cmux wait-for "<role-id>-done" --timeout 300
 # 特定のエージェントを終了
 cmux send --surface surface:N "/exit\n"
 cmux close-surface --surface surface:N
+cmux clear-status <role-id>  # サイドバーからステータスを除去
 
 # 全エージェントを終了
-# team.json を読み、各 surface を順にクローズ
+# team.json を読み、各 surface を順にクローズし、各 role-id の status を clear
 ```
 
 ## 3. プロンプト生成プロトコル
@@ -230,32 +241,34 @@ Conductor は以下の手順でエージェントプロンプトを生成する:
 
 ### 推奨: Conductor は単独ペイン、サブエージェントは別ワークスペース
 
-すべての構成で、サブエージェントは**別ワークスペース**に配置する:
+すべての構成で、サブエージェントは**別ワークスペース**に配置する。
+**各ワークスペースには必ずフェーズ/ロールを示す名前を付けること。**
 
 ```bash
-# サブエージェント用ワークスペースを作成
+# サブエージェント用ワークスペースを作成し、名前を付ける
 cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
+cmux rename-workspace --workspace workspace:N "Research"
 ```
 
 ### Small (1+3)
 ```
-workspace:1 → Conductor（ユーザーと対話）
-workspace:2 → Agent A, Agent B, Agent C (3-way split)
+workspace:1 "Conductor"  → Conductor（ユーザーと対話）
+workspace:2 "Research"   → Agent A, Agent B, Agent C (3-way split)
 ```
 
 ### Medium (1+5)
 ```
-workspace:1 → Conductor
-workspace:2 → Agent A, Agent B (split)
-workspace:3 → Agent C, Agent D, Agent E (3-way split)
+workspace:1 "Conductor"  → Conductor
+workspace:2 "Impl-1"     → Agent A, Agent B (split)
+workspace:3 "Impl-2"     → Agent C, Agent D, Agent E (3-way split)
 ```
 
 ### Large (1+7)
 ```
-workspace:1 → Conductor
-workspace:2 → Agent A, Agent B (split)
-workspace:3 → Agent C, Agent D (split)
-workspace:4 → Agent E, Agent F, Agent G (3-way split)
+workspace:1 "Conductor"  → Conductor
+workspace:2 "Research"    → Agent A, Agent B (split)
+workspace:3 "Design"     → Agent C, Agent D (split)
+workspace:4 "Impl"       → Agent E, Agent F, Agent G (3-way split)
 ```
 
 ### エージェント用ワークスペースの作成パターン
@@ -264,12 +277,12 @@ workspace:4 → Agent E, Agent F, Agent G (3-way split)
 # 1. ワークスペース作成 → 最初のサーフェスが返る
 cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
 
-# 2. そのワークスペース内で分割
+# 2. すぐに名前を付ける（作成直後に！後回しにしない）
+cmux rename-workspace --workspace workspace:N "Research"
+
+# 3. そのワークスペース内で分割
 cmux new-split right --workspace workspace:N  # → surface:M+1
 cmux new-split right --workspace workspace:N  # → surface:M+2
-
-# 3. ワークスペースに名前を付ける（サイドバーで識別しやすくなる）
-cmux rename-workspace --workspace workspace:N "Researchers"
 ```
 
 ### NG パターン（避けること）
