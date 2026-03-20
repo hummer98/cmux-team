@@ -2,162 +2,166 @@
 
 # cmux-team
 
-Claude Code + cmux によるマルチエージェント開発オーケストレーション。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## なぜ cmux-team?
+Multi-agent development orchestration with Claude Code + cmux.
 
-Claude Code の組み込みサブエージェント（Agent ツール）は便利ですが、**中で何をしているか見えません**。結果だけが返ってきて、途中経過はブラックボックスです。
+**[日本語版 README はこちら](README.ja.md)**
 
-cmux-team は、cmux のターミナル分割を使ってサブエージェントを**目に見える形で**並列実行します。
+## Why cmux-team?
 
-![Before/After 比較](docs/slides/before-after.jpeg)
+Claude Code's built-in sub-agents (the Agent tool) are useful, but **you can't see what they're doing**. You only get the final result — the process is a black box.
 
-**あなたがやること**: Claude に自然言語で指示するだけ。
-**Claude がやること**: cmux でペインを分割し、サブエージェントを起動・監視・統合。
+cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parallel.
 
-## 前提条件
+![Before/After comparison](docs/slides/before-after.jpeg)
 
-- [Claude Code](https://claude.ai/claude-code) がインストール済み
-- [cmux](https://github.com/manaflow-ai/cmux) がインストール済み
-- cmux 内で Claude Code を実行していること
+**What you do**: Just give Claude instructions in natural language.
+**What Claude does**: Splits panes via cmux, launches sub-agents, monitors them, and integrates results.
 
-## インストール
+## Prerequisites
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
+- [cmux](https://github.com/manaflow-ai/cmux) installed
+- Running Claude Code inside a cmux session
+
+## Installation
 
 ```bash
-git clone <repo-url> cmux-team
+git clone https://github.com/hummer98/cmux-team.git
 cd cmux-team
 ./install.sh
 ```
 
 ```bash
-# インストール状態を確認
+# Check installation status
 ./install.sh --check
 
-# アンインストール
+# Uninstall
 ./install.sh --uninstall
 ```
 
-## 使い方
+## Usage
 
-### 基本的な流れ
+### Basic Workflow
 
-cmux を起動し、その中で Claude Code を起動します。あとは Claude に話しかけるだけです。
-
-```
-あなた: /team-init TODO アプリを作りたい
-Claude: .team/ を初期化しました。次は /team-spec で要件を決めましょう。
-
-あなた: /team-spec
-Claude: どんな機能が必要ですか？（対話が始まる）
-  ...壁打ちの後...
-Claude: requirements.md を生成しました。
-
-あなた: /team-research React vs Vue vs Svelte
-Claude: 3つのリサーチャーを起動します。
-  → 右にペインが3つ開き、それぞれが並列で調査開始
-  → 調査の様子がリアルタイムで見える
-  → 全員完了したら結果を統合して報告
-
-あなた: /team-design
-Claude: アーキテクトとレビュアーを起動します。
-  → 設計 → レビュー → フィードバック反映 を自動で実行
-
-あなた: /team-impl all
-Claude: タスクを分割して実装エージェントを並列起動します。
-  → 各エージェントがコードを書いている様子が見える
-
-あなた: /team-status
-Claude: 現在の状態を表示（各エージェントの進捗、イシュー数など）
-
-あなた: /team-disband
-Claude: 全エージェントを終了しました。
-```
-
-### コマンド一覧
-
-| コマンド | やること | いつ使う |
-|---------|---------|---------|
-| `/team-init [説明]` | `.team/` を初期化 | プロジェクト開始時に1回 |
-| `/team-spec [概要]` | 要件をブレスト | 何を作るか決める時 |
-| `/team-research <トピック>` | 並列リサーチ（3エージェント） | 技術調査が必要な時 |
-| `/team-design` | 設計 + レビュー | 要件が固まった後 |
-| `/team-impl [タスク\|all]` | 並列実装 | 設計が固まった後 |
-| `/team-review` | 実装レビュー | 実装が終わった後 |
-| `/team-test [scope\|all]` | テスト作成・実行 | 実装・レビュー後 |
-| `/team-sync-docs` | ドキュメント同期 | 仕様変更時 |
-| `/team-issue [操作]` | イシュー管理 | 設計判断・課題の記録 |
-| `/team-status` | チーム状態表示 | いつでも |
-| `/team-disband [force]` | 全エージェント終了 | 作業完了時 |
-
-### コマンドを使わなくても動く
-
-スラッシュコマンドは必須ではありません。自然言語で指示すれば、Claude が適切なワークフローを判断します：
+Start cmux, launch Claude Code inside it, and just talk to Claude.
 
 ```
-あなた: 認証機能の設計をして、レビューも並列でやって
-あなた: このリポジトリのテスト構成を3人で調べて
-あなた: 全エージェント止めて
+You:    /team-init I want to build a TODO app
+Claude: Initialized .team/. Let's define requirements with /team-spec next.
+
+You:    /team-spec
+Claude: What features do you need? (interactive brainstorming begins)
+  ...after discussion...
+Claude: Generated requirements.md.
+
+You:    /team-research React vs Vue vs Svelte
+Claude: Launching 3 researchers.
+  → 3 panes open, each researching in parallel
+  → You can watch the progress in real time
+  → Results are integrated when all finish
+
+You:    /team-design
+Claude: Launching architect and reviewer.
+  → Design → Review → Feedback automatically
+
+You:    /team-impl all
+Claude: Splitting tasks and launching implementation agents in parallel.
+  → You can watch each agent writing code
+
+You:    /team-status
+Claude: Shows current status (agent progress, issue count, etc.)
+
+You:    /team-disband
+Claude: All agents terminated.
 ```
 
-## 人間の操作ポイント
+### Commands
 
-### あなたがやること
+| Command | What it does | When to use |
+|---------|-------------|-------------|
+| `/team-init [description]` | Initialize `.team/` | Once at project start |
+| `/team-spec [summary]` | Brainstorm requirements | When deciding what to build |
+| `/team-research <topic>` | Parallel research (3 agents) | When technical research is needed |
+| `/team-design` | Design + review | After requirements are set |
+| `/team-impl [task\|all]` | Parallel implementation | After design is set |
+| `/team-review` | Implementation review | After implementation |
+| `/team-test [scope\|all]` | Create & run tests | After implementation/review |
+| `/team-sync-docs` | Sync documentation | When specs change |
+| `/team-issue [action]` | Issue management | Record design decisions & issues |
+| `/team-status` | Show team status | Anytime |
+| `/team-disband [force]` | Terminate all agents | When done |
 
-1. **cmux を起動して Claude Code を立ち上げる**
-2. **やりたいことを伝える**（自然言語 or スラッシュコマンド）
-3. **サブエージェントのワークスペース（タブ）で動きを見る**（見てるだけでOK）
-4. **結果の報告を受け取る**
+### Works Without Commands Too
 
-### 介入が必要な場面
+Slash commands are optional. Claude will determine the appropriate workflow from natural language:
 
-- **サブエージェントが止まっている**: cmux のペインをクリックして直接操作できます
-- **方向性がおかしい**: Conductor（左ペイン）に「やめて」「方向転換して」と伝える
-- **パーミッション確認が出た**: 後述のトラブルシューティング参照
+```
+You: Design the auth feature and run review in parallel
+You: Have 3 agents investigate this repo's test structure
+You: Stop all agents
+```
 
-### やらなくていいこと
+## What You Do (and Don't)
 
-- cmux コマンドを自分で打つ必要はありません（Claude が打ちます）
-- サブエージェントの出力ファイルを読む必要はありません（Claude が統合します）
-- team.json を編集する必要はありません
+### Your role
 
-## プロジェクト内に作られるもの
+1. **Start cmux and launch Claude Code**
+2. **Tell it what you want** (natural language or slash commands)
+3. **Watch sub-agents in their workspace tabs** (just watching is fine)
+4. **Receive the integrated report**
 
-`/team-init` を実行すると、プロジェクトに `.team/` ディレクトリが作られます：
+### When to intervene
+
+- **Agent is stuck**: Click its cmux pane and interact directly
+- **Wrong direction**: Tell the Conductor (left pane) to stop or change course
+- **Permission prompt appeared**: See Troubleshooting below
+
+### What you don't need to do
+
+- You don't need to type cmux commands yourself (Claude does it)
+- You don't need to read agent output files (Claude integrates them)
+- You don't need to edit team.json
+
+## Project Structure Created
+
+Running `/team-init` creates a `.team/` directory in your project:
 
 ```
 .team/
-├── team.json          # チーム状態（自動管理、手動編集不要）
-├── specs/             # 仕様書（git tracked ← 残す価値あり）
+├── team.json          # Team state (auto-managed, no manual editing)
+├── specs/             # Specifications (git tracked — worth keeping)
 │   ├── requirements.md
 │   ├── design.md
 │   └── tasks.md
-├── issues/            # 設計判断・課題の記録（git tracked）
+├── issues/            # Design decisions & issues (git tracked)
 │   ├── open/
 │   └── closed/
-├── output/            # エージェント出力（一時的、gitignore）
-├── prompts/           # 生成プロンプト（一時的、gitignore）
-└── docs-snapshot/     # 同期用（一時的、gitignore）
+├── output/            # Agent output (temporary, gitignored)
+├── prompts/           # Generated prompts (temporary, gitignored)
+└── docs-snapshot/     # Sync snapshots (temporary, gitignored)
 ```
 
-`specs/` と `issues/` は git に含まれるので、設計判断の履歴が残ります。
+`specs/` and `issues/` are git-tracked, preserving your design decision history.
 
-## 並列構成
+## Parallel Configurations
 
-同時に動くエージェント数は用途に応じて自動調整されます：
+The number of concurrent agents is automatically adjusted by use case:
 
-| 構成 | エージェント数 | 使用場面 | 画面レイアウト |
-|------|-------------|---------|--------------|
-| Small | 1+3 (4体) | リサーチ、レビュー | Conductor 単独 + エージェント用ワークスペース1つ |
-| Medium | 1+5 (6体) | 実装 + レビュー | Conductor 単独 + エージェント用ワークスペース2つ |
-| Large | 1+7 (8体) | フルチーム | Conductor 単独 + エージェント用ワークスペース3つ |
+| Config | Agents | Use case | Layout |
+|--------|--------|----------|--------|
+| Small | 1+3 (4) | Research, review | Conductor solo + 1 agent workspace |
+| Medium | 1+5 (6) | Implementation + review | Conductor solo + 2 agent workspaces |
+| Large | 1+7 (8) | Full team | Conductor solo + 3 agent workspaces |
 
-Conductor（あなたとの会話）は常に単独ワークスペースに配置されます。
-サブエージェントは別のワークスペース（cmux のタブ）に分散し、タブ切り替えで動きを確認できます。
-cmux のサイドバーに各エージェントのステータスが表示されるので、タブを切り替えなくても進捗を把握できます。
+The Conductor (your conversation partner) always stays in its own workspace.
+Sub-agents are distributed across separate workspaces (cmux tabs) — switch tabs to watch them.
+The cmux sidebar shows each agent's status, so you can track progress without switching tabs.
 
-## Hooks 設定（推奨）
+## Hooks Configuration (Recommended)
 
-`~/.claude/settings.json` に以下を追加すると、エージェントの完了時に cmux の通知リングが光ります：
+Add the following to `~/.claude/settings.json` to get cmux notification ring alerts when agents complete:
 
 ```json
 {
@@ -188,104 +192,104 @@ cmux のサイドバーに各エージェントのステータスが表示され
 }
 ```
 
-## トラブルシューティング
+## Architecture
 
-### Conductor のペインが狭くなって動作しない
+### Skill Structure
 
-サブエージェントを同じワークスペースに分割すると、Conductor のペイン幅が不足して `cmux send` や画面読み取りが失敗します。
+| Skill | Used by | Purpose |
+|-------|---------|---------|
+| `cmux-team` | Conductor (parent Claude) | Knows how to launch, monitor, and integrate agents |
+| `cmux-agent-role` | Sub-agents | Knows output destinations, completion signals, status reporting |
 
-**対処**: サブエージェントは必ず別ワークスペースに配置してください。Conductor は単独ワークスペースに留まります。これは SKILL.md で指示済みですが、万一発生した場合は `/team-disband` で全エージェントを終了し、再実行してください。
+### Communication Model
 
-### サブエージェントでパーミッション確認が出る
+![Communication model](docs/slides/communication-model.jpeg)
 
-`--dangerously-skip-permissions` で起動しても、`.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが表示されます。
+Sub-agents never communicate directly with each other. All coordination goes through shared files in `.team/` or via the Conductor.
 
-**対処**: 最初の確認で **「2. Yes, and allow Claude to edit its own settings for this session」** を選択してください。以降のセッション中は確認が出なくなります。
+### Agent Roles
 
-### `cmux read-screen` が「Surface is not a terminal」エラー
+| Role | Responsibility | Example Output |
+|------|---------------|----------------|
+| Researcher | Technical research & fact gathering | Comparison tables, recommendations |
+| Architect | Technical design | Design docs, Mermaid diagrams |
+| Reviewer | Quality checks | Approved / Changes Requested |
+| Implementer | Coding | Code, list of changed files |
+| Tester | Test creation & execution | Test code, execution results |
+| DocKeeper | Documentation management | docs/ diffs |
+| IssueManager | Issue management | Issue triage & summaries |
 
-ワークスペース作成直後に発生することがあります。
+## Troubleshooting
 
-**対処**: `cmux refresh-surfaces` を実行してからリトライしてください。
+### Conductor pane becomes too narrow
 
-### サブエージェントが応答しない
+Splitting sub-agents into the same workspace as the Conductor causes pane width issues, breaking `cmux send` and screen reading.
 
-API の過負荷（overloaded）でリトライ中の可能性があります。
+**Fix**: Sub-agents must be placed in separate workspaces. The Conductor stays in its own workspace. If this happens, run `/team-disband` and retry.
 
-**対処**:
-1. cmux のサブエージェント用ワークスペースタブをクリックして画面を確認
-2. 「Retrying...」と表示されていれば待つ
-3. 完全に止まっていれば Esc でキャンセルし、`/team-disband` → 再実行
+### Permission prompts in sub-agents
 
-### サブエージェントのペインが増えすぎた
+Even with `--dangerously-skip-permissions`, permission dialogs may appear when writing to `.claude/commands/` or `.claude/skills/`.
 
-**対処**: `/team-disband` で全エージェントを一括終了できます。`/team-disband force` で強制終了。
+**Fix**: Select **"2. Yes, and allow Claude to edit its own settings for this session"** at the first prompt.
 
-### cmux 外で実行してしまった
+### `cmux read-screen` returns "Surface is not a terminal"
 
-cmux-team は cmux 内でのみ動作します。通常のターミナルで実行すると、ペイン分割や画面読み取りができません。
+Can occur immediately after workspace creation.
 
-**対処**: cmux を起動してから Claude Code を立ち上げ直してください。
+**Fix**: Run `cmux refresh-surfaces` then retry.
 
-### 初回起動時に「Trust this folder?」確認が出る
+### Sub-agent not responding
 
-新しいディレクトリで Claude を起動すると信頼確認が表示されます。サブエージェント側でも同様です。Conductor がこの確認を自動承認しますが、失敗する場合は手動でサブエージェントのペインをクリックして承認してください。
+May be retrying due to API overload.
 
-## 制約・既知の問題
+**Fix**:
+1. Click the sub-agent's workspace tab to check its screen
+2. If "Retrying..." is shown, wait
+3. If completely stuck, press Esc to cancel, then `/team-disband` → retry
 
-- **API レート制限**: 複数エージェントが同時に API を叩くため、過負荷になりやすい。Claude Max 推奨。
-- **Conductor のペイン幅**: Conductor はサブエージェントと同一ワークスペースに配置しないこと。ペイン幅不足で cmux コマンドが失敗する。
-- **`cmux send` の改行**: 単一行テキストは `\n` で送信可能だが、**複数行テキストでは `\n` が改行として入力欄に追加されるだけで送信されない**。複数行の場合は `cmux send` の後に `cmux send-key return` が必要。Conductor はファイルパス指示（単一行）を使うことで回避している。
-- **初回起動時の信頼確認**: 新しいディレクトリで Claude を起動すると「Trust this folder?」確認が出る。サブエージェント側でも同様。
-- **セッション復帰**: サブエージェントがクラッシュした場合、`claude --resume <session-id>` で復帰可能だが、Conductor 側での自動検知は完全ではない。
+### Too many sub-agent panes
 
-## アーキテクチャ詳細
+**Fix**: `/team-disband` terminates all agents at once. Use `/team-disband force` for forced termination.
 
-### スキル構成
+### Running outside cmux
 
-| スキル | 誰が使う | 何をする |
-|--------|---------|---------|
-| `cmux-team` | Conductor（親 Claude） | エージェント起動・監視・結果統合の方法を知っている |
-| `cmux-agent-role` | サブエージェント | 出力先・完了シグナル・ステータス報告の方法を知っている |
+cmux-team only works inside cmux. Pane splitting and screen reading won't work in a regular terminal.
 
-### 通信モデル
+**Fix**: Start cmux first, then launch Claude Code inside it.
 
-![通信モデル](docs/slides/communication-model.jpeg)
+### "Trust this folder?" prompt on first launch
 
-サブエージェント同士は直接通信しません。すべて `.team/` の共有ファイルか Conductor を介します。
+New directories trigger a trust confirmation in Claude. Sub-agents may also show this. The Conductor auto-approves it, but if it fails, manually click the sub-agent pane and approve.
 
-### エージェントロール
+## Known Limitations
 
-| ロール | 担当 | 出力例 |
-|--------|-----|--------|
-| Researcher | 技術調査・事実収集 | 比較表、推奨事項 |
-| Architect | 技術設計 | 設計書、Mermaid 図 |
-| Reviewer | 品質チェック | Approved / Changes Requested |
-| Implementer | コーディング | コード、変更ファイル一覧 |
-| Tester | テスト作成・実行 | テストコード、実行結果 |
-| DocKeeper | ドキュメント管理 | docs/ の更新差分 |
-| IssueManager | 課題管理 | イシュー分類・要約 |
+- **API rate limits**: Multiple agents hitting the API simultaneously can cause overload. Claude Max recommended.
+- **Conductor pane width**: Never place the Conductor and sub-agents in the same workspace — cmux commands will fail due to insufficient width.
+- **`cmux send` newlines**: Single-line text can be sent with `\n`, but **multi-line text requires `cmux send` followed by `cmux send-key return`**. The Conductor works around this by using file path instructions (single line).
+- **First-launch trust prompt**: New directories trigger a "Trust this folder?" confirmation in Claude, including for sub-agents.
+- **Session recovery**: Crashed sub-agents can be resumed with `claude --resume <session-id>`, but the Conductor's auto-detection is not fully reliable.
 
-## 開発
+## Development
 
-### リポジトリ構造
+### Repository Structure
 
 ```
 cmux-team/
 ├── .claude/
 │   ├── skills/
 │   │   ├── cmux-team/
-│   │   │   ├── SKILL.md           # Conductor 向けオーケストレーション知識
-│   │   │   └── templates/         # エージェントプロンプトテンプレート (8個)
+│   │   │   ├── SKILL.md           # Orchestration knowledge for Conductor
+│   │   │   └── templates/         # Agent prompt templates (8)
 │   │   └── cmux-agent-role/
-│   │       └── SKILL.md           # サブエージェント行動規範
-│   └── commands/                  # スラッシュコマンド定義 (11個)
-├── docs/seeds/                    # 設計シードドキュメント
-├── install.sh                     # インストーラ (--check, --uninstall 対応)
+│   │       └── SKILL.md           # Sub-agent behavior protocol
+│   └── commands/                  # Slash command definitions (11)
+├── docs/seeds/                    # Design seed documents
+├── install.sh                     # Installer (--check, --uninstall)
 ├── LICENSE                        # MIT
 └── README.md
 ```
 
-## ライセンス
+## License
 
-MIT License - 詳細は [LICENSE](LICENSE) を参照。
+MIT License — see [LICENSE](LICENSE) for details.
