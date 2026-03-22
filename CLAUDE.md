@@ -178,7 +178,7 @@ cmux
 
 # 3. リサーチ（最小構成テスト）
 /team-research テストトピック
-# → 別ワークスペースに3ペインが作成されること
+# → 同じワークスペース内に3ペインが分割されること
 # → サブエージェントが起動・実行・完了すること
 # → .team/output/researcher-*.md に結果が書き出されること
 
@@ -193,7 +193,7 @@ cmux
 
 ### 確認ポイント
 
-- Conductor が別ワークスペースにペインを作成すること（同一ワークスペースに詰め込まないこと）
+- Conductor と同じワークスペース内でペインが分割されること（デフォルト動作）
 - `cmux send` 後に `cmux send-key return` で送信されること
 - Trust 確認が出た場合に自動承認されること
 - 完了シグナル (`cmux wait-for`) が正しく受信されること
@@ -226,9 +226,9 @@ cmux send-key --surface surface:M --workspace workspace:N "return"
 
 新しいディレクトリで Claude を起動すると「Trust this folder?」確認が表示される。Conductor が `cmux read-screen` で検出し `cmux send-key return` で自動承認するが、タイミングによっては手動介入が必要な場合がある。
 
-### Conductor の別ワークスペース配置
+### ペイン幅の注意
 
-**Conductor は常に単独ワークスペースに配置し、サブエージェントは別ワークスペースに配置すること。** 同一ワークスペースに詰め込むと Conductor のペイン幅が不足し、`cmux send` や `cmux read-screen` が失敗する。
+サブエージェントは Conductor と同じワークスペース内に `new-split` で配置するのがデフォルト。ペイン数が多すぎて幅が不足すると `cmux send` や `cmux read-screen` が失敗する場合がある。その場合はペイン数を減らすか、ワークスペースを分けて対応する。
 
 ### パーミッション確認
 

@@ -74,14 +74,13 @@ find . -name "*test*" -o -name "*spec*" | head -20
 
 ### 6. テストエージェント起動
 
-**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
+サブエージェントの配置は cmux-team SKILL.md §5 参照。
 
 ```bash
-# エージェント用ワークスペースを作成
-cmux new-workspace --cwd $(pwd)  # → workspace:W, surface:S
-cmux rename-workspace --workspace workspace:W "Test"
-# 複数テスターの場合は分割
-# cmux new-split right --workspace workspace:W  # → surface:S2
+# Conductor と同じワークスペース内で分割（デフォルト）
+cmux new-split right  # → surface:S
+# 複数テスターの場合は追加分割
+# cmux new-split right  # → surface:S2
 ```
 
 各テスターに対して（**1体ずつ、cmux-team SKILL.md §2.1 の手順に従う**）:

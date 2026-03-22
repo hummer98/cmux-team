@@ -84,7 +84,7 @@ Claude: Let's start with requirements. What features do you need?
   ...interactive brainstorming...
 Claude: requirements.md generated. Moving to research phase.
         Launching 3 researchers.
-  → 3 panes open in a separate workspace, each researching in parallel
+  → 3 panes open next to you, each researching in parallel
   → You can watch the progress in real time
   → Results are integrated when all finish
 Claude: Research complete. Here's the summary. Proceed to design?
@@ -182,13 +182,12 @@ The number of concurrent agents is automatically adjusted by use case:
 
 | Config | Agents | Use case | Layout |
 |--------|--------|----------|--------|
-| Small | 1+3 (4) | Research, review | Conductor solo + 1 agent workspace |
-| Medium | 1+5 (6) | Implementation + review | Conductor solo + 2 agent workspaces |
-| Large | 1+7 (8) | Full team | Conductor solo + 3 agent workspaces |
+| Small | 1+3 (4) | Research, review | Same workspace, split panes |
+| Medium | 1+5 (6) | Implementation + review | Same workspace (or 2 if needed) |
+| Large | 1+7 (8) | Full team | Split across 2 workspaces |
 
-The Conductor (your conversation partner) always stays in its own workspace.
-Sub-agents are distributed across separate workspaces (cmux tabs) — switch tabs to watch them.
-The cmux sidebar shows each agent's status, so you can track progress without switching tabs.
+Sub-agents are placed next to the Conductor as split panes in the same workspace, so you can watch their progress in real time.
+The cmux sidebar also shows each agent's status.
 
 ## Hooks Configuration (Recommended)
 
@@ -254,9 +253,9 @@ Sub-agents never communicate directly with each other. All coordination goes thr
 
 ### Conductor pane becomes too narrow
 
-Splitting sub-agents into the same workspace as the Conductor causes pane width issues, breaking `cmux send` and screen reading.
+Too many panes in the same workspace can cause pane width issues, breaking `cmux send` and screen reading.
 
-**Fix**: Sub-agents must be placed in separate workspaces. The Conductor stays in its own workspace. If this happens, run `/team-disband` and retry.
+**Fix**: Reduce the number of panes, or split agents across multiple workspaces. Run `/team-disband` and retry with fewer agents.
 
 ### Permission prompts in sub-agents
 
@@ -296,7 +295,7 @@ New directories trigger a trust confirmation in Claude. Sub-agents may also show
 ## Known Limitations
 
 - **API rate limits**: Multiple agents hitting the API simultaneously can cause overload. Claude Max recommended.
-- **Conductor pane width**: Never place the Conductor and sub-agents in the same workspace — cmux commands will fail due to insufficient width.
+- **Pane width**: Too many panes in one workspace can cause cmux commands to fail. Reduce pane count or split across workspaces.
 - **`cmux send` newlines**: Single-line text can be sent with `\n`, but **multi-line text requires `cmux send` followed by `cmux send-key return`**. The Conductor works around this by using file path instructions (single line).
 - **First-launch trust prompt**: New directories trigger a "Trust this folder?" confirmation in Claude, including for sub-agents.
 - **Session recovery**: Crashed sub-agents can be resumed with `claude --resume <session-id>`, but the Conductor's auto-detection is not fully reliable.

@@ -73,15 +73,12 @@ description: "実装エージェントを起動しコーディングタスクを
 
 ### 6. エージェント起動
 
-**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
+サブエージェントの配置は cmux-team SKILL.md §5 参照。
 
 ```bash
-# エージェント用ワークスペースを作成
-cmux new-workspace --cwd $(pwd)  # → workspace:W, surface:S1
-cmux rename-workspace --workspace workspace:W "Implementers"
-
-# 追加ペインを分割（エージェント数に応じて）
-cmux new-split right --workspace workspace:W  # → surface:S2
+# Conductor と同じワークスペース内で分割（デフォルト）
+cmux new-split right  # → surface:S1
+cmux new-split right  # → surface:S2
 # ...必要に応じて追加
 ```
 

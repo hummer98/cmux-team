@@ -46,18 +46,15 @@ description: "リサーチエージェントを起動しトピックを並列調
 
 ### 4. エージェント起動
 
-**サブエージェントは必ず別ワークスペースに配置する**（cmux-team SKILL.md §5 参照）。
+サブエージェントの配置は cmux-team SKILL.md §5 参照。
 
-#### 4a. エージェント用ワークスペースを作成
+#### 4a. エージェント用ペインを作成
 
 ```bash
-# ワークスペース作成（初回のみ）→ 出力をパースして workspace:W, surface:S1 を取得
-cmux new-workspace --cwd $(pwd)
-cmux rename-workspace --workspace workspace:W "Researchers"
-
-# 追加ペインを分割（2体目、3体目）
-cmux new-split right --workspace workspace:W  # → surface:S2
-cmux new-split right --workspace workspace:W  # → surface:S3
+# Conductor と同じワークスペース内で分割（デフォルト）
+cmux new-split right  # → surface:S1
+cmux new-split right  # → surface:S2
+cmux new-split right  # → surface:S3
 ```
 
 #### 4b. 各リサーチャーを1体ずつ起動

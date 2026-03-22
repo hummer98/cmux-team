@@ -79,22 +79,23 @@ cmux tree --all --json
 
 ### 2.1 スポーン（起動）
 
-**重要**: サブエージェントは必ず別ワークスペースに配置すること（§5 レイアウト戦略参照）。
+サブエージェントの配置は §5 レイアウト戦略を参照。
 
-#### Step 1: エージェント用ワークスペースとペインを作成
+#### Step 1: サブエージェント用ペインを作成
 
-**重要: ワークスペースには必ず用途がわかる名前を付けること。**
-「✳ Claude Code」のままでは、どのワークスペースが何をしているか判別できない。
+**デフォルト: Conductor と同じワークスペース内で `new-split`**（隣で進捗が見える）。
+別ワークスペースにするのは別フォルダ・別プロジェクトで作業させる場合のみ。
 
 ```bash
-# 別ワークスペースを作成（初回のみ）
-cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
+# 同じワークスペース内で分割（デフォルト）
+cmux new-split right  # → surface:M
 
-# 用途がわかる名前を付ける（フェーズ名 or ロール名）
-cmux rename-workspace --workspace workspace:N "Research"  # 例: Research, Design, Impl-1
+# 追加のペインが必要なら更に分割
+cmux new-split right  # → surface:M+1
 
-# 追加のペインが必要なら分割
-cmux new-split right --workspace workspace:N  # → surface:M+1
+# 別プロジェクトで作業させる場合のみ別ワークスペース
+cmux new-workspace --cwd /path/to/other/project  # → workspace:N, surface:M
+cmux rename-workspace --workspace workspace:N "Other Project"
 ```
 
 #### Step 2: team.json にエージェントを登録
@@ -279,63 +280,49 @@ Conductor は以下の手順でエージェントプロンプトを生成する:
 
 ## 5. レイアウト戦略
 
-**重要: Conductor のペインは十分な幅を維持すること。**
-サブエージェントと同一ワークスペースに詰め込むと、Conductor のペインが狭くなり
-`cmux send` や `cmux read-screen` の出力が崩れて操作に失敗する。
+### デフォルト: 同じワークスペース内で分割
 
-### 推奨: Conductor は単独ペイン、サブエージェントは別ワークスペース
-
-すべての構成で、サブエージェントは**別ワークスペース**に配置する。
-**各ワークスペースには必ずフェーズ/ロールを示す名前を付けること。**
+サブエージェントは **Conductor と同じワークスペース内に `new-split` で配置する**。
+隣のペインで進捗がリアルタイムに見えるのが最大のメリット。
 
 ```bash
-# サブエージェント用ワークスペースを作成し、名前を付ける
-cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
-cmux rename-workspace --workspace workspace:N "Research"
+# Conductor の隣に分割
+cmux new-split right  # → surface:M
+cmux new-split right  # → surface:M+1
+```
+
+### 別ワークスペースにするケース
+
+別フォルダ・別プロジェクトで作業させる場合のみ別ワークスペースを使う。
+
+```bash
+cmux new-workspace --cwd /path/to/other/project  # → workspace:N, surface:M
+cmux rename-workspace --workspace workspace:N "Other Project"
 ```
 
 ### Small (1+3)
 ```
-workspace:1 "Conductor"  → Conductor（ユーザーと対話）
-workspace:2 "Research"   → Agent A, Agent B, Agent C (3-way split)
+[Conductor] | [Agent A] | [Agent B] | [Agent C]
+# 同一ワークスペース内で 4-way split
 ```
 
 ### Medium (1+5)
 ```
-workspace:1 "Conductor"  → Conductor
-workspace:2 "Impl-1"     → Agent A, Agent B (split)
-workspace:3 "Impl-2"     → Agent C, Agent D, Agent E (3-way split)
+[Conductor] | [Agent A] | [Agent B] | [Agent C] | [Agent D] | [Agent E]
+# 同一ワークスペース内。ペインが多い場合は上下分割も併用
 ```
 
 ### Large (1+7)
 ```
-workspace:1 "Conductor"  → Conductor
-workspace:2 "Research"    → Agent A, Agent B (split)
-workspace:3 "Design"     → Agent C, Agent D (split)
-workspace:4 "Impl"       → Agent E, Agent F, Agent G (3-way split)
+# ペインが多すぎる場合は 2 ワークスペースに分ける
+workspace:1 → Conductor | Agent A | Agent B | Agent C
+workspace:2 → Agent D | Agent E | Agent F | Agent G
 ```
 
-### エージェント用ワークスペースの作成パターン
+### 注意事項
 
-```bash
-# 1. ワークスペース作成 → 最初のサーフェスが返る
-cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
-
-# 2. すぐに名前を付ける（作成直後に！後回しにしない）
-cmux rename-workspace --workspace workspace:N "Research"
-
-# 3. そのワークスペース内で分割
-cmux new-split right --workspace workspace:N  # → surface:M+1
-cmux new-split right --workspace workspace:N  # → surface:M+2
-```
-
-### NG パターン（避けること）
-
-```
-# NG: 同一ワークスペースに全員を詰め込む
-[Conductor] | [Agent A] | [Agent B] | [Agent C]
-# → Conductor のペインが狭くなり cmux コマンドが失敗する
-```
+- ペイン幅が狭すぎると `cmux send` や `cmux read-screen` の出力が崩れることがある
+- その場合はペイン数を減らすか、ワークスペースを分けて対応する
 
 ## 6. 進捗トラッキング
 
