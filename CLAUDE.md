@@ -1,7 +1,7 @@
 # cmux-team
 
 Claude Code + cmux によるマルチエージェント開発オーケストレーションのスキル/コマンドパッケージ。
-Conductor（親 Claude セッション）が cmux CLI を通じて複数のサブエージェント Claude セッションを起動・監視・統合する。
+Master（ユーザー対話）→ Manager（ループ監視）→ Conductor（タスク実行）→ Agent（実作業）の4層構造。
 
 ## リポジトリ構造
 
@@ -12,9 +12,11 @@ cmux-team/
 │   └── marketplace.json              # Marketplace カタログ
 ├── skills/
 │   ├── cmux-team/
-│   │   ├── SKILL.md                  # Conductor 向けオーケストレーションスキル
-│   │   └── templates/                # エージェントプロンプトテンプレート (8個)
+│   │   ├── SKILL.md                  # 4層アーキテクチャ定義スキル
+│   │   └── templates/                # エージェントプロンプトテンプレート (10個)
 │   │       ├── common-header.md      #   全エージェント共通ヘッダー
+│   │       ├── manager.md            #   Manager ロール
+│   │       ├── conductor.md          #   Conductor ロール
 │   │       ├── researcher.md         #   リサーチャーロール
 │   │       ├── architect.md          #   アーキテクトロール
 │   │       ├── reviewer.md           #   レビュアーロール
@@ -25,7 +27,7 @@ cmux-team/
 │   └── cmux-agent-role/
 │       └── SKILL.md                  # サブエージェント行動規範スキル
 ├── commands/                         # スラッシュコマンド定義 (11個)
-│   ├── team-init.md                  #   .team/ 初期化
+│   ├── team-init.md                  #   Master モード + Manager 起動
 │   ├── team-spec.md                  #   要件ブレスト（対話型）
 │   ├── team-research.md              #   並列リサーチ
 │   ├── team-design.md                #   設計 + レビュー
@@ -54,8 +56,8 @@ cmux-team/
 
 | スキル | 誰が読むか | 内容 |
 |--------|-----------|------|
-| `cmux-team` (SKILL.md) | Conductor（親 Claude） | エージェントの起動・監視・結果収集・レイアウト戦略 |
-| `cmux-agent-role` (SKILL.md) | サブエージェント | 出力プロトコル・完了シグナル・ステータス報告・イシュー作成 |
+| `cmux-team` (SKILL.md) | Master（ユーザーセッション） | 4層アーキテクチャ全体の定義、Master 行動原則 |
+| `cmux-agent-role` (SKILL.md) | Agent（実作業エージェント） | 出力プロトコル・イシュー作成・作業境界 |
 
 ### docs/seeds/ の役割
 
@@ -80,7 +82,7 @@ cmux-team/
 
 1. `skills/cmux-team/templates/<role-name>.md` を作成
 2. `{{VARIABLE}}` プレースホルダーを使用（下記参照）
-3. Conductor が spawn 時にテンプレート変数を置換し `.team/prompts/` に書き出す
+3. Conductor（または Manager）が spawn 時にテンプレート変数を置換し `.team/prompts/` に書き出す
 
 ### install.sh への反映
 
@@ -88,7 +90,7 @@ cmux-team/
 
 ## テンプレート変数仕様
 
-テンプレート内の `{{VARIABLE}}` プレースホルダーは、Conductor がプロンプト生成時に実際の値に置換する。
+テンプレート内の `{{VARIABLE}}` プレースホルダーは、Conductor（または Manager）がプロンプト生成時に実際の値に置換する。
 
 ### 共通変数（common-header.md 由来）
 
@@ -98,6 +100,8 @@ cmux-team/
 | `{{TASK_DESCRIPTION}}` | タスクの説明文 |
 | `{{OUTPUT_FILE}}` | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
 | `{{PROJECT_ROOT}}` | プロジェクトルートの絶対パス |
+| `{{WORKTREE_PATH}}` | git worktree のパス（Agent が作業するディレクトリ） |
+| `{{OUTPUT_DIR}}` | 出力ディレクトリパス（例: `.team/output/`） |
 
 ### ロール固有変数
 
@@ -117,6 +121,9 @@ cmux-team/
 | `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
 | `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
 | `{{OPEN_ISSUES_LIST}}` | issue-manager | オープンイシューの一覧 |
+| `{{MANAGER_INSTRUCTIONS}}` | manager | Manager への指示（監視ループ設定等） |
+| `{{CONDUCTOR_INSTRUCTIONS}}` | conductor | Conductor へのタスク実行指示 |
+| `{{PHASE_NAME}}` | conductor | 実行フェーズ名（research, design, impl 等） |
 
 ## install.sh の動作
 
@@ -129,7 +136,7 @@ cmux-team/
    - `~/.claude/commands/`
 3. ファイルをコピー（`cp -f`、symlink ではない）:
    - スキル SKILL.md × 2
-   - テンプレート × 8
+   - テンプレート × 10
    - コマンド × 11
 4. cmux の存在を確認（警告のみ、インストール自体は続行）
 
@@ -172,28 +179,35 @@ cmux-team/
 cmux
 # Claude Code 内で:
 
-# 2. チーム初期化
+# 2. チーム初期化（Master → Manager 起動）
 /team-init テストプロジェクト
 # → .team/ が作成され team.json が正しいこと
+# → Master が Manager を spawn すること
+# → Manager が監視ループを開始すること
 
-# 3. リサーチ（最小構成テスト）
+# 3. リサーチ（Manager → Conductor → Agent の流れ）
 /team-research テストトピック
-# → 同じワークスペース内に3ペインが分割されること
-# → サブエージェントが起動・実行・完了すること
+# → Manager が Conductor を spawn すること
+# → Conductor が Agent を spawn し、ペインが分割されること
+# → Agent が起動・実行・完了すること
 # → .team/output/researcher-*.md に結果が書き出されること
+# → Conductor がフェーズ完了を Manager に報告すること
 
 # 4. ステータス確認
 /team-status
-# → 各エージェントの状態が表示されること
+# → 各層（Manager, Conductor, Agent）の状態が表示されること
 
 # 5. クリーンアップ
 /team-disband
 # → 全ペインが閉じること
+# → git worktree が削除されること
 ```
 
 ### 確認ポイント
 
-- Conductor と同じワークスペース内でペインが分割されること（デフォルト動作）
+- 4層構造（Master → Manager → Conductor → Agent）が正しく機能すること
+- Manager が Conductor の完了を検知し次のフェーズに進むこと
+- Agent は git worktree 内で作業し、メインブランチを汚さないこと
 - `cmux send` 後に `cmux send-key return` で送信されること
 - Trust 確認が出た場合に自動承認されること
 - 完了シグナル (`cmux wait-for`) が正しく受信されること
@@ -224,7 +238,7 @@ cmux send-key --surface surface:M --workspace workspace:N "return"
 
 ### Trust 確認（初回起動時）
 
-新しいディレクトリで Claude を起動すると「Trust this folder?」確認が表示される。Conductor が `cmux read-screen` で検出し `cmux send-key return` で自動承認するが、タイミングによっては手動介入が必要な場合がある。
+新しいディレクトリで Claude を起動すると「Trust this folder?」確認が表示される。Manager または Conductor が `cmux read-screen` で検出し `cmux send-key return` で自動承認するが、タイミングによっては手動介入が必要な場合がある。
 
 ### ペイン幅の注意
 
@@ -234,6 +248,21 @@ cmux send-key --surface surface:M --workspace workspace:N "return"
 
 `--dangerously-skip-permissions` で起動しても `.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが出る場合がある。最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること。
 
+### git worktree のクリーンアップ
+
+Agent は git worktree 上で作業する。`/team-disband` 実行時に worktree は自動削除されるが、異常終了した場合は手動でクリーンアップが必要。
+
+```bash
+# 残存 worktree の確認
+git worktree list
+# 不要な worktree の削除
+git worktree remove <path> --force
+# worktree の参照が壊れている場合
+git worktree prune
+```
+
+`.team/worktrees/` 配下にも worktree パスが記録されているため、合わせて確認すること。
+
 ### API レート制限
 
-複数エージェント同時実行で API 過負荷になりやすい。Claude Max 推奨。
+複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。

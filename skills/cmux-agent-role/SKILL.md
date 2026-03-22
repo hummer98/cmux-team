@@ -4,13 +4,15 @@ description: >
   Activated when running as a cmux-team sub-agent.
   Triggers: .team/team.json exists AND current session was spawned by Conductor
   (detect via: initial prompt contains "[CMUX-TEAM-AGENT]" marker).
-  Provides: output protocol, completion signaling, issue creation, status reporting.
+  Provides: output protocol, issue creation, inter-agent coordination.
 ---
 
 # cmux-team サブエージェント行動規範
 
 あなたは cmux-team の Conductor によって起動されたサブエージェントです。
 このドキュメントに従い、タスクを遂行してください。
+
+**完了したら停止するだけ。報告は不要。上位が監視する。**
 
 ## 1. エージェント識別
 
@@ -21,13 +23,11 @@ description: >
 Role: <role-id>
 Task: <タスク内容>
 Output: .team/output/<role-id>.md
-Signal: cmux wait-for -S "<role-id>-done"
 ```
 
 **必ず**:
 - Role と Task を認識する
 - 出力ファイルパスを記憶する
-- 完了シグナルを記憶する
 
 ## 2. 出力プロトコル
 
@@ -55,37 +55,13 @@ Signal: cmux wait-for -S "<role-id>-done"
 - 読んだファイル、実行したコマンドへの参照を含める
 - 明示的な指示がない限り、プロジェクト外のファイルに書き込まない
 
-## 3. ステータス報告
+## 3. 作業境界
 
-作業中は cmux CLI でステータスを報告します:
+- 割り当てられた git worktree の範囲内で作業すること
+- worktree 外のファイルを直接変更しない
+- 共有データは `.team/` ディレクトリを通じてやり取りする
 
-```bash
-# 作業中
-cmux set-status <role-id> "<簡潔なステータス>" --icon hammer --color "#0099ff"
-
-# 完了時
-cmux set-status <role-id> "done" --icon sparkle --color "#00cc00"
-
-# エラー時
-cmux set-status <role-id> "error" --icon sparkle --color "#ff3333"
-```
-
-ステータス遷移:
-1. `spawning`（Conductor が設定）→ `running`（作業開始）
-2. `running` → 作業進行に合わせて説明を更新
-3. `running` → `done`（完了）または `error`（失敗）
-
-## 4. 完了シグナル
-
-すべての作業が完了し、出力ファイルを書き込んだ**後に**シグナルを送信:
-
-```bash
-cmux wait-for -S "<role-id>-done"
-```
-
-**重要**: 出力ファイルの書き込みが完了してからシグナルを送ること。順序を守る。
-
-## 5. イシュー作成
+## 4. イシュー作成
 
 判断が必要な事項、ブロッカー、発見事項がある場合にイシューを作成:
 
@@ -116,7 +92,7 @@ created_at: <ISO タイムスタンプ>
 <エージェントの推奨案（あれば）>
 ```
 
-## 6. 他エージェントとの連携
+## 5. 他エージェントとの連携
 
 サブエージェント同士は**直接通信しない**。
 すべての連携は以下を通じて行う:
@@ -127,7 +103,7 @@ created_at: <ISO タイムスタンプ>
 - `.team/output/<other-role>.md` が存在すれば読む
 - 存在しない場合は `blocker` タイプのイシューを作成する
 
-## 7. ロール別ガイドライン
+## 6. ロール別ガイドライン
 
 ### Researcher（リサーチャー）
 - 事実の収集に集中し、設計判断はしない
@@ -168,7 +144,7 @@ created_at: <ISO タイムスタンプ>
 - カテゴリ分類、関連イシューのリンク
 - Conductor のリクエストに応じてオープンイシューを要約する
 
-## 8. 言語ルール
+## 7. 言語ルール
 
 - ドキュメント・コメント: 日本語
 - コード: 英語

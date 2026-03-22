@@ -9,352 +9,480 @@ description: >
 
 # cmux-team: マルチエージェントオーケストレーション
 
-cmux を使って複数の Claude サブエージェントを並行起動・管理するための
-Conductor（指揮者）向けスキル。
+4層アーキテクチャ（Master → Manager → Conductor → Agent）による
+自律的マルチエージェント開発オーケストレーションスキル。
 
-## 0. Conductor の行動原則
+## 0. アーキテクチャ概要
 
-**あなたは Conductor（指揮者）です。** 以下の原則を厳守してください。
-
-### 0.1 自分で作業しない
-
-Conductor はオーケストレーションに専念する。以下の作業は**すべてサブエージェントに委譲**すること:
-
-- コードの調査・読解・分析（`.team/` 配下の管理ファイルを除く）
-- コードの実装・修正・リファクタリング
-- リサーチ・技術調査
-- テストの作成・実行
-- 設計ドキュメントの作成
-- コードレビュー
-
-**Conductor がやるべきこと:**
-
-- ミッションの分析とフェーズ計画
-- タスクの分解とサブエージェントへの割り当て
-- サブエージェントの起動・監視・結果収集
-- フェーズ間の判断（次に進むか、やり直すか）
-- ユーザーへの進捗報告と確認
-- `.team/` 配下の管理ファイル（team.json, specs/, issues/）の読み書き
-
-**唯一の例外:** `/team-spec`（要件ブレスト）はユーザーとの対話が本質であり、Conductor 自身が実施する。
-
-### 0.2 フェーズ進行
-
-Conductor はミッションを以下のフェーズで自律的に進行する。各フェーズの完了後、ユーザーに結果を報告し、次のフェーズに進む承認を得ること。
+### 4層構造
 
 ```
-spec → research → design → impl → review → test → sync-docs
+[ユーザー] ↔ [Master] → [Manager (ループ)] → [Conductor (タスク駆動)] → [Agent (実作業)]
+    │            │              │                       │                      │
+    │            │              │                       │                      ├─ コード実装
+    │            │              │                       │                      ├─ テスト実行
+    │            │              │                       │                      └─ 完了→停止
+    │            │              │                       │
+    │            │              │                       ├─ git worktree 内で作業
+    │            │              │                       ├─ Agent 起動・監視
+    │            │              │                       └─ 結果統合→停止
+    │            │              │
+    │            │              ├─ issue 検出→Conductor spawn
+    │            │              ├─ pull 型監視→結果回収
+    │            │              └─ issue クローズ→ループ継続
+    │            │
+    │            ├─ issue 作成
+    │            ├─ status.json 読み取り→報告
+    │            └─ Manager 健全性確認
+    │
+    └─ 指示・確認
 ```
 
-- すべてのフェーズが必須ではない。ミッションの性質に応じてスキップしてよい
-- フェーズの結果に問題があれば、前のフェーズに戻ることもある（例: レビューで設計に問題 → design に戻る）
-- 各フェーズでサブエージェントを動的に起動し、完了後はペインを閉じる
+### 各層の責務
 
-### 0.3 サブエージェントの動的管理
+| 層 | 責務 | 特徴 |
+|----|------|------|
+| **Master** | ユーザー対話。issue 作成。status.json 読み取り。 | 作業しない。ポーリングしない。 |
+| **Manager** | 別ペインでループ実行。issue 検出→Conductor spawn→結果回収→issue クローズ。 | 常駐ループ。 |
+| **Conductor** | 1タスクを自律実行。git worktree 隔離。Agent spawn→結果統合。 | タスク完了で停止。 |
+| **Agent** | 実作業（実装・テスト・リサーチ等）。 | 完了したら停止。上位が見に来る。 |
 
-- サブエージェントは**フェーズ単位で起動・終了**する。事前に全員を起動しない
-- 前のフェーズの結果に基づいてエージェント数やタスク割り当てを決定する
-- フェーズ完了後はペインを閉じてリソースを解放する
+### 通信方式
 
-## 1. クイックオリエンテーション
+| 方向 | 手段 |
+|------|------|
+| Master → Manager | `.team/issues/open/` （ファイルベース） |
+| Manager → Conductor | `cmux send` （プロンプト送信） |
+| Manager ← Conductor | pull（`cmux read-screen` で `❯` 検出） |
+| Conductor → Agent | `cmux send` （プロンプト送信） |
+| Conductor ← Agent | pull（`cmux read-screen` で `❯` 検出） |
+| Manager → Master | `.team/status.json` （ファイルベース） |
 
-### 環境検出
-```bash
-# cmux 環境確認（必須）
-echo $CMUX_SOCKET_PATH  # 設定されていなければ cmux 外
+## 1. Master の行動原則
 
-# 既存チーム状態の確認
-cat .team/team.json 2>/dev/null
+**あなたは Master です。** 以下の原則を厳守すること。
 
-# 現在のトポロジー確認
-cmux tree --all --json
-```
+### やること
 
-### 前提条件
-- `CMUX_SOCKET_PATH` 環境変数が設定されていること
-- `cmux` コマンドが利用可能であること
-- カレントディレクトリにプロジェクトがあること
+- ユーザーの指示を解釈し `.team/issues/open/` に issue ファイルを作成
+- `/team-init` で Manager を spawn
+- `status.json` を読んでユーザーに進捗を報告
+- Manager の健全性を `cmux read-screen` で確認（Manager が止まっていたら再 spawn）
 
-## 2. エージェントライフサイクルプロトコル
+### やらないこと
 
-### 2.1 スポーン（起動）
+- コードの読解・実装・テスト・レビュー
+- Conductor / Agent の直接起動・監視
+- ポーリング・ループ実行
+- `.team/` 管理ファイル以外のファイル操作
 
-サブエージェントの配置は §5 レイアウト戦略を参照。
-
-#### Step 1: サブエージェント用ペインを作成
-
-**デフォルト: Conductor と同じワークスペース内で `new-split`**（隣で進捗が見える）。
-別ワークスペースにするのは別フォルダ・別プロジェクトで作業させる場合のみ。
+### Manager spawn 手順
 
 ```bash
-# 同じワークスペース内で分割（デフォルト）
+# 1. Manager 用ペインを作成
 cmux new-split right  # → surface:M
 
-# 追加のペインが必要なら更に分割
-cmux new-split right  # → surface:M+1
+# 2. Claude を起動
+cmux send --surface surface:M "claude --dangerously-skip-permissions\n"
 
-# 別プロジェクトで作業させる場合のみ別ワークスペース
-cmux new-workspace --cwd /path/to/other/project  # → workspace:N, surface:M
-cmux rename-workspace --workspace workspace:N "Other Project"
-```
-
-#### Step 2: team.json にエージェントを登録
-
-```bash
-# team.json の agents 配列にエントリを追加
-# { "id": "<role-id>", "role": "<role>", "surface": "surface:M", "status": "spawning", ... }
-```
-
-#### Step 3: サイドバーにステータスを設定
-
-「何が行われているか見える」ための必須ステップ。サイドバーで全エージェントの状態を一目で把握できる。
-
-```bash
-cmux set-status <role-id> "spawning" --icon sparkle --color "#ffcc00"
-```
-
-#### Step 4: Claude を起動（シェルコマンドなので \n で送信される）
-
-```bash
-cmux send --surface surface:M --workspace workspace:N "claude --dangerously-skip-permissions\n"
-```
-
-#### Step 5: Claude のブート完了を待つ
-
-「Trust this folder?」確認または ❯ プロンプトが表示されるまでポーリング:
-
-```bash
-# 最大30秒、3秒間隔でポーリング
-# 検出パターン: "Yes, I trust" (Trust確認) または "❯" (プロンプト)
+# 3. Trust 承認を待つ（最大30秒）
 for i in $(seq 1 10); do
-  SCREEN=$(cmux read-screen --surface surface:M --workspace workspace:N 2>&1)
+  SCREEN=$(cmux read-screen --surface surface:M 2>&1)
   if echo "$SCREEN" | grep -q "Yes, I trust"; then
-    # Trust 確認が出ている → Enter で承認
-    cmux send-key --surface surface:M --workspace workspace:N "return"
-    sleep 5  # Claude 起動待ち
+    cmux send-key --surface surface:M "return"
+    sleep 5
     break
   elif echo "$SCREEN" | grep -q '❯'; then
-    # プロンプトが表示された → 準備完了
     break
   fi
   sleep 3
 done
-```
 
-#### Step 6: タスクプロンプトを送信
-
-**重要: 複数行テキストは `cmux send` の `\n` では送信されない。
-`cmux send` でテキストを入力した後、`cmux send-key return` で明示的に送信すること。**
-
-```bash
-# プロンプトファイルの内容を送信
-PROMPT=$(cat .team/prompts/<role-id>.md)
-cmux send --surface surface:M --workspace workspace:N "${PROMPT}"
-# ↑ \n を付けない！複数行テキストでは改行が入力欄に追加されるだけ
-
-# 明示的に Enter を送信
+# 4. Manager プロンプトを送信
+PROMPT=$(cat .team/prompts/manager.md)
+cmux send --surface surface:M "${PROMPT}"
 sleep 0.5
-cmux send-key --surface surface:M --workspace workspace:N "return"
+cmux send-key --surface surface:M "return"
 ```
 
-**注意: 単一行テキスト（シェルコマンドなど）は `\n` で送信可能。
-複数行テキスト（プロンプトなど）は `send-key return` が必要。**
+### issue ファイル形式
 
-#### Step 7: 送信確認とステータス更新
+`.team/issues/open/<issue-id>.md`:
+
+```markdown
+---
+id: issue-001
+title: ログイン機能の実装
+priority: high
+created_at: 2026-03-23T00:00:00Z
+---
+
+## 要件
+ユーザーがメールアドレスとパスワードでログインできるようにする。
+
+## 受け入れ基準
+- ...
+```
+
+## 2. Manager プロトコル
+
+Manager は別ペインで常駐ループを実行する。テンプレート `templates/manager.md` 参照。
+
+### 2.1 Issue 検出
 
 ```bash
-# 3秒後に画面を確認し、Claude が処理を開始したか検証
-sleep 3
-SCREEN=$(cmux read-screen --surface surface:M --workspace workspace:N 2>&1)
-if echo "$SCREEN" | grep -qE '(Stewing|Thinking|Reading|Writing|Searching)'; then
-  # 処理開始を確認
-  cmux set-status <role-id> "running" --icon hammer --color "#0099ff"
-else
-  # 入力欄にテキストが残っている場合は再度 send-key return
-  cmux send-key --surface surface:M --workspace workspace:N "return"
-  sleep 3
-  cmux set-status <role-id> "running" --icon hammer --color "#0099ff"
-fi
+# .team/issues/open/ を走査
+ls .team/issues/open/*.md 2>/dev/null
 ```
 
-### 2.2 モニタリング
+issue が存在すれば Conductor を起動する。なければ待機して再チェック。
+
+### 2.2 Conductor 起動
 
 ```bash
-# 現在の画面を読む
-cmux read-screen --surface surface:N --lines 50
+# 1. ペイン作成
+cmux new-split right  # → surface:C
 
-# スクロールバック付きで完全な出力を読む
-cmux read-screen --surface surface:N --scrollback --lines 200
+# 2. Claude 起動
+cmux send --surface surface:C "claude --dangerously-skip-permissions\n"
 
-# エージェントがアイドルか確認（プロンプトが再表示されているか）
-cmux read-screen --surface surface:N | tail -5 | grep '❯'
+# 3. Trust 承認待ち（§1 と同じ手順）
+
+# 4. git worktree 作成
+git worktree add .worktrees/conductor-N -b conductor-N/task
+
+# 5. Conductor プロンプトを生成し送信
+# タスク定義を .team/tasks/conductor-N.md に書き出す
+# テンプレートから Conductor プロンプトを合成
+PROMPT=$(cat .team/prompts/conductor-N.md)
+cmux send --surface surface:C "${PROMPT}"
+sleep 0.5
+cmux send-key --surface surface:C "return"
 ```
 
-### 2.3 結果収集
+### 2.3 Conductor 監視（pull 型）
+
+定期的に `cmux read-screen` で Conductor の状態を判定する:
 
 ```bash
-# 方法 A: ファイルベース（推奨）
-cat .team/output/<role-id>.md
+SCREEN=$(cmux read-screen --surface surface:C 2>&1)
 
-# 方法 B: スクリーンスクレイピング（フォールバック）
-cmux read-screen --surface surface:N --scrollback
-
-# ステータスを完了に更新
-cmux set-status <role-id> "done" --icon sparkle --color "#00cc66"
+# 判定ロジック:
+# ❯ あり AND "esc to interrupt" なし → 完了（アイドル状態）
+# ❯ あり AND "esc to interrupt" あり → 実行中
+# ❯ なし → 起動中 or クラッシュ
 ```
 
-### 2.4 完了同期
+**重要: push ではなく pull 型。Conductor は完了したら停止するだけ。Manager が見に来る。**
+
+### 2.4 結果回収
+
+Conductor 完了を検出したら:
 
 ```bash
-# Conductor が待機:
-cmux wait-for "<role-id>-done" --timeout 300
+# 1. 結果を読む
+cat .team/output/conductor-N/summary.md
 
-# エージェント側がシグナル送信（プロンプトで指示済み）:
-# cmux wait-for -S "<role-id>-done"
+# 2. issue を closed に移動
+mv .team/issues/open/issue-XXX.md .team/issues/closed/
+
+# 3. Conductor ペインを閉じる
+cmux send --surface surface:C "/exit\n"
+cmux close-surface --surface surface:C
+
+# 4. worktree ブランチをマージ（テストパス時）
+cd .worktrees/conductor-N
+git add -A && git commit -m "conductor-N: タスク完了"
+cd ../..
+git merge conductor-N/task
+
+# 5. worktree を削除
+git worktree remove .worktrees/conductor-N
+git branch -D conductor-N/task
 ```
 
-### 2.5 ティアダウン（終了）
+### 2.5 ステータス更新
+
+ループのたびに `.team/status.json` を更新する:
 
 ```bash
-# 特定のエージェントを終了
-cmux send --surface surface:N "/exit\n"
-cmux close-surface --surface surface:N
-cmux clear-status <role-id>  # サイドバーからステータスを除去
-
-# 全エージェントを終了
-# team.json を読み、各 surface を順にクローズし、各 role-id の status を clear
+# status.json を書き出す（Master が読む）
 ```
 
-## 3. プロンプト生成プロトコル
+### 2.6 ループ継続
 
-Conductor は以下の手順でエージェントプロンプトを生成する:
+結果回収後、再び §2.1 に戻り次の issue を探す。issue がなければ短い間隔で待機。
 
-1. `.team/specs/` から現在の要件・設計を読む
-2. `.team/issues/open/` から関連コンテキストを読む
-3. テンプレート + コンテキストからロール別プロンプトを合成
-4. `.team/prompts/<role-id>.md` に書き込み（監査証跡）
-5. `cmux send` でエージェントに送信
+## 3. Conductor プロトコル
 
-### テンプレート変数
+Conductor は1つのタスクを自律的に完遂する。テンプレート `templates/conductor.md` 参照。
 
-プロンプトテンプレート内の `{{VARIABLE}}` を実際の値に置換する:
-- `{{ROLE_ID}}` — エージェントのロール ID
-- `{{TASK_DESCRIPTION}}` — タスクの説明
-- `{{OUTPUT_FILE}}` — 出力ファイルパス
-- `{{PROJECT_ROOT}}` — プロジェクトルートパス
-- `{{REQUIREMENTS_CONTENT}}` — requirements.md の内容
-- `{{DESIGN_CONTENT}}` — design.md の内容
-- `{{RESEARCH_SUMMARY}}` — リサーチ結果の要約
+### 3.1 タスク受領
 
-## 4. チーム状態管理 (team.json)
+```bash
+# Manager が書き出したタスク定義を読む
+cat .team/tasks/conductor-N.md
+```
+
+### 3.2 git worktree 内で作業
+
+**すべての作業は `.worktrees/conductor-N/` 内で行う。main ブランチは無傷。**
+
+```bash
+cd .worktrees/conductor-N
+# 以降すべてここで作業
+```
+
+### 3.3 Agent 起動
+
+```bash
+# 1. ペイン作成
+cmux new-split right  # → surface:A
+
+# 2. Claude 起動
+cmux send --surface surface:A "claude --dangerously-skip-permissions\n"
+
+# 3. Trust 承認待ち
+
+# 4. タスクプロンプトを送信
+PROMPT=$(cat .team/prompts/agent-N.md)
+cmux send --surface surface:A "${PROMPT}"
+sleep 0.5
+cmux send-key --surface surface:A "return"
+```
+
+**1体ずつ確実に起動すること。** 起動確認（`cmux read-screen` で処理開始を検出）してから次を起動する。
+
+### 3.4 Agent 監視（pull 型）
+
+Manager と同じ判定ロジック:
+
+```bash
+SCREEN=$(cmux read-screen --surface surface:A 2>&1)
+# ❯ あり AND "esc to interrupt" なし → 完了
+# ❯ あり AND "esc to interrupt" あり → 実行中
+```
+
+### 3.5 結果統合
+
+- Agent の出力ファイルを確認
+- 問題があれば修正指示を追加で `cmux send`
+- テストを実行し全パスを確認
+
+### 3.6 完了
+
+```bash
+# 1. 結果サマリを書き出す
+# .team/output/conductor-N/summary.md に結果を書く
+
+# 2. Agent ペインをすべて閉じる
+cmux send --surface surface:A "/exit\n"
+cmux close-surface --surface surface:A
+
+# 3. 自分は停止する（❯ に戻る）
+# Manager が cmux read-screen で検出する
+```
+
+## 4. Agent プロトコル
+
+Agent は実作業を担当する。`cmux-agent-role` スキル参照。
+
+- 割り当てられたタスクを実行する
+- 指定された出力ファイルに結果を書く
+- **完了したら停止する。報告は不要。** 上位（Conductor）が `cmux read-screen` で検出する
+- worktree 内で作業すること（Conductor から指定されたディレクトリ）
+
+## 5. 通信プロトコル
+
+### ファイルベース通信
+
+`.team/` ディレクトリ構造:
+
+```
+.team/
+├── issues/
+│   ├── open/          # Master が作成、Manager が読む
+│   └── closed/        # Manager が完了時に移動
+├── tasks/             # Manager が作成、Conductor が読む
+├── output/
+│   └── conductor-N/   # Conductor が書く、Manager が読む
+│       └── summary.md
+├── prompts/           # 各層がプロンプト生成時に書き出す（監査証跡）
+├── specs/             # 要件・設計ドキュメント
+├── team.json          # チーム構成（Master が初期化）
+└── status.json        # Manager が更新、Master が読む
+```
+
+### cmux コマンド通信
+
+| コマンド | 用途 |
+|---------|------|
+| `cmux send` | 上位→下位のプロンプト送信 |
+| `cmux send-key return` | 複数行プロンプトの送信確定 |
+| `cmux read-screen` | 上位が下位の画面を読む（pull 型監視） |
+| `cmux close-surface` | 完了した下位ペインの終了 |
+| `cmux new-split right` | サブペインの作成 |
+
+### 複数行テキスト送信の注意
+
+**単一行テキスト**（シェルコマンドなど）は末尾 `\n` で送信可能。
+**複数行テキスト**（プロンプトなど）は `\n` では送信されない。以下の手順を使うこと:
+
+```bash
+# 1. テキストを送信（\n を付けない）
+cmux send --surface surface:M "${PROMPT}"
+# 2. 明示的に Enter を送信
+sleep 0.5
+cmux send-key --surface surface:M "return"
+```
+
+## 6. チーム状態管理
+
+### team.json（Master が初期化）
 
 ```json
 {
   "project": "project-name",
   "description": "",
   "phase": "init",
-  "created_at": "2026-03-18T00:00:00Z",
-  "agents": [
-    {
-      "id": "researcher-1",
-      "role": "researcher",
-      "surface": "surface:21",
-      "workspace": "workspace:5",
-      "status": "running",
-      "task": "Investigate auth patterns",
-      "started_at": "2026-03-18T00:01:00Z"
-    }
-  ],
-  "completed_outputs": [
-    "output/researcher-1.md"
-  ]
+  "architecture": "4-tier",
+  "created_at": "2026-03-23T00:00:00Z",
+  "manager": {
+    "surface": "surface:N",
+    "status": "running"
+  },
+  "conductors": [],
+  "completed_outputs": []
 }
 ```
 
-### ステータス値
-- `spawning` — エージェント起動中
-- `running` — タスク実行中
-- `done` — タスク完了
-- `error` — エラー発生
-- `idle` — アイドル（次のタスク待ち）
+### status.json（Manager が管理）
 
-## 5. レイアウト戦略
+```json
+{
+  "updated_at": "2026-03-23T00:01:00Z",
+  "manager": {
+    "surface": "surface:N",
+    "status": "monitoring",
+    "loop_count": 5
+  },
+  "conductors": [
+    {
+      "id": "conductor-1",
+      "surface": "surface:C",
+      "task": "ログイン機能の実装",
+      "status": "running",
+      "agents": [
+        { "id": "agent-1", "surface": "surface:A", "status": "running" }
+      ]
+    }
+  ],
+  "completed_tasks": [
+    { "id": "conductor-0", "task": "初期セットアップ", "completed_at": "..." }
+  ],
+  "issues": {
+    "open": 2,
+    "closed": 3
+  }
+}
+```
+
+## 7. レイアウト戦略
 
 ### デフォルト: 同じワークスペース内で分割
 
-サブエージェントは **Conductor と同じワークスペース内に `new-split` で配置する**。
-隣のペインで進捗がリアルタイムに見えるのが最大のメリット。
+```
+[Master] | [Manager] | [Conductor] | [Agent A] | [Agent B]
+```
+
+すべて同一ワークスペース内の `new-split right` で配置する。隣のペインで進捗がリアルタイムに見える。
+
+### ペインが多すぎる場合
+
+ペイン幅が狭すぎると `cmux send` や `cmux read-screen` が正常に動作しない。その場合:
+- Agent 数を減らす（3体以下推奨）
+- 完了した Agent のペインを即座に閉じてスペースを確保する
+- やむを得ない場合はワークスペースを分ける
+
+## 8. git worktree プロトコル
+
+### 作成
 
 ```bash
-# Conductor の隣に分割
-cmux new-split right  # → surface:M
-cmux new-split right  # → surface:M+1
+git worktree add .worktrees/conductor-N -b conductor-N/task
 ```
 
-### 別ワークスペースにするケース
+### 作業
 
-別フォルダ・別プロジェクトで作業させる場合のみ別ワークスペースを使う。
+Agent はすべて worktree 内で作業する。main ブランチは常に無傷。
+
+### 成功時
 
 ```bash
-cmux new-workspace --cwd /path/to/other/project  # → workspace:N, surface:M
-cmux rename-workspace --workspace workspace:N "Other Project"
+# Conductor が worktree 内で commit
+cd .worktrees/conductor-N
+git add -A
+git commit -m "conductor-N: タスク完了"
+
+# Manager が main にマージ
+cd /path/to/project
+git merge conductor-N/task
+
+# worktree を削除
+git worktree remove .worktrees/conductor-N
+git branch -D conductor-N/task
 ```
 
-### Small (1+3)
-```
-[Conductor] | [Agent A] | [Agent B] | [Agent C]
-# 同一ワークスペース内で 4-way split
-```
-
-### Medium (1+5)
-```
-[Conductor] | [Agent A] | [Agent B] | [Agent C] | [Agent D] | [Agent E]
-# 同一ワークスペース内。ペインが多い場合は上下分割も併用
-```
-
-### Large (1+7)
-```
-# ペインが多すぎる場合は 2 ワークスペースに分ける
-workspace:1 → Conductor | Agent A | Agent B | Agent C
-workspace:2 → Agent D | Agent E | Agent F | Agent G
-```
-
-### 注意事項
-
-- ペイン幅が狭すぎると `cmux send` や `cmux read-screen` の出力が崩れることがある
-- その場合はペイン数を減らすか、ワークスペースを分けて対応する
-
-## 6. 進捗トラッキング
+### 失敗時
 
 ```bash
-# エージェント別ステータス（サイドバー表示）
-cmux set-status researcher-1 "reading files" --icon hammer --color "#0099ff"
-
-# フェーズ全体の進捗
-cmux set-progress 0.33 --label "Research: 1/3 agents done"
+git worktree remove --force .worktrees/conductor-N
+git branch -D conductor-N/task
 ```
 
-## 7. エラーリカバリ
+## 9. エラーリカバリ
 
-- `cmux read-screen` でエージェントペインにエラーが表示された場合
-  → `.team/issues/open/` にログを記録
-- `cmux wait-for` がタイムアウトした場合
-  → `read-screen` で診断し、ユーザーに通知
-- エージェントがクラッシュした場合
-  → プロンプト消失を検出し、再スポーンを提案
+| 障害 | 検出者 | 対応 |
+|------|--------|------|
+| Agent クラッシュ | Conductor | `cmux read-screen` で異常検出 → ペイン閉じて再 spawn |
+| Conductor クラッシュ | Manager | `cmux read-screen` で異常検出 → ペイン閉じて再 spawn、または abort して issue を reopen |
+| Manager クラッシュ | Master | `cmux read-screen` で Manager ペインが応答なし → ペイン閉じて再 spawn |
+| API レート制限 | 各層 | 待機して再試行。同時 Agent 数を減らす |
 
-## 8. コマンド一覧
+### 異常検出の基準
+
+```bash
+SCREEN=$(cmux read-screen --surface surface:X 2>&1)
+
+# 正常パターン:
+# - "esc to interrupt" が含まれる → 実行中
+# - ❯ が含まれ "esc to interrupt" がない → アイドル（完了）
+
+# 異常パターン:
+# - シェルプロンプト ($, %) が見える → Claude が終了した
+# - エラーメッセージが見える → クラッシュ
+# - 画面が空 → ペインが消えた
+```
+
+## 10. コマンド一覧
+
+### 基本コマンド
 
 | コマンド | 説明 |
 |---------|------|
-| `/team-init` | チーム初期化（.team/ ディレクトリ作成） |
-| `/team-status` | チーム状態表示 |
-| `/team-disband` | 全エージェント終了 |
-| `/team-research` | リサーチエージェント起動 |
-| `/team-spec` | 仕様ブレスト（対話型） |
-| `/team-design` | 設計エージェント起動 |
-| `/team-impl` | 実装エージェント起動 |
-| `/team-review` | レビューエージェント起動 |
-| `/team-test` | テストエージェント起動 |
-| `/team-sync-docs` | ドキュメント同期 |
-| `/team-issue` | イシュー管理 |
+| `/team-init` | Master モード初期化 + Manager spawn |
+| `/team-status` | ステータス表示（status.json 読み取り） |
+| `/team-disband` | 全層終了（Agent → Conductor → Manager の順で bottom-up） |
+| `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
+| `/team-issue` | イシュー管理（issue の作成・一覧・クローズ） |
+
+### 手動オーバーライド（Manager を経由せず直接実行）
+
+| コマンド | 説明 |
+|---------|------|
+| `/team-research` | リサーチ直接実行 |
+| `/team-design` | 設計直接実行 |
+| `/team-impl` | 実装直接実行 |
+| `/team-review` | レビュー直接実行 |
+| `/team-test` | テスト直接実行 |
+| `/team-sync-docs` | ドキュメント同期直接実行 |

@@ -1,65 +1,54 @@
 ---
 allowed-tools: Bash, Read, Write, Edit
-description: "全サブエージェントを終了しチームを解散する"
+description: "全層を終了しチームを解散する"
 ---
 
 # /team-disband
 
-すべてのサブエージェントペインを終了し、チームを解散してください。
+全層（Agent → Conductor → Manager）を bottom-up で終了してください。
 
 ## 手順
 
-1. **`.team/team.json` を読み込む**:
-   - 存在しない場合は「チーム未初期化です」と表示して終了
+1. .team/status.json を読む（存在しなければ team.json を使う）
 
-2. **アクティブエージェントの確認**:
-   - agents 配列が空なら「アクティブなエージェントはありません」と表示して終了
+2. **Layer 1: Agent 終了**
+   各 Conductor の Agent を終了:
+   - cmux send --surface <agent-surface> "/exit\n"
+   - sleep 2
+   - cmux close-surface --surface <agent-surface>
 
-3. **各エージェントを終了**:
-   `$ARGUMENTS` に "force" が含まれる場合はグレースフル終了をスキップ。
+3. **Layer 2: Conductor 終了**
+   各 Conductor を終了:
+   - cmux send --surface <conductor-surface> "/exit\n"
+   - sleep 2
+   - cmux close-surface --surface <conductor-surface>
 
-   **通常終了（グレースフル）**:
-   各エージェントに対して:
-   ```bash
-   # a. /exit コマンドを送信
-   cmux send --surface <surface-ref> "/exit\n"
+4. **Layer 3: git worktree クリーンアップ**
+   - git worktree list で .worktrees/ 内の worktree を列挙
+   - git worktree remove <path> --force で削除
+   - 対応するブランチを git branch -D で削除
 
-   # b. 少し待つ (Claude が終了するのを待つ)
-   sleep 2
+5. **Layer 4: Manager 終了**
+   - cmux send --surface <manager-surface> "/exit\n"
+   - sleep 2
+   - cmux close-surface --surface <manager-surface>
 
-   # c. Surface をクローズ
-   cmux close-surface --surface <surface-ref>
+6. **ステータスクリア**
+   - cmux clear-progress
+   - cmux のサイドバーステータスをすべてクリア
 
-   # d. ステータスをクリア
-   cmux clear-status <role-id>
-   ```
+7. **team.json 更新**
+   - phase: "disbanded"
+   - manager: null
+   - conductors: []
 
-   **強制終了** (`/team-disband force`):
-   ```bash
-   cmux close-surface --surface <surface-ref>
-   cmux clear-status <role-id>
-   ```
-
-4. **プログレスバーをクリア**:
-   ```bash
-   cmux clear-progress
-   ```
-
-5. **team.json を更新**:
-   - agents 配列を空にする
-   - phase を "disbanded" に更新
-
-6. **サマリーを表示**:
-   - 終了したエージェント数
-   - 収集済みの出力ファイル一覧
-   - `.team/output/` にある成果物の案内
+8. サマリー表示
 
 ## 引数
 
-`$ARGUMENTS` = "force"（オプション）: グレースフル終了をスキップし即座にペインをクローズ
+$ARGUMENTS = "force" → グレースフル終了をスキップし即座にペインクローズ
 
 ## 注意事項
 
-- `.team/` ディレクトリ自体は削除しない（出力やイシューは保持）
-- cmux が利用できない場合は team.json のみ更新する
-- エージェントが応答しない場合は 5 秒後に強制クローズにフォールバック
+- .team/ ディレクトリ自体は削除しない
+- マージされていない worktree ブランチがある場合は警告を表示

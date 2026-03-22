@@ -1,128 +1,61 @@
 ---
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
-description: "チームを初期化し .team/ ディレクトリ構造を作成する"
+description: "チームを初期化し Master モードで Manager を起動する"
 ---
 
 # /team-init
 
-チームを初期化し、Conductor モードでミッションを遂行してください。
+チームを初期化し、Master モードに入ってください。
 
 ## 手順
 
 ### Phase 0: インフラ準備
 
-1. **cmux 環境チェック**:
-   - `CMUX_SOCKET_PATH` が設定されているか確認
-   - 設定されていない場合はエラー（Conductor モードには cmux が必須）
+1. cmux 環境チェック (CMUX_SOCKET_PATH)
+2. .team/ ディレクトリ構造を作成（既存ならスキップ）:
+   - team.json, status.json, specs/, output/, issues/open/, issues/closed/, tasks/, prompts/, docs-snapshot/
+3. team.json 初期化（architecture: "4-tier"）
+4. status.json 初期化（空状態）
+5. .team/.gitignore 作成 (output/, prompts/, docs-snapshot/, status.json)
+6. .gitignore に .worktrees/ 追加を提案
 
-2. **`.team/` ディレクトリ構造を作成**（既に存在する場合はスキップ）:
-   ```
-   .team/
-   ├── team.json
-   ├── specs/
-   ├── output/
-   ├── issues/
-   │   ├── open/
-   │   └── closed/
-   ├── prompts/
-   └── docs-snapshot/
-   ```
+### Phase 1: Master モード起動
 
-3. **`team.json` を初期化**（既に存在する場合はスキップ）:
-   ```json
-   {
-     "project": "<カレントディレクトリ名>",
-     "description": "$ARGUMENTS",
-     "phase": "init",
-     "created_at": "<現在のISO 8601タイムスタンプ>",
-     "agents": [],
-     "completed_outputs": []
-   }
-   ```
+**あなたは Master です。** cmux-team スキル（SKILL.md）のセクション 1 に従ってください。
+- 自分でコードを書かない、調査しない
+- すべての作業は Manager → Conductor → Agent に委譲
 
-4. **`.team/.gitignore` を作成**（エフェメラルなファイルを除外）:
-   ```
-   output/
-   prompts/
-   docs-snapshot/
-   ```
+### Phase 2: Manager 起動
 
-5. **プロジェクトの `.gitignore` を確認**:
-   - `.team/output/` と `.team/prompts/` が含まれていなければ追加を提案
+1. Manager 用プロンプトを生成:
+   - templates/common-header.md + templates/manager.md からプロンプトを合成
+   - .team/prompts/manager.md に書き出す
+2. Manager を spawn:
+   - cmux new-split right → surface:N
+   - cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
+   - Trust 確認ポーリング → 承認
+   - ❯ 検出後: cmux send --surface surface:N ".team/prompts/manager.md を読んで、その指示に従って作業を開始してください。\n"
+3. team.json を更新（manager.surface を記録）
 
-### Phase 1: Conductor 起動
+### Phase 3: ミッション投入
 
-**ここからあなたは Conductor（指揮者）です。**
-cmux-team スキル（SKILL.md）のセクション 0「Conductor の行動原則」に従ってください。
+1. $ARGUMENTS を解析してミッションを理解
+2. .team/issues/open/001-<slug>.md に issue を作成
+3. ユーザーに報告: 「Manager を起動しました。ミッション issue を作成しました。Manager が自動的にタスクを拾います。」
 
-- 自分でコードを書かない、調査しない、レビューしない
-- すべての作業はサブエージェントに委譲する
-- オーケストレーション（計画・起動・監視・収集・報告）に専念する
+### Phase 4: Master として待機
 
-### Phase 2: ミッション分析
-
-`$ARGUMENTS` を分析し、以下を判断する:
-
-1. **ミッションの要約**: 何を達成するのか（1-2 文）
-2. **必要なフェーズの選定**: 以下のうちどれが必要かを判断する
-
-| フェーズ | いつ必要か | いつスキップできるか |
-|---------|-----------|-------------------|
-| spec | 要件が曖昧・未定義 | 要件が明確に指定されている |
-| research | 技術選定・調査が必要 | 既知の技術・シンプルなタスク |
-| design | アーキテクチャ設計が必要 | 小規模な変更・バグ修正 |
-| impl | コード変更が必要 | ほぼ常に必要 |
-| review | 品質保証が必要 | 軽微な修正 |
-| test | テストが必要 | ドキュメントのみの変更 |
-| sync-docs | ドキュメント更新が必要 | ドキュメント不要なプロジェクト |
-
-3. **フェーズ計画をユーザーに提示し、承認を得る**:
-
-```
-## ミッション: <要約>
-
-### 実行計画
-1. ✅ spec — 要件をブレストで策定
-2. ⏭️ research — スキップ（既知の技術のため）
-3. ✅ design — アーキテクチャ設計
-4. ✅ impl — 実装（タスク数は設計後に決定）
-5. ✅ review — コードレビュー
-6. ✅ test — テスト作成・実行
-7. ⏭️ sync-docs — スキップ
-
-この計画で進めてよいですか？
-```
-
-### Phase 3: 自律的フェーズ実行
-
-ユーザーの承認後、計画に沿って各フェーズを順番に実行する。
-
-**各フェーズの実行方法:**
-- 該当する `/team-*` コマンドの手順に従う（ただしコマンドとして呼ぶのではなく、その手順を Conductor 自身が実行する）
-- サブエージェントをフェーズごとに動的に起動し、完了後はペインを閉じる
-- フェーズ完了後、結果をユーザーに報告し、次のフェーズに進む承認を得る
-
-**フェーズ間の判断:**
-- レビューで問題が見つかった → impl に戻るか、ユーザーに判断を仰ぐ
-- テストが失敗した → impl で修正するか、ユーザーに判断を仰ぐ
-- 想定外の問題が発生した → イシューを作成し、ユーザーに報告する
-
-**完了条件:**
-- 全フェーズが完了したら、最終サマリーを表示:
-  - 実行したフェーズと結果
-  - 変更されたファイル一覧
-  - 残存イシュー
-  - 後続アクションの提案
+- ユーザーからの追加指示を待つ
+- 「状況は？」→ .team/status.json を読んで報告
+- 「あとこれもやって」→ 新しい issue を作成
+- Manager の健全性を定期的に確認（cmux read-screen で生存確認）
 
 ## 引数
 
-`$ARGUMENTS` = ミッションの説明（必須）
-
-ミッションが空の場合は「何を実現したいですか？」と尋ねる。
+$ARGUMENTS = ミッションの説明（必須）
+空の場合は「何を実現したいですか？」と尋ねる。
 
 ## 注意事項
 
-- `.team/` が既に存在する場合はインフラ準備をスキップし、Conductor モードに直接入る
-- 各フェーズ間で必ずユーザーの承認を得ること（自動的に全フェーズを走らせない）
-- `.team/specs/` と `.team/issues/` は git 追跡対象にする（仕様とイシューは永続化）
-- `.team/output/`, `.team/prompts/`, `.team/docs-snapshot/` はエフェメラル（git 除外）
+- .team/ が既に存在する場合はインフラ準備をスキップし、Manager が稼働中か確認
+- Manager が既に稼働中なら再起動せず、新しい issue のみ作成

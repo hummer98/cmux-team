@@ -224,23 +224,25 @@ Add the following to `~/.claude/settings.json` to get cmux notification ring ale
 
 ## Architecture
 
-### Skill Structure
+### Skill Structure (4-Tier Architecture)
 
 | Skill | Used by | Purpose |
 |-------|---------|---------|
-| `cmux-team` | Conductor (parent Claude) | Knows how to launch, monitor, and integrate agents |
-| `cmux-agent-role` | Sub-agents | Knows output destinations, completion signals, status reporting |
+| `cmux-team` | Master | 4-tier architecture definition, Master behavior |
+| `cmux-agent-role` | Agent | Output protocol, work boundaries |
 
-### Communication Model
+### Communication Model (4-Tier)
 
 ![Communication model](docs/slides/communication-model.jpeg)
 
-Sub-agents never communicate directly with each other. All coordination goes through shared files in `.team/` or via the Conductor.
+The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**. Communication is pull-based — upper tiers monitor lower tiers by reading their status files rather than receiving push notifications. All coordination uses file-based communication through `.team/`. Agents never communicate directly with each other.
 
 ### Agent Roles
 
 | Role | Responsibility | Example Output |
 |------|---------------|----------------|
+| Manager | Issue monitoring, Conductor spawning, result collection | status.json, issue lifecycle |
+| Conductor | Task orchestration, Agent management, worktree isolation | summary.md, test results |
 | Researcher | Technical research & fact gathering | Comparison tables, recommendations |
 | Architect | Technical design | Design docs, Mermaid diagrams |
 | Reviewer | Quality checks | Approved / Changes Requested |
@@ -312,7 +314,7 @@ cmux-team/
 ├── skills/
 │   ├── cmux-team/
 │   │   ├── SKILL.md               # Orchestration knowledge for Conductor
-│   │   └── templates/             # Agent prompt templates (8)
+│   │   └── templates/             # Agent prompt templates (10)
 │   └── cmux-agent-role/
 │       └── SKILL.md               # Sub-agent behavior protocol
 ├── commands/                      # Slash command definitions (11)
