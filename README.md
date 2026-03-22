@@ -231,9 +231,13 @@ Add the following to `~/.claude/settings.json` to get cmux notification ring ale
 | `cmux-team` | Master | 4-tier architecture definition, Master behavior |
 | `cmux-agent-role` | Agent | Output protocol, work boundaries |
 
-### Communication Model (4-Tier)
+### 4-Tier Topology
 
-![Communication model](docs/slides/communication-model.jpeg)
+![4-Tier Agent Topology](docs/slides/4tier-topology.jpeg)
+
+### Communication Model (Pull-Based)
+
+![Communication Model](docs/slides/communication-model-4tier.jpeg)
 
 The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**. Communication is pull-based — upper tiers monitor lower tiers by reading their status files rather than receiving push notifications. All coordination uses file-based communication through `.team/`. Agents never communicate directly with each other.
 
