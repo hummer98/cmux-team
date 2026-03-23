@@ -111,7 +111,7 @@ git branch -d ${CONDUCTOR_ID}/task
   "manager": {
     "surface": "surface:N",
     "status": "monitoring",
-    "loop_count": 0
+    "last_checked_at": "<ISO 8601>"
   },
   "conductors": [],
   "completed_tasks": [],
