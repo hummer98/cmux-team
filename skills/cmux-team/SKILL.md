@@ -32,7 +32,7 @@ description: >
     │            │              └─ タスククローズ→ループ継続
     │            │
     │            ├─ タスク作成
-    │            ├─ status.json 読み取り→報告
+    │            ├─ 真のソース直接参照→報告
     │            └─ Manager 健全性確認
     │
     └─ 指示・確認
@@ -42,7 +42,7 @@ description: >
 
 | 層 | 責務 | 特徴 |
 |----|------|------|
-| **Master** | ユーザー対話。タスク作成。status.json 読み取り。 | 作業しない。ポーリングしない。 |
+| **Master** | ユーザー対話。タスク作成。真のソース直接参照で進捗報告。 | 作業しない。ポーリングしない。 |
 | **Manager** | 別ペインで待機。[TASK_CREATED] 通知で起床→タスク検出→Conductor spawn→結果回収→タスククローズ→アイドル化。 | アイドル時停止、イベント駆動。 |
 | **Conductor** | 1タスクを自律実行。git worktree 隔離。Agent spawn→結果統合。 | タスク完了で停止。 |
 | **Agent** | 実作業（実装・テスト・リサーチ等）。 | 完了したら停止。上位が見に来る。 |
@@ -56,7 +56,7 @@ description: >
 | Manager ← Conductor | pull（`cmux read-screen` で `❯` 検出） |
 | Conductor → Agent | `cmux send` （プロンプト送信） |
 | Conductor ← Agent | pull（`cmux read-screen` で `❯` 検出） |
-| Manager → Master | `.team/status.json` （ファイルベース） |
+| Manager → Master | `.team/logs/manager.log` + `cmux read-screen`（直接参照） |
 
 ## 1. Master の行動原則
 
@@ -66,7 +66,7 @@ description: >
 
 - ユーザーの指示を解釈し `.team/tasks/open/` にタスクファイルを作成
 - `/team-init` で Manager を spawn
-- `status.json` を読んでユーザーに進捗を報告
+- 真のソースを直接参照してユーザーに進捗を報告（`cmux tree`, `ls .team/tasks/`, `manager.log`, `cmux read-screen`）
 - Manager の健全性を `cmux read-screen` で確認（Manager が止まっていたら再 spawn）
 
 ### やらないこと
@@ -189,15 +189,7 @@ git worktree remove .worktrees/conductor-N
 git branch -D conductor-N/task
 ```
 
-### 2.5 ステータス更新
-
-ループのたびに `.team/status.json` を更新する:
-
-```bash
-# status.json を書き出す（Master が読む）
-```
-
-### 2.6 ループ継続・アイドル化
+### 2.5 ループ継続・アイドル化
 
 結果回収後、タスクを再スキャンする。タスクがあれば Conductor を起動、なければアイドル化して Master からの通知を待機。
 
@@ -295,8 +287,7 @@ Agent は実作業を担当する。`cmux-agent-role` スキル参照。
 │       └── summary.md
 ├── prompts/           # 各層がプロンプト生成時に書き出す（監査証跡）
 ├── specs/             # 要件・設計ドキュメント
-├── team.json          # チーム構成（Master が初期化）
-└── status.json        # Manager が更新、Master が読む
+└── team.json          # チーム構成（Master が初期化）
 ```
 
 ### cmux コマンド通信
@@ -342,31 +333,16 @@ cmux send-key --surface surface:M "return"
 }
 ```
 
-### status.json（Manager が管理）
+### 進捗情報の取得方法（Master 向け）
 
-```json
-{
-  "updated_at": "2026-03-24T16:23:00Z",
-  "manager": {
-    "surface": "surface:N",
-    "status": "monitoring"
-  },
-  "conductors": [
-    {
-      "id": "conductor-1774283589",
-      "role": "dockeeper",
-      "issue": 9,
-      "status": "running",
-      "started_at": "2026-03-24T16:23:00Z"
-    }
-  ]
-}
-```
+status.json は廃止。Master は以下の真のソースから直接情報を取得する:
 
-**注記（008 変更）:**
-- `loop_count` は削除（Manager はイベント駆動に変更）
-- `completed_tasks` と `tasks` カウントは削除（履歴は `.team/logs/manager.log` に記録）
-- 各 Conductor には `role` 、 `issue` 、 `started_at` を記録
+| 情報 | 真のソース | 取得方法 |
+|------|-----------|---------|
+| Manager の状態 | Manager ペイン | `cmux read-screen --surface MANAGER` |
+| 稼働中 Conductor | cmux ペイン構成 | `cmux tree` |
+| open task 数 | task ファイル | `ls .team/tasks/open/` |
+| 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
 
 ## 7. レイアウト戦略
 
@@ -514,7 +490,7 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 | コマンド | 説明 |
 |---------|------|
 | `/start` | チーム体制構築（Master + Manager 起動） |
-| `/team-status` | ステータス表示（status.json 読み取り） |
+| `/team-status` | ステータス表示（真のソース直接参照） |
 | `/team-disband` | 全層終了（Agent → Conductor → Manager の順で bottom-up） |
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
 | `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |

@@ -80,7 +80,7 @@ Claude: Created task. Manager will pick it up.
   → You can watch each agent working in real time
 
 You:    How's it going?
-Claude: (reads status.json)
+Claude: (checks Manager screen, cmux tree, task files)
         Conductor-1: implementing (2/3 agents done)
 
 You:    Also add E2E tests
@@ -234,7 +234,7 @@ The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**.
 
 | Role | Responsibility | Example Output |
 |------|---------------|----------------|
-| Manager | Task monitoring (event-driven), Conductor spawning, result collection | status.json, manager.log |
+| Manager | Task monitoring (event-driven), Conductor spawning, result collection | manager.log |
 | Conductor | Task orchestration, Agent management, worktree isolation | summary.md, test results |
 | Researcher | Technical research & fact gathering | Comparison tables, recommendations |
 | Architect | Technical design | Design docs, Mermaid diagrams |

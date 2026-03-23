@@ -294,7 +294,7 @@ cmux
 - **イベント駆動**: アイドル時は停止し、Master からの `[TASK_CREATED]` 通知で起床する。ポーリングしない
 - **Conductor 起動**: `.team/scripts/spawn-conductor.sh` にスクリプト化。worktree 作成・ペイン分割・プロンプト生成・Claude 起動・Trust 承認を決定論的に処理
 - **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
-- **status.json**: 現在の状態のみ保持。`completed_tasks` や `loop_count` は含めない（履歴はログ参照）
+- **status.json は廃止**: Master は真のソース（`cmux read-screen`, `cmux tree`, `ls .team/tasks/`, `manager.log`）を直接参照する
 
 ### `cmux send` の改行問題
 
