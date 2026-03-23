@@ -144,7 +144,7 @@ You: Stop all agents
 
 ## Project Structure Created
 
-Running `/team-init` creates a `.team/` directory in your project:
+Running `/cmux-team:start` creates a `.team/` directory in your project:
 
 ```
 .team/
@@ -304,7 +304,7 @@ cmux-team/
 │   └── marketplace.json           # Marketplace catalog
 ├── skills/
 │   ├── cmux-team/
-│   │   ├── SKILL.md               # Orchestration knowledge for Conductor
+│   │   ├── SKILL.md               # 4-tier architecture definition
 │   │   └── templates/             # Agent prompt templates (10)
 │   └── cmux-agent-role/
 │       └── SKILL.md               # Sub-agent behavior protocol
