@@ -452,6 +452,28 @@ cmux new-split down --surface surface:M  # → [Manager] の下に [Agent]
 git worktree add .worktrees/conductor-N -b conductor-N/task
 ```
 
+### ブートストラップ（作成直後に必ず実行）
+
+git worktree は tracked files のみチェックアウトする。`.gitignore` されたディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）は手動で再構築する必要がある。
+
+```bash
+cd .worktrees/conductor-N
+
+# 依存関係のインストール
+npm install  # or yarn install, pnpm install
+
+# プロジェクト固有の初期化（例: scaffold からのコピー）
+# 各プロジェクトの README や CLAUDE.md を参照して必要な手順を確認
+
+# 環境変数
+direnv allow  # .envrc がある場合
+```
+
+**重要**: 必要な初期化手順はプロジェクトごとに異なる。worktree 作成後、作業開始前に以下を確認すること:
+- `package.json` があれば `npm install`
+- `.gitignore` に記載されたビルド成果物やランタイムディレクトリの有無
+- `.envrc` や環境変数の設定
+
 ### 作業
 
 Agent はすべて worktree 内で作業する。main ブランチは常に無傷。

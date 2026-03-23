@@ -17,6 +17,13 @@ cd {{WORKTREE_PATH}}
 ```
 main ブランチに直接変更を加えてはならない。
 
+## 作業開始前の確認（ブートストラップ）
+
+worktree は tracked files のみ含む。作業開始前に以下を確認すること（SKILL.md §8 参照）:
+- `package.json` があれば `npm install` を実行
+- `.gitignore` に記載されたランタイムディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）の有無を確認し、必要なら再構築
+- `.envrc` や環境変数の設定
+
 ## フェーズ実行
 
 タスクを分析し、必要なフェーズを自律的に実行する:

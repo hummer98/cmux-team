@@ -55,6 +55,13 @@ done
 CONDUCTOR_ID="conductor-$(date +%s)"
 git worktree add ".worktrees/${CONDUCTOR_ID}" -b "${CONDUCTOR_ID}/task"
 
+# worktree のブートストラップ（SKILL.md §8 参照）
+cd ".worktrees/${CONDUCTOR_ID}"
+# package.json があれば npm install
+[ -f package.json ] && npm install
+# プロジェクト固有の初期化手順は CLAUDE.md を参照
+cd -
+
 # タスクファイル作成
 # .team/tasks/${CONDUCTOR_ID}.md にタスク内容を書き出す
 
