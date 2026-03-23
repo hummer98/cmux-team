@@ -152,9 +152,9 @@ cmux wait-for "reviewer-impl-done" --timeout 300
 - REQ-002: ✅ / ❌
 ```
 
-### 8. イシュー作成
+### 8. タスク作成
 
-Critical/Major の指摘に対して自動的にイシューを作成:
+Critical/Major の指摘に対して自動的にタスクを作成:
 
 各指摘に対して `.team/tasks/open/NNN-<slug>.md` を作成:
 ```markdown
@@ -206,7 +206,7 @@ severity: critical|major
 レビューが完了しました。
 
 指摘: Critical X件 / Major Y件 / Minor Z件 / Suggestion W件
-イシュー作成: N件
+タスク作成: N件
 
 次のステップ:
   /team-impl    → 指摘事項を修正（Changes Requested の場合）

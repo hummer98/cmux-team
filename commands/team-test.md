@@ -170,9 +170,9 @@ cmux wait-for "tester-e2e-done" --timeout 300
 - 未カバー要件: REQ-003, REQ-007, REQ-012
 ```
 
-### 11. テスト失敗のイシュー化
+### 11. テスト失敗のタスク化
 
-失敗したテストに対して自動的にイシューを作成:
+失敗したテストに対して自動的にタスクを作成:
 
 `.team/tasks/open/NNN-test-failure-<name>.md`:
 ```markdown
@@ -214,7 +214,7 @@ severity: major
 
 結果: X passed / Y failed
 カバレッジ: Z%
-イシュー作成: N 件
+タスク作成: N 件
 
 次のステップ:
   /team-impl       → テスト失敗の修正（失敗がある場合）

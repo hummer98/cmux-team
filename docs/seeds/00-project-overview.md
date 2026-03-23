@@ -71,7 +71,7 @@ Developers using Claude Code inside cmux who want to parallelize development wor
 │   ├── design.md
 │   └── tasks.md
 ├── output/            # Agent deliverables
-├── issues/
+├── tasks/
 │   ├── open/
 │   └── closed/
 ├── prompts/           # Generated prompts for each agent

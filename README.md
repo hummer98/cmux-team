@@ -153,7 +153,7 @@ Running `/cmux-team:start` creates a `.team/` directory in your project:
 │   ├── requirements.md
 │   ├── design.md
 │   └── tasks.md
-├── issues/            # Design decisions & issues (git tracked)
+├── tasks/             # Tasks & design decisions (git tracked)
 │   ├── open/
 │   └── closed/
 ├── output/            # Agent output (temporary, gitignored)
@@ -161,7 +161,7 @@ Running `/cmux-team:start` creates a `.team/` directory in your project:
 └── docs-snapshot/     # Sync snapshots (temporary, gitignored)
 ```
 
-`specs/` and `issues/` are git-tracked, preserving your design decision history.
+`specs/` and `tasks/` are git-tracked, preserving your design decision history.
 
 ## Parallel Configurations
 
@@ -228,11 +228,13 @@ Add the following to `~/.claude/settings.json` to get cmux notification ring ale
 
 The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**. Communication is pull-based — upper tiers monitor lower tiers by reading their status files rather than receiving push notifications. All coordination uses file-based communication through `.team/`. Agents never communicate directly with each other.
 
+**Manager specifics**: Runs on Haiku model (`--model haiku`) with restricted permissions (`--settings .team/settings.manager.json` — Bash/Read only, no Edit/Write/Agent). Idles when no tasks are available; wakes on `[TASK_CREATED]` notification from Master. Conductor spawning is delegated to `.team/scripts/spawn-conductor.sh`. History is logged to `.team/logs/manager.log`.
+
 ### Agent Roles
 
 | Role | Responsibility | Example Output |
 |------|---------------|----------------|
-| Manager | Task monitoring, Conductor spawning, result collection | status.json, task lifecycle |
+| Manager | Task monitoring (event-driven), Conductor spawning, result collection | status.json, manager.log |
 | Conductor | Task orchestration, Agent management, worktree isolation | summary.md, test results |
 | Researcher | Technical research & fact gathering | Comparison tables, recommendations |
 | Architect | Technical design | Design docs, Mermaid diagrams |
@@ -240,7 +242,7 @@ The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**.
 | Implementer | Coding | Code, list of changed files |
 | Tester | Test creation & execution | Test code, execution results |
 | DocKeeper | Documentation management | docs/ diffs |
-| TaskManager | Task management | Task triage & summaries |
+| Task Manager | Task management | Task triage & summaries |
 
 ## Troubleshooting
 

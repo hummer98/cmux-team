@@ -83,8 +83,8 @@ description: >
 cmux new-split right  # → surface:M
 cmux rename-tab --surface surface:M "[M] Manager"
 
-# 2. Claude を初期プロンプト付きで起動（Trust 承認後すぐに実行される）
-cmux send --surface surface:M "claude --dangerously-skip-permissions '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
+# 2. Claude を初期プロンプト付きで起動（Haiku + 権限制限）
+cmux send --surface surface:M "claude --dangerously-skip-permissions --model haiku --settings .team/settings.manager.json '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
 # 3. Trust 確認が出たら承認
 for i in $(seq 1 10); do
@@ -120,7 +120,7 @@ created_at: 2026-03-23T00:00:00Z
 
 ## 2. Manager プロトコル
 
-Manager は別ペインで常駐ループを実行する。テンプレート `templates/manager.md` 参照。
+Manager は別ペインでイベント駆動で動作する（Haiku モデル、権限制限付き）。テンプレート `templates/manager.md` 参照。
 
 ### 2.1 タスク検出
 
@@ -133,23 +133,20 @@ ls .team/tasks/open/*.md 2>/dev/null
 
 ### 2.2 Conductor 起動
 
+Conductor 起動は `.team/scripts/spawn-conductor.sh` に委譲する:
+
 ```bash
-# 1. ペイン作成（§7 グリッドレイアウトに従い right/down を使い分ける）
-cmux new-split down  # → surface:C
-
-# 2. git worktree 作成
-git worktree add .worktrees/conductor-N -b conductor-N/task
-
-# 3. Conductor プロンプトを生成
-# タスク定義を .team/tasks/conductor-N.md に書き出す
-# テンプレートから .team/prompts/conductor-N.md を合成
-
-# 4. Claude を初期プロンプト付きで起動
-cmux rename-tab --surface surface:C "[C] Conductor"
-cmux send --surface surface:C "claude --dangerously-skip-permissions '.team/prompts/conductor-N.md を読んで指示に従って作業してください。'\n"
-
-# 5. Trust 確認が出たら承認（§1 と同じ手順）
+# タスク ID を取得してスクリプト呼び出し
+TASK_ID=$(echo "$TASK_FILE" | sed -E 's/^.*\/([0-9]+)-.*/\1/')
+bash .team/scripts/spawn-conductor.sh "$TASK_ID"
 ```
+
+スクリプトが以下を決定論的に処理:
+1. git worktree 作成
+2. cmux ペイン作成（`new-split down`）
+3. Conductor プロンプト生成（`.team/prompts/conductor-N.md`）
+4. Claude 起動（初期プロンプト付き）
+5. Trust 承認の自動化
 
 ### 2.3 Conductor 監視（pull 型）
 
@@ -204,8 +201,8 @@ git branch -D conductor-N/task
 
 結果回収後、タスクを再スキャンする。タスクがあれば Conductor を起動、なければアイドル化して Master からの通知を待機。
 
-- **Conductor 稼働中**: 10秒間隔で監視ループを実行
-- **アイドル時（open issues ゼロ）**: Manager は `/exit` で停止。`.team/logs/manager.log` に `idle_start` を記録
+- **Conductor 稼働中**: 30秒間隔で pull 型監視を実行
+- **アイドル時（open tasks ゼロ）**: Manager は停止して待機。`.team/logs/manager.log` に `idle_start` を記録
 - **起床トリガー**: Master が新規 issue を作成すると、システムが `[TASK_CREATED]` 通知をユーザーに表示。ユーザーが新しいセッションで Manager を再 spawn するか、既存 Manager ペインで restart コマンドを実行
 
 ## 3. Conductor プロトコル

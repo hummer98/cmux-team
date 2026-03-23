@@ -220,7 +220,7 @@ Write to {{OUTPUT_FILE}}:
 
 ---
 
-## IssueManager Template
+## TaskManager Template
 
 ```markdown
 {{COMMON_HEADER}}

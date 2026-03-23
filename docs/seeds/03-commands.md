@@ -17,8 +17,8 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
    ├── team.json
    ├── specs/
    ├── output/
-   ├── issues/open/
-   ├── issues/closed/
+   ├── tasks/open/
+   ├── tasks/closed/
    ├── prompts/
    └── docs-snapshot/
    ```

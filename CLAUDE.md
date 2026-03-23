@@ -1,7 +1,7 @@
 # cmux-team
 
 Claude Code + cmux によるマルチエージェント開発オーケストレーションのスキル/コマンドパッケージ。
-Master（ユーザー対話）→ Manager（ループ監視）→ Conductor（タスク実行）→ Agent（実作業）の4層構造。
+Master（ユーザー対話）→ Manager（イベント駆動監視）→ Conductor（タスク実行）→ Agent（実作業）の4層構造。
 
 ## プロジェクトミッション
 
@@ -184,7 +184,7 @@ cmux-team/
 | `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
 | `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
 | `{{OPEN_TASKS_LIST}}` | task-manager | オープンタスクの一覧 |
-| `{{MANAGER_INSTRUCTIONS}}` | manager | Manager への指示（監視ループ設定等） |
+| `{{MANAGER_INSTRUCTIONS}}` | manager | Manager への指示（イベント駆動監視設定等） |
 | `{{CONDUCTOR_INSTRUCTIONS}}` | conductor | Conductor へのタスク実行指示 |
 | `{{PHASE_NAME}}` | conductor | 実行フェーズ名（research, design, impl 等） |
 
@@ -246,7 +246,7 @@ cmux
 /cmux-team:start
 # → .team/ が作成され team.json が正しいこと
 # → Master が Manager を spawn すること
-# → Manager が監視ループを開始すること
+# → Manager がイベント駆動でタスク待機を開始すること
 
 # 3. リサーチ（Manager → Conductor → Agent の流れ）
 /cmux-team:start-research テストトピック
@@ -286,6 +286,15 @@ cmux
 - README.md やユーザー向けテキストは日本語
 
 ## 既知の注意点
+
+### Manager の動作仕様
+
+- **モデル**: `--model haiku` で起動（トークン消費抑制）
+- **権限制限**: `--settings .team/settings.manager.json` で Bash/Read のみ許可。Edit/Write/Agent 等は禁止
+- **イベント駆動**: アイドル時は停止し、Master からの `[TASK_CREATED]` 通知で起床する。ポーリングしない
+- **Conductor 起動**: `.team/scripts/spawn-conductor.sh` にスクリプト化。worktree 作成・ペイン分割・プロンプト生成・Claude 起動・Trust 承認を決定論的に処理
+- **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
+- **status.json**: 現在の状態のみ保持。`completed_tasks` や `loop_count` は含めない（履歴はログ参照）
 
 ### `cmux send` の改行問題
 
