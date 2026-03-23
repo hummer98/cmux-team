@@ -140,8 +140,8 @@ issue が存在すれば Conductor を起動する。なければ待機して再
 ### 2.2 Conductor 起動
 
 ```bash
-# 1. ペイン作成
-cmux new-split right  # → surface:C
+# 1. ペイン作成（§7 グリッドレイアウトに従い right/down を使い分ける）
+cmux new-split down  # → surface:C
 
 # 2. Claude 起動
 cmux send --surface surface:C "claude --dangerously-skip-permissions\n"
@@ -236,8 +236,8 @@ cd .worktrees/conductor-N
 ### 3.3 Agent 起動
 
 ```bash
-# 1. ペイン作成
-cmux new-split right  # → surface:A
+# 1. ペイン作成（§7 グリッドレイアウトに従い right/down を使い分ける）
+cmux new-split down  # → surface:A
 
 # 2. Claude 起動
 cmux send --surface surface:A "claude --dangerously-skip-permissions\n"
@@ -321,7 +321,7 @@ Agent は実作業を担当する。`cmux-agent-role` スキル参照。
 | `cmux send-key return` | 複数行プロンプトの送信確定 |
 | `cmux read-screen` | 上位が下位の画面を読む（pull 型監視） |
 | `cmux close-surface` | 完了した下位ペインの終了 |
-| `cmux new-split right` | サブペインの作成 |
+| `cmux new-split right/down` | サブペインの作成（グリッドレイアウト） |
 
 ### 複数行テキスト送信の注意
 
@@ -389,20 +389,60 @@ cmux send-key --surface surface:M "return"
 
 ## 7. レイアウト戦略
 
-### デフォルト: 同じワークスペース内で分割
+### 基本方針: グリッドレイアウト
+
+`new-split right` だけで横に並べると、ペインが 1/2 → 1/4 → 1/8 と狭くなる。
+**`right` と `down` を組み合わせてグリッド状に配置する。**
+
+### 2ペイン（Master + Manager）
+
+```bash
+cmux new-split right  # → [Master] | [Manager]
+```
+
+### 4ペイン（2x2 グリッド）
+
+```bash
+# 1. 左右に分割
+cmux new-split right  # → [Master] | [Manager]
+
+# 2. Master 側（左）を上下に分割
+cmux new-split down  # → [Master] の下に [Conductor]
+
+# 3. Manager 側（右）を上下に分割
+cmux new-split down --surface surface:M  # → [Manager] の下に [Agent]
+```
+
+結果:
+```
+[Master    ] | [Manager  ]
+[Conductor ] | [Agent    ]
+```
+
+### 6ペイン（2x3 グリッド）
 
 ```
-[Master] | [Manager] | [Conductor] | [Agent A] | [Agent B]
+[Master    ] | [Manager  ]
+[Conductor ] | [Agent A  ]
+[Agent B   ] | [Agent C  ]
 ```
 
-すべて同一ワークスペース内の `new-split right` で配置する。隣のペインで進捗がリアルタイムに見える。
+上下分割を追加で行うことで均等なサイズを維持する。
 
-### ペインが多すぎる場合
+### 分割方向の選び方
 
-ペイン幅が狭すぎると `cmux send` や `cmux read-screen` が正常に動作しない。その場合:
-- Agent 数を減らす（3体以下推奨）
-- 完了した Agent のペインを即座に閉じてスペースを確保する
-- やむを得ない場合はワークスペースを分ける
+| ペイン数 | 分割方法 |
+|---------|---------|
+| 2 | `right` 1回 |
+| 3-4 | `right` + `down` で 2x2 |
+| 5-6 | 2x3 グリッド |
+| 7+ | ワークスペースを分ける |
+
+### 注意事項
+
+- ペイン幅・高さが狭すぎると `cmux send` や `cmux read-screen` が正常に動作しない
+- 完了した Agent のペインは即座に閉じてスペースを確保する
+- 7ペイン以上はワークスペースを分けて対応する
 
 ## 8. git worktree プロトコル
 

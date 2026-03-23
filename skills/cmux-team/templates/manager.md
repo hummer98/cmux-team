@@ -33,8 +33,8 @@ ls .team/issues/open/ 2>/dev/null
 ### 2. Conductor 起動（未割当タスクがある場合）
 
 ```bash
-# ペイン作成
-cmux new-split right  # → surface:N を記録
+# ペイン作成（SKILL.md §7 のグリッドレイアウトに従い right/down を使い分ける）
+cmux new-split down  # → surface:N を記録（2ペイン目以降は down で均等分割）
 
 # Claude 起動
 cmux send --surface surface:N "claude --dangerously-skip-permissions\n"

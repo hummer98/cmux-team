@@ -33,8 +33,8 @@ main ブランチに直接変更を加えてはならない。
 ## Agent 起動手順
 
 ```bash
-# ペイン作成（同じワークスペース内で分割）
-cmux new-split right  # → surface:N
+# ペイン作成（SKILL.md §7 のグリッドレイアウトに従い right/down を使い分ける）
+cmux new-split down  # → surface:N（right/down を交互に使いグリッド状に配置）
 
 # Claude 起動
 cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
