@@ -10,7 +10,7 @@
 - Conductor を spawn してタスクを割り当てる
 - Conductor を pull 型で監視する（`cmux read-screen` で完了検出）
 - 完了した Conductor の結果を回収し、タスクをクローズする
-- `.team/status.json` を更新する（Master が読む用）
+- `.team/logs/manager.log` に状態変化を記録する
 
 ## やらないこと
 
@@ -48,9 +48,6 @@ TASK_ID=$(echo "$TASK_FILE" | sed -E 's/^.*\/([0-9]+)-.*/\1/')
 if bash .team/scripts/spawn-conductor.sh "$TASK_ID" > /tmp/conductor-spawn.txt 2>&1; then
   # 出力をパース
   source /tmp/conductor-spawn.txt
-
-  # status.json に Conductor を記録
-  # （実装: jq または Python で status.json に追加）
 
   # ログ記録
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] conductor_spawned id=$CONDUCTOR_ID task=$TASK_ID surface=$SURFACE" >> .team/logs/manager.log
@@ -103,31 +100,7 @@ git worktree remove .worktrees/${CONDUCTOR_ID}
 git branch -d ${CONDUCTOR_ID}/task
 ```
 
-### 5. ステータス更新
-
-`.team/status.json` を以下の形式で更新（現在の状態のみ保持する）:
-
-```json
-{
-  "updated_at": "<ISO 8601>",
-  "manager": {
-    "surface": "surface:N",
-    "status": "idle|monitoring"
-  },
-  "conductors": [
-    {
-      "id": "conductor-xxx",
-      "task_id": "007",
-      "surface": "surface:N",
-      "status": "running"
-    }
-  ]
-}
-```
-
-**注意:** `completed_tasks`、`tasks` カウント、`last_checked_at` は status.json に含めない。これらはログまたは `ls` で確認する。
-
-### 5.1. ログ書き込み
+### 5. ログ書き込み
 
 状態変化が発生するたびに `.team/logs/manager.log` に追記する（1行1イベント、構造化テキスト）:
 

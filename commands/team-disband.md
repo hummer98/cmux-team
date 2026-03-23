@@ -9,7 +9,8 @@ description: "全層を終了しチームを解散する"
 
 ## 手順
 
-1. .team/status.json を読む（存在しなければ team.json を使う）
+1. .team/team.json を読む（なければ未初期化を案内）
+   稼働中の Conductor は `cmux tree` で確認する
 
 2. **Layer 1: Agent 終了**
    各 Conductor の Agent を終了:

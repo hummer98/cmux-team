@@ -6,9 +6,9 @@
 ## やること
 
 - ユーザーの指示を解釈し `.team/tasks/open/` にタスクファイルを作成する
-- `.team/status.json` を読んでユーザーに進捗を報告する
+- 真のソースを直接参照してユーザーに進捗を報告する
 - Manager（隣のペイン）の健全性を `cmux read-screen` で確認する
-- ユーザーの質問に答える（status.json や .team/output/ を参照して）
+- ユーザーの質問に答える（`cmux tree` / `ls .team/tasks/` / `.team/logs/manager.log` / `.team/output/` を参照して）
 
 ## やらないこと（厳守）
 
@@ -84,10 +84,10 @@ cmux send-key --surface ${MANAGER_SURFACE} "return"
 
 ユーザーに「状況は？」と聞かれたら:
 
-1. `.team/status.json` を読む — Manager の状態と稼働中 Conductor の一覧を確認
-2. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
-3. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
-4. 必要に応じて Manager の画面を `cmux read-screen` で確認
+1. Manager の状態は `cmux read-screen` で Manager ペインの画面を直接確認
+2. 稼働中の Conductor は `cmux tree` でペイン構成を確認
+3. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
+4. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
 
 ## Manager の再起動
 
