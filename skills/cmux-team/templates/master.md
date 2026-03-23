@@ -101,10 +101,10 @@ MANAGER_SURFACE=$(cat .team/team.json | grep -o '"surface": *"[^"]*"' | head -1 
 cmux send --surface ${MANAGER_SURFACE} "/exit\n"
 # 2. 3秒待って Haiku で再起動
 sleep 3
-cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model haiku '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
+cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
 ```
 
-**注意:** Manager は Haiku モデルで動作する。`--model haiku` を忘れないこと。
+**注意:** Manager は Sonnet モデルで動作する。`--model sonnet` を忘れないこと。
 
 ## 言語ルール
 

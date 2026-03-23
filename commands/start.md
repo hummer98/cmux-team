@@ -69,8 +69,8 @@ created_at: <ISO 8601>
 - ready にしたら `cmux send --surface MANAGER "[TASK_CREATED]"` で Manager に通知
 
 ## Manager の再起動
-Manager は Haiku モデルで動作する。再起動時は `--model haiku` を忘れないこと:
-cmux send --surface MANAGER "claude --dangerously-skip-permissions --model haiku --settings .team/settings.manager.json '.team/prompts/manager.md を読んで指示に従ってください。'\n"
+Manager は Sonnet モデルで動作する。再起動時は `--model sonnet` を忘れないこと:
+cmux send --surface MANAGER "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従ってください。'\n"
 ```
 
 ### Phase 2: Master を spawn
@@ -108,7 +108,7 @@ cmux new-split down --surface surface:M  # → surface:G
 cmux rename-tab --surface surface:G "[G] Manager"
 
 # Claude を起動（初期プロンプト付き）
-cmux send --surface surface:G "claude --dangerously-skip-permissions --model haiku --settings .team/settings.manager.json '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
+cmux send --surface surface:G "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
 # Trust 確認が出たら承認
 for i in $(seq 1 10); do

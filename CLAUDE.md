@@ -289,8 +289,8 @@ cmux
 
 ### Manager の動作仕様
 
-- **モデル**: `--model haiku` で起動（トークン消費抑制）
-- **権限制限**: `--settings .team/settings.manager.json` で Bash/Read のみ許可。Edit/Write/Agent 等は禁止
+- **モデル**: `--model sonnet` で起動
+- **権限**: `--dangerously-skip-permissions`（Sonnet はテンプレートの指示に忠実に従うため権限制限不要）
 - **イベント駆動**: アイドル時は停止し、Master からの `[TASK_CREATED]` 通知で起床する。ポーリングしない
 - **Conductor 起動**: `.team/scripts/spawn-conductor.sh` にスクリプト化。worktree 作成・ペイン分割・プロンプト生成・Claude 起動・Trust 承認を決定論的に処理
 - **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）

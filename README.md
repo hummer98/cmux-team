@@ -228,7 +228,7 @@ Add the following to `~/.claude/settings.json` to get cmux notification ring ale
 
 The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**. Communication is pull-based — upper tiers monitor lower tiers by reading their status files rather than receiving push notifications. All coordination uses file-based communication through `.team/`. Agents never communicate directly with each other.
 
-**Manager specifics**: Runs on Haiku model (`--model haiku`) with restricted permissions (`--settings .team/settings.manager.json` — Bash/Read only, no Edit/Write/Agent). Idles when no tasks are available; wakes on `[TASK_CREATED]` notification from Master. Conductor spawning is delegated to `.team/scripts/spawn-conductor.sh`. History is logged to `.team/logs/manager.log`.
+**Manager specifics**: Runs on Sonnet model (`--model sonnet`). Idles when no tasks are available; wakes on `[TASK_CREATED]` notification from Master. Conductor spawning is delegated to `.team/scripts/spawn-conductor.sh`. History is logged to `.team/logs/manager.log`.
 
 ### Agent Roles
 

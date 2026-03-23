@@ -83,8 +83,8 @@ description: >
 cmux new-split right  # → surface:M
 cmux rename-tab --surface surface:M "[M] Manager"
 
-# 2. Claude を初期プロンプト付きで起動（Haiku + 権限制限）
-cmux send --surface surface:M "claude --dangerously-skip-permissions --model haiku --settings .team/settings.manager.json '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
+# 2. Claude を初期プロンプト付きで起動（Sonnet）
+cmux send --surface surface:M "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
 # 3. Trust 確認が出たら承認
 for i in $(seq 1 10); do
