@@ -67,7 +67,7 @@ do_check() {
 
   # commands
   local cmd_count=0
-  for cmd in team team-status team-disband team-research team-spec team-design team-impl team-review team-test team-sync-docs team-issue; do
+  for cmd in start team-status team-disband team-research team-spec team-design team-impl team-review team-test team-sync-docs team-issue; do
     if [[ -f "${COMMANDS_DST}/${cmd}.md" ]]; then
       cmd_count=$((cmd_count + 1))
     fi
@@ -192,7 +192,7 @@ do_install() {
   ok "インストール完了!"
   echo ""
   info "利用可能なコマンド:"
-  echo "  /team           チーム体制を構築"
+  echo "  /start          チーム体制を構築"
   echo "  /team-status    チーム状態を表示"
   echo "  /team-disband   全エージェントを終了"
   echo "  /team-research  リサーチエージェントを起動"

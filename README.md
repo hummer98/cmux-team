@@ -68,7 +68,7 @@ cd cmux-team
 Start cmux, launch Claude Code inside it, and just talk to Claude.
 
 ```
-You:    /team
+You:    /cmux-team:start
 Claude: Team ready.
           [Master ✳]  |  [Manager ⚡]
         What would you like to do?
@@ -90,16 +90,16 @@ Claude: Created another issue. Manager will assign it next.
 You just talk to Master. Manager handles orchestration autonomously. Use individual commands for manual control:
 
 ```
-You:    /team-status                              (check progress anytime)
-You:    /team-disband                             (stop all agents)
-You:    /team-research React vs Vue vs Svelte     (bypass Manager, run directly)
+You:    /cmux-team:start-status                              (check progress anytime)
+You:    /cmux-team:start-disband                             (stop all agents)
+You:    /cmux-team:start-research React vs Vue vs Svelte     (bypass Manager, run directly)
 ```
 
 ### Commands
 
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `/team` | Set up team (Master + Manager) | Once per session |
+| `/cmux-team:start` | Set up team (Master + Manager) | Once per session |
 | `/team-spec [summary]` | Brainstorm requirements | When deciding what to build |
 | `/team-research <topic>` | Parallel research (3 agents) | When technical research is needed |
 | `/team-design` | Design + review | After requirements are set |
