@@ -38,39 +38,35 @@ ls .team/tasks/open/ 2>/dev/null
 
 ### 2. Conductor 起動（未割当タスクがある場合）
 
+Conductor 起動は完全に決定論的なため、シェルスクリプトに委譲する:
+
 ```bash
-# ペイン作成（SKILL.md §7 のグリッドレイアウトに従い right/down を使い分ける）
-cmux new-split down  # → surface:N を記録
-cmux rename-tab --surface surface:N "[N] Conductor"
+# タスク ID を task ファイルから取得（例: "009-sync-docs-after-007-008.md" → "009"）
+TASK_ID=$(echo "$TASK_FILE" | sed -E 's/^.*\/([0-9]+)-.*/\1/')
 
-# git worktree を作成
-CONDUCTOR_ID="conductor-$(date +%s)"
-git worktree add ".worktrees/${CONDUCTOR_ID}" -b "${CONDUCTOR_ID}/task"
+# Conductor 起動スクリプトを呼び出し
+if bash .team/scripts/spawn-conductor.sh "$TASK_ID" > /tmp/conductor-spawn.txt 2>&1; then
+  # 出力をパース
+  source /tmp/conductor-spawn.txt
 
-# worktree のブートストラップ（SKILL.md §8 参照）
-cd ".worktrees/${CONDUCTOR_ID}"
-[ -f package.json ] && npm install
-cd -
+  # status.json に Conductor を記録
+  # （実装: jq または Python で status.json に追加）
 
-# タスクファイル作成
-# .team/tasks/${CONDUCTOR_ID}.md にタスク内容を書き出す
-# .team/prompts/${CONDUCTOR_ID}.md にプロンプトを書き出す
-
-# Claude を初期プロンプト付きで起動（Trust 承認後すぐに実行される）
-cmux send --surface surface:N "claude --dangerously-skip-permissions '.team/prompts/${CONDUCTOR_ID}.md を読んで指示に従って作業してください。'\n"
-
-# Trust 確認が出たら承認
-for i in $(seq 1 10); do
-  SCREEN=$(cmux read-screen --surface surface:N 2>&1)
-  if echo "$SCREEN" | grep -q "Yes, I trust"; then
-    cmux send-key --surface surface:N "return"
-    sleep 3; break
-  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
-    break
-  fi
-  sleep 3
-done
+  # ログ記録
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] conductor_spawned id=$CONDUCTOR_ID task=$TASK_ID surface=$SURFACE" >> .team/logs/manager.log
+else
+  # エラーハンドリング
+  cat /tmp/conductor-spawn.txt >> .team/logs/manager-errors.log
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] conductor_spawn_error task=$TASK_ID" >> .team/logs/manager.log
+fi
 ```
+
+**スクリプトの役割:** `.team/scripts/spawn-conductor.sh` が以下を決定論的に処理
+- git worktree 作成
+- cmux ペイン作成
+- Conductor プロンプト生成
+- Claude 起動
+- Trust 承認の自動化
 
 ### 3. Conductor 監視（pull 型）
 
