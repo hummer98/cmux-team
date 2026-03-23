@@ -51,7 +51,7 @@ description: >
 
 | 方向 | 手段 |
 |------|------|
-| Master → Manager | `.team/issues/open/` （ファイルベース） |
+| Master → Manager | `.team/issues/open/` + `cmux send` 通知（イベント駆動） |
 | Manager → Conductor | `cmux send` （プロンプト送信） |
 | Manager ← Conductor | pull（`cmux read-screen` で `❯` 検出） |
 | Conductor → Agent | `cmux send` （プロンプト送信） |
@@ -202,7 +202,11 @@ git branch -D conductor-N/task
 
 ### 2.6 ループ継続
 
-結果回収後、再び §2.1 に戻り次の issue を探す。issue がなければ短い間隔で待機。
+結果回収後、再び §2.1 に戻り次の issue を探す。
+
+- **Conductor 稼働中**: 10秒間隔で短い監視ループ
+- **アイドル時（Conductor ゼロ + issue ゼロ）**: 120秒フォールバックポーリングで待機。Master からの `cmux send` 通知で即座に起床
+- **通知受信時**: `[ISSUE_CREATED]` メッセージを受け取ったら即座に §2.1 を実行
 
 ## 3. Conductor プロトコル
 
