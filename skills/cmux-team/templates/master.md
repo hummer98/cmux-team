@@ -84,9 +84,10 @@ cmux send-key --surface ${MANAGER_SURFACE} "return"
 
 ユーザーに「状況は？」と聞かれたら:
 
-1. `.team/status.json` を読む
-2. Conductor の状態、完了タスク数、オープンタスク数を報告
-3. 必要に応じて Manager の画面を `cmux read-screen` で確認
+1. `.team/status.json` を読む — Manager の状態と稼働中 Conductor の一覧を確認
+2. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
+3. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
+4. 必要に応じて Manager の画面を `cmux read-screen` で確認
 
 ## 言語ルール
 
