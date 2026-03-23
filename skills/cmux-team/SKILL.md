@@ -81,28 +81,22 @@ description: >
 ```bash
 # 1. Manager 用ペインを作成
 cmux new-split right  # → surface:M
+cmux rename-tab --surface surface:M "[M] Manager"
 
-# 2. Claude を起動
-cmux send --surface surface:M "claude --dangerously-skip-permissions\n"
+# 2. Claude を初期プロンプト付きで起動（Trust 承認後すぐに実行される）
+cmux send --surface surface:M "claude --dangerously-skip-permissions '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
-# 3. Trust 承認を待つ（最大30秒）
+# 3. Trust 確認が出たら承認
 for i in $(seq 1 10); do
   SCREEN=$(cmux read-screen --surface surface:M 2>&1)
   if echo "$SCREEN" | grep -q "Yes, I trust"; then
     cmux send-key --surface surface:M "return"
-    sleep 5
-    break
-  elif echo "$SCREEN" | grep -q '❯'; then
+    sleep 3; break
+  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
     break
   fi
   sleep 3
 done
-
-# 4. Manager プロンプトを送信
-PROMPT=$(cat .team/prompts/manager.md)
-cmux send --surface surface:M "${PROMPT}"
-sleep 0.5
-cmux send-key --surface surface:M "return"
 ```
 
 ### issue ファイル形式
@@ -143,21 +137,18 @@ issue が存在すれば Conductor を起動する。なければ待機して再
 # 1. ペイン作成（§7 グリッドレイアウトに従い right/down を使い分ける）
 cmux new-split down  # → surface:C
 
-# 2. Claude 起動
-cmux send --surface surface:C "claude --dangerously-skip-permissions\n"
-
-# 3. Trust 承認待ち（§1 と同じ手順）
-
-# 4. git worktree 作成
+# 2. git worktree 作成
 git worktree add .worktrees/conductor-N -b conductor-N/task
 
-# 5. Conductor プロンプトを生成し送信
+# 3. Conductor プロンプトを生成
 # タスク定義を .team/tasks/conductor-N.md に書き出す
-# テンプレートから Conductor プロンプトを合成
-PROMPT=$(cat .team/prompts/conductor-N.md)
-cmux send --surface surface:C "${PROMPT}"
-sleep 0.5
-cmux send-key --surface surface:C "return"
+# テンプレートから .team/prompts/conductor-N.md を合成
+
+# 4. Claude を初期プロンプト付きで起動
+cmux rename-tab --surface surface:C "[C] Conductor"
+cmux send --surface surface:C "claude --dangerously-skip-permissions '.team/prompts/conductor-N.md を読んで指示に従って作業してください。'\n"
+
+# 5. Trust 確認が出たら承認（§1 と同じ手順）
 ```
 
 ### 2.3 Conductor 監視（pull 型）
@@ -238,17 +229,12 @@ cd .worktrees/conductor-N
 ```bash
 # 1. ペイン作成（§7 グリッドレイアウトに従い right/down を使い分ける）
 cmux new-split down  # → surface:A
+cmux rename-tab --surface surface:A "[A] Agent"
 
-# 2. Claude 起動
-cmux send --surface surface:A "claude --dangerously-skip-permissions\n"
+# 2. Claude を初期プロンプト付きで起動
+cmux send --surface surface:A "claude --dangerously-skip-permissions '.team/prompts/agent-N.md を読んで指示に従って作業してください。'\n"
 
-# 3. Trust 承認待ち
-
-# 4. タスクプロンプトを送信
-PROMPT=$(cat .team/prompts/agent-N.md)
-cmux send --surface surface:A "${PROMPT}"
-sleep 0.5
-cmux send-key --surface surface:A "return"
+# 3. Trust 確認が出たら承認（§1 と同じ手順）
 ```
 
 **1体ずつ確実に起動すること。** 起動確認（`cmux read-screen` で処理開始を検出）してから次を起動する。

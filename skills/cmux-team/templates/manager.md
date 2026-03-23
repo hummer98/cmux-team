@@ -34,22 +34,8 @@ ls .team/issues/open/ 2>/dev/null
 
 ```bash
 # ペイン作成（SKILL.md §7 のグリッドレイアウトに従い right/down を使い分ける）
-cmux new-split down  # → surface:N を記録（2ペイン目以降は down で均等分割）
-
-# Claude 起動
-cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
-
-# Trust 確認を待つ（最大30秒ポーリング）
-for i in $(seq 1 10); do
-  SCREEN=$(cmux read-screen --surface surface:N 2>&1)
-  if echo "$SCREEN" | grep -q "Yes, I trust"; then
-    cmux send-key --surface surface:N "return"
-    sleep 5; break
-  elif echo "$SCREEN" | grep -q '❯'; then
-    break
-  fi
-  sleep 3
-done
+cmux new-split down  # → surface:N を記録
+cmux rename-tab --surface surface:N "[N] Conductor"
 
 # git worktree を作成
 CONDUCTOR_ID="conductor-$(date +%s)"
@@ -57,16 +43,27 @@ git worktree add ".worktrees/${CONDUCTOR_ID}" -b "${CONDUCTOR_ID}/task"
 
 # worktree のブートストラップ（SKILL.md §8 参照）
 cd ".worktrees/${CONDUCTOR_ID}"
-# package.json があれば npm install
 [ -f package.json ] && npm install
-# プロジェクト固有の初期化手順は CLAUDE.md を参照
 cd -
 
 # タスクファイル作成
 # .team/tasks/${CONDUCTOR_ID}.md にタスク内容を書き出す
+# .team/prompts/${CONDUCTOR_ID}.md にプロンプトを書き出す
 
-# Conductor にプロンプト送信
-cmux send --surface surface:N ".team/prompts/${CONDUCTOR_ID}.md を読んで、その指示に従って作業してください。\n"
+# Claude を初期プロンプト付きで起動（Trust 承認後すぐに実行される）
+cmux send --surface surface:N "claude --dangerously-skip-permissions '.team/prompts/${CONDUCTOR_ID}.md を読んで指示に従って作業してください。'\n"
+
+# Trust 確認が出たら承認
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:N 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    cmux send-key --surface surface:N "return"
+    sleep 3; break
+  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
+    break
+  fi
+  sleep 3
+done
 ```
 
 ### 3. Conductor 監視（pull 型）

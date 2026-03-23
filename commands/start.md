@@ -69,23 +69,20 @@ created_at: <ISO 8601>
 cmux new-split right  # → surface:M
 cmux rename-tab --surface surface:M "[M] Master"
 
-# Claude を起動
-cmux send --surface surface:M "claude --dangerously-skip-permissions\n"
+# Claude を起動（初期プロンプト付きで起動 → Trust 承認後すぐに実行される）
+cmux send --surface surface:M "claude --dangerously-skip-permissions '.team/prompts/master.md を読んで指示に従ってください。ユーザーからのタスクを待ってください。'\n"
 
-# Trust 確認ポーリング → 承認
+# Trust 確認が出たら承認
 for i in $(seq 1 10); do
   SCREEN=$(cmux read-screen --surface surface:M 2>&1)
   if echo "$SCREEN" | grep -q "Yes, I trust"; then
     cmux send-key --surface surface:M "return"
-    sleep 5; break
-  elif echo "$SCREEN" | grep -q '❯'; then
+    sleep 3; break
+  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
     break
   fi
   sleep 3
 done
-
-# Master プロンプトを送信
-cmux send --surface surface:M ".team/prompts/master.md を読んで、その指示に従ってください。ユーザーからのタスクを待ってください。\n"
 ```
 
 ### Phase 3: Manager 用プロンプトを生成
@@ -95,17 +92,24 @@ templates/common-header.md + templates/manager.md からプロンプトを合成
 ### Phase 4: Manager を spawn
 
 ```bash
-# Manager ペインを作成（Master の隣に）
+# Manager ペインを作成（Master の下に）
 cmux new-split down --surface surface:M  # → surface:G
 cmux rename-tab --surface surface:G "[G] Manager"
 
-# Claude を起動
-cmux send --surface surface:G "claude --dangerously-skip-permissions\n"
+# Claude を起動（初期プロンプト付き）
+cmux send --surface surface:G "claude --dangerously-skip-permissions '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
-# Trust 確認ポーリング → 承認（Phase 2 と同じ手順）
-
-# Manager プロンプトを送信
-cmux send --surface surface:G ".team/prompts/manager.md を読んで、その指示に従って作業を開始してください。\n"
+# Trust 確認が出たら承認
+for i in $(seq 1 10); do
+  SCREEN=$(cmux read-screen --surface surface:G 2>&1)
+  if echo "$SCREEN" | grep -q "Yes, I trust"; then
+    cmux send-key --surface surface:G "return"
+    sleep 3; break
+  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
+    break
+  fi
+  sleep 3
+done
 ```
 
 ### Phase 5: team.json を更新
