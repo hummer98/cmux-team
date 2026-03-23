@@ -174,7 +174,7 @@ cmux wait-for "tester-e2e-done" --timeout 300
 
 失敗したテストに対して自動的にイシューを作成:
 
-`.team/issues/open/NNN-test-failure-<name>.md`:
+`.team/tasks/open/NNN-test-failure-<name>.md`:
 ```markdown
 ---
 id: NNN
@@ -219,7 +219,7 @@ severity: major
 次のステップ:
   /team-impl       → テスト失敗の修正（失敗がある場合）
   /team-sync-docs  → ドキュメント同期
-  /team-issue      → イシューの確認・管理
+  /team-task       → タスクの確認・管理
 ```
 
 ## 引数

@@ -31,7 +31,7 @@ Developers using Claude Code inside cmux who want to parallelize development wor
 2. **Autonomy** — Sub-agents run with `--dangerously-skip-permissions`
 3. **File-based communication** — Results written to `.team/output/`, synced via filesystem
 4. **Signal-based coordination** — `cmux wait-for` for completion, `cmux set-status` for progress
-5. **Issue-driven decisions** — Temporary info (design decisions, research findings) tracked as issues
+5. **Task-driven decisions** — Temporary info (design decisions, research findings) tracked as tasks
 
 ## Parallelism Tiers
 
@@ -56,7 +56,7 @@ Developers using Claude Code inside cmux who want to parallelize development wor
     ├── team-review.md
     ├── team-test.md
     ├── team-sync-docs.md
-    ├── team-issue.md
+    ├── team-task.md
     ├── team-status.md
     └── team-disband.md
 ```

@@ -7,6 +7,6 @@ Project: {{PROJECT_ROOT}}
 ## Instructions
 - Write all findings/deliverables to the Output file above
 - When done, just stop. Your supervisor will detect completion.
-- If you encounter a decision point or blocker, create an issue in .team/issues/open/
+- If you encounter a decision point or blocker, create a task in .team/tasks/open/
 - Do NOT interact with other panes. Work independently.
 - Language: Japanese (for documentation), English (for code)

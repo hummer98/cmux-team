@@ -17,7 +17,7 @@ description: >
   Activated when running as a cmux-team sub-agent.
   Triggers: .team/team.json exists AND current session was spawned by Conductor
   (detect via: initial prompt contains "[CMUX-TEAM-AGENT]" marker).
-  Provides: output protocol, completion signaling, issue creation, status reporting.
+  Provides: output protocol, completion signaling, task creation, status reporting.
 ---
 ```
 
@@ -54,8 +54,8 @@ All deliverables MUST be written to the designated output file:
 ## Recommendations
 <if applicable>
 
-## Issues Raised
-- See .team/issues/open/NNN-*.md
+## Tasks Raised
+- See .team/tasks/open/NNN-*.md
 ```
 
 Rules:
@@ -97,18 +97,18 @@ cmux wait-for -S "<role>-done"
 
 IMPORTANT: Signal AFTER writing the output file, not before.
 
-### 5. Issue Creation
+### 5. Task Creation
 
 When the agent encounters decisions, blockers, or findings that need tracking:
 
 ```bash
-# Determine next issue number
-ls .team/issues/open/ | wc -l  # → N, use N+1
+# Determine next task number
+ls .team/tasks/open/ | wc -l  # → N, use N+1
 
-# Create issue file
+# Create task file
 ```
 
-Issue format:
+Task format:
 ```markdown
 ---
 id: NNN
@@ -119,7 +119,7 @@ created_at: <ISO timestamp>
 ---
 
 ## Context
-<what led to this issue>
+<what led to this task>
 
 ## Options
 1. <option A> — pros/cons
@@ -138,7 +138,7 @@ All coordination goes through:
 
 If an agent needs input from another agent's work:
 - Read `.team/output/<other-role>.md` if it exists
-- If not available, raise an issue with type `blocker`
+- If not available, raise a task with type `blocker`
 
 ### 7. Role-Specific Guidelines
 
@@ -176,7 +176,7 @@ If an agent needs input from another agent's work:
 - Update `docs/` to reflect current state
 - Keep documentation concise and accurate
 
-#### IssueManager
-- Monitor `.team/issues/open/` for new issues
-- Categorize, link related issues
-- Summarize open issues for Conductor on request
+#### TaskManager
+- Monitor `.team/tasks/open/` for new tasks
+- Categorize, link related tasks
+- Summarize open tasks for Conductor on request

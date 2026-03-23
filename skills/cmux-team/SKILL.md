@@ -27,11 +27,11 @@ description: >
     │            │              │                       ├─ Agent 起動・監視
     │            │              │                       └─ 結果統合→停止
     │            │              │
-    │            │              ├─ issue 検出→Conductor spawn
+    │            │              ├─ タスク検出→Conductor spawn
     │            │              ├─ pull 型監視→結果回収
-    │            │              └─ issue クローズ→ループ継続
+    │            │              └─ タスククローズ→ループ継続
     │            │
-    │            ├─ issue 作成
+    │            ├─ タスク作成
     │            ├─ status.json 読み取り→報告
     │            └─ Manager 健全性確認
     │
@@ -42,8 +42,8 @@ description: >
 
 | 層 | 責務 | 特徴 |
 |----|------|------|
-| **Master** | ユーザー対話。issue 作成。status.json 読み取り。 | 作業しない。ポーリングしない。 |
-| **Manager** | 別ペインでループ実行。issue 検出→Conductor spawn→結果回収→issue クローズ。 | 常駐ループ。 |
+| **Master** | ユーザー対話。タスク作成。status.json 読み取り。 | 作業しない。ポーリングしない。 |
+| **Manager** | 別ペインでループ実行。タスク検出→Conductor spawn→結果回収→タスククローズ。 | 常駐ループ。 |
 | **Conductor** | 1タスクを自律実行。git worktree 隔離。Agent spawn→結果統合。 | タスク完了で停止。 |
 | **Agent** | 実作業（実装・テスト・リサーチ等）。 | 完了したら停止。上位が見に来る。 |
 
@@ -51,7 +51,7 @@ description: >
 
 | 方向 | 手段 |
 |------|------|
-| Master → Manager | `.team/issues/open/` + `cmux send` 通知（イベント駆動） |
+| Master → Manager | `.team/tasks/open/` + `cmux send` 通知（イベント駆動） |
 | Manager → Conductor | `cmux send` （プロンプト送信） |
 | Manager ← Conductor | pull（`cmux read-screen` で `❯` 検出） |
 | Conductor → Agent | `cmux send` （プロンプト送信） |
@@ -64,7 +64,7 @@ description: >
 
 ### やること
 
-- ユーザーの指示を解釈し `.team/issues/open/` に issue ファイルを作成
+- ユーザーの指示を解釈し `.team/tasks/open/` にタスクファイルを作成
 - `/team-init` で Manager を spawn
 - `status.json` を読んでユーザーに進捗を報告
 - Manager の健全性を `cmux read-screen` で確認（Manager が止まっていたら再 spawn）
@@ -99,13 +99,13 @@ for i in $(seq 1 10); do
 done
 ```
 
-### issue ファイル形式
+### タスクファイル形式
 
-`.team/issues/open/<issue-id>.md`:
+`.team/tasks/open/<task-id>.md`:
 
 ```markdown
 ---
-id: issue-001
+id: task-001
 title: ログイン機能の実装
 priority: high
 created_at: 2026-03-23T00:00:00Z
@@ -122,14 +122,14 @@ created_at: 2026-03-23T00:00:00Z
 
 Manager は別ペインで常駐ループを実行する。テンプレート `templates/manager.md` 参照。
 
-### 2.1 Issue 検出
+### 2.1 タスク検出
 
 ```bash
-# .team/issues/open/ を走査
-ls .team/issues/open/*.md 2>/dev/null
+# .team/tasks/open/ を走査
+ls .team/tasks/open/*.md 2>/dev/null
 ```
 
-issue が存在すれば Conductor を起動する。なければ待機して再チェック。
+タスクが存在すれば Conductor を起動する。なければ待機して再チェック。
 
 ### 2.2 Conductor 起動
 
@@ -174,8 +174,8 @@ Conductor 完了を検出したら:
 # 1. 結果を読む
 cat .team/output/conductor-N/summary.md
 
-# 2. issue を closed に移動
-mv .team/issues/open/issue-XXX.md .team/issues/closed/
+# 2. タスクを closed に移動
+mv .team/tasks/open/task-XXX.md .team/tasks/closed/
 
 # 3. Conductor ペインを閉じる
 cmux send --surface surface:C "/exit\n"
@@ -202,11 +202,11 @@ git branch -D conductor-N/task
 
 ### 2.6 ループ継続
 
-結果回収後、再び §2.1 に戻り次の issue を探す。
+結果回収後、再び §2.1 に戻り次のタスクを探す。
 
 - **Conductor 稼働中**: 10秒間隔で短い監視ループ
-- **アイドル時（Conductor ゼロ + issue ゼロ）**: 120秒フォールバックポーリングで待機。Master からの `cmux send` 通知で即座に起床
-- **通知受信時**: `[ISSUE_CREATED]` メッセージを受け取ったら即座に §2.1 を実行
+- **アイドル時（Conductor ゼロ + タスクゼロ）**: 120秒フォールバックポーリングで待機。Master からの `cmux send` 通知で即座に起床
+- **通知受信時**: `[TASK_CREATED]` メッセージを受け取ったら即座に §2.1 を実行
 
 ## 3. Conductor プロトコル
 
@@ -290,10 +290,9 @@ Agent は実作業を担当する。`cmux-agent-role` スキル参照。
 
 ```
 .team/
-├── issues/
+├── tasks/
 │   ├── open/          # Master が作成、Manager が読む
 │   └── closed/        # Manager が完了時に移動
-├── tasks/             # Manager が作成、Conductor が読む
 ├── output/
 │   └── conductor-N/   # Conductor が書く、Manager が読む
 │       └── summary.md
@@ -370,7 +369,7 @@ cmux send-key --surface surface:M "return"
   "completed_tasks": [
     { "id": "conductor-0", "task": "初期セットアップ", "completed_at": "..." }
   ],
-  "issues": {
+  "tasks": {
     "open": 2,
     "closed": 3
   }
@@ -497,7 +496,7 @@ git branch -D conductor-N/task
 | 障害 | 検出者 | 対応 |
 |------|--------|------|
 | Agent クラッシュ | Conductor | `cmux read-screen` で異常検出 → ペイン閉じて再 spawn |
-| Conductor クラッシュ | Manager | `cmux read-screen` で異常検出 → ペイン閉じて再 spawn、または abort して issue を reopen |
+| Conductor クラッシュ | Manager | `cmux read-screen` で異常検出 → ペイン閉じて再 spawn、または abort してタスクを reopen |
 | Manager クラッシュ | Master | `cmux read-screen` で Manager ペインが応答なし → ペイン閉じて再 spawn |
 | API レート制限 | 各層 | 待機して再試行。同時 Agent 数を減らす |
 
@@ -526,7 +525,7 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 | `/team-status` | ステータス表示（status.json 読み取り） |
 | `/team-disband` | 全層終了（Agent → Conductor → Manager の順で bottom-up） |
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
-| `/team-issue` | イシュー管理（issue の作成・一覧・クローズ） |
+| `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
 
 ### 手動オーバーライド（Manager を経由せず直接実行）
 

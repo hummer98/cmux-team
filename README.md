@@ -74,8 +74,8 @@ Claude: Team ready.
         What would you like to do?
 
 You:    Build a TODO app with React
-Claude: Created issue. Manager will pick it up.
-  → Manager detects issue → spawns Conductor
+Claude: Created task. Manager will pick it up.
+  → Manager detects task → spawns Conductor
   → Conductor spawns Agents in adjacent panes
   → You can watch each agent working in real time
 
@@ -84,7 +84,7 @@ Claude: (reads status.json)
         Conductor-1: implementing (2/3 agents done)
 
 You:    Also add E2E tests
-Claude: Created another issue. Manager will assign it next.
+Claude: Created another task. Manager will assign it next.
 ```
 
 You just talk to Master. Manager handles orchestration autonomously. Use individual commands for manual control:
@@ -107,7 +107,7 @@ You:    /cmux-team:start-research React vs Vue vs Svelte     (bypass Manager, ru
 | `/team-review` | Implementation review | After implementation |
 | `/team-test [scope\|all]` | Create & run tests | After implementation/review |
 | `/team-sync-docs` | Sync documentation | When specs change |
-| `/team-issue [action]` | Issue management | Record design decisions & issues |
+| `/team-task [action]` | Task management | Record design decisions & tasks |
 | `/team-status` | Show team status | Anytime |
 | `/team-disband [force]` | Terminate all agents | When done |
 
@@ -232,7 +232,7 @@ The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**.
 
 | Role | Responsibility | Example Output |
 |------|---------------|----------------|
-| Manager | Issue monitoring, Conductor spawning, result collection | status.json, issue lifecycle |
+| Manager | Task monitoring, Conductor spawning, result collection | status.json, task lifecycle |
 | Conductor | Task orchestration, Agent management, worktree isolation | summary.md, test results |
 | Researcher | Technical research & fact gathering | Comparison tables, recommendations |
 | Architect | Technical design | Design docs, Mermaid diagrams |
@@ -240,7 +240,7 @@ The system uses a 4-tier architecture: **Master > Manager > Conductor > Agent**.
 | Implementer | Coding | Code, list of changed files |
 | Tester | Test creation & execution | Test code, execution results |
 | DocKeeper | Documentation management | docs/ diffs |
-| IssueManager | Issue management | Issue triage & summaries |
+| TaskManager | Task management | Task triage & summaries |
 
 ## Troubleshooting
 

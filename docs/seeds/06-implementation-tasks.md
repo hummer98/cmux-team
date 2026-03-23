@@ -20,7 +20,7 @@ Ordered implementation plan. Each task builds on the previous.
 
 ### Task 1.3: cmux-agent-role SKILL.md
 - Implement the sub-agent behavior skill (simpler, fewer dependencies)
-- Include: output protocol, status reporting, completion signaling, issue creation
+- Include: output protocol, status reporting, completion signaling, task creation
 - This must work standalone when an agent is spawned
 
 ---
@@ -75,8 +75,8 @@ Ordered implementation plan. Each task builds on the previous.
 
 ## Phase 4: Support Commands
 
-### Task 4.1: /team-issue command
-- CRUD for issues in .team/issues/
+### Task 4.1: /team-task command
+- CRUD for tasks in .team/tasks/
 - create, list, show, close subcommands
 
 ### Task 4.2: /team-sync-docs command

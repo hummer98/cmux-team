@@ -98,7 +98,7 @@ cmux close-surface --surface surface:N
 
 The Conductor generates prompts for each agent role by:
 1. Reading `.team/specs/` for current requirements/design
-2. Reading `.team/issues/open/` for relevant context
+2. Reading `.team/tasks/open/` for relevant context
 3. Composing role-specific prompt from template + context
 4. Writing to `.team/prompts/<role>.md` for auditability
 5. Sending to agent via `cmux send`
@@ -160,6 +160,6 @@ cmux set-progress 0.33 --label "Research: 1/3 agents done"
 
 ### 7. Error Recovery
 
-- If `cmux read-screen` shows an error in agent pane → log to `.team/issues/open/`
+- If `cmux read-screen` shows an error in agent pane → log to `.team/tasks/open/`
 - If `cmux wait-for` times out → read-screen to diagnose, notify user
 - If agent crashes → detect via missing prompt, offer to respawn

@@ -24,7 +24,7 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
    ```
 2. Initialize `team.json` with project name (derived from directory) and empty agents list
 3. Add `.team/output/` and `.team/prompts/` to `.gitignore` (ephemeral)
-4. Keep `.team/specs/` and `.team/issues/` tracked in git
+4. Keep `.team/specs/` and `.team/tasks/` tracked in git
 5. Print summary of initialized structure
 
 **Arguments:** `$ARGUMENTS` = project description (optional, stored in team.json)
@@ -170,17 +170,17 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
 
 ---
 
-## /team-issue
+## /team-task
 
-**File:** `team-issue.md`
+**File:** `team-task.md`
 
-**Purpose:** Create, list, close, and manage issues.
+**Purpose:** Create, list, close, and manage tasks.
 
 **Behavior:**
-- `$ARGUMENTS` = "" → list all open issues
-- `$ARGUMENTS` = "create <title>" → create new issue interactively
-- `$ARGUMENTS` = "close <id>" → move issue to closed/
-- `$ARGUMENTS` = "show <id>" → display issue details
+- `$ARGUMENTS` = "" → list all open tasks
+- `$ARGUMENTS` = "create <title>" → create new task interactively
+- `$ARGUMENTS` = "close <id>" → move task to closed/
+- `$ARGUMENTS` = "show <id>" → display task details
 - `$ARGUMENTS` = "<title>" → shorthand for create
 
 ---
@@ -195,7 +195,7 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
 1. Read `.team/team.json`
 2. For each agent: show role, status, surface, current task
 3. Run `cmux tree --all` for topology
-4. Show open issue count
+4. Show open task count
 5. Show phase progress
 6. Check agent health via `cmux read-screen` (detect crashes)
 

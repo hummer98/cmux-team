@@ -4,7 +4,7 @@ description: >
   Activated when running as a cmux-team sub-agent.
   Triggers: .team/team.json exists AND current session was spawned by Conductor
   (detect via: initial prompt contains "[CMUX-TEAM-AGENT]" marker).
-  Provides: output protocol, issue creation, inter-agent coordination.
+  Provides: output protocol, task creation, inter-agent coordination.
 ---
 
 # cmux-team サブエージェント行動規範
@@ -45,8 +45,8 @@ Output: .team/output/<role-id>.md
 ## Recommendations
 <該当する場合>
 
-## Issues Raised
-- See .team/issues/open/NNN-*.md
+## Tasks Raised
+- See .team/tasks/open/NNN-*.md
 ```
 
 **ルール**:
@@ -61,16 +61,16 @@ Output: .team/output/<role-id>.md
 - worktree 外のファイルを直接変更しない
 - 共有データは `.team/` ディレクトリを通じてやり取りする
 
-## 4. イシュー作成
+## 4. タスク作成
 
-判断が必要な事項、ブロッカー、発見事項がある場合にイシューを作成:
+判断が必要な事項、ブロッカー、発見事項がある場合にタスクを作成:
 
 ```bash
-# 次のイシュー番号を決定
-ls .team/issues/open/ | wc -l  # → N, use N+1
+# 次のタスク番号を決定
+ls .team/tasks/open/ | wc -l  # → N, use N+1
 ```
 
-イシュー形式:
+タスク形式:
 
 ```markdown
 ---
@@ -101,7 +101,7 @@ created_at: <ISO タイムスタンプ>
 
 他エージェントの成果が必要な場合:
 - `.team/output/<other-role>.md` が存在すれば読む
-- 存在しない場合は `blocker` タイプのイシューを作成する
+- 存在しない場合は `blocker` タイプのタスクを作成する
 
 ## 6. ロール別ガイドライン
 
@@ -120,7 +120,7 @@ created_at: <ISO タイムスタンプ>
 - レビュー対象のアーティファクトを読む
 - 要件と設計に照らし合わせてチェックする
 - 出力: Approved/Changes Requested + 具体的なフィードバック
-- 重要な懸念事項はイシューとして起票する
+- 重要な懸念事項はタスクとして起票する
 
 ### Implementer（実装者）
 - `.team/specs/design.md` に厳密に従う
@@ -132,17 +132,17 @@ created_at: <ISO タイムスタンプ>
 - 実装出力を読み、何が作られたかを理解する
 - 要件を検証するテストを書く
 - テストを実行し結果を報告する
-- テスト失敗はイシューとして起票する
+- テスト失敗はタスクとして起票する
 
 ### DocKeeper（ドキュメント管理者）
 - すべての出力と仕様を読む
 - `docs/` を現在の状態に反映させる
 - ドキュメントは簡潔かつ正確に
 
-### IssueManager（イシュー管理者）
-- `.team/issues/open/` の新しいイシューを監視する
-- カテゴリ分類、関連イシューのリンク
-- Conductor のリクエストに応じてオープンイシューを要約する
+### TaskManager（タスク管理者）
+- `.team/tasks/open/` の新しいタスクを監視する
+- カテゴリ分類、関連タスクのリンク
+- Conductor のリクエストに応じてオープンタスクを要約する
 
 ## 7. 言語ルール
 

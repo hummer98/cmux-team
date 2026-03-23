@@ -43,7 +43,7 @@ git diff HEAD~10 -- . ':!.team'
 - `.team/specs/requirements.md` — 要件定義
 - `.team/specs/design.md` — 設計ドキュメント
 - `.team/output/implementer-*.md` — 実装エージェントの出力（あれば）
-- `.team/issues/open/` — オープンイシュー
+- `.team/tasks/open/` — オープンタスク
 
 ### 3. レビュアー数の決定
 
@@ -156,7 +156,7 @@ cmux wait-for "reviewer-impl-done" --timeout 300
 
 Critical/Major の指摘に対して自動的にイシューを作成:
 
-各指摘に対して `.team/issues/open/NNN-<slug>.md` を作成:
+各指摘に対して `.team/tasks/open/NNN-<slug>.md` を作成:
 ```markdown
 ---
 id: NNN
@@ -211,7 +211,7 @@ severity: critical|major
 次のステップ:
   /team-impl    → 指摘事項を修正（Changes Requested の場合）
   /team-test    → テストフェーズに進む（Approved の場合）
-  /team-issue   → イシューの確認・管理
+  /team-task    → タスクの確認・管理
 ```
 
 ## 引数

@@ -1,11 +1,11 @@
 ---
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
-description: "イシューの作成・一覧・クローズ・表示を管理する"
+description: "タスクの作成・一覧・クローズ・表示を管理する"
 ---
 
-# /team-issue
+# /team-task
 
-`.team/issues/` のイシューを管理してください。
+`.team/tasks/` のタスクを管理してください。
 
 ## サブコマンド判定
 
@@ -23,12 +23,12 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 
 ### 手順
 
-1. `.team/issues/open/` と `.team/issues/closed/` の全ファイルを読み込む
-2. 各イシューの YAML フロントマターを解析
+1. `.team/tasks/open/` と `.team/tasks/closed/` の全ファイルを読み込む
+2. 各タスクの YAML フロントマターを解析
 3. 一覧を表形式で表示:
 
 ```
-## オープンイシュー (N件)
+## オープンタスク (N件)
 
 | ID  | タイトル                    | タイプ    | ステータス | 起票者         | 作成日     |
 |-----|---------------------------|----------|----------|---------------|-----------|
@@ -42,7 +42,7 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 | 000 | 初期設計の方針決定          | decision | architect      | 2026-03-18 |
 ```
 
-イシューが 0 件の場合: 「オープンイシューはありません」
+タスクが 0 件の場合: 「オープンタスクはありません」
 
 ---
 
@@ -50,22 +50,22 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 
 ### 手順
 
-1. **次のイシュー番号を決定**:
+1. **次のタスク番号を決定**:
    ```bash
    # open/ と closed/ の全ファイルから最大の ID を取得
-   ls .team/issues/open/ .team/issues/closed/ 2>/dev/null | grep -oE '^[0-9]+' | sort -n | tail -1
+   ls .team/tasks/open/ .team/tasks/closed/ 2>/dev/null | grep -oE '^[0-9]+' | sort -n | tail -1
    # → 最大 ID + 1。ファイルがなければ 001 から開始
    ```
 
-2. **イシュー情報の収集**:
+2. **タスク情報の収集**:
    タイトルは `$ARGUMENTS` から取得済み。以下を対話的に確認:
    - **タイプ**: decision / blocker / finding / question
-   - **コンテキスト**: このイシューの背景（1-2 文）
+   - **コンテキスト**: このタスクの背景（1-2 文）
    - **選択肢**（decision/question の場合）: 検討中のオプション
    - **推奨案**（あれば）
 
-3. **イシューファイルを作成**:
-   ファイル名: `.team/issues/open/NNN-<slug>.md`
+3. **タスクファイルを作成**:
+   ファイル名: `.team/tasks/open/NNN-<slug>.md`
    （slug はタイトルから英数字・ハイフンに変換、30 文字以内）
 
    ```markdown
@@ -96,7 +96,7 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
    新規作成時は常に `status: draft` で作成する。
 
 4. **作成確認**:
-   作成したイシューの内容を表示。
+   作成したタスクの内容を表示。
 
 ---
 
@@ -104,17 +104,17 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 
 ### 手順
 
-1. **イシューファイルを検索**:
+1. **タスクファイルを検索**:
    ```bash
-   ls .team/issues/open/ | grep "^$ID"
+   ls .team/tasks/open/ | grep "^$ID"
    ```
 
-2. **イシューが見つからない場合**:
-   「ID: $ID のオープンイシューが見つかりません」と表示
+2. **タスクが見つからない場合**:
+   「ID: $ID のオープンタスクが見つかりません」と表示
 
-3. **イシューファイルを移動**:
+3. **タスクファイルを移動**:
    ```bash
-   mv .team/issues/open/NNN-*.md .team/issues/closed/
+   mv .team/tasks/open/NNN-*.md .team/tasks/closed/
    ```
 
 4. **クローズ情報を追記**:
@@ -127,7 +127,7 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
    ```
 
 5. **確認表示**:
-   「イシュー #NNN をクローズしました: <タイトル>」
+   「タスク #NNN をクローズしました: <タイトル>」
 
 ---
 
@@ -135,16 +135,16 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 
 ### 手順
 
-1. **イシューファイルを検索**:
-   `.team/issues/open/` と `.team/issues/closed/` の両方を検索:
+1. **タスクファイルを検索**:
+   `.team/tasks/open/` と `.team/tasks/closed/` の両方を検索:
    ```bash
-   ls .team/issues/open/ .team/issues/closed/ 2>/dev/null | grep "^$ID"
+   ls .team/tasks/open/ .team/tasks/closed/ 2>/dev/null | grep "^$ID"
    ```
 
-2. **イシューが見つからない場合**:
-   「ID: $ID のイシューが見つかりません」と表示
+2. **タスクが見つからない場合**:
+   「ID: $ID のタスクが見つかりません」と表示
 
-3. **イシューの全内容を表示**:
+3. **タスクの全内容を表示**:
    ファイルの全内容を読み込んで整形表示。
 
 ---
@@ -153,7 +153,7 @@ description: "イシューの作成・一覧・クローズ・表示を管理す
 
 すべての操作の前に:
 - `.team/team.json` が存在すること
-- `.team/issues/` ディレクトリが存在すること（なければ作成）
+- `.team/tasks/` ディレクトリが存在すること（なければ作成）
 
 ## 引数
 

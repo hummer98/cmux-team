@@ -6,10 +6,10 @@
 
 ## あなたの責務
 
-- `.team/issues/open/` を定期的に走査し、未処理タスクを検出する
+- `.team/tasks/open/` を定期的に走査し、未処理タスクを検出する
 - Conductor を spawn してタスクを割り当てる
 - Conductor を pull 型で監視する（`cmux read-screen` で完了検出）
-- 完了した Conductor の結果を回収し、issue をクローズする
+- 完了した Conductor の結果を回収し、タスクをクローズする
 - `.team/status.json` を更新する（Master が読む用）
 
 ## やらないこと
@@ -22,19 +22,19 @@
 
 以下のサイクルを繰り返す:
 
-### 1. Issue 走査
+### 1. タスク走査
 
 ```bash
-ls .team/issues/open/ 2>/dev/null
+ls .team/tasks/open/ 2>/dev/null
 ```
 
-各 issue ファイルの YAML フロントマターを読み、`status` フィールドを確認する:
+各タスクファイルの YAML フロントマターを読み、`status` フィールドを確認する:
 
 - **`status: ready`** → 走査対象。Conductor に割り当て可能
 - **`status: draft`** → **無視する**。Master がユーザーと確認中のため着手しない
 - **`status` フィールドなし** → 後方互換のため `ready` として扱う
 
-未割当のタスク（`status: ready` かつ `.team/tasks/` に対応する Conductor がいないもの）を検出する。
+未割当のタスク（`status: ready` かつ対応する Conductor がいないもの）を検出する。
 
 ### 2. Conductor 起動（未割当タスクがある場合）
 
@@ -91,8 +91,8 @@ SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
 # 出力ファイルを確認
 cat .team/output/${CONDUCTOR_ID}/summary.md
 
-# issue をクローズ
-mv .team/issues/open/NNN-*.md .team/issues/closed/
+# タスクをクローズ
+mv .team/tasks/open/NNN-*.md .team/tasks/closed/
 
 # Conductor ペインを閉じる
 cmux send --surface surface:N "/exit\n"
@@ -121,7 +121,7 @@ git branch -d ${CONDUCTOR_ID}/task
   },
   "conductors": [],
   "completed_tasks": [],
-  "issues": { "open": 0, "closed": 0 }
+  "tasks": { "open": 0, "closed": 0 }
 }
 ```
 
@@ -137,9 +137,9 @@ git branch -d ${CONDUCTOR_ID}/task
 sleep 10  # 10秒間隔で Conductor の状態をチェック
 ```
 
-#### アイドル時（Conductor ゼロ + ready issue ゼロ）— 指数バックオフ
+#### アイドル時（Conductor ゼロ + ready タスクゼロ）— 指数バックオフ
 
-`status: ready` の issue がなく Conductor も稼働していないアイドル状態では、ポーリング間隔を指数バックオフさせる:
+`status: ready` のタスクがなく Conductor も稼働していないアイドル状態では、ポーリング間隔を指数バックオフさせる:
 
 | サイクル | 間隔 |
 |---------|------|
@@ -167,19 +167,19 @@ IDLE_COUNT=$((IDLE_COUNT + 1))
 
 以下のいずれかが発生したら、アイドルカウンタを即座に 0 にリセットする:
 
-- **`status: ready` の issue を検出した場合** → リセットして Conductor 起動へ
-- **Master からの `[ISSUE_CREATED]` 通知を受け取った場合** → リセットして §1 へ
+- **`status: ready` のタスクを検出した場合** → リセットして Conductor 起動へ
+- **Master からの `[TASK_CREATED]` 通知を受け取った場合** → リセットして §1 へ
 - **Conductor が稼働中になった場合** → 10秒間隔の監視モードへ切り替え
 
 ```bash
 # リセット例
-IDLE_COUNT=0  # ready issue 検出時・通知受信時にリセット
+IDLE_COUNT=0  # ready タスク検出時・通知受信時にリセット
 ```
 
 #### Master からの通知を受け取った場合
 
-Master は issue 作成後に `cmux send` で `[ISSUE_CREATED]` メッセージを送ってくる。
-このメッセージを受け取ったら、sleep を待たず即座にアイドルカウンタをリセットし §1 Issue 走査を実行すること。
+Master はタスク作成後に `cmux send` で `[TASK_CREATED]` メッセージを送ってくる。
+このメッセージを受け取ったら、sleep を待たず即座にアイドルカウンタをリセットし §1 タスク走査を実行すること。
 
 **注意:** `cmux send` による通知はベストエフォートであり、届かない場合もある。
 そのため指数バックオフの上限 120秒がフォールバックポーリングとして機能する。
@@ -192,4 +192,4 @@ Conductor は最大 3 つまで同時に稼働させる。API レート制限を
 
 - Conductor がクラッシュした場合: ペインを閉じて再 spawn を検討
 - worktree が残った場合: `git worktree remove --force` でクリーンアップ
-- issue が stuck した場合: issue にエラー情報を追記し、新しい Conductor で再試行
+- タスクが stuck した場合: タスクにエラー情報を追記し、新しい Conductor で再試行
