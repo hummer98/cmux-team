@@ -1,89 +1,111 @@
 #!/bin/bash
-# spawn-conductor.sh - Deterministic Conductor spawn script
+# spawn-conductor.sh — Conductor を決定論的に起動する
+#
 # Usage: bash .team/scripts/spawn-conductor.sh <task-id>
+# Output (stdout): KEY=VALUE 形式の起動情報
+# Exit: 0=成功, 1=失敗
 
-set -e
+set -euo pipefail
 
+TASK_ID="${1:?Usage: spawn-conductor.sh <task-id>}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TASK_ID="${1:-}"
+cd "$PROJECT_ROOT"
 
-# Error handling
-if [[ -z "$TASK_ID" ]]; then
-  echo "ERROR: task-id required" >&2
-  echo "Usage: bash .team/scripts/spawn-conductor.sh <task-id>" >&2
-  exit 1
-fi
-
-# Verify task file exists
-TASK_FILE=$(find "$PROJECT_ROOT/.team/tasks/open/" -name "${TASK_ID}-*.md" 2>/dev/null | head -1)
+# --- 1. task ファイルの存在確認 ---
+# ゼロパディングあり/なし両方で検索
+TASK_FILE=$(ls .team/tasks/open/${TASK_ID}-*.md .team/tasks/open/0${TASK_ID}-*.md .team/tasks/open/00${TASK_ID}-*.md 2>/dev/null | head -1) || true
 if [[ -z "$TASK_FILE" ]]; then
-  echo "ERROR: task file not found for task ID: $TASK_ID" >&2
+  TASK_FILE=$(ls .team/issues/open/${TASK_ID}-*.md .team/issues/open/0${TASK_ID}-*.md .team/issues/open/00${TASK_ID}-*.md 2>/dev/null | head -1) || true
+fi
+if [[ -z "$TASK_FILE" ]]; then
+  echo "ERROR: task file not found for ID=${TASK_ID}" >&2
   exit 1
 fi
 
-# Generate Conductor ID
+# --- 2. Conductor ID 生成 ---
 CONDUCTOR_ID="conductor-$(date +%s)"
 
-# Step 1: Create cmux pane
-if ! command -v cmux &> /dev/null; then
-  echo "ERROR: cmux not found" >&2
-  exit 1
-fi
-
-PANE_OUTPUT=$(cmux new-split down 2>&1)
-SURFACE=$(echo "$PANE_OUTPUT" | grep -oP 'surface:\d+' | head -1 || echo "")
-if [[ -z "$SURFACE" ]]; then
-  echo "ERROR: failed to create cmux pane" >&2
-  exit 1
-fi
-
-# Step 2: Rename tab
-cmux rename-tab --surface "$SURFACE" "[C$TASK_ID] Conductor" 2>/dev/null || true
-
-# Step 3: Create git worktree
-cd "$PROJECT_ROOT"
-WORKTREE_PATH=".worktrees/${CONDUCTOR_ID}"
-git worktree add "$WORKTREE_PATH" -b "${CONDUCTOR_ID}/task" > /dev/null 2>&1 || {
+# --- 3. git worktree 作成 ---
+WORKTREE_PATH="${PROJECT_ROOT}/.worktrees/${CONDUCTOR_ID}"
+git worktree add "$WORKTREE_PATH" -b "${CONDUCTOR_ID}/task" >&2 || {
   echo "ERROR: failed to create git worktree" >&2
   exit 1
 }
 
-# Step 4: Generate Conductor prompt
-PROMPT_FILE=".team/prompts/${CONDUCTOR_ID}.md"
-mkdir -p "$(dirname "$PROMPT_FILE")"
-cat > "$PROMPT_FILE" << 'PROMPT_EOF'
-[CMUX-TEAM-AGENT]
-Role: conductor
-Task: implementer running
-Output: .team/output/conductor-${CONDUCTOR_ID}/summary.md
-Project: ${PROJECT_ROOT}
+# worktree ブートストラップ
+if [[ -f "${WORKTREE_PATH}/package.json" ]]; then
+  (cd "$WORKTREE_PATH" && npm install) >&2 2>&1 || true
+fi
 
-You are Conductor for task. Start implementing.
+# --- 4. Conductor プロンプト生成 ---
+TASK_CONTENT=$(cat "$TASK_FILE")
+OUTPUT_DIR=".team/output/${CONDUCTOR_ID}"
+PROMPT_FILE=".team/prompts/${CONDUCTOR_ID}.md"
+mkdir -p "$OUTPUT_DIR" "$(dirname "$PROMPT_FILE")"
+
+cat > "$PROMPT_FILE" << PROMPT_EOF
+# Conductor ロール
+
+あなたは 4層エージェントアーキテクチャの **Conductor** です。
+割り当てられた 1 つのタスクを自律的に完了してください。
+
+## タスク
+
+${TASK_CONTENT}
+
+## 作業ディレクトリ
+
+すべての作業は git worktree \`${WORKTREE_PATH}\` 内で行う。
+\`\`\`bash
+cd ${WORKTREE_PATH}
+\`\`\`
+main ブランチに直接変更を加えてはならない。
+
+## 完了時の処理
+
+1. 変更をコミットする: \`cd ${WORKTREE_PATH} && git add -A && git commit -m "feat: <タスク概要>"\`
+2. 結果サマリーを \`${PROJECT_ROOT}/${OUTPUT_DIR}/summary.md\` に書き出す
+3. 完了マーカーを作成: \`touch ${PROJECT_ROOT}/${OUTPUT_DIR}/done\`
+4. 停止する（❯ プロンプトに戻る）
+
+## やらないこと
+
+- main ブランチで作業する（worktree を使う）
+- Manager や Master に直接報告する（出力ファイルを書くだけ）
+- ユーザーに確認を求める（自律的に判断する）
 PROMPT_EOF
 
-# Step 5: Launch Claude
-cmux send --surface "$SURFACE" "claude --dangerously-skip-permissions\n"
+# --- 5. cmux ペイン作成 ---
+SPLIT_OUTPUT=$(cmux new-split down 2>&1)
+SURFACE=$(echo "$SPLIT_OUTPUT" | awk '{print $2}')
 
-# Step 6: Poll for Trust confirmation (max 30s)
-for i in {1..10}; do
+if [[ -z "$SURFACE" || "$SURFACE" != surface:* ]]; then
+  echo "ERROR: failed to create split pane: $SPLIT_OUTPUT" >&2
+  exit 1
+fi
+
+# タブ名を設定
+cmux rename-tab --surface "$SURFACE" "[${SURFACE##*:}] Conductor-${TASK_ID}" >&2 2>&1 || true
+
+# --- 6. Claude 起動（初期プロンプト付き） ---
+cmux send --surface "$SURFACE" "claude --dangerously-skip-permissions '${PROMPT_FILE} を読んで指示に従って作業してください。'\n" >&2
+
+# --- 7. Trust 承認ポーリング（最大30秒） ---
+for i in $(seq 1 10); do
   sleep 3
-  SCREEN=$(cmux read-screen --surface "$SURFACE" 2>&1)
+  SCREEN=$(cmux read-screen --surface "$SURFACE" --lines 10 2>&1) || true
   if echo "$SCREEN" | grep -q "Yes, I trust"; then
-    cmux send-key --surface "$SURFACE" "return"
-    sleep 2
+    cmux send-key --surface "$SURFACE" return >&2
+    sleep 3
     break
-  elif echo "$SCREEN" | grep -qE '(❯|claude)'; then
+  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
     break
   fi
 done
 
-# Step 7: Send Conductor prompt
-sleep 1
-cmux send --surface "$SURFACE" ".team/prompts/${CONDUCTOR_ID}.md を読んで、その指示に従って作業してください。\n"
-
-# Step 8: Output success information
-echo "CONDUCTOR_ID=$CONDUCTOR_ID"
-echo "SURFACE=$SURFACE"
-echo "TASK_ID=$TASK_ID"
-
-exit 0
+# --- 8. 起動情報を出力 ---
+echo "CONDUCTOR_ID=${CONDUCTOR_ID}"
+echo "SURFACE=${SURFACE}"
+echo "TASK_ID=${TASK_ID}"
+echo "WORKTREE_PATH=${WORKTREE_PATH}"
+echo "OUTPUT_DIR=${OUTPUT_DIR}"

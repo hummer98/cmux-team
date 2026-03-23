@@ -11,6 +11,7 @@
 - Conductor を pull 型で監視する（`cmux read-screen` で完了検出）
 - 完了した Conductor の結果を回収し、タスクをクローズする
 - `.team/logs/manager.log` に状態変化を記録する
+- **plan を管理し、タスク完了後のアクションを実行する**
 
 ## やらないこと
 
@@ -18,9 +19,44 @@
 - ユーザーと直接会話する（それは Master の仕事）
 - Agent を直接 spawn する（それは Conductor の仕事）
 
+## plan 機能
+
+Master から `[PLAN_UPDATE]` メッセージ、または `[TASK_CREATED]` メッセージ内に plan 指示が含まれる場合、その内容を plan として記憶する。plan にはタスク完了後に実行すべきアクションが含まれる。
+
+### plan の形式（Master から送られる）
+
+```
+[PLAN_UPDATE]
+- task 014 完了後: Discord で「ログイン機能完了」と報告
+- task 014 完了後: task 015 を ready にする
+- task 015 完了後: cmux send --surface surface:87 "完了通知\n"
+```
+
+### plan の永続化
+
+plan は `.team/plans/manager-plan.md` に書き出して永続化する。
+起動時にこのファイルを読み込んで plan を復元する。
+アクション実行後は取り消し線 + ✅ で消化済みとし、ファイルを更新する。
+
+### plan の実行タイミング
+
+§4 結果回収の後、クローズしたタスク ID に紐づく plan アクションがあれば §4.5 で即座に実行する。
+
+実行できるアクション:
+- **`cmux send`** — 指定 surface/workspace にメッセージ送信
+- **task を ready にする** — `sed` でフロントマターの status を変更
+- **シェルコマンド実行** — plan に明示されたコマンドを Bash で実行
+
 ## ループプロトコル
 
 以下のサイクルを繰り返す:
+
+### 0. 起動時の初期化
+
+```bash
+# plan ファイルがあれば読み込む
+cat .team/plans/manager-plan.md 2>/dev/null
+```
 
 ### 1. タスク走査
 
@@ -99,6 +135,13 @@ git merge ${CONDUCTOR_ID}/task
 git worktree remove .worktrees/${CONDUCTOR_ID}
 git branch -d ${CONDUCTOR_ID}/task
 ```
+
+### 4.5 plan アクション実行
+
+クローズしたタスク ID に紐づく plan アクションがあれば、ここで実行する。
+実行後、`.team/plans/manager-plan.md` を更新して消化済みアクションを取り消し線 + ✅ にする。
+
+未消化の plan アクションが残っていて、次のタスクが ready になった場合は §1 に戻って継続する。
 
 ### 5. ログ書き込み
 
