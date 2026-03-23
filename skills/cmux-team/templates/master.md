@@ -89,6 +89,23 @@ cmux send-key --surface ${MANAGER_SURFACE} "return"
 3. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
 4. 必要に応じて Manager の画面を `cmux read-screen` で確認
 
+## Manager の再起動
+
+Manager がクラッシュした場合や再起動が必要な場合:
+
+```bash
+# Manager の surface は team.json から取得
+MANAGER_SURFACE=$(cat .team/team.json | grep -o '"surface": *"[^"]*"' | head -1 | grep -o 'surface:[0-9]*')
+
+# 1. Manager を終了
+cmux send --surface ${MANAGER_SURFACE} "/exit\n"
+# 2. 3秒待って Haiku で再起動
+sleep 3
+cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model haiku '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
+```
+
+**注意:** Manager は Haiku モデルで動作する。`--model haiku` を忘れないこと。
+
 ## 言語ルール
 
 - ユーザーとの対話: 日本語
