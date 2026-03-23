@@ -28,7 +28,13 @@
 ls .team/issues/open/ 2>/dev/null
 ```
 
-未割当のタスク（`.team/tasks/` に対応する Conductor がいないもの）を検出する。
+各 issue ファイルの YAML フロントマターを読み、`status` フィールドを確認する:
+
+- **`status: ready`** → 走査対象。Conductor に割り当て可能
+- **`status: draft`** → **無視する**。Master がユーザーと確認中のため着手しない
+- **`status` フィールドなし** → 後方互換のため `ready` として扱う
+
+未割当のタスク（`status: ready` かつ `.team/tasks/` に対応する Conductor がいないもの）を検出する。
 
 ### 2. Conductor 起動（未割当タスクがある場合）
 
@@ -131,22 +137,52 @@ git branch -d ${CONDUCTOR_ID}/task
 sleep 10  # 10秒間隔で Conductor の状態をチェック
 ```
 
-#### アイドル時（Conductor ゼロ + issue ゼロ）
+#### アイドル時（Conductor ゼロ + ready issue ゼロ）— 指数バックオフ
 
-長いフォールバックポーリングに切り替えて待機する。
-Master が issue を作成した際に `cmux send` で通知してくるため、通常はそれで起床する。
+`status: ready` の issue がなく Conductor も稼働していないアイドル状態では、ポーリング間隔を指数バックオフさせる:
+
+| サイクル | 間隔 |
+|---------|------|
+| 初回 | 30秒 |
+| 2回目 | 60秒 |
+| 3回目以降 | 120秒（上限） |
 
 ```bash
-sleep 120  # フォールバック: 120秒後に再チェック（通知が漏れた場合の安全網）
+# アイドルカウンタを保持（初期値 0）
+# IDLE_COUNT=0 → sleep 30
+# IDLE_COUNT=1 → sleep 60
+# IDLE_COUNT>=2 → sleep 120
+
+if [ $IDLE_COUNT -eq 0 ]; then
+  sleep 30
+elif [ $IDLE_COUNT -eq 1 ]; then
+  sleep 60
+else
+  sleep 120
+fi
+IDLE_COUNT=$((IDLE_COUNT + 1))
+```
+
+#### バックオフのリセット条件
+
+以下のいずれかが発生したら、アイドルカウンタを即座に 0 にリセットする:
+
+- **`status: ready` の issue を検出した場合** → リセットして Conductor 起動へ
+- **Master からの `[ISSUE_CREATED]` 通知を受け取った場合** → リセットして §1 へ
+- **Conductor が稼働中になった場合** → 10秒間隔の監視モードへ切り替え
+
+```bash
+# リセット例
+IDLE_COUNT=0  # ready issue 検出時・通知受信時にリセット
 ```
 
 #### Master からの通知を受け取った場合
 
 Master は issue 作成後に `cmux send` で `[ISSUE_CREATED]` メッセージを送ってくる。
-このメッセージを受け取ったら、sleep を待たず即座に §1 Issue 走査を実行すること。
+このメッセージを受け取ったら、sleep を待たず即座にアイドルカウンタをリセットし §1 Issue 走査を実行すること。
 
 **注意:** `cmux send` による通知はベストエフォートであり、届かない場合もある。
-そのため 120秒のフォールバックポーリングを必ず残すこと。
+そのため指数バックオフの上限 120秒がフォールバックポーリングとして機能する。
 
 ## 最大同時実行数
 

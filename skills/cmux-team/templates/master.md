@@ -31,6 +31,7 @@
 id: <連番>
 title: <タスク名>
 priority: high|medium|low
+status: draft
 created_at: <ISO 8601>
 ---
 
@@ -43,6 +44,25 @@ created_at: <ISO 8601>
 ## 完了条件
 <何をもって完了とするか>
 ```
+
+## issue の status フロー（draft → ready）
+
+issue は必ず `status: draft` で作成する。Manager は `draft` の issue を無視するため、作成直後にタスクが走り出すことはない。
+
+### フロー
+
+1. **draft で作成** — ユーザーの指示を受けて issue を作成
+2. **ユーザーに内容を確認** — issue の内容を表示し、問題がないか確認する
+3. **ready に変更** — ユーザーの承認を得たら `status: ready` に変更する
+4. **Manager に通知** — `[ISSUE_CREATED]` メッセージを送信（§ issue 作成後の Manager 通知 参照）
+
+```bash
+# draft → ready への変更（ユーザー承認後）
+# issue ファイルの frontmatter 内 status を書き換える
+sed -i '' 's/^status: draft$/status: ready/' .team/issues/open/NNN-*.md
+```
+
+**注意:** ユーザーが「すぐやって」と明示的に指示した場合は、最初から `status: ready` で作成してもよい。
 
 ## issue 作成後の Manager 通知
 
