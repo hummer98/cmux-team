@@ -120,7 +120,7 @@ created_at: 2026-03-23T00:00:00Z
 
 ## 2. Manager プロトコル
 
-Manager は別ペインでイベント駆動で動作する（Haiku モデル、権限制限付き）。テンプレート `templates/manager.md` 参照。
+Manager は別ペインでイベント駆動で動作する（Sonnet モデル）。テンプレート `templates/manager.md` 参照。
 
 ### 2.1 タスク検出
 
