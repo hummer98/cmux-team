@@ -127,62 +127,37 @@ git branch -d ${CONDUCTOR_ID}/task
 
 ### 6. 次のサイクルへ
 
-状態に応じてループ間隔を切り替える:
+状態に応じて動作を切り替える:
 
 #### Conductor 稼働中の場合
 
-短い間隔で pull 型監視を継続する:
+30秒間隔で pull 型監視を継続する:
 
 ```bash
-sleep 10  # 10秒間隔で Conductor の状態をチェック
+sleep 30  # 30秒間隔で Conductor の状態をチェック
 ```
 
-#### アイドル時（Conductor ゼロ + ready タスクゼロ）— 指数バックオフ
+すべての Conductor が完了したら、§1 タスク走査に戻る。
 
-`status: ready` のタスクがなく Conductor も稼働していないアイドル状態では、ポーリング間隔を指数バックオフさせる:
+#### アイドル時（Conductor ゼロ + ready タスクゼロ）— アイドル停止
 
-| サイクル | 間隔 |
-|---------|------|
-| 初回 | 30秒 |
-| 2回目 | 60秒 |
-| 3回目以降 | 120秒（上限） |
+Conductor が全て完了し、`status: ready` のタスクもない場合は **ループを停止して待機状態に入る**。
+ポーリングは一切行わない。以下のメッセージを出力してループを終了する:
 
-```bash
-# アイドルカウンタを保持（初期値 0）
-# IDLE_COUNT=0 → sleep 30
-# IDLE_COUNT=1 → sleep 60
-# IDLE_COUNT>=2 → sleep 120
-
-if [ $IDLE_COUNT -eq 0 ]; then
-  sleep 30
-elif [ $IDLE_COUNT -eq 1 ]; then
-  sleep 60
-else
-  sleep 120
-fi
-IDLE_COUNT=$((IDLE_COUNT + 1))
+```
+アイドル状態に入ります。[TASK_CREATED] メッセージを待機中。
 ```
 
-#### バックオフのリセット条件
-
-以下のいずれかが発生したら、アイドルカウンタを即座に 0 にリセットする:
-
-- **`status: ready` のタスクを検出した場合** → リセットして Conductor 起動へ
-- **Master からの `[TASK_CREATED]` 通知を受け取った場合** → リセットして §1 へ
-- **Conductor が稼働中になった場合** → 10秒間隔の監視モードへ切り替え
-
-```bash
-# リセット例
-IDLE_COUNT=0  # ready タスク検出時・通知受信時にリセット
-```
-
-#### Master からの通知を受け取った場合
+#### Master からの `[TASK_CREATED]` 通知による起床
 
 Master はタスク作成後に `cmux send` で `[TASK_CREATED]` メッセージを送ってくる。
-このメッセージを受け取ったら、sleep を待たず即座にアイドルカウンタをリセットし §1 タスク走査を実行すること。
+このメッセージを受信したら:
 
-**注意:** `cmux send` による通知はベストエフォートであり、届かない場合もある。
-そのため指数バックオフの上限 120秒がフォールバックポーリングとして機能する。
+1. 即座にアイドル状態を解除
+2. §1 タスク走査を実行
+3. `status: ready` のタスクがあれば Conductor を spawn
+
+**注意:** アイドル停止中は何もしない。Master からの `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。
 
 ## 最大同時実行数
 

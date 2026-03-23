@@ -97,7 +97,7 @@ cmux new-split down --surface surface:M  # → surface:G
 cmux rename-tab --surface surface:G "[G] Manager"
 
 # Claude を起動（初期プロンプト付き）
-cmux send --surface surface:G "claude --dangerously-skip-permissions '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
+cmux send --surface surface:G "claude --dangerously-skip-permissions --model haiku '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
 
 # Trust 確認が出たら承認
 for i in $(seq 1 10); do
