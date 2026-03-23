@@ -109,20 +109,52 @@ git branch -d ${CONDUCTOR_ID}/task
 
 ### 5. ステータス更新
 
-`.team/status.json` を以下の形式で更新:
+`.team/status.json` を以下の形式で更新（現在の状態のみ保持する）:
 
 ```json
 {
   "updated_at": "<ISO 8601>",
   "manager": {
     "surface": "surface:N",
-    "status": "monitoring",
-    "last_checked_at": "<ISO 8601>"
+    "status": "idle|monitoring"
   },
-  "conductors": [],
-  "completed_tasks": [],
-  "tasks": { "open": 0, "closed": 0 }
+  "conductors": [
+    {
+      "id": "conductor-xxx",
+      "task_id": "007",
+      "surface": "surface:N",
+      "status": "running"
+    }
+  ]
 }
+```
+
+**注意:** `completed_tasks`、`tasks` カウント、`last_checked_at` は status.json に含めない。これらはログまたは `ls` で確認する。
+
+### 5.1. ログ書き込み
+
+状態変化が発生するたびに `.team/logs/manager.log` に追記する（1行1イベント、構造化テキスト）:
+
+```bash
+mkdir -p .team/logs
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/manager.log
+```
+
+**記録するイベント:**
+
+| イベント | 形式 | タイミング |
+|---------|------|-----------|
+| Conductor 起動 | `conductor_started id=<conductor-id> task=<task-id> surface=<surface>` | §2 Conductor 起動後 |
+| タスク完了 | `task_completed id=<task-id> conductor=<conductor-id> merged=<commit-hash>` | §4 マージ成功後 |
+| タスクエラー | `task_error id=<task-id> conductor=<conductor-id> reason=<概要>` | エラー検出時 |
+| アイドル開始 | `idle_start` | §6 アイドル停止に入る直前 |
+| アイドル解除 | `idle_wake trigger=TASK_CREATED` | `[TASK_CREATED]` 受信時 |
+
+例:
+```
+[2026-03-24T12:08:00Z] task_completed id=001 conductor=conductor-1774278927 merged=a855ed1
+[2026-03-24T12:35:00Z] conductor_started id=conductor-1774280063 task=003 surface=surface:90
+[2026-03-24T12:45:00Z] idle_start
 ```
 
 ### 6. 次のサイクルへ
