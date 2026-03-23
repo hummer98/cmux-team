@@ -136,9 +136,40 @@ cmux でペインをクリックするか、タブを切り替えてください
 
 なし
 
+## 既存セッションの検出（Phase 1 の前に実行）
+
+Master / Manager が既に稼働中の場合は再起動しない。以下の手順で検出する:
+
+```bash
+# 1. team.json から surface 情報を読む
+MASTER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('master',{}).get('surface',''))" 2>/dev/null)
+MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))" 2>/dev/null)
+
+# 2. 各 surface が生きているか確認
+if [ -n "$MASTER_SURFACE" ]; then
+  SCREEN=$(cmux read-screen --surface $MASTER_SURFACE --lines 5 2>&1)
+  if echo "$SCREEN" | grep -qv "Error"; then
+    echo "Master は稼働中 ($MASTER_SURFACE)"
+    MASTER_ALIVE=true
+  fi
+fi
+
+if [ -n "$MANAGER_SURFACE" ]; then
+  SCREEN=$(cmux read-screen --surface $MANAGER_SURFACE --lines 5 2>&1)
+  if echo "$SCREEN" | grep -qv "Error"; then
+    echo "Manager は稼働中 ($MANAGER_SURFACE)"
+    MANAGER_ALIVE=true
+  fi
+fi
+```
+
+- **両方稼働中** → 「チーム稼働中。Master ($MASTER_SURFACE) に切り替えてタスクを伝えてください。」と表示して終了
+- **Master のみ死亡** → Master だけ再 spawn（Phase 2 のみ実行）
+- **Manager のみ死亡** → Manager だけ再 spawn（Phase 3-4 のみ実行）
+- **両方死亡 or 未起動** → 通常通り全 Phase を実行
+
 ## 注意事項
 
 - `.team/` が既に存在する場合はインフラ準備をスキップ
-- Master/Manager が既に稼働中なら再起動せず、ペイン情報を表示して案内
 - Conductor や Agent は Manager が必要に応じて spawn する
 - このセッション自身は Master にも Manager にもならない
