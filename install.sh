@@ -67,7 +67,7 @@ do_check() {
 
   # commands
   local cmd_count=0
-  for cmd in start team-status team-disband team-research team-spec team-design team-impl team-review team-test team-sync-docs team-issue; do
+  for cmd in start team-status team-disband team-research team-spec team-design team-impl team-review team-test team-sync-docs team-task; do
     if [[ -f "${COMMANDS_DST}/${cmd}.md" ]]; then
       cmd_count=$((cmd_count + 1))
     fi
@@ -202,7 +202,7 @@ do_install() {
   echo "  /team-review    レビューエージェントを起動"
   echo "  /team-test      テストエージェントを起動"
   echo "  /team-sync-docs ドキュメント同期"
-  echo "  /team-issue     イシュー管理"
+  echo "  /team-task      タスク管理"
 }
 
 # --- メイン ---
