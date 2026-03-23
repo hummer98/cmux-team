@@ -44,6 +44,22 @@ created_at: <ISO 8601>
 <何をもって完了とするか>
 ```
 
+## issue 作成後の Manager 通知
+
+issue ファイルを `.team/issues/open/` に書き出した後、Manager に即時通知を送る:
+
+```bash
+# Manager の surface は team.json から取得
+MANAGER_SURFACE=$(cat .team/team.json | grep -o '"surface": *"[^"]*"' | head -1 | grep -o 'surface:[0-9]*')
+
+# 通知メッセージを送信（Manager が即座に issue 走査を開始する）
+cmux send --surface ${MANAGER_SURFACE} "[ISSUE_CREATED] 新しい issue を作成しました。issue 走査を実行してください。"
+sleep 0.5
+cmux send-key --surface ${MANAGER_SURFACE} "return"
+```
+
+**注意:** この通知はベストエフォート。送信に失敗しても issue ファイルは存在するため、Manager のフォールバックポーリング（120秒）で検出される。
+
 ## 進捗報告
 
 ユーザーに「状況は？」と聞かれたら:
