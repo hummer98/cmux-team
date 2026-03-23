@@ -88,7 +88,7 @@ cmux-team/
 │   └── cmux-agent-role/
 │       └── SKILL.md                  # サブエージェント行動規範スキル
 ├── commands/                         # スラッシュコマンド定義 (11個)
-│   ├── team-init.md                  #   Master モード + Manager 起動
+│   ├── team.md                       #   チーム体制構築（Master + Manager）
 │   ├── team-spec.md                  #   要件ブレスト（対話型）
 │   ├── team-research.md              #   並列リサーチ
 │   ├── team-design.md                #   設計 + レビュー
@@ -240,8 +240,8 @@ cmux-team/
 cmux
 # Claude Code 内で:
 
-# 2. チーム初期化（Master → Manager 起動）
-/team-init テストプロジェクト
+# 2. チーム体制構築（Master + Manager 起動）
+/team
 # → .team/ が作成され team.json が正しいこと
 # → Master が Manager を spawn すること
 # → Manager が監視ループを開始すること

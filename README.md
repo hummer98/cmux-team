@@ -68,51 +68,38 @@ cd cmux-team
 Start cmux, launch Claude Code inside it, and just talk to Claude.
 
 ```
-You:    /team-init I want to build a TODO app
-Claude: Initialized .team/. I'm now in Conductor mode.
-        Here's my plan:
-        1. ✅ spec — Brainstorm requirements
-        2. ✅ research — Investigate tech stack
-        3. ✅ design — Architecture design
-        4. ✅ impl — Implementation
-        5. ✅ review — Code review
-        6. ✅ test — Testing
-        Shall I proceed?
+You:    /team
+Claude: Team ready.
+          [Master ✳]  |  [Manager ⚡]
+        What would you like to do?
 
-You:    Go ahead
-Claude: Let's start with requirements. What features do you need?
-  ...interactive brainstorming...
-Claude: requirements.md generated. Moving to research phase.
-        Launching 3 researchers.
-  → 3 panes open next to you, each researching in parallel
-  → You can watch the progress in real time
-  → Results are integrated when all finish
-Claude: Research complete. Here's the summary. Proceed to design?
+You:    Build a TODO app with React
+Claude: Created issue. Manager will pick it up.
+  → Manager detects issue → spawns Conductor
+  → Conductor spawns Agents in adjacent panes
+  → You can watch each agent working in real time
 
-You:    Yes
-Claude: Launching architect.
-  → Design → Review → Feedback automatically
-Claude: Design approved. 5 tasks identified. Proceed to implementation?
+You:    How's it going?
+Claude: (reads status.json)
+        Conductor-1: implementing (2/3 agents done)
 
-You:    Yes
-Claude: Launching 3 implementation agents.
-  → You can watch each agent writing code
-  ...
+You:    Also add E2E tests
+Claude: Created another issue. Manager will assign it next.
 ```
 
-The Conductor autonomously progresses through phases, asking for your approval at each step. You can also use individual commands for manual control:
+You just talk to Master. Manager handles orchestration autonomously. Use individual commands for manual control:
 
 ```
-You:    /team-research React vs Vue vs Svelte    (run just the research phase)
 You:    /team-status                              (check progress anytime)
 You:    /team-disband                             (stop all agents)
+You:    /team-research React vs Vue vs Svelte     (bypass Manager, run directly)
 ```
 
 ### Commands
 
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `/team-init <mission>` | Initialize & enter Conductor mode | Start of any mission |
+| `/team` | Set up team (Master + Manager) | Once per session |
 | `/team-spec [summary]` | Brainstorm requirements | When deciding what to build |
 | `/team-research <topic>` | Parallel research (3 agents) | When technical research is needed |
 | `/team-design` | Design + review | After requirements are set |

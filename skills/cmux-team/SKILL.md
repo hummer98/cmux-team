@@ -532,7 +532,7 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 
 | コマンド | 説明 |
 |---------|------|
-| `/team-init` | Master モード初期化 + Manager spawn |
+| `/team` | チーム体制構築（Master + Manager 起動） |
 | `/team-status` | ステータス表示（status.json 読み取り） |
 | `/team-disband` | 全層終了（Agent → Conductor → Manager の順で bottom-up） |
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
