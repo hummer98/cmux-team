@@ -1,12 +1,8 @@
 {
-  "name": "hummer98-plugins",
+  "name": "hummer98-cmux-team",
   "owner": {
     "name": "hummer98",
-    "url": "https://github.com/hummer98"
-  },
-  "metadata": {
-    "description": "Claude Code plugins by hummer98",
-    "version": "1.0"
+    "email": "github@hummer98"
   },
   "plugins": [
     {
@@ -16,7 +12,10 @@
       "version": "2.0.0",
       "author": {
         "name": "hummer98"
-      }
+      },
+      "repository": "https://github.com/hummer98/cmux-team",
+      "license": "MIT",
+      "keywords": ["cmux", "multi-agent", "orchestration", "parallel", "team"]
     }
   ]
 }
