@@ -43,7 +43,7 @@ description: >
 | 層 | 責務 | 特徴 |
 |----|------|------|
 | **Master** | ユーザー対話。タスク作成。status.json 読み取り。 | 作業しない。ポーリングしない。 |
-| **Manager** | 別ペインでループ実行。タスク検出→Conductor spawn→結果回収→タスククローズ。 | 常駐ループ。 |
+| **Manager** | 別ペインで待機。[TASK_CREATED] 通知で起床→タスク検出→Conductor spawn→結果回収→タスククローズ→アイドル化。 | アイドル時停止、イベント駆動。 |
 | **Conductor** | 1タスクを自律実行。git worktree 隔離。Agent spawn→結果統合。 | タスク完了で停止。 |
 | **Agent** | 実作業（実装・テスト・リサーチ等）。 | 完了したら停止。上位が見に来る。 |
 
@@ -200,13 +200,13 @@ git branch -D conductor-N/task
 # status.json を書き出す（Master が読む）
 ```
 
-### 2.6 ループ継続
+### 2.6 ループ継続・アイドル化
 
-結果回収後、再び §2.1 に戻り次のタスクを探す。
+結果回収後、タスクを再スキャンする。タスクがあれば Conductor を起動、なければアイドル化して Master からの通知を待機。
 
-- **Conductor 稼働中**: 10秒間隔で短い監視ループ
-- **アイドル時（Conductor ゼロ + タスクゼロ）**: 120秒フォールバックポーリングで待機。Master からの `cmux send` 通知で即座に起床
-- **通知受信時**: `[TASK_CREATED]` メッセージを受け取ったら即座に §2.1 を実行
+- **Conductor 稼働中**: 10秒間隔で監視ループを実行
+- **アイドル時（open issues ゼロ）**: Manager は `/exit` で停止。`.team/logs/manager.log` に `idle_start` を記録
+- **起床トリガー**: Master が新規 issue を作成すると、システムが `[TASK_CREATED]` 通知をユーザーに表示。ユーザーが新しいセッションで Manager を再 spawn するか、既存 Manager ペインで restart コマンドを実行
 
 ## 3. Conductor プロトコル
 
@@ -349,32 +349,27 @@ cmux send-key --surface surface:M "return"
 
 ```json
 {
-  "updated_at": "2026-03-23T00:01:00Z",
+  "updated_at": "2026-03-24T16:23:00Z",
   "manager": {
     "surface": "surface:N",
-    "status": "monitoring",
-    "loop_count": 5
+    "status": "monitoring"
   },
   "conductors": [
     {
-      "id": "conductor-1",
-      "surface": "surface:C",
-      "task": "ログイン機能の実装",
+      "id": "conductor-1774283589",
+      "role": "dockeeper",
+      "issue": 9,
       "status": "running",
-      "agents": [
-        { "id": "agent-1", "surface": "surface:A", "status": "running" }
-      ]
+      "started_at": "2026-03-24T16:23:00Z"
     }
-  ],
-  "completed_tasks": [
-    { "id": "conductor-0", "task": "初期セットアップ", "completed_at": "..." }
-  ],
-  "tasks": {
-    "open": 2,
-    "closed": 3
-  }
+  ]
 }
 ```
+
+**注記（008 変更）:**
+- `loop_count` は削除（Manager はイベント駆動に変更）
+- `completed_tasks` と `tasks` カウントは削除（履歴は `.team/logs/manager.log` に記録）
+- 各 Conductor には `role` 、 `issue` 、 `started_at` を記録
 
 ## 7. レイアウト戦略
 
