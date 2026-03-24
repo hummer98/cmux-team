@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls *)",
+      "Bash(bash *)",
+      "Bash(cat *)",
+      "Bash(echo *)",
+      "Bash(sleep *)",
+      "Bash(cmux *)",
+      "Bash(git *)",
+      "Bash(env *)",
+      "Bash(env)",
+      "Bash(grep *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(date *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(mv *)",
+      "Bash(pwd)",
+      "Bash(test *)",
+      "Bash([ *)",
+      "Bash(cd *)",
+      "Bash(source *)",
+      "Read(.team/**)"
+    ]
+  }
+}
