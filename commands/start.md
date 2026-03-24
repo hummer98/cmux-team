@@ -97,7 +97,9 @@ done
 
 ### Phase 3: Manager 用プロンプトを生成
 
-templates/common-header.md + templates/manager.md からプロンプトを合成し、`.team/prompts/manager.md` に書き出す。
+templates/manager.md を `.team/prompts/manager.md` に書き出す。
+
+**注意:** Manager は common-header.md を使わない。common-header はリーフエージェント（Agent 層）用であり、「Do NOT interact with other panes」等の指示が Manager の責務（ペイン操作・Conductor 起動）と矛盾するため。
 
 ### Phase 4: Manager を spawn
 
