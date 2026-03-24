@@ -87,7 +87,12 @@ fi
 # タブ名を設定
 cmux rename-tab --surface "$SURFACE" "[${SURFACE##*:}] Conductor-${TASK_ID}" >&2 2>&1 || true
 
-# --- 6. Claude 起動（初期プロンプト付き） ---
+# --- 6. Surface 検証 + Claude 起動（初期プロンプト付き） ---
+# cmux#2042: 存在しない surface への send はフォーカス中ペインにフォールバックするため事前検証
+if ! bash "$(dirname "$0")/validate-surface.sh" "$SURFACE"; then
+  echo "ERROR: surface $SURFACE does not exist (cmux#2042 workaround)" >&2
+  exit 1
+fi
 cmux send --surface "$SURFACE" "claude --dangerously-skip-permissions '${PROMPT_FILE} を読んで指示に従って作業してください。'\n" >&2
 
 # --- 7. Trust 承認ポーリング（最大30秒） ---

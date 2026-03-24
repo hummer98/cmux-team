@@ -70,15 +70,22 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 
 ```bash
 # Manager の surface は team.json から取得
-MANAGER_SURFACE=$(cat .team/team.json | grep -o '"surface": *"[^"]*"' | head -1 | grep -o 'surface:[0-9]*')
+MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
 
-# 通知メッセージを送信（Manager が即座にタスク走査を開始する）
-cmux send --surface ${MANAGER_SURFACE} "[TASK_CREATED] 新しいタスクを作成しました。タスク走査を実行してください。"
-sleep 0.5
-cmux send-key --surface ${MANAGER_SURFACE} "return"
+# surface の存在を検証してから送信（cmux#2042 回避）
+if ! bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE"; then
+  echo "ERROR: Manager surface $MANAGER_SURFACE が存在しません。Manager を再起動してください。"
+  # ここで処理を中断し、ユーザーに報告する
+else
+  cmux send --surface ${MANAGER_SURFACE} "[TASK_CREATED] 新しいタスクを作成しました。タスク走査を実行してください。"
+  sleep 0.5
+  cmux send-key --surface ${MANAGER_SURFACE} "return"
+fi
 ```
 
 **注意:** この通知は必須。Manager はアイドル停止中であり、この `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。送信に失敗した場合は再送すること。
+
+**重要（cmux#2042）:** `cmux send` は存在しない surface を指定してもエラーを返さず、フォーカス中のペインにフォールバックする。必ず `validate-surface.sh` で事前検証すること。
 
 ## 進捗報告
 
@@ -95,13 +102,18 @@ Manager がクラッシュした場合や再起動が必要な場合:
 
 ```bash
 # Manager の surface は team.json から取得
-MANAGER_SURFACE=$(cat .team/team.json | grep -o '"surface": *"[^"]*"' | head -1 | grep -o 'surface:[0-9]*')
+MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
 
-# 1. Manager を終了
-cmux send --surface ${MANAGER_SURFACE} "/exit\n"
-# 2. 3秒待って Sonnet で再起動
-sleep 3
-cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
+# surface の存在を検証（cmux#2042 回避）
+if ! bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE"; then
+  echo "ERROR: Manager surface $MANAGER_SURFACE が存在しません。新しいペインを作成してください。"
+else
+  # 1. Manager を終了
+  cmux send --surface ${MANAGER_SURFACE} "/exit\n"
+  # 2. 3秒待って Sonnet で再起動
+  sleep 3
+  cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
+fi
 ```
 
 **注意:** Manager は Sonnet モデルで動作する。`--model sonnet` を忘れないこと。

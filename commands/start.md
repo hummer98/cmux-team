@@ -160,20 +160,16 @@ MASTER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); 
 MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))" 2>/dev/null)
 
 # 2. 各 surface が生きているか確認
-if [ -n "$MASTER_SURFACE" ]; then
-  SCREEN=$(cmux read-screen --surface $MASTER_SURFACE --lines 5 2>&1)
-  if echo "$SCREEN" | grep -qv "Error"; then
-    echo "Master は稼働中 ($MASTER_SURFACE)"
-    MASTER_ALIVE=true
-  fi
+# 重要（cmux#2042）: cmux read-screen は存在しない surface でもエラーを返さず
+# フォーカス中ペインの内容を返してしまう。validate-surface.sh で事前検証する。
+if [ -n "$MASTER_SURFACE" ] && bash .team/scripts/validate-surface.sh "$MASTER_SURFACE" 2>/dev/null; then
+  echo "Master は稼働中 ($MASTER_SURFACE)"
+  MASTER_ALIVE=true
 fi
 
-if [ -n "$MANAGER_SURFACE" ]; then
-  SCREEN=$(cmux read-screen --surface $MANAGER_SURFACE --lines 5 2>&1)
-  if echo "$SCREEN" | grep -qv "Error"; then
-    echo "Manager は稼働中 ($MANAGER_SURFACE)"
-    MANAGER_ALIVE=true
-  fi
+if [ -n "$MANAGER_SURFACE" ] && bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE" 2>/dev/null; then
+  echo "Manager は稼働中 ($MANAGER_SURFACE)"
+  MANAGER_ALIVE=true
 fi
 ```
 

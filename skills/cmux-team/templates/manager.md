@@ -106,12 +106,19 @@ fi
 稼働中の Conductor を `cmux read-screen` で確認:
 
 ```bash
-SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
+# surface の存在を検証してから読み取る（cmux#2042 回避）
+if bash .team/scripts/validate-surface.sh surface:N; then
+  SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
+else
+  # surface が消失 → Conductor がクラッシュしたとみなす
+  echo "WARNING: Conductor surface surface:N が消失。クラッシュとして処理。"
+fi
 ```
 
 **完了判定:**
 - `❯` が表示されている AND `esc to interrupt` が含まれていない → **完了**
 - `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
+- surface が存在しない → **クラッシュ**（エラーリカバリへ）
 - エラーメッセージが表示されている → **エラー**
 
 ### 4. 結果回収（Conductor 完了時）
@@ -123,10 +130,12 @@ cat .team/output/${CONDUCTOR_ID}/summary.md
 # タスクをクローズ
 mv .team/tasks/open/NNN-*.md .team/tasks/closed/
 
-# Conductor ペインを閉じる
-cmux send --surface surface:N "/exit\n"
-sleep 2
-cmux close-surface --surface surface:N
+# Conductor ペインを閉じる（surface 存在確認付き — cmux#2042 回避）
+if bash .team/scripts/validate-surface.sh surface:N; then
+  cmux send --surface surface:N "/exit\n"
+  sleep 2
+  cmux close-surface --surface surface:N
+fi
 
 # worktree のブランチをマージ（テストがパスしていれば）
 cd .worktrees/${CONDUCTOR_ID} && git add -A && git commit -m "feat: <タスク概要>"
