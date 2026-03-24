@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.2.1] - 2026-03-25
+
+### Changed
+- Conductor テンプレートを強化: 冒頭に「自分でコードを書かない」ルールを配置、`[CMUX-TEAM-AGENT]` ヘッダーを除去
+- Conductor に Agent 監視ループを追加: 30秒間隔のポーリングで Agent 完了を検出（Agent spawn 後に完了を待てない問題を解消）
+- `/release` コマンドをプロジェクトローカル (`.claude/commands/`) に移動（plugin 配布対象から除外）
+- `/release` に marketplace キャッシュ pull + plugin reinstall ステップを追加
+
+### Fixed
+- タブタイトルに surface 番号が表示されない問題を修正（`[M]` → `[58] Master` 等）
+
 ## [2.2.0] - 2026-03-25
 
 ### Added
