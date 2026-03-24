@@ -184,13 +184,13 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/ma
 
 #### Conductor 稼働中の場合
 
-30秒間隔で pull 型監視を継続する:
+30秒間隔で **§1 タスク走査 → §3 Conductor 監視** を繰り返す:
 
 ```bash
-sleep 30  # 30秒間隔で Conductor の状態をチェック
+sleep 30  # 30秒待機後、§1 に戻る
 ```
 
-すべての Conductor が完了したら、§1 タスク走査に戻る。
+**重要:** §3（監視）だけでなく §1（タスク走査）も毎サイクル実行する。Conductor や Agent が作業中に新しいタスクを `.team/tasks/open/` に作成する場合があるため、タスク走査を省略すると新規タスクが拾われない。
 
 #### アイドル時（Conductor ゼロ + ready タスクゼロ）— アイドル停止
 
