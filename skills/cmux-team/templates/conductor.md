@@ -72,18 +72,41 @@ AGENT_NUM=${AGENT_SURFACE##*:}
 cmux rename-tab --surface surface:N "[${AGENT_NUM}] Agent-<role>"
 ```
 
-## Agent 完了検出（pull 型）
+## Agent 監視ループ
+
+Agent を起動したら、30秒間隔でポーリングして完了を待つ。**Agent が完了するまで次のステップに進まない。**
 
 ```bash
-# surface の存在を検証してから読み取る（cmux#2042 回避）
-if bash .team/scripts/validate-surface.sh surface:N; then
-  SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
-  # ❯ あり AND "esc to interrupt" なし → 完了
-  # ❯ あり AND "esc to interrupt" あり → 実行中
-else
-  # surface 消失 → Agent クラッシュとして処理
-fi
+# 全 Agent の完了を待つループ
+while true; do
+  ALL_DONE=true
+  for AGENT_SURFACE in $AGENT_SURFACES; do
+    if bash .team/scripts/validate-surface.sh "$AGENT_SURFACE"; then
+      SCREEN=$(cmux read-screen --surface "$AGENT_SURFACE" --lines 10 2>&1)
+      if echo "$SCREEN" | grep -q '❯' && ! echo "$SCREEN" | grep -q 'esc to interrupt'; then
+        # ❯ あり AND "esc to interrupt" なし → 完了
+        echo "Agent $AGENT_SURFACE: 完了"
+      else
+        # まだ実行中
+        ALL_DONE=false
+      fi
+    else
+      # surface 消失 → Agent クラッシュとして処理
+      echo "WARNING: Agent $AGENT_SURFACE が消失。クラッシュとして処理。"
+    fi
+  done
+
+  if $ALL_DONE; then
+    break
+  fi
+  sleep 30
+done
 ```
+
+**完了判定:**
+- `❯` が表示されている AND `esc to interrupt` が含まれていない → **完了**
+- `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
+- surface が存在しない → **クラッシュ**
 
 ## レビュー判断（ステップ 5）
 
