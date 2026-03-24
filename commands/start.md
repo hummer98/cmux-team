@@ -114,7 +114,9 @@ for i in $(seq 1 10); do
 done
 
 # タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする）
-cmux rename-tab --surface surface:M "[M] Master"
+# surface 番号を含めて識別しやすくする（例: [58] Master）
+MASTER_NUM=${MASTER_SURFACE##*:}  # "surface:58" → "58"
+cmux rename-tab --surface surface:M "[${MASTER_NUM}] Master"
 ```
 
 ### Phase 3: Manager 用プロンプトを生成
@@ -145,7 +147,8 @@ for i in $(seq 1 10); do
 done
 
 # タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする）
-cmux rename-tab --surface surface:G "[G] Manager"
+MANAGER_NUM=${MANAGER_SURFACE##*:}  # "surface:59" → "59"
+cmux rename-tab --surface surface:G "[${MANAGER_NUM}] Manager"
 ```
 
 ### Phase 5: team.json を更新

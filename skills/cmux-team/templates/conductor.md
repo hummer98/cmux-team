@@ -66,7 +66,9 @@ for i in $(seq 1 10); do
 done
 
 # タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする）
-cmux rename-tab --surface surface:N "[N] Agent-<role>"
+# N は実際の surface 番号に置き換える（例: [42] Agent-impl）
+AGENT_NUM=${AGENT_SURFACE##*:}
+cmux rename-tab --surface surface:N "[${AGENT_NUM}] Agent-<role>"
 ```
 
 ## Agent 完了検出（pull 型）
