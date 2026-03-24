@@ -67,6 +67,11 @@ created_at: <ISO 8601>
 - `status: ready` — ユーザー承認後。Manager が拾って Conductor を起動する
 - ready にしたら `cmux send --surface MANAGER "[TASK_CREATED]"` で Manager に通知
 
+## TODO（軽微な作業の即時実行）
+- 正式タスクを作るほどではない軽微な作業は `[TODO]` で Manager に直接依頼:
+  `cmux send --surface MANAGER "[TODO] git worktree prune で残存 worktree を整理して"`
+- Manager が即時実行する。タスクファイルの作成やユーザー承認は不要
+
 ## Manager の再起動
 Manager は Sonnet モデルで動作する。再起動時は `--model sonnet` を忘れないこと:
 cmux send --surface MANAGER "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従ってください。'\n"
