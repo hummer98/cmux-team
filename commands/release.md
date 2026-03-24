@@ -1,84 +1,95 @@
 ---
-allowed-tools: Bash, Read, Edit
-description: "バージョンを更新し、コミット・push・plugin 更新を一括実行する"
+allowed-tools: Bash, Read, Edit, Write
+description: "バージョン自動判定・CHANGELOG 更新・コミット・push・GitHub Release・plugin 更新を一括実行する"
 ---
 
 # /cmux-team:release
 
-cmux-team のリリースを実行する。バージョン更新 → コミット → push → plugin 更新を一括で行う。
+cmux-team のリリースを実行する。前回リリースからのコミットを分析してバージョンを自動判定し、CHANGELOG 更新 → コミット → push → GitHub Release → plugin 更新を一括で行う。
 
 ## 引数
 
-`$ARGUMENTS` でバージョンを指定できる（省略時は patch バージョンを自動インクリメント）:
+`$ARGUMENTS` でバージョンを上書き指定できる（省略時は自動判定）:
 
-- `/release` — patch バージョンを +1（例: 2.1.0 → 2.1.1）
+- `/release` — コミット内容から自動判定
 - `/release 2.2.0` — 指定バージョンに更新
-- `/release minor` — minor バージョンを +1（例: 2.1.0 → 2.2.0）
-- `/release major` — major バージョンを +1（例: 2.1.0 → 3.0.0）
 
 ## 手順
 
-### 1. 現在のバージョンを確認
+### 1. 現在のバージョンとコミット履歴を取得
 
 ```bash
 CURRENT=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
 echo "現在のバージョン: $CURRENT"
+
+# 前回リリースからのコミットを取得（タグがあればタグから、なければ全コミット）
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+if [ -n "$LAST_TAG" ]; then
+  COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+else
+  COMMITS=$(git log --oneline -20)
+fi
+echo "$COMMITS"
 ```
 
-### 2. 新しいバージョンを決定
+### 2. バージョンを自動判定
 
-`$ARGUMENTS` を解析する:
+`$ARGUMENTS` が指定されていればそれを使う。未指定なら、コミットメッセージを分析して判定する:
 
-- 空 or `patch` → patch を +1
-- `minor` → minor を +1、patch を 0 に
-- `major` → major を +1、minor と patch を 0 に
-- `X.Y.Z` 形式 → そのまま使用
+**判定ルール（Conventional Commits ベース）:**
 
-```bash
-NEW_VERSION=$(python3 -c "
-import sys
-current = '$CURRENT'
-arg = '$ARGUMENTS'.strip()
-major, minor, patch = map(int, current.split('.'))
-if not arg or arg == 'patch':
-    patch += 1
-elif arg == 'minor':
-    minor += 1; patch = 0
-elif arg == 'major':
-    major += 1; minor = 0; patch = 0
-else:
-    print(arg); sys.exit()
-print(f'{major}.{minor}.{patch}')
-")
-echo "新しいバージョン: $NEW_VERSION"
+| コミットに含まれるキーワード | バージョン変更 |
+|---|---|
+| `BREAKING CHANGE`, `!:` | **major** (+1.0.0) |
+| `feat:`, `feat(`, 新機能追加 | **minor** (+0.1.0) |
+| `fix:`, `chore:`, `docs:`, バグ修正、軽微な変更のみ | **patch** (+0.0.1) |
+
+コミットの中で最も大きい変更レベルを採用する。
+
+### 3. CHANGELOG.md を更新
+
+`CHANGELOG.md` が存在しない場合は新規作成する。
+
+コミット履歴を分類し、以下のフォーマットで先頭に追記する:
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+- 新機能の説明 (コミットハッシュ)
+
+### Changed
+- 変更の説明
+
+### Fixed
+- 修正の説明
 ```
 
-### 3. plugin.json を更新
+**分類ルール:**
+- `feat:` → Added
+- `fix:` → Fixed
+- それ以外（`chore:`, `docs:`, リファクタ等）→ Changed
 
-```bash
-# Edit ツールで .claude-plugin/plugin.json の version を更新
-```
+コミットメッセージをそのまま転記するのではなく、**ユーザーが読んで意味がわかる説明**に書き直すこと。内部的な実装詳細は省略し、機能・振る舞いの変更にフォーカスする。
 
-### 4. 未コミットの変更を確認
+### 4. plugin.json を更新
 
-```bash
-git status --short
-git diff --stat
-```
+Edit ツールで `.claude-plugin/plugin.json` の `version` を新バージョンに更新する。
 
-未コミットの変更がある場合は、それらも含めてコミットする。
-
-### 5. コミット
+### 5. コミット・push
 
 ```bash
 git add -A
 git commit -m "chore: release v${NEW_VERSION}"
+git push origin main
 ```
 
-### 6. push
+### 6. GitHub Release を作成
 
 ```bash
-git push origin main
+gh release create "v${NEW_VERSION}" \
+  --title "v${NEW_VERSION}" \
+  --notes-file <(CHANGELOG から該当バージョンのセクションを抽出)
 ```
 
 ### 7. plugin 更新
@@ -99,5 +110,6 @@ claude plugin update cmux-team@hummer98-cmux-team
 
 - コミット: <hash>
 - push: origin/main
-- plugin: 更新済み
+- GitHub Release: <url>
+- plugin: 更新済み（要セッション再起動）
 ```
