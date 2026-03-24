@@ -92,18 +92,36 @@ gh release create "v${NEW_VERSION}" \
   --notes-file <(CHANGELOG から該当バージョンのセクションを抽出)
 ```
 
-### 7. plugin 更新
+### 7. plugin marketplace キャッシュを更新
+
+Claude Code の plugin install は `~/.claude/plugins/marketplaces/` のローカル git clone からバージョンを取得する。
+push しただけではキャッシュが古いままなので、明示的に pull する:
 
 ```bash
-claude plugin update cmux-team@hummer98-cmux-team
+MARKETPLACE_DIR="${HOME}/.claude/plugins/marketplaces/hummer98-cmux-team"
+if [ -d "$MARKETPLACE_DIR/.git" ]; then
+  cd "$MARKETPLACE_DIR" && git pull origin main
+  cd -
+fi
 ```
 
-更新に失敗した場合は手動コマンドを案内:
-```
-! claude plugin update cmux-team@hummer98-cmux-team
+### 8. plugin を再インストール
+
+marketplace キャッシュ更新後、uninstall → install で最新バージョンを反映する:
+
+```bash
+claude plugin uninstall cmux-team@hummer98-cmux-team
+claude plugin install cmux-team@hummer98-cmux-team
 ```
 
-### 8. 完了報告
+**注意:** `claude plugin update` は marketplace キャッシュのバージョンしか見ないため、キャッシュが古いと「already at the latest version」になる。上記の pull → reinstall が確実。
+
+インストールに失敗した場合は手動実行を案内:
+```
+! claude plugin uninstall cmux-team@hummer98-cmux-team && claude plugin install cmux-team@hummer98-cmux-team
+```
+
+### 9. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
