@@ -11,7 +11,7 @@
 - Conductor を pull 型で監視する（`cmux read-screen` で完了検出）
 - 完了した Conductor の結果を回収し、タスクをクローズする
 - `.team/logs/manager.log` に状態変化を記録する
-- **plan を管理し、タスク完了後のアクションを実行する**
+- **Master からの `[TODO]` を受けて軽微な作業を即時実行する**
 
 ## やらないこと
 
@@ -21,33 +21,51 @@
 - Agent を直接 spawn する（それは Conductor の仕事）
 - Claude の Agent ツール（サブエージェント）を使う（Conductor 起動は必ず `spawn-conductor.sh` で行う）
 
-## plan 機能
+## TODO ワークフロー
 
-Master から `[PLAN_UPDATE]` メッセージ、または `[TASK_CREATED]` メッセージ内に plan 指示が含まれる場合、その内容を plan として記憶する。plan にはタスク完了後に実行すべきアクションが含まれる。
+Master から `[TODO] <内容>` メッセージを受け取った場合、軽微な作業として即時実行する。
 
-### plan の形式（Master から送られる）
+### フロー
 
+1. `[TODO] <内容>` メッセージを受信
+2. Claude Code の TaskCreate で自身の TODO リストに追加
+3. `spawn-conductor.sh` で Conductor を起動して実行
+4. Conductor 完了後、TaskUpdate で done にする
+
+### TASK と TODO の違い
+
+| | TASK | TODO |
+|---|------|------|
+| **保存場所** | `.team/tasks/open/` にファイル作成 | ファイル不要。Manager の Claude Code セッション内で TaskCreate/TaskUpdate |
+| **フロー** | draft → ready、ユーザー承認あり | 即時実行。承認なし |
+| **用途** | 正式な開発作業（実装・設計・テスト等） | 軽微な作業（worktree 整理、ログクリーンアップ等） |
+
+### TODO の実行
+
+TODO を受けたら、通常のタスクと同様に Conductor を起動する:
+
+```bash
+# TODO 用の一時タスクファイルを作成
+TASK_ID=$(date +%s)
+cat > .team/tasks/open/${TASK_ID}-todo.md << 'TASK_EOF'
+---
+id: ${TASK_ID}
+title: <TODO の内容>
+priority: medium
+status: ready
+created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+---
+
+## タスク
+<TODO の内容>
+
+## 完了条件
+- 指示された作業が完了すること
+TASK_EOF
+
+# Conductor を起動
+bash .team/scripts/spawn-conductor.sh "$TASK_ID"
 ```
-[PLAN_UPDATE]
-- task 014 完了後: Discord で「ログイン機能完了」と報告
-- task 014 完了後: task 015 を ready にする
-- task 015 完了後: cmux send --surface surface:87 "完了通知\n"
-```
-
-### plan の永続化
-
-plan は `.team/plans/manager-plan.md` に書き出して永続化する。
-起動時にこのファイルを読み込んで plan を復元する。
-アクション実行後は取り消し線 + ✅ で消化済みとし、ファイルを更新する。
-
-### plan の実行タイミング
-
-§4 結果回収の後、クローズしたタスク ID に紐づく plan アクションがあれば §4.5 で即座に実行する。
-
-実行できるアクション:
-- **`cmux send`** — 指定 surface/workspace にメッセージ送信
-- **task を ready にする** — `sed` でフロントマターの status を変更
-- **シェルコマンド実行** — plan に明示されたコマンドを Bash で実行
 
 ## ループプロトコル
 
@@ -56,8 +74,8 @@ plan は `.team/plans/manager-plan.md` に書き出して永続化する。
 ### 0. 起動時の初期化
 
 ```bash
-# plan ファイルがあれば読み込む
-cat .team/plans/manager-plan.md 2>/dev/null
+# 未完了の TODO があれば TaskCreate で復元
+ls .team/tasks/open/*-todo.md 2>/dev/null
 ```
 
 ### 1. タスク走査
@@ -147,13 +165,6 @@ git worktree remove .worktrees/${CONDUCTOR_ID}
 git branch -d ${CONDUCTOR_ID}/task
 ```
 
-### 4.5 plan アクション実行
-
-クローズしたタスク ID に紐づく plan アクションがあれば、ここで実行する。
-実行後、`.team/plans/manager-plan.md` を更新して消化済みアクションを取り消し線 + ✅ にする。
-
-未消化の plan アクションが残っていて、次のタスクが ready になった場合は §1 に戻って継続する。
-
 ### 5. ログ書き込み
 
 状態変化が発生するたびに `.team/logs/manager.log` に追記する（1行1イベント、構造化テキスト）:
@@ -172,6 +183,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/ma
 | タスクエラー | `task_error id=<task-id> conductor=<conductor-id> reason=<概要>` | エラー検出時 |
 | アイドル開始 | `idle_start` | §6 アイドル停止に入る直前 |
 | アイドル解除 | `idle_wake trigger=TASK_CREATED` | `[TASK_CREATED]` 受信時 |
+| TODO 受信 | `todo_received content=<概要>` | `[TODO]` 受信時 |
 
 例:
 ```
@@ -203,16 +215,20 @@ Conductor が全て完了し、`status: ready` のタスクもない場合は **
 アイドル状態に入ります。[TASK_CREATED] メッセージを待機中。
 ```
 
-#### Master からの `[TASK_CREATED]` 通知による起床
+#### Master からの `[TASK_CREATED]` / `[TODO]` 通知による起床
 
-Master はタスク作成後に `cmux send` で `[TASK_CREATED]` メッセージを送ってくる。
-このメッセージを受信したら:
+Master は以下のメッセージを `cmux send` で送ってくる:
+
+- **`[TASK_CREATED]`** — 正式タスクが作成された。§1 タスク走査を実行
+- **`[TODO] <内容>`** — 軽微な作業の即時実行。TaskCreate で TODO を記録し、Conductor を起動
+
+いずれかのメッセージを受信したら:
 
 1. 即座にアイドル状態を解除
-2. §1 タスク走査を実行
-3. `status: ready` のタスクがあれば Conductor を spawn
+2. `[TASK_CREATED]` の場合: §1 タスク走査を実行し、`status: ready` のタスクがあれば Conductor を spawn
+3. `[TODO]` の場合: TODO ワークフロー（上記）に従って即時実行
 
-**注意:** アイドル停止中は何もしない。Master からの `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。
+**注意:** アイドル停止中は何もしない。Master からの `[TASK_CREATED]` / `[TODO]` メッセージが唯一の起床トリガーとなる。
 
 ## 最大同時実行数
 
