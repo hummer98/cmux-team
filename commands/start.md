@@ -77,7 +77,6 @@ cmux send --surface MANAGER "claude --dangerously-skip-permissions --model sonne
 ```bash
 # Master ペインを作成
 cmux new-split right  # → surface:M
-cmux rename-tab --surface surface:M "[M] Master"
 
 # Claude を起動（初期プロンプト付きで起動 → Trust 承認後すぐに実行される）
 cmux send --surface surface:M "claude --dangerously-skip-permissions '.team/prompts/master.md を読んで指示に従ってください。ユーザーからのタスクを待ってください。'\n"
@@ -93,6 +92,9 @@ for i in $(seq 1 10); do
   fi
   sleep 3
 done
+
+# タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする）
+cmux rename-tab --surface surface:M "[M] Master"
 ```
 
 ### Phase 3: Manager 用プロンプトを生成
@@ -106,7 +108,6 @@ templates/manager.md を `.team/prompts/manager.md` に書き出す。
 ```bash
 # Manager ペインを作成（Master の下に）
 cmux new-split down --surface surface:M  # → surface:G
-cmux rename-tab --surface surface:G "[G] Manager"
 
 # Claude を起動（初期プロンプト付き）
 cmux send --surface surface:G "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
@@ -122,6 +123,9 @@ for i in $(seq 1 10); do
   fi
   sleep 3
 done
+
+# タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする）
+cmux rename-tab --surface surface:G "[G] Manager"
 ```
 
 ### Phase 5: team.json を更新

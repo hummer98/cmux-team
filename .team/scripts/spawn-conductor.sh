@@ -84,9 +84,6 @@ if [[ -z "$SURFACE" || "$SURFACE" != surface:* ]]; then
   exit 1
 fi
 
-# タブ名を設定
-cmux rename-tab --surface "$SURFACE" "[${SURFACE##*:}] Conductor-${TASK_ID}" >&2 2>&1 || true
-
 # --- 6. Surface 検証 + Claude 起動（初期プロンプト付き） ---
 # cmux#2042: 存在しない surface への send はフォーカス中ペインにフォールバックするため事前検証
 if ! bash "$(dirname "$0")/validate-surface.sh" "$SURFACE"; then
@@ -108,7 +105,10 @@ for i in $(seq 1 10); do
   fi
 done
 
-# --- 8. 起動情報を出力 ---
+# --- 8. タブ名を設定（Claude Code 起動後に実行。起動前だと Claude Code が上書きする） ---
+cmux rename-tab --surface "$SURFACE" "[${SURFACE##*:}] Conductor-${TASK_ID}" >&2 2>&1 || true
+
+# --- 9. 起動情報を出力 ---
 echo "CONDUCTOR_ID=${CONDUCTOR_ID}"
 echo "SURFACE=${SURFACE}"
 echo "TASK_ID=${TASK_ID}"
