@@ -43,7 +43,65 @@ OUTPUT_DIR=".team/output/${CONDUCTOR_ID}"
 PROMPT_FILE=".team/prompts/${CONDUCTOR_ID}.md"
 mkdir -p "$OUTPUT_DIR" "$(dirname "$PROMPT_FILE")"
 
-cat > "$PROMPT_FILE" << PROMPT_EOF
+# テンプレート検索（リポジトリ内 → plugin キャッシュ → 手動インストール）
+TEMPLATE_DIR=""
+for candidate in \
+  "${PROJECT_ROOT}/skills/cmux-team/templates" \
+  ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates \
+  "${HOME}/.claude/skills/cmux-team/templates"; do
+  if [[ -f "${candidate}/conductor.md" ]]; then
+    TEMPLATE_DIR="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$TEMPLATE_DIR" ]]; then
+  # --- テンプレートベースのプロンプト生成 ---
+  cp "${TEMPLATE_DIR}/conductor.md" "$PROMPT_FILE"
+
+  # {{COMMON_HEADER}} を common-header.md の内容で展開
+  if [[ -f "${TEMPLATE_DIR}/common-header.md" ]]; then
+    awk -v f="${TEMPLATE_DIR}/common-header.md" '
+      /\{\{COMMON_HEADER\}\}/ { while ((getline line < f) > 0) print line; close(f); next }
+      { print }
+    ' "$PROMPT_FILE" > "${PROMPT_FILE}.tmp" && mv "${PROMPT_FILE}.tmp" "$PROMPT_FILE"
+  else
+    grep -v '{{COMMON_HEADER}}' "$PROMPT_FILE" > "${PROMPT_FILE}.tmp" && mv "${PROMPT_FILE}.tmp" "$PROMPT_FILE"
+  fi
+
+  # タスク内容をプロンプトに埋め込み（タスク読み込み指示行を実際の内容で置換）
+  TASK_TMP=$(mktemp)
+  printf '%s\n' "$TASK_CONTENT" > "$TASK_TMP"
+  awk -v f="$TASK_TMP" '
+    /を読んでタスク内容を確認してください/ { while ((getline line < f) > 0) print line; close(f); next }
+    { print }
+  ' "$PROMPT_FILE" > "${PROMPT_FILE}.tmp" && mv "${PROMPT_FILE}.tmp" "$PROMPT_FILE"
+  rm -f "$TASK_TMP"
+
+  # テンプレート変数を sed で置換
+  sed \
+    -e "s|{{WORKTREE_PATH}}|${WORKTREE_PATH}|g" \
+    -e "s|{{OUTPUT_DIR}}|${PROJECT_ROOT}/${OUTPUT_DIR}|g" \
+    -e "s|{{PROJECT_ROOT}}|${PROJECT_ROOT}|g" \
+    -e "s|{{ROLE_ID}}|${CONDUCTOR_ID}|g" \
+    -e "s|{{TASK_DESCRIPTION}}|task ${TASK_ID}|g" \
+    -e "s|{{OUTPUT_FILE}}|${PROJECT_ROOT}/${OUTPUT_DIR}/summary.md|g" \
+    "$PROMPT_FILE" > "${PROMPT_FILE}.tmp" && mv "${PROMPT_FILE}.tmp" "$PROMPT_FILE"
+
+  # 完了マーカーとコミット手順を追記（Manager による完了検出に必要）
+  cat >> "$PROMPT_FILE" << COMPLETION_EOF
+
+## 完了マーカー
+
+タスク完了時、以下を必ず実行すること:
+1. 変更をコミット: \`cd ${WORKTREE_PATH} && git add -A && git commit -m "feat: <タスク概要>"\`
+2. 結果サマリー: \`${PROJECT_ROOT}/${OUTPUT_DIR}/summary.md\` に書き出す
+3. 完了マーカー: \`touch ${PROJECT_ROOT}/${OUTPUT_DIR}/done\`
+COMPLETION_EOF
+
+else
+  # --- フォールバック: テンプレートが見つからない場合は heredoc ---
+  cat > "$PROMPT_FILE" << PROMPT_EOF
 # Conductor ロール
 
 あなたは 4層エージェントアーキテクチャの **Conductor** です。
@@ -74,6 +132,7 @@ main ブランチに直接変更を加えてはならない。
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）
 PROMPT_EOF
+fi
 
 # --- 5. cmux ペイン作成 ---
 SPLIT_OUTPUT=$(cmux new-split down 2>&1)
