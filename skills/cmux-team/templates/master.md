@@ -58,7 +58,6 @@ created_at: <ISO 8601>
 
 ```bash
 # draft → ready への変更（ユーザー承認後）
-# タスクファイルの frontmatter 内 status を書き換える
 sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 ```
 
@@ -72,20 +71,34 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 # Manager の surface は team.json から取得
 MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
 
-# surface の存在を検証してから送信（cmux#2042 回避）
-if ! bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE"; then
-  echo "ERROR: Manager surface $MANAGER_SURFACE が存在しません。Manager を再起動してください。"
-  # ここで処理を中断し、ユーザーに報告する
-else
-  cmux send --surface ${MANAGER_SURFACE} "[TASK_CREATED] 新しいタスクを作成しました。タスク走査を実行してください。"
-  sleep 0.5
-  cmux send-key --surface ${MANAGER_SURFACE} "return"
-fi
+# 通知メッセージを送信（Manager が即座にタスク走査を開始する）
+cmux send --surface ${MANAGER_SURFACE} "[TASK_CREATED] 新しいタスクを作成しました。タスク走査を実行してください。"
+sleep 0.5
+cmux send-key --surface ${MANAGER_SURFACE} "return"
 ```
 
 **注意:** この通知は必須。Manager はアイドル停止中であり、この `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。送信に失敗した場合は再送すること。
 
-**重要（cmux#2042）:** `cmux send` は存在しない surface を指定してもエラーを返さず、フォーカス中のペインにフォールバックする。必ず `validate-surface.sh` で事前検証すること。
+## TODO メッセージ（軽微な作業の即時実行）
+
+正式なタスクファイルを作るほどではない軽微な作業は、`[TODO]` メッセージで Manager に直接依頼できる:
+
+```bash
+# Manager の surface は team.json から取得
+MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
+
+# TODO を送信（Manager が即時実行する）
+cmux send --surface ${MANAGER_SURFACE} "[TODO] git worktree prune で残存 worktree を整理して"
+sleep 0.5
+cmux send-key --surface ${MANAGER_SURFACE} "return"
+```
+
+### TASK と TODO の使い分け
+
+- **TASK**（`.team/tasks/open/` にファイル作成）: 正式な開発作業。draft → ready フロー、ユーザー承認あり
+- **TODO**（`[TODO]` メッセージ送信）: 軽微な作業。ファイル不要、Manager が即時実行。承認なし
+
+ユーザーが「すぐやって」「ちょっとこれやって」と言った軽微な作業には TODO を使う。
 
 ## 進捗報告
 
@@ -105,16 +118,11 @@ Manager がクラッシュした場合や再起動が必要な場合:
 # Manager の surface は team.json から取得
 MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
 
-# surface の存在を検証（cmux#2042 回避）
-if ! bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE"; then
-  echo "ERROR: Manager surface $MANAGER_SURFACE が存在しません。新しいペインを作成してください。"
-else
-  # 1. Manager を終了
-  cmux send --surface ${MANAGER_SURFACE} "/exit\n"
-  # 2. 3秒待って Sonnet で再起動
-  sleep 3
-  cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
-fi
+# 1. Manager を終了
+cmux send --surface ${MANAGER_SURFACE} "/exit\n"
+# 2. 3秒待って Sonnet で再起動
+sleep 3
+cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
 ```
 
 **注意:** Manager は Sonnet モデルで動作する。`--model sonnet` を忘れないこと。
