@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.0] - 2026-03-25
+
+### Added
+- `spawn-team.sh`: `/start` の全フェーズを一括実行するスクリプト（インフラ準備・プロンプト生成・ペイン作成・Trust 承認・team.json 更新）
+
+### Changed
+- `/start` コマンドを `spawn-team.sh` の1回呼び出しに簡素化（約20回の tool call → 1回に高速化）
+
 ## [2.2.3] - 2026-03-25
 
 ### Fixed
