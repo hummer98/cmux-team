@@ -19,13 +19,15 @@ if [[ -z "${CMUX_SOCKET_PATH:-}" ]]; then
   exit 1
 fi
 
-# --- 1. テンプレート検索 ---
+# --- 1. テンプレート検索（最新バージョン優先） ---
 TEMPLATE_DIR=""
+# plugin キャッシュは複数バージョンが残るため、最新を選ぶ
+LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1)
 for candidate in \
-  ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates \
+  "$LATEST_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/templates" \
   "${HOME}/.claude/skills/cmux-team/templates"; do
-  if [[ -f "${candidate}/master.md" ]]; then
+  if [[ -n "$candidate" ]] && [[ -f "${candidate}/master.md" ]]; then
     TEMPLATE_DIR="$candidate"
     break
   fi

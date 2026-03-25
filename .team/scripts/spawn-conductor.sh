@@ -43,13 +43,14 @@ OUTPUT_DIR=".team/output/${CONDUCTOR_ID}"
 PROMPT_FILE=".team/prompts/${CONDUCTOR_ID}.md"
 mkdir -p "$OUTPUT_DIR" "$(dirname "$PROMPT_FILE")"
 
-# テンプレート検索（リポジトリ内 → plugin キャッシュ → 手動インストール）
+# テンプレート検索（最新バージョン優先）
 TEMPLATE_DIR=""
+LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1)
 for candidate in \
+  "$LATEST_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/templates" \
-  ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates \
   "${HOME}/.claude/skills/cmux-team/templates"; do
-  if [[ -f "${candidate}/conductor.md" ]]; then
+  if [[ -n "$candidate" ]] && [[ -f "${candidate}/conductor.md" ]]; then
     TEMPLATE_DIR="$candidate"
     break
   fi
