@@ -95,6 +95,7 @@ fi
 2. 稼働中の Conductor は `cmux tree` でペイン構成を確認
 3. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
 4. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
+5. Conductor のセッションログを追跡したい場合は `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し、`claude --resume <session-id>` で参照
 
 ## Manager の再起動
 
