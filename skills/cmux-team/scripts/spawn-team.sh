@@ -85,12 +85,10 @@ if [[ -n "$SCRIPT_DIR" ]]; then
 fi
 
 # --- 4. プロンプト生成（毎回再生成） ---
-# Master: common-header + master.md
-cat "${TEMPLATE_DIR}/common-header.md" > .team/prompts/master.md
-echo "" >> .team/prompts/master.md
-cat "${TEMPLATE_DIR}/master.md" >> .team/prompts/master.md
+# Master: master.md のみ（common-header は使わない。Master はペイン操作が必要）
+cp -f "${TEMPLATE_DIR}/master.md" .team/prompts/master.md
 
-# Manager: manager.md のみ（common-header は使わない）
+# Manager: manager.md のみ（common-header は使わない。Manager はペイン操作が主要責務）
 cp -f "${TEMPLATE_DIR}/manager.md" .team/prompts/manager.md
 
 echo "PROMPTS_UPDATED=true" >&2
