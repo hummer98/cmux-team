@@ -147,26 +147,45 @@ fi
 # 出力ファイルを確認
 cat .team/output/${CONDUCTOR_ID}/summary.md
 
-# タスクをクローズ
-mv .team/tasks/open/NNN-*.md .team/tasks/closed/
-
 # Conductor ペインを閉じる前に session_id を取得
 if bash .team/scripts/validate-surface.sh surface:N; then
   cmux send --surface surface:N "/exit\n"
   sleep 3
-  # /exit 後の画面から session_id を取得（"claude --resume <uuid>" を解析）
   EXIT_SCREEN=$(cmux read-screen --surface surface:N --lines 20 2>&1)
   SESSION_ID=$(echo "$EXIT_SCREEN" | grep -oE 'claude --resume [a-f0-9-]+' | awk '{print $3}' | head -1)
   cmux close-surface --surface surface:N
 fi
 
-# worktree のブランチをマージ（テストがパスしていれば）
-cd .worktrees/${CONDUCTOR_ID} && git add -A && git commit -m "feat: <タスク概要>"
+# worktree のブランチをマージ
+cd .worktrees/${CONDUCTOR_ID}
+git add -A
+git diff --cached --quiet || git commit -m "feat: <タスク概要>"
 cd {{PROJECT_ROOT}}
-git merge ${CONDUCTOR_ID}/task
-git worktree remove .worktrees/${CONDUCTOR_ID}
-git branch -d ${CONDUCTOR_ID}/task
+
+# マージ実行と検証（コード変更がある場合のみ）
+MERGE_COMMIT=""
+if git log ${CONDUCTOR_ID}/task --oneline -1 2>/dev/null | grep -q .; then
+  git merge ${CONDUCTOR_ID}/task
+  MERGE_COMMIT=$(git rev-parse --short HEAD)
+fi
+
+# マージ検証: メインブランチに反映されたか確認
+if [[ -n "$MERGE_COMMIT" ]]; then
+  # マージ成功 → worktree クリーンアップ
+  git worktree remove .worktrees/${CONDUCTOR_ID}
+  git branch -d ${CONDUCTOR_ID}/task
+
+  # タスクをクローズ
+  mv .team/tasks/open/NNN-*.md .team/tasks/closed/
+else
+  # コード変更なし（調査タスク等）→ worktree だけクリーンアップ、タスクはクローズ
+  git worktree remove .worktrees/${CONDUCTOR_ID} --force
+  git branch -D ${CONDUCTOR_ID}/task 2>/dev/null || true
+  mv .team/tasks/open/NNN-*.md .team/tasks/closed/
+fi
 ```
+
+**重要: タスクをクローズするのはマージ確認後のみ。** マージに失敗した場合はクローズせず、エラーログを記録して再試行を検討する。
 
 ### 5. ログ書き込み
 
