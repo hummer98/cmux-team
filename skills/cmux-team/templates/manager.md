@@ -232,7 +232,11 @@ Master は以下のメッセージを `cmux send` で送ってくる:
 
 ## 最大同時実行数
 
-Conductor は最大 3 つまで同時に稼働させる。API レート制限を考慮して制御すること。
+Conductor の同時稼働数は環境変数 `CMUX_TEAM_MAX_CONDUCTORS` で指定する（デフォルト: 3）。
+
+```bash
+MAX_CONDUCTORS=${CMUX_TEAM_MAX_CONDUCTORS:-3}
+```
 
 ## エラーリカバリ
 
