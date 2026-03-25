@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.2.2] - 2026-03-25
+
+### Changed
+- `/start` 実行時に毎回 plugin キャッシュからテンプレートを再生成するよう変更（plugin 更新後にプロンプトが古いまま残る問題を解消）
+- Conductor 最大同時実行数を環境変数 `CMUX_TEAM_MAX_CONDUCTORS` で設定可能に（デフォルト: 3）
+- Conductor 終了時に session_id を manager.log に記録（`claude --resume` で事後確認可能）
+
+### Fixed
+- タスク完了時に worktree のマージを検証せずクローズしていた問題を修正（コード変更の消失を防止）
+
 ## [2.2.1] - 2026-03-25
 
 ### Changed
