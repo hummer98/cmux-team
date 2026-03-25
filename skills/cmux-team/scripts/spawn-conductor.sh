@@ -149,7 +149,7 @@ if ! bash "$(dirname "$0")/validate-surface.sh" "$SURFACE"; then
   echo "ERROR: surface $SURFACE does not exist (cmux#2042 workaround)" >&2
   exit 1
 fi
-cmux send --surface "$SURFACE" "claude --dangerously-skip-permissions '${PROMPT_FILE} を読んで指示に従って作業してください。'\n" >&2
+cmux send --surface "$SURFACE" "CONDUCTOR_ID=${CONDUCTOR_ID} TASK_ID=${TASK_ID} claude --dangerously-skip-permissions '${PROMPT_FILE} を読んで指示に従って作業してください。'\n" >&2
 
 # --- 7. Trust 承認ポーリング（最大30秒） ---
 for i in $(seq 1 10); do

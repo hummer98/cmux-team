@@ -150,10 +150,13 @@ cat .team/output/${CONDUCTOR_ID}/summary.md
 # タスクをクローズ
 mv .team/tasks/open/NNN-*.md .team/tasks/closed/
 
-# Conductor ペインを閉じる（surface 存在確認付き — cmux#2042 回避）
+# Conductor ペインを閉じる前に session_id を取得
 if bash .team/scripts/validate-surface.sh surface:N; then
   cmux send --surface surface:N "/exit\n"
-  sleep 2
+  sleep 3
+  # /exit 後の画面から session_id を取得（"claude --resume <uuid>" を解析）
+  EXIT_SCREEN=$(cmux read-screen --surface surface:N --lines 20 2>&1)
+  SESSION_ID=$(echo "$EXIT_SCREEN" | grep -oE 'claude --resume [a-f0-9-]+' | awk '{print $3}' | head -1)
   cmux close-surface --surface surface:N
 fi
 
@@ -179,7 +182,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/ma
 | イベント | 形式 | タイミング |
 |---------|------|-----------|
 | Conductor 起動 | `conductor_started id=<conductor-id> task=<task-id> surface=<surface>` | §2 Conductor 起動後 |
-| タスク完了 | `task_completed id=<task-id> conductor=<conductor-id> merged=<commit-hash>` | §4 マージ成功後 |
+| タスク完了 | `task_completed id=<task-id> conductor=<conductor-id> session=<session-id> merged=<commit-hash>` | §4 マージ成功後 |
 | タスクエラー | `task_error id=<task-id> conductor=<conductor-id> reason=<概要>` | エラー検出時 |
 | アイドル開始 | `idle_start` | §6 アイドル停止に入る直前 |
 | アイドル解除 | `idle_wake trigger=TASK_CREATED` | `[TASK_CREATED]` 受信時 |
