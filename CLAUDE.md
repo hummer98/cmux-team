@@ -285,6 +285,24 @@ cmux
 - テンプレートは `{{VARIABLE}}` プレースホルダーを使用
 - README.md やユーザー向けテキストは日本語
 
+## プロンプト編集ルール（厳守）
+
+**テンプレート (`skills/cmux-team/templates/*.md`) がソースオブトゥルース。** ランタイムプロンプト (`.team/prompts/*.md`) は派生物であり、直接編集してはならない。
+
+| やること | やらないこと |
+|---------|-------------|
+| `skills/cmux-team/templates/master.md` を編集 | `.team/prompts/master.md` を直接編集 |
+| `skills/cmux-team/templates/manager.md` を編集 | `.team/prompts/manager.md` を直接編集 |
+| 編集後に `/start` で再生成 or テンプレートからコピー | ランタイムだけ書き換えて「動いた」で終わり |
+
+**理由:** ランタイムプロンプトだけ書き換えると、テンプレートとの乖離が蓄積する。次回の `/start` や別プロジェクトでの起動時に変更が消失する。
+
+プロンプトを変更する場合の手順:
+1. `skills/cmux-team/templates/*.md` を編集
+2. `.team/prompts/*.md` にコピー（または `/start` で再生成）
+3. 他プロジェクト（Dear 等）のランタイムプロンプトも更新
+4. コミット・リリース
+
 ## 既知の注意点
 
 ### Manager の動作仕様
