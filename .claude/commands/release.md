@@ -105,7 +105,21 @@ if [ -d "$MARKETPLACE_DIR/.git" ]; then
 fi
 ```
 
-### 8. plugin を再インストール
+### 8. 旧バージョンの plugin キャッシュを削除
+
+plugin キャッシュに旧バージョンが残ると、テンプレート検索の glob で古いバージョンが先にマッチする問題がある。最新以外を削除する:
+
+```bash
+CACHE_BASE="${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team"
+LATEST=$(ls -d "$CACHE_BASE"/*/ 2>/dev/null | sort -V | tail -1)
+for dir in "$CACHE_BASE"/*/; do
+  if [[ "$dir" != "$LATEST" ]]; then
+    rm -rf "$dir"
+  fi
+done
+```
+
+### 9. plugin を再インストール
 
 marketplace キャッシュ更新後、uninstall → install で最新バージョンを反映する:
 
@@ -121,7 +135,7 @@ claude plugin install cmux-team@hummer98-cmux-team
 ! claude plugin uninstall cmux-team@hummer98-cmux-team && claude plugin install cmux-team@hummer98-cmux-team
 ```
 
-### 9. 完了報告
+### 10. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
