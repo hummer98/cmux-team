@@ -40,9 +40,25 @@ description: "全層を終了しチームを解散する"
    - 対応するブランチを `git branch -d` で削除（マージ済みのみ。未マージは `-d` が失敗するので安全）
 
 5. **Layer 4: Manager 終了**
-   - cmux send --surface <manager-surface> "/exit\n"
-   - sleep 2
-   - cmux close-surface --surface <manager-surface>
+   TypeScript Manager プロセスに SHUTDOWN メッセージを送信:
+   ```bash
+   # SHUTDOWN キューメッセージを送信
+   bun run .team/manager/cli.ts SHUTDOWN
+
+   # プロセスが終了するまで待機（最大 15 秒）
+   MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))")
+   for i in $(seq 1 15); do
+     kill -0 $MANAGER_PID 2>/dev/null || break
+     sleep 1
+   done
+
+   # まだ生きていたら SIGTERM
+   kill $MANAGER_PID 2>/dev/null || true
+
+   # Manager ペインを閉じる
+   MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
+   cmux close-surface --surface $MANAGER_SURFACE 2>/dev/null || true
+   ```
 
 6. **ステータスクリア**
    - cmux clear-progress

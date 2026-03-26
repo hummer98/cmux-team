@@ -1,7 +1,8 @@
 import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 
-const LOG_DIR = ".team/logs";
+const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
+const LOG_DIR = join(PROJECT_ROOT, ".team/logs");
 const LOG_FILE = join(LOG_DIR, "manager.log");
 
 export async function log(event: string, detail: string = ""): Promise<void> {

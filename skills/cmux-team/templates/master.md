@@ -7,7 +7,7 @@
 
 - ユーザーの指示を解釈し `.team/tasks/open/` にタスクファイルを作成する
 - 真のソースを直接参照してユーザーに進捗を報告する
-- Manager（隣のペイン）の健全性を `cmux read-screen` で確認する
+- Manager（TypeScript プロセス）の健全性を確認する
 - ユーザーの質問に答える（`cmux tree` / `ls .team/tasks/` / `.team/logs/manager.log` / `.team/output/` を参照して）
 
 ## やらないこと（厳守）
@@ -54,7 +54,7 @@ created_at: <ISO 8601>
 1. **draft で作成** — ユーザーの指示を受けてタスクを作成
 2. **ユーザーに内容を確認** — タスクの内容を表示し、問題がないか確認する
 3. **ready に変更** — ユーザーの承認を得たら `status: ready` に変更する
-4. **Manager に通知** — `[TASK_CREATED]` メッセージを送信（§ タスク作成後の Manager 通知 参照）
+4. **Manager に通知** — CLI でキューにメッセージを送信
 
 ```bash
 # draft → ready への変更（ユーザー承認後）
@@ -65,38 +65,27 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 
 ## タスク作成後の Manager 通知
 
-タスクファイルを `.team/tasks/open/` に書き出した後、Manager に即時通知を送る:
+タスクファイルを `.team/tasks/open/` に書き出し、status を ready にした後、CLI でキューに通知を送る:
 
 ```bash
-# Manager の surface は team.json から取得
-MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
-
-# 通知メッセージを送信（Manager が即座にタスク走査を開始する）
-cmux send --surface ${MANAGER_SURFACE} "[TASK_CREATED] 新しいタスクを作成しました。タスク走査を実行してください。"
-sleep 0.5
-cmux send-key --surface ${MANAGER_SURFACE} "return"
+# CLI でキューにメッセージを追加（Manager が次のポーリングサイクルで処理）
+bun run .team/manager/cli.ts TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
 ```
 
-**注意:** この通知は必須。Manager はアイドル停止中であり、この `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。送信に失敗した場合は再送すること。
+**注意:** Manager は定期的にキューをポーリングしているため、通知は数秒以内に処理される。`cmux send` は使わない。
 
 ## TODO メッセージ（軽微な作業の即時実行）
 
-正式なタスクファイルを作るほどではない軽微な作業は、`[TODO]` メッセージで Manager に直接依頼できる:
+正式なタスクファイルを作るほどではない軽微な作業は、CLI で Manager に直接依頼できる:
 
 ```bash
-# Manager の surface は team.json から取得
-MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
-
-# TODO を送信（Manager が即時実行する）
-cmux send --surface ${MANAGER_SURFACE} "[TODO] git worktree prune で残存 worktree を整理して"
-sleep 0.5
-cmux send-key --surface ${MANAGER_SURFACE} "return"
+bun run .team/manager/cli.ts TODO --content "git worktree prune で残存 worktree を整理して"
 ```
 
 ### TASK と TODO の使い分け
 
-- **TASK**（`.team/tasks/open/` にファイル作成）: 正式な開発作業。draft → ready フロー、ユーザー承認あり
-- **TODO**（`[TODO]` メッセージ送信）: 軽微な作業。ファイル不要、Manager が即時実行。承認なし
+- **TASK**（`.team/tasks/open/` にファイル作成 + CLI 通知）: 正式な開発作業。draft → ready フロー、ユーザー承認あり
+- **TODO**（CLI で TODO 送信）: 軽微な作業。ファイル不要、Manager が即時実行。承認なし
 
 ユーザーが「すぐやって」「ちょっとこれやって」と言った軽微な作業には TODO を使う。
 
@@ -104,28 +93,35 @@ cmux send-key --surface ${MANAGER_SURFACE} "return"
 
 ユーザーに「状況は？」と聞かれたら:
 
-1. Manager の状態は `cmux read-screen` で Manager ペインの画面を直接確認
-2. 稼働中の Conductor は `cmux tree` でペイン構成を確認
-3. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
-4. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
-5. Conductor のセッションログを追跡したい場合は `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し、`claude --resume <session-id>` で参照
+1. Manager の健全性を確認:
+   ```bash
+   MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))")
+   kill -0 $MANAGER_PID 2>/dev/null && echo "Manager: alive" || echo "Manager: dead"
+   ```
+2. Manager のログ出力を `cmux read-screen` で確認（正常動作中は `[manager]` ログが流れている）
+3. 稼働中の Conductor は `cmux tree` でペイン構成を確認
+4. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
+5. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
+6. Conductor のセッションログを追跡したい場合は `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し、`claude --resume <session-id>` で参照
 
 ## Manager の再起動
 
 Manager がクラッシュした場合や再起動が必要な場合:
 
 ```bash
-# Manager の surface は team.json から取得
+# Manager の surface と PID を team.json から取得
 MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))")
+MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))")
 
-# 1. Manager を終了
-cmux send --surface ${MANAGER_SURFACE} "/exit\n"
-# 2. 3秒待って Sonnet で再起動
-sleep 3
-cmux send --surface ${MANAGER_SURFACE} "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで、その指示に従ってください。'\n"
+# 1. 既存プロセスを停止
+kill $MANAGER_PID 2>/dev/null || true
+sleep 2
+
+# 2. Manager ペインで再起動
+cmux send --surface ${MANAGER_SURFACE} "cd $(pwd) && PROJECT_ROOT=$(pwd) bun run .team/manager/manager.ts\n"
 ```
 
-**注意:** Manager は Sonnet モデルで動作する。`--model sonnet` を忘れないこと。
+**注意:** Manager は TypeScript プロセスで動作する。Claude セッションではない。
 
 ## 言語ルール
 

@@ -11,9 +11,10 @@
  * AI 判断が必要な場合のみ claude --print でワンショット実行
  */
 
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { mkdir } from "fs/promises";
 import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
 import {
   spawnConductor,
@@ -23,8 +24,14 @@ import {
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
+// --- プロジェクトルート検出 ---
+const scriptDir = import.meta.dir;
+if (!process.env.PROJECT_ROOT && scriptDir.includes(".team/manager")) {
+  process.env.PROJECT_ROOT = join(scriptDir, "../..");
+}
+
 // --- 設定 ---
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
 const POLL_INTERVAL = Number(process.env.CMUX_TEAM_POLL_INTERVAL ?? 15_000); // 15秒
 const MAX_CONDUCTORS = Number(process.env.CMUX_TEAM_MAX_CONDUCTORS ?? 3);
 

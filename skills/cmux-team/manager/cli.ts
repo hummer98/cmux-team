@@ -7,7 +7,17 @@
  *   bun run cli.ts TODO --content "git worktree prune"
  *   bun run cli.ts CONDUCTOR_DONE --conductor-id conductor-xxx --surface surface:42
  *   bun run cli.ts SHUTDOWN
+ *
+ * PROJECT_ROOT 環境変数でプロジェクトルートを指定可能（省略時は cwd）
  */
+
+import { join } from "path";
+
+// .team/manager/ から実行された場合、プロジェクトルートを自動検出
+const scriptDir = import.meta.dir;
+if (!process.env.PROJECT_ROOT && scriptDir.includes(".team/manager")) {
+  process.env.PROJECT_ROOT = join(scriptDir, "../..");
+}
 
 import { sendMessage } from "./queue";
 import type { QueueMessage } from "./schema";

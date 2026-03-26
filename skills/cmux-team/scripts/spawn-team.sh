@@ -4,24 +4,25 @@
 # Usage: bash .team/scripts/spawn-team.sh
 # Output (stdout): KEY=VALUE 形式の起動情報
 # Exit: 0=成功, 1=失敗
-#
-# 既存セッションの検出、プロンプト生成、ペイン作成、Claude 起動、
-# Trust 承認、team.json 更新を一括で行う。
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# --- 0. cmux 環境チェック ---
+# --- 0. 環境チェック ---
 if [[ -z "${CMUX_SOCKET_PATH:-}" ]]; then
   echo "ERROR: CMUX_SOCKET_PATH が設定されていません。cmux 内で実行してください。" >&2
   exit 1
 fi
 
+if ! command -v bun >/dev/null 2>&1; then
+  echo "ERROR: bun が見つかりません。brew install oven-sh/bun/bun でインストールしてください。" >&2
+  exit 1
+fi
+
 # --- 1. テンプレート検索（最新バージョン優先） ---
 TEMPLATE_DIR=""
-# plugin キャッシュは複数バージョンが残るため、最新を選ぶ
 LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1)
 for candidate in \
   "$LATEST_CACHE" \
@@ -38,20 +39,38 @@ if [[ -z "$TEMPLATE_DIR" ]]; then
   exit 1
 fi
 
-# --- 2. スクリプト検索 ---
+# --- 2. スクリプト・Manager ソース検索 ---
 SCRIPT_DIR=""
+LATEST_SCRIPT_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/scripts 2>/dev/null | sort -V | tail -1)
 for candidate in \
-  ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/scripts \
+  "$LATEST_SCRIPT_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/scripts" \
   "${HOME}/.claude/skills/cmux-team/scripts"; do
-  if [[ -f "${candidate}/spawn-conductor.sh" ]]; then
+  if [[ -n "$candidate" ]] && [[ -f "${candidate}/spawn-conductor.sh" ]]; then
     SCRIPT_DIR="$candidate"
     break
   fi
 done
 
+MANAGER_SRC=""
+LATEST_MANAGER_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager 2>/dev/null | sort -V | tail -1)
+for candidate in \
+  "$LATEST_MANAGER_CACHE" \
+  "${PROJECT_ROOT}/skills/cmux-team/manager" \
+  "${HOME}/.claude/skills/cmux-team/manager"; do
+  if [[ -n "$candidate" ]] && [[ -f "${candidate}/manager.ts" ]]; then
+    MANAGER_SRC="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$MANAGER_SRC" ]]; then
+  echo "ERROR: Manager ランタイムが見つかりません" >&2
+  exit 1
+fi
+
 # --- 3. インフラ準備 ---
-mkdir -p .team/{specs,output,tasks/open,tasks/closed,prompts,docs-snapshot,logs,scripts}
+mkdir -p .team/{specs,output,tasks/open,tasks/closed,prompts,docs-snapshot,logs,scripts,manager,queue/processed}
 
 # team.json 初期化（未存在時のみ）
 if [[ ! -f .team/team.json ]]; then
@@ -76,6 +95,8 @@ output/
 prompts/
 docs-snapshot/
 logs/
+manager/
+queue/
 GITIGNORE_EOF
 fi
 
@@ -83,21 +104,29 @@ fi
 if [[ -n "$SCRIPT_DIR" ]]; then
   cp -f "${SCRIPT_DIR}/spawn-conductor.sh" .team/scripts/
   cp -f "${SCRIPT_DIR}/validate-surface.sh" .team/scripts/
+  cp -f "${SCRIPT_DIR}/spawn-team.sh" .team/scripts/ 2>/dev/null || true
   chmod +x .team/scripts/*.sh
 fi
 
-# --- 4. プロンプト生成（毎回再生成） ---
-# Master: master.md のみ（common-header は使わない。Master はペイン操作が必要）
-cp -f "${TEMPLATE_DIR}/master.md" .team/prompts/master.md
+# --- 3.5 Manager ランタイムコピー + bun install ---
+for f in manager.ts cli.ts schema.ts queue.ts conductor.ts logger.ts package.json bun.lock tsconfig.json; do
+  if [[ -f "${MANAGER_SRC}/${f}" ]]; then
+    cp -f "${MANAGER_SRC}/${f}" .team/manager/
+  fi
+done
 
-# Manager: manager.md のみ（common-header は使わない。Manager はペイン操作が主要責務）
-cp -f "${TEMPLATE_DIR}/manager.md" .team/prompts/manager.md
+if [[ ! -d .team/manager/node_modules ]] || [[ .team/manager/package.json -nt .team/manager/node_modules/.package-lock.json ]]; then
+  (cd .team/manager && bun install 2>&1) >&2
+fi
+
+# --- 4. プロンプト生成（毎回再生成） ---
+cp -f "${TEMPLATE_DIR}/master.md" .team/prompts/master.md
 
 echo "PROMPTS_UPDATED=true" >&2
 
 # --- 5. 既存セッション検出 ---
 MASTER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('master',{}).get('surface',''))" 2>/dev/null || echo "")
-MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))" 2>/dev/null || echo "")
+MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))" 2>/dev/null || echo "")
 
 MASTER_ALIVE=false
 MANAGER_ALIVE=false
@@ -106,15 +135,16 @@ if [[ -n "$MASTER_SURFACE" ]] && bash .team/scripts/validate-surface.sh "$MASTER
   MASTER_ALIVE=true
 fi
 
-if [[ -n "$MANAGER_SURFACE" ]] && bash .team/scripts/validate-surface.sh "$MANAGER_SURFACE" 2>/dev/null; then
+if [[ -n "$MANAGER_PID" ]] && kill -0 "$MANAGER_PID" 2>/dev/null; then
   MANAGER_ALIVE=true
+  MANAGER_SURFACE=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('surface',''))" 2>/dev/null || echo "")
 fi
 
 # 両方稼働中 → プロンプト更新のみで終了
 if $MASTER_ALIVE && $MANAGER_ALIVE; then
   echo "STATUS=already_running"
   echo "MASTER_SURFACE=${MASTER_SURFACE}"
-  echo "MANAGER_SURFACE=${MANAGER_SURFACE}"
+  echo "MANAGER_PID=${MANAGER_PID}"
   exit 0
 fi
 
@@ -156,7 +186,7 @@ if ! $MASTER_ALIVE; then
   cmux rename-tab --surface "$MASTER_SURFACE" "[${MASTER_NUM}] Master" >&2 2>&1 || true
 fi
 
-# --- 8. Manager spawn（必要な場合のみ） ---
+# --- 8. Manager spawn（TypeScript プロセス） ---
 if ! $MANAGER_ALIVE; then
   SPLIT_OUTPUT=$(cmux new-split down --surface "$MASTER_SURFACE" 2>&1)
   MANAGER_SURFACE=$(echo "$SPLIT_OUTPUT" | awk '{print $2}')
@@ -171,11 +201,22 @@ if ! $MANAGER_ALIVE; then
     exit 1
   fi
 
-  cmux send --surface "$MANAGER_SURFACE" "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n" >&2
-  wait_for_trust "$MANAGER_SURFACE"
+  # bun run manager.ts をプロジェクトルートで起動
+  cmux send --surface "$MANAGER_SURFACE" "cd ${PROJECT_ROOT} && PROJECT_ROOT=${PROJECT_ROOT} bun run .team/manager/manager.ts\n" >&2
+
+  # Manager PID を取得
+  sleep 3
+  MANAGER_PID=""
+  for i in $(seq 1 5); do
+    MANAGER_PID=$(pgrep -f "bun.*manager.ts" 2>/dev/null | tail -1) || true
+    if [[ -n "$MANAGER_PID" ]]; then
+      break
+    fi
+    sleep 1
+  done
 
   MANAGER_NUM=${MANAGER_SURFACE##*:}
-  cmux rename-tab --surface "$MANAGER_SURFACE" "[${MANAGER_NUM}] Manager" >&2 2>&1 || true
+  cmux rename-tab --surface "$MANAGER_SURFACE" "[${MANAGER_NUM}] Manager(TS)" >&2 2>&1 || true
 fi
 
 # --- 9. team.json 更新 ---
@@ -184,7 +225,12 @@ import json
 with open('.team/team.json') as f:
     d = json.load(f)
 d['master'] = {'surface': '${MASTER_SURFACE}'}
-d['manager'] = {'surface': '${MANAGER_SURFACE}', 'status': 'running'}
+d['manager'] = {
+    'surface': '${MANAGER_SURFACE:-}',
+    'pid': int('${MANAGER_PID:-0}' or '0'),
+    'type': 'typescript',
+    'status': 'running'
+}
 d['phase'] = 'running'
 with open('.team/team.json', 'w') as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
@@ -194,4 +240,5 @@ with open('.team/team.json', 'w') as f:
 # --- 10. 起動情報を出力 ---
 echo "STATUS=spawned"
 echo "MASTER_SURFACE=${MASTER_SURFACE}"
-echo "MANAGER_SURFACE=${MANAGER_SURFACE}"
+echo "MANAGER_SURFACE=${MANAGER_SURFACE:-}"
+echo "MANAGER_PID=${MANAGER_PID:-}"

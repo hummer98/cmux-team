@@ -3,7 +3,8 @@ import { existsSync } from "fs";
 import { join, basename } from "path";
 import { QueueMessage } from "./schema";
 
-const QUEUE_DIR = ".team/queue";
+const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
+const QUEUE_DIR = join(PROJECT_ROOT, ".team/queue");
 const PROCESSED_DIR = join(QUEUE_DIR, "processed");
 
 export async function ensureQueueDirs(): Promise<void> {
