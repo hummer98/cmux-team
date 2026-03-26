@@ -81,8 +81,8 @@ describe("Queue", () => {
 
     const messages = await q.read();
     expect(messages).toHaveLength(1);
-    expect(messages[0].message.type).toBe("TASK_CREATED");
-    expect(messages[0].message.taskId).toBe("035");
+    expect(messages[0]!.message.type).toBe("TASK_CREATED");
+    expect(messages[0]!.message.taskId).toBe("035");
   });
 
   test("TODO メッセージを送信・読み取りできる", async () => {
@@ -95,8 +95,8 @@ describe("Queue", () => {
 
     const messages = await q.read();
     expect(messages).toHaveLength(1);
-    expect(messages[0].message.type).toBe("TODO");
-    expect(messages[0].message.content).toBe("worktree を整理して");
+    expect(messages[0]!.message.type).toBe("TODO");
+    expect(messages[0]!.message.content).toBe("worktree を整理して");
   });
 
   test("複数メッセージが順序通りに読み取れる", async () => {
@@ -119,9 +119,9 @@ describe("Queue", () => {
 
     const messages = await q.read();
     expect(messages).toHaveLength(3);
-    expect(messages[0].message.type).toBe("TASK_CREATED");
-    expect(messages[1].message.type).toBe("TODO");
-    expect(messages[2].message.type).toBe("SHUTDOWN");
+    expect(messages[0]!.message.type).toBe("TASK_CREATED");
+    expect(messages[1]!.message.type).toBe("TODO");
+    expect(messages[2]!.message.type).toBe("SHUTDOWN");
   });
 
   test("処理済みメッセージが processed/ に移動される", async () => {
@@ -166,7 +166,7 @@ describe("Queue", () => {
 
     const messages = await q.read();
     expect(messages).toHaveLength(1);
-    expect(messages[0].message.conductorId).toBe("conductor-123");
-    expect(messages[0].message.sessionId).toBe("abc-def");
+    expect(messages[0]!.message.conductorId).toBe("conductor-123");
+    expect(messages[0]!.message.sessionId).toBe("abc-def");
   });
 });

@@ -20,7 +20,7 @@ export interface TaskMeta {
  */
 export function parseTaskMeta(content: string, fileName: string, filePath: string): TaskMeta | null {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return null;
+  if (!fmMatch?.[1]) return null;
 
   const fm = fmMatch[1];
 
@@ -32,7 +32,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
   const depsMatch = fm.match(/^depends_on:\s*(.+)$/m);
-  if (depsMatch) {
+  if (depsMatch?.[1]) {
     const raw = depsMatch[1].trim();
     if (raw.startsWith("[")) {
       // YAML array: [033, 034]

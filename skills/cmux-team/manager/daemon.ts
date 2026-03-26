@@ -11,6 +11,7 @@ import {
   collectResults,
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
+import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
@@ -144,40 +145,28 @@ async function processQueue(state: DaemonState): Promise<void> {
 }
 
 async function scanTasks(state: DaemonState): Promise<void> {
-  const tasksDir = join(state.projectRoot, ".team/tasks/open");
-  if (!existsSync(tasksDir)) return;
+  const { open, closed } = await loadTasks(state.projectRoot);
+  state.openTasks = open.length;
 
-  const files = await readdir(tasksDir);
-  const taskFiles = files.filter((f) => f.endsWith(".md"));
-  state.openTasks = taskFiles.length;
-  state.pendingTasks = 0;
+  const assignedIds = new Set(
+    [...state.conductors.values()].map((c) => c.taskId)
+  );
 
-  for (const file of taskFiles) {
-    const taskId = file.match(/^0*(\d+)/)?.[1];
-    if (!taskId) continue;
+  const executable = sortByPriority(
+    filterExecutableTasks(open, closed, assignedIds)
+  );
+  state.pendingTasks = executable.length;
 
-    const alreadyAssigned = [...state.conductors.values()].some(
-      (c) => c.taskId === taskId
-    );
-    if (alreadyAssigned) continue;
-
-    const content = await readFile(join(tasksDir, file), "utf-8");
-    const statusMatch = content.match(/^status:\s*(.+)$/m);
-    const status = statusMatch?.[1]?.trim() ?? "ready";
-
-    if (status !== "ready") continue;
-
-    state.pendingTasks++;
-
+  for (const task of executable) {
     if (state.conductors.size >= state.maxConductors) {
       await log(
         "throttled",
-        `task_id=${taskId} conductors=${state.conductors.size}/${state.maxConductors}`
+        `task_id=${task.id} conductors=${state.conductors.size}/${state.maxConductors}`
       );
       break;
     }
 
-    const conductor = await spawnConductor(taskId, state.projectRoot);
+    const conductor = await spawnConductor(task.id, state.projectRoot);
     if (conductor) {
       state.conductors.set(conductor.conductorId, conductor);
     }

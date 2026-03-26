@@ -69,7 +69,7 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 
 ```bash
 # CLI でキューにメッセージを追加（Manager が次のポーリングサイクルで処理）
-bun run .team/manager/cli.ts TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
+.team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
 ```
 
 **注意:** Manager は定期的にキューをポーリングしているため、通知は数秒以内に処理される。`cmux send` は使わない。
@@ -79,7 +79,7 @@ bun run .team/manager/cli.ts TASK_CREATED --task-id NNN --task-file .team/tasks/
 正式なタスクファイルを作るほどではない軽微な作業は、CLI で Manager に直接依頼できる:
 
 ```bash
-bun run .team/manager/cli.ts TODO --content "git worktree prune で残存 worktree を整理して"
+.team/manager/main.ts send TODO --content "git worktree prune で残存 worktree を整理して"
 ```
 
 ### TASK と TODO の使い分け
@@ -118,7 +118,7 @@ kill $MANAGER_PID 2>/dev/null || true
 sleep 2
 
 # 2. Manager ペインで再起動
-cmux send --surface ${MANAGER_SURFACE} "cd $(pwd) && PROJECT_ROOT=$(pwd) bun run .team/manager/manager.ts\n"
+cmux send --surface ${MANAGER_SURFACE} "cd $(pwd) && PROJECT_ROOT=$(pwd) .team/manager/main.ts start\n"
 ```
 
 **注意:** Manager は TypeScript プロセスで動作する。Claude セッションではない。

@@ -43,7 +43,7 @@ description: "全層を終了しチームを解散する"
    TypeScript Manager プロセスに SHUTDOWN メッセージを送信:
    ```bash
    # SHUTDOWN キューメッセージを送信
-   bun run .team/manager/cli.ts SHUTDOWN
+   .team/manager/main.ts stop
 
    # プロセスが終了するまで待機（最大 15 秒）
    MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))")

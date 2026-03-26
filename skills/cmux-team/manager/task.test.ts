@@ -113,7 +113,7 @@ describe("filterExecutableTasks", () => {
     const tasks = [makeMeta("1", "draft"), makeMeta("2", "ready")];
     const result = filterExecutableTasks(tasks, new Set(), new Set());
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("2");
+    expect(result[0]!.id).toBe("2");
   });
 
   test("依存タスクが全て closed なら実行可能", () => {
@@ -135,7 +135,7 @@ describe("filterExecutableTasks", () => {
     const assigned = new Set(["1"]);
     const result = filterExecutableTasks(tasks, new Set(), assigned);
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("2");
+    expect(result[0]!.id).toBe("2");
   });
 
   // ユースケース 1: issue → task → 順序付き実行
