@@ -1,60 +1,108 @@
+/**
+ * Conductor の spawn・監視・結果回収（spawn-conductor.sh を TypeScript で置換）
+ */
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { ConductorState } from "./schema";
+import { readFile, mkdir, readdir, rename } from "fs/promises";
+import { join } from "path";
+import * as cmux from "./cmux";
+import { generateConductorPrompt } from "./template";
 import { log } from "./logger";
+import type { ConductorState } from "./schema";
 
 const execFile = promisify(execFileCb);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function spawnConductor(
   taskId: string,
   projectRoot: string
 ): Promise<ConductorState | null> {
-  const scriptPath = `${projectRoot}/.team/scripts/spawn-conductor.sh`;
-
-  if (!existsSync(scriptPath)) {
-    log("error", `spawn-conductor.sh not found: ${scriptPath}`);
-    return null;
-  }
-
   try {
-    const { stdout, stderr } = await execFile("bash", [scriptPath, taskId], {
-      cwd: projectRoot,
-      timeout: 120_000,
+    const conductorId = `conductor-${Math.floor(Date.now() / 1000)}`;
+
+    // --- 1. タスクファイル検索 ---
+    const tasksDir = join(projectRoot, ".team/tasks/open");
+    const files = await readdir(tasksDir);
+    const taskFile = files.find((f) => {
+      const id = f.match(/^0*(\d+)/)?.[1];
+      return id === taskId || id === taskId.replace(/^0+/, "");
     });
 
-    if (stderr) {
-      log("info", `spawn stderr: ${stderr.trim().split("\n").pop()}`);
-    }
-
-    const vars: Record<string, string> = {};
-    for (const line of stdout.trim().split("\n")) {
-      const [key, ...rest] = line.split("=");
-      if (key && rest.length) vars[key] = rest.join("=");
-    }
-
-    if (!vars.CONDUCTOR_ID || !vars.SURFACE) {
-      log("error", `spawn output missing required fields: ${stdout}`);
+    if (!taskFile) {
+      await log("error", `Task file not found for ID=${taskId}`);
       return null;
     }
 
-    const state: ConductorState = {
-      conductorId: vars.CONDUCTOR_ID,
+    const taskContent = await readFile(join(tasksDir, taskFile), "utf-8");
+
+    // --- 2. git worktree 作成 ---
+    const worktreePath = join(projectRoot, ".worktrees", conductorId);
+    const branch = `${conductorId}/task`;
+
+    await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
+      cwd: projectRoot,
+    });
+
+    // worktree ブートストラップ
+    if (existsSync(join(worktreePath, "package.json"))) {
+      await execFile("npm", ["install"], { cwd: worktreePath }).catch(() => {});
+    }
+
+    // --- 3. Conductor プロンプト生成 ---
+    const outputDir = `.team/output/${conductorId}`;
+    await mkdir(join(projectRoot, outputDir), { recursive: true });
+
+    const promptFile = await generateConductorPrompt(
+      projectRoot,
+      conductorId,
       taskId,
-      surface: vars.SURFACE,
-      worktreePath: vars.WORKTREE_PATH || "",
-      outputDir: vars.OUTPUT_DIR || "",
+      taskContent,
+      worktreePath,
+      outputDir
+    );
+
+    // --- 4. cmux ペイン作成 ---
+    const surface = await cmux.newSplit("down");
+
+    if (!(await cmux.validateSurface(surface))) {
+      await log("error", `Conductor surface ${surface} validation failed`);
+      return null;
+    }
+
+    // --- 5. Claude Code 起動 ---
+    await cmux.send(
+      surface,
+      `CONDUCTOR_ID=${conductorId} TASK_ID=${taskId} claude --dangerously-skip-permissions '${promptFile} を読んで指示に従って作業してください。'\n`
+    );
+
+    // --- 6. Trust 承認 ---
+    await cmux.waitForTrust(surface);
+
+    // --- 7. タブ名設定 ---
+    const num = surface.replace("surface:", "");
+    await cmux.renameTab(surface, `[${num}] Conductor-${taskId}`);
+
+    const state: ConductorState = {
+      conductorId,
+      taskId,
+      surface,
+      worktreePath,
+      outputDir,
       startedAt: new Date().toISOString(),
     };
 
-    log(
+    await log(
       "conductor_started",
-      `task_id=${taskId} conductor_id=${state.conductorId} surface=${state.surface}`
+      `task_id=${taskId} conductor_id=${conductorId} surface=${surface}`
     );
 
     return state;
   } catch (e: any) {
-    log("error", `spawn failed for task ${taskId}: ${e.message}`);
+    await log("error", `Conductor spawn failed for task ${taskId}: ${e.message}`);
     return null;
   }
 }
@@ -62,15 +110,12 @@ export async function spawnConductor(
 export async function checkConductorStatus(
   surface: string
 ): Promise<"running" | "done" | "crashed"> {
-  try {
-    const { stdout } = await execFile(
-      "cmux",
-      ["read-screen", "--surface", surface, "--lines", "10"],
-      { timeout: 10_000 }
-    );
+  if (!(await cmux.validateSurface(surface))) return "crashed";
 
-    const hasPrompt = stdout.includes("❯");
-    const isExecuting = stdout.includes("esc to interrupt");
+  try {
+    const screen = await cmux.readScreen(surface, 10);
+    const hasPrompt = screen.includes("❯");
+    const isExecuting = screen.includes("esc to interrupt");
 
     if (hasPrompt && !isExecuting) return "done";
     if (hasPrompt && isExecuting) return "running";
@@ -86,27 +131,24 @@ export async function collectResults(
 ): Promise<{ sessionId?: string; mergeCommit?: string }> {
   const result: { sessionId?: string; mergeCommit?: string } = {};
 
+  // 1. Conductor を /exit して session_id を取得
   try {
-    await execFile("cmux", ["send", "--surface", conductor.surface, "/exit\n"]);
+    await cmux.send(conductor.surface, "/exit\n");
     await sleep(3000);
 
-    const { stdout: exitScreen } = await execFile("cmux", [
-      "read-screen",
-      "--surface",
-      conductor.surface,
-      "--lines",
-      "20",
-    ]);
+    const exitScreen = await cmux.readScreen(conductor.surface, 20);
     const match = exitScreen.match(/claude --resume ([a-f0-9-]+)/);
     if (match) result.sessionId = match[1];
 
-    await execFile("cmux", ["close-surface", "--surface", conductor.surface]);
+    await cmux.closeSurface(conductor.surface);
   } catch {
-    // surface が既に閉じている場合は無視
+    // surface が既に閉じている場合
   }
 
+  // 2. worktree マージ
   try {
     const branch = `${conductor.conductorId}/task`;
+
     await execFile("git", ["add", "-A"], { cwd: conductor.worktreePath });
 
     // 変更があればコミット
@@ -146,12 +188,23 @@ export async function collectResults(
       cwd: projectRoot,
     }).catch(() => {});
   } catch (e: any) {
-    log("error", `merge failed for ${conductor.conductorId}: ${e.message}`);
+    await log(
+      "error",
+      `Merge failed for ${conductor.conductorId}: ${e.message}`
+    );
   }
 
-  return result;
-}
+  // 3. タスクをクローズ
+  try {
+    const tasksDir = join(projectRoot, ".team/tasks/open");
+    const closedDir = join(projectRoot, ".team/tasks/closed");
+    await mkdir(closedDir, { recursive: true });
+    const files = await readdir(tasksDir);
+    const taskFile = files.find((f) => f.startsWith(conductor.taskId));
+    if (taskFile) {
+      await rename(join(tasksDir, taskFile), join(closedDir, taskFile));
+    }
+  } catch {}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return result;
 }

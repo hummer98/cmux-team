@@ -23,7 +23,7 @@ fi
 
 # --- 1. テンプレート検索（最新バージョン優先） ---
 TEMPLATE_DIR=""
-LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1)
+LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1 || echo "")
 for candidate in \
   "$LATEST_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/templates" \
@@ -41,7 +41,7 @@ fi
 
 # --- 2. スクリプト・Manager ソース検索 ---
 SCRIPT_DIR=""
-LATEST_SCRIPT_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/scripts 2>/dev/null | sort -V | tail -1)
+LATEST_SCRIPT_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/scripts 2>/dev/null | sort -V | tail -1 || echo "")
 for candidate in \
   "$LATEST_SCRIPT_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/scripts" \
@@ -53,7 +53,7 @@ for candidate in \
 done
 
 MANAGER_SRC=""
-LATEST_MANAGER_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager 2>/dev/null | sort -V | tail -1)
+LATEST_MANAGER_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager 2>/dev/null | sort -V | tail -1 || echo "")
 for candidate in \
   "$LATEST_MANAGER_CACHE" \
   "${PROJECT_ROOT}/skills/cmux-team/manager" \
