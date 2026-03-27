@@ -238,6 +238,41 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
   );
 }
 
+// --- タスクセクション ---
+function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
+  if (state.taskList.length === 0) {
+    return (
+      <Box paddingLeft={1}>
+        <Text dimColor>no open tasks</Text>
+      </Box>
+    );
+  }
+
+  const assignedTaskIds = new Set(
+    [...state.conductors.values()].map((c) => c.taskId)
+  );
+
+  return (
+    <Box flexDirection="column">
+      {state.taskList.map((task) => {
+        const assigned = assignedTaskIds.has(task.id);
+        const color = assigned ? "green" : task.status === "ready" ? "yellow" : undefined;
+        const dimColor = !assigned && task.status === "draft";
+        const title = task.isTodo ? `TODO: ${task.title}` : task.title;
+        const elapsed = task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
+        return (
+          <Box key={task.id} paddingLeft={1}>
+            <Text color={color} dimColor={dimColor}>● </Text>
+            <Text bold dimColor={dimColor}>{task.id}</Text>
+            <Text dimColor={dimColor}> [{task.status}] {title}</Text>
+            {elapsed && <Text dimColor>{elapsed}</Text>}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 // --- ログセクション ---
 function formatLogLine(line: string, cols: number): { time: string; event: string; detail: string; color: string } {
   const match = line.match(/^\[([^\]]+)\]\s+(\S+)\s*(.*)/);
@@ -324,9 +359,10 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   });
 
   // レイアウト計算
-  // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, footer=1, keyhint=1
+  // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, tasks=max(1,N), sep=1, footer=1, keyhint=1
   const conductorCount = Math.max(1, state.conductors.size);
-  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + 1 + 1;
+  const tasksCount = Math.max(1, state.taskList.length);
+  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + tasksCount + 1 + 1 + 1;
   const contentLines = Math.max(1, rows - fixedLines);
   const logTail = useLogTail(state.projectRoot, contentLines);
   const journalEntries = useJournalEntries(state.projectRoot);
@@ -341,6 +377,8 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
       <MasterSection state={state} />
       <Sep cols={cols} label={`Conductors ${state.conductors.size}/${state.maxConductors}`} />
       <ConductorsSection state={state} cols={cols} />
+      <Sep cols={cols} label="Tasks" />
+      <TasksSection state={state} cols={cols} />
       <Sep cols={cols} label={tabLabel} />
       <Box flexDirection="column" height={contentLines} overflow="hidden">
         {activeTab === "journal" ? (
