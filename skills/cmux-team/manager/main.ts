@@ -38,6 +38,25 @@ function findProjectRoot(): string {
   return process.cwd();
 }
 
+/** 最新の main.ts を検索（plugin キャッシュ → ローカル → 自分自身） */
+function findLatestMainTs(): string {
+  const home = require("os").homedir();
+  const cacheBase = join(home, ".claude/plugins/cache/hummer98-cmux-team/cmux-team");
+  try {
+    const { execFileSync } = require("child_process");
+    const stdout = execFileSync("ls", ["-d", join(cacheBase, "*/skills/cmux-team/manager/main.ts")]);
+    const paths = stdout.toString().trim().split("\n").filter(Boolean).sort();
+    if (paths.length > 0) return paths[paths.length - 1];
+  } catch {}
+
+  // ローカル
+  const local = join(process.cwd(), "skills/cmux-team/manager/main.ts");
+  if (existsSync(local)) return local;
+
+  // 自分自身
+  return process.argv[1] || import.meta.path;
+}
+
 const PROJECT_ROOT = findProjectRoot();
 process.env.PROJECT_ROOT = PROJECT_ROOT;
 process.chdir(PROJECT_ROOT);
@@ -87,10 +106,11 @@ async function cmdStart(): Promise<void> {
   // ダッシュボード表示（キーボードショートカット付き）
   startDashboard(() => state, {
     onReload: () => {
-      // 同じコマンドで再起動（プロセス置換）
-      log("daemon_reload").then(() => {
-        const args = process.argv.slice(1);
-        Bun.spawn([process.execPath, ...args], {
+      // 最新の main.ts を検索して再起動（バージョンアップ対応）
+      log("daemon_reload").then(async () => {
+        const latestMainTs = findLatestMainTs();
+        await log("daemon_reload_target", latestMainTs);
+        Bun.spawn([process.execPath, "run", latestMainTs, "start"], {
           stdio: ["inherit", "inherit", "inherit"],
           cwd: process.cwd(),
           env: process.env,
