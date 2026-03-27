@@ -10,5 +10,4 @@ export async function log(event: string, detail: string = ""): Promise<void> {
   const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const line = `[${timestamp}] ${event} ${detail}`.trimEnd() + "\n";
   await appendFile(LOG_FILE, line);
-  console.error(`[manager] ${event} ${detail}`);
 }
