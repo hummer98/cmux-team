@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.6.0] - 2026-03-27
+
+### Added
+- TypeScript daemon による決定論的 Manager（Claude Code セッションを廃止し、bun プロセスに完全移行）
+- TUI ダッシュボード（ink ベース）: タスク・Conductor 状態をリアルタイム表示
+- タスク依存解決: `depends_on` フィールドで依存チェーンを宣言可能
+- 優先度ソート: high > medium > low の順でタスクを実行
+- CLI インターフェース: `main.ts start/send/status/stop` で daemon を操作
+- ファイルキュー通信: `.team/queue/` 経由のメッセージパッシング（`cmux send-key` 不要に）
+- ユニットテスト 39 件: タスクパース、依存解決、キュー送受信、ユースケースシナリオ
+- E2E テストランナー: 独立 cmux workspace で実際の Claude Code を起動して検証（3 シナリオ）
+- CONTRIBUTING.md: テスト方法・リポジトリ構造・コーディング規約をコントリビューター向けに分離
+
+### Changed
+- README.md / README.ja.md を daemon アーキテクチャに合わせて全面書き直し
+- bun を前提条件に追加
+- インストール方法: plugin 推奨、skills add をフォールバックに整理
+
+### Fixed
+- テンプレート検索: `import.meta.path` からの相対パスを最優先にし、任意のプロジェクトで確実に検出
+- テンプレート未検出時: フォールバック動作を廃止し、エラー停止 + リカバリー手段を表示
+- ゼロパディング ID のタスクファイルマッチング（`startsWith("1")` が `001-*.md` にマッチしない問題）
+- Conductor spawn 後 30 秒のガード期間を追加（初期化中の誤完了判定を防止）
+
 ## [2.5.0] - 2026-03-25
 
 ### Added

@@ -9,3 +9,7 @@
 .team/output/
 .team/prompts/
 .team/docs-snapshot/
+.team/logs/
+.team/queue/
+.team/e2e-results/
+.worktrees/
