@@ -36,6 +36,16 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 /plugin install cmux-team@hummer98-cmux-team
 ```
 
+### Skills Only (Fallback)
+
+For environments where plugins aren't available:
+
+```bash
+npx skills add hummer98/cmux-team
+```
+
+> **Note**: Installs skills only (no slash commands). Natural language instructions work, but `/team-*` commands won't be available.
+
 ### Manual Install (Legacy)
 
 ```bash
