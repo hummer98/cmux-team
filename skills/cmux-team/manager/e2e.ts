@@ -256,7 +256,7 @@ async function startDaemon(): Promise<void> {
   const treeOutput = await cmuxExec("tree");
   const wsRegex = new RegExp(`${e2eWorkspace}[\\s\\S]*?surface (surface:\\d+)`);
   const surfaceMatch = treeOutput.match(wsRegex);
-  if (!surfaceMatch) throw new Error(`Failed to find surface in ${e2eWorkspace}`);
+  if (!surfaceMatch?.[1]) throw new Error(`Failed to find surface in ${e2eWorkspace}`);
   daemonSurface = surfaceMatch[1];
   console.log(`  workspace: ${e2eWorkspace}, daemon surface: ${daemonSurface}`);
 

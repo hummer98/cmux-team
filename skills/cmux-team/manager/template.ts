@@ -12,12 +12,17 @@ const execFile = promisify(execFileCb);
 
 export function findTemplateDir(): string | null {
   const home = homedir();
+
+  // 1. daemon 自身からの相対パス（manager/ の兄弟 templates/）
+  //    manager/template.ts → ../templates/
+  const fromSelf = join(dirname(import.meta.path), "../templates");
+  if (existsSync(join(fromSelf, "master.md"))) return fromSelf;
+
+  // 2. plugin キャッシュから最新バージョンを探す
   const cacheBase = join(
     home,
     ".claude/plugins/cache/hummer98-cmux-team/cmux-team"
   );
-
-  // plugin キャッシュから最新バージョンを探す
   try {
     const { stdout } = require("child_process").execFileSync("ls", [
       "-d",
@@ -32,12 +37,12 @@ export function findTemplateDir(): string | null {
     // キャッシュなし
   }
 
-  // プロジェクトローカル
+  // 3. プロジェクトローカル
   const projectRoot = process.env.PROJECT_ROOT || process.cwd();
   const local = join(projectRoot, "skills/cmux-team/templates");
   if (existsSync(join(local, "master.md"))) return local;
 
-  // 手動インストール
+  // 4. 手動インストール
   const manual = join(home, ".claude/skills/cmux-team/templates");
   if (existsSync(join(manual, "master.md"))) return manual;
 
@@ -47,15 +52,21 @@ export function findTemplateDir(): string | null {
 export async function generateMasterPrompt(
   projectRoot: string
 ): Promise<void> {
-  const templateDir = findTemplateDir();
-  if (!templateDir) throw new Error("Template directory not found");
-
   const promptsDir = join(projectRoot, ".team/prompts");
   await mkdir(promptsDir, { recursive: true });
-
-  const src = join(templateDir, "master.md");
   const dst = join(promptsDir, "master.md");
-  await cp(src, dst);
+
+  const templateDir = findTemplateDir();
+  if (!templateDir) {
+    throw new Error(
+      "Template directory not found. リカバリー:\n" +
+      "  1. plugin reinstall: /plugin install cmux-team@hummer98-cmux-team\n" +
+      "  2. 手動: ./install.sh\n" +
+      "  3. 開発: skills/cmux-team/templates/ が存在するディレクトリで実行"
+    );
+  }
+
+  await cp(join(templateDir, "master.md"), dst);
 }
 
 export async function generateConductorPrompt(
@@ -67,12 +78,20 @@ export async function generateConductorPrompt(
   outputDir: string
 ): Promise<string> {
   const templateDir = findTemplateDir();
+  if (!templateDir || !existsSync(join(templateDir, "conductor.md"))) {
+    throw new Error(
+      "Conductor template not found. リカバリー:\n" +
+      "  1. plugin reinstall: /plugin install cmux-team@hummer98-cmux-team\n" +
+      "  2. 手動: ./install.sh"
+    );
+  }
+
   const promptsDir = join(projectRoot, ".team/prompts");
   await mkdir(promptsDir, { recursive: true });
 
   const promptFile = join(promptsDir, `${conductorId}.md`);
 
-  if (templateDir && existsSync(join(templateDir, "conductor.md"))) {
+  {
     let content = await readFile(join(templateDir, "conductor.md"), "utf-8");
 
     // {{COMMON_HEADER}} を展開（Conductor は使わないので削除）
@@ -108,34 +127,6 @@ export async function generateConductorPrompt(
 `;
 
     await writeFile(promptFile, content);
-  } else {
-    // フォールバック: 最小プロンプト
-    await writeFile(
-      promptFile,
-      `# Conductor ロール
-
-あなたは 4層エージェントアーキテクチャの **Conductor** です。
-割り当てられた 1 つのタスクを自律的に完了してください。
-
-## タスク
-
-${taskContent}
-
-## 作業ディレクトリ
-
-すべての作業は git worktree \`${worktreePath}\` 内で行う。
-\`\`\`bash
-cd ${worktreePath}
-\`\`\`
-
-## 完了時の処理
-
-1. 変更をコミット: \`cd ${worktreePath} && git add -A && git commit -m "feat: <タスク概要>"\`
-2. 結果サマリーを \`${join(projectRoot, outputDir, "summary.md")}\` に書き出す
-3. 完了マーカー: \`touch ${join(projectRoot, outputDir, "done")}\`
-4. 停止する
-`
-    );
   }
 
   return promptFile;
