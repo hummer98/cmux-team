@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.11.0] - 2026-03-28
+
+### Added
+- CLI ベースの Agent spawn: `main.ts spawn-agent` コマンドで Conductor からエージェントを起動。logging proxy 統合により全出力を `.team/logs/` に記録
+- `--task-title` オプション: spawn-agent に記述的タブ名を指定可能に
+- TUI journal タブ: Conductor 完了レポートをジャーナル形式で表示。タスク履歴の振り返りが容易に
+- TUI ダッシュボードに Tasks セクション追加: タスク一覧と journal タブのレイアウトを統合
+
+### Changed
+- TUI・status のタイムスタンプをローカルタイムゾーンで表示するよう変更
+
 ## [2.10.0] - 2026-03-27
 
 ### Added
