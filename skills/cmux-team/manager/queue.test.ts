@@ -160,6 +160,7 @@ describe("Queue", () => {
       type: "CONDUCTOR_DONE",
       conductorId: "conductor-123",
       surface: "surface:42",
+      success: true,
       sessionId: "abc-def",
       timestamp: new Date().toISOString(),
     });

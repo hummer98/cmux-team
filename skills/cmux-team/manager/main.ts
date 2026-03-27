@@ -115,21 +115,23 @@ async function cmdStart(): Promise<void> {
   // ダッシュボード表示（キーボードショートカット付き）
   startDashboard(() => state, {
     version,
-    onReload: () => {
-      // ink を先に解放してから新プロセスを起動
+    onReload: async () => {
+      // ink を解放し、exec でプロセスを置換（PID は変わらない、env は完全に引き継ぐ）
       unmountDashboard();
-      log("daemon_reload").then(async () => {
-        const latestMainTs = findLatestMainTs();
-        await log("daemon_reload_target", latestMainTs);
-        state.running = false;
-        await updateTeamJson(state);
-        Bun.spawn([process.execPath, "run", latestMainTs, "start"], {
-          stdio: ["inherit", "inherit", "inherit"],
-          cwd: process.cwd(),
+      const latestMainTs = findLatestMainTs();
+      await log("daemon_reload");
+      await log("daemon_reload_target", latestMainTs);
+      state.running = false;
+      // execSync で自プロセスを置換（bun → bash exec → bun）
+      const { execFileSync } = require("child_process");
+      try {
+        execFileSync("bash", ["-c", `exec bun run "${latestMainTs}" start`], {
+          stdio: "inherit",
           env: process.env,
+          cwd: process.cwd(),
         });
-        process.exit(0);
-      });
+      } catch {}
+      process.exit(0);
     },
     onQuit: () => { shutdown(); },
   });

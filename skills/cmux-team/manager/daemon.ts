@@ -15,6 +15,14 @@ import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: string;
+  isTodo: boolean;
+  createdAt: string;
+}
+
 export interface DaemonState {
   running: boolean;
   masterSurface: string | null;
@@ -25,6 +33,7 @@ export interface DaemonState {
   lastUpdate: Date;
   pendingTasks: number;
   openTasks: number;
+  taskList: TaskSummary[];
 }
 
 export async function createDaemon(projectRoot: string): Promise<DaemonState> {
@@ -38,6 +47,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     lastUpdate: new Date(),
     pendingTasks: 0,
     openTasks: 0,
+    taskList: [],
   };
 }
 
@@ -90,12 +100,18 @@ export async function startMaster(state: DaemonState): Promise<void> {
       await readFile(join(state.projectRoot, ".team/team.json"), "utf-8")
     );
     const surface = teamJson.master?.surface;
-    if (surface && (await isMasterAlive(surface))) {
-      state.masterSurface = surface;
-      await log("master_alive", `surface=${surface}`);
-      return;
+    if (surface) {
+      const alive = await isMasterAlive(surface);
+      if (alive) {
+        state.masterSurface = surface;
+        await log("master_alive", `surface=${surface}`);
+        return;
+      }
+      await log("master_check_failed", `surface=${surface} alive=false`);
     }
-  } catch {}
+  } catch (e: any) {
+    await log("master_check_error", e.message);
+  }
 
   // Master spawn
   const master = await spawnMaster(state.projectRoot);
@@ -275,7 +291,10 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
     const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-    teamJson.master = { surface: state.masterSurface || "" };
+    // master surface が null の場合は既存値を保持（reload 時に消さない）
+    if (state.masterSurface) {
+      teamJson.master = { surface: state.masterSurface };
+    }
     teamJson.manager = {
       pid: process.pid,
       type: "typescript",
