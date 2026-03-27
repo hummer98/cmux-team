@@ -251,6 +251,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     teamJson.conductors = [...state.conductors.values()].map((c) => ({
       id: c.conductorId,
       taskId: c.taskId,
+      taskTitle: c.taskTitle,
       surface: c.surface,
     }));
     await writeFile(teamJsonPath, JSON.stringify(teamJson, null, 2) + "\n");

@@ -161,7 +161,7 @@ async function cmdStatus(): Promise<void> {
   const pid = teamJson.manager?.pid;
   const alive = pid && isProcessAlive(pid);
   const masterSurface = teamJson.master?.surface;
-  const conductors: Array<{ id: string; taskId: string; surface: string }> = teamJson.conductors || [];
+  const conductors: Array<{ id: string; taskId: string; taskTitle?: string; surface: string }> = teamJson.conductors || [];
   const logLines = getArg("log") || "10";
 
   // --- ヘッダー ---
@@ -182,7 +182,8 @@ async function cmdStatus(): Promise<void> {
     console.log(`  idle`);
   } else {
     for (const c of conductors) {
-      console.log(`  ● ${c.surface}  task=${c.taskId}  ${c.id}`);
+      const title = c.taskTitle ? `  ${c.taskTitle}` : "";
+      console.log(`  ● ${c.surface}  task=${c.taskId}${title}  ${c.id}`);
     }
   }
 

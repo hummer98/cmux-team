@@ -38,6 +38,7 @@ export async function spawnConductor(
     }
 
     const taskContent = await readFile(join(tasksDir, taskFile), "utf-8");
+    const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || taskFile.replace(/^\d+-/, "").replace(/\.md$/, "");
 
     // --- 2. git worktree 作成 ---
     const worktreePath = join(projectRoot, ".worktrees", conductorId);
@@ -84,11 +85,13 @@ export async function spawnConductor(
 
     // --- 7. タブ名設定 ---
     const num = surface.replace("surface:", "");
-    await cmux.renameTab(surface, `[${num}] Conductor-${taskId}`);
+    const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
+    await cmux.renameTab(surface, `[${num}] ${shortTitle}`);
 
     const state: ConductorState = {
       conductorId,
       taskId,
+      taskTitle,
       surface,
       worktreePath,
       outputDir,

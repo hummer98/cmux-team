@@ -150,8 +150,8 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
             <Text>{c.surface}</Text>
             <Text dimColor> task=</Text>
             <Text bold>{c.taskId}</Text>
+            {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
             <Text dimColor> {elapsed}</Text>
-            {cols > 60 && <Text dimColor> {c.conductorId}</Text>}
           </Box>
         );
       })}

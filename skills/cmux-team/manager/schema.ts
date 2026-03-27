@@ -46,6 +46,7 @@ export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export const ConductorState = z.object({
   conductorId: z.string(),
   taskId: z.string(),
+  taskTitle: z.string().optional(),
   surface: z.string(),
   worktreePath: z.string(),
   outputDir: z.string(),
