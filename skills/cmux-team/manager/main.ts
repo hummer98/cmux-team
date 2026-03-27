@@ -74,9 +74,6 @@ async function cmdStart(): Promise<void> {
   await startMaster(state);
   await updateTeamJson(state);
 
-  // ダッシュボード表示
-  startDashboard(() => state);
-
   // シグナルハンドリング
   const shutdown = async () => {
     state.running = false;
@@ -86,6 +83,23 @@ async function cmdStart(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  // ダッシュボード表示（キーボードショートカット付き）
+  startDashboard(() => state, {
+    onReload: () => {
+      // 同じコマンドで再起動（プロセス置換）
+      log("daemon_reload").then(() => {
+        const args = process.argv.slice(1);
+        Bun.spawn([process.execPath, ...args], {
+          stdio: ["inherit", "inherit", "inherit"],
+          cwd: process.cwd(),
+          env: process.env,
+        });
+        process.exit(0);
+      });
+    },
+    onQuit: () => { shutdown(); },
+  });
 
   // メインループ
   while (state.running) {

@@ -7,13 +7,15 @@
  * 下部: manager.log の末尾（残りスペースを全て使う）
  */
 import React, { useState, useEffect } from "react";
-import { render, Text, Box, useStdout } from "ink";
+import { render, Text, Box, useStdout, useInput } from "ink";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState } from "./daemon";
 
 interface DashboardProps {
   getState: () => DaemonState;
+  onReload?: () => void;
+  onQuit?: () => void;
 }
 
 function useTerminalSize() {
@@ -198,7 +200,7 @@ function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
 }
 
 // --- メインダッシュボード ---
-function Dashboard({ getState }: DashboardProps) {
+function Dashboard({ getState, onReload, onQuit }: DashboardProps) {
   const [state, setState] = useState(getState());
   const { columns: cols, rows } = useTerminalSize();
 
@@ -209,10 +211,15 @@ function Dashboard({ getState }: DashboardProps) {
     return () => clearInterval(interval);
   }, []);
 
+  useInput((input, key) => {
+    if (input === "r" && onReload) onReload();
+    if (input === "q" && onQuit) onQuit();
+  });
+
   // レイアウト計算
-  // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, footer余白=1
+  // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, footer=1, keyhint=1
   const conductorCount = Math.max(1, state.conductors.size);
-  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + 1;
+  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + 1 + 1;
   const logLines = Math.max(1, rows - fixedLines);
   const logTail = useLogTail(state.projectRoot, logLines);
 
@@ -227,10 +234,19 @@ function Dashboard({ getState }: DashboardProps) {
       <Box flexDirection="column" height={logLines} overflow="hidden">
         <LogSection lines={logTail} cols={cols} />
       </Box>
+      <Box>
+        <Text backgroundColor="gray" color="white" bold> r </Text>
+        <Text>reload </Text>
+        <Text backgroundColor="gray" color="white" bold> q </Text>
+        <Text>quit</Text>
+      </Box>
     </Box>
   );
 }
 
-export function startDashboard(getState: () => DaemonState): void {
-  render(<Dashboard getState={getState} />);
+export function startDashboard(
+  getState: () => DaemonState,
+  opts?: { onReload?: () => void; onQuit?: () => void }
+): void {
+  render(<Dashboard getState={getState} onReload={opts?.onReload} onQuit={opts?.onQuit} />);
 }
