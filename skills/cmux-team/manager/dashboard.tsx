@@ -4,13 +4,15 @@
  * top のようなフルスクリーン表示。ターミナルサイズにレスポンシブ。
  * 上部: ヘッダー（ステータス・PID・uptime）
  * 中部: Master / Conductors / Tasks パネル
- * 下部: manager.log の末尾（残りスペースを全て使う）
+ * 下部: journal / log タブ切り替え（残りスペースを全て使う）
  */
 import React, { useState, useEffect } from "react";
 import { render, Text, Box, useStdout, useInput } from "ink";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState } from "./daemon";
+
+type ActiveTab = "journal" | "log";
 
 interface DashboardProps {
   getState: () => DaemonState;
@@ -60,6 +62,61 @@ function useLogTail(projectRoot: string, lineCount: number) {
   }, [projectRoot, lineCount]);
 
   return lines;
+}
+
+// --- ジャーナルエントリ ---
+interface JournalEntry {
+  time: string;  // HH:MM
+  icon: string;  // [+], [▶], [✓]
+  taskId: string;
+  message: string;
+  color: string;
+}
+
+function useJournalEntries(projectRoot: string): JournalEntry[] {
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+
+  useEffect(() => {
+    const logFile = join(projectRoot, ".team/logs/manager.log");
+    const read = async () => {
+      try {
+        const content = await readFile(logFile, "utf-8");
+        const lines = content.trim().split("\n").filter(Boolean);
+        const result: JournalEntry[] = [];
+
+        for (const line of lines) {
+          const match = line.match(/^\[([^\]]+)\]\s+(\S+)\s*(.*)/);
+          if (!match) continue;
+          const ts = match[1] ?? "";
+          const event = match[2] ?? "";
+          const detail = match[3] ?? "";
+          const time = ts.slice(11, 16); // HH:MM
+
+          if (event === "task_received") {
+            const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+            result.push({ time, icon: "[+]", taskId, message: detail, color: "cyan" });
+          } else if (event === "conductor_started") {
+            const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+            const conductorId = detail.match(/conductor_id=(\S+)/)?.[1] ?? "";
+            result.push({ time, icon: "[▶]", taskId, message: `${conductorId} started`, color: "yellow" });
+          } else if (event === "task_completed") {
+            const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+            const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? detail;
+            result.push({ time, icon: "[✓]", taskId, message: summary, color: "green" });
+          }
+        }
+
+        setEntries(result);
+      } catch {
+        setEntries([]);
+      }
+    };
+    read();
+    const interval = setInterval(read, 2000);
+    return () => clearInterval(interval);
+  }, [projectRoot]);
+
+  return entries;
 }
 
 function formatUptime(startMs: number): string {
@@ -210,9 +267,36 @@ function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
   );
 }
 
+// --- ジャーナルセクション ---
+function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: number }) {
+  if (entries.length === 0) {
+    return (
+      <Box paddingLeft={1}>
+        <Text dimColor>no journal entries</Text>
+      </Box>
+    );
+  }
+  return (
+    <Box flexDirection="column">
+      {entries.map((entry, i) => {
+        const maxMsg = Math.max(0, cols - entry.time.length - entry.icon.length - entry.taskId.length - 7);
+        return (
+          <Box key={i} paddingLeft={1}>
+            <Text dimColor>{entry.time} </Text>
+            <Text color={entry.color}>{entry.icon} </Text>
+            <Text bold>#{entry.taskId} </Text>
+            <Text>{entry.message.slice(0, maxMsg)}</Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 // --- メインダッシュボード ---
 function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   const [state, setState] = useState(getState());
+  const [activeTab, setActiveTab] = useState<ActiveTab>("journal");
   const { columns: cols, rows } = useTerminalSize();
 
   useEffect(() => {
@@ -223,6 +307,9 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   }, []);
 
   useInput((input, key) => {
+    if (input === "1") setActiveTab("journal");
+    if (input === "2") setActiveTab("log");
+    if (key.tab) setActiveTab((prev) => (prev === "journal" ? "log" : "journal"));
     if (input === "r" && onReload) onReload();
     if (input === "q" && onQuit) onQuit();
   });
@@ -231,8 +318,12 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, footer=1, keyhint=1
   const conductorCount = Math.max(1, state.conductors.size);
   const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + 1 + 1;
-  const logLines = Math.max(1, rows - fixedLines);
-  const logTail = useLogTail(state.projectRoot, logLines);
+  const contentLines = Math.max(1, rows - fixedLines);
+  const logTail = useLogTail(state.projectRoot, contentLines);
+  const journalEntries = useJournalEntries(state.projectRoot);
+  const visibleJournal = journalEntries.slice(-contentLines);
+
+  const tabLabel = activeTab === "journal" ? "Journal" : "Log";
 
   return (
     <Box flexDirection="column" width={cols} height={rows}>
@@ -241,12 +332,20 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
       <MasterSection state={state} />
       <Sep cols={cols} label={`Conductors ${state.conductors.size}/${state.maxConductors}`} />
       <ConductorsSection state={state} cols={cols} />
-      <Sep cols={cols} label="Log" />
-      <Box flexDirection="column" height={logLines} overflow="hidden">
-        <LogSection lines={logTail} cols={cols} />
+      <Sep cols={cols} label={tabLabel} />
+      <Box flexDirection="column" height={contentLines} overflow="hidden">
+        {activeTab === "journal" ? (
+          <JournalSection entries={visibleJournal} cols={cols} />
+        ) : (
+          <LogSection lines={logTail} cols={cols} />
+        )}
       </Box>
       <Box justifyContent="space-between" width={cols}>
         <Box>
+          <Text backgroundColor={activeTab === "journal" ? "white" : "gray"} color={activeTab === "journal" ? "black" : "white"} bold> 1 </Text>
+          <Text>journal </Text>
+          <Text backgroundColor={activeTab === "log" ? "white" : "gray"} color={activeTab === "log" ? "black" : "white"} bold> 2 </Text>
+          <Text>log </Text>
           <Text backgroundColor="gray" color="white" bold> r </Text>
           <Text>reload </Text>
           <Text backgroundColor="gray" color="white" bold> q </Text>

@@ -154,7 +154,23 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
    git add -A
    git diff --cached --quiet || git commit -m "feat: <タスク概要>"
    ```
-4. **成果物の納品** — 以下のいずれかを選択:
+4. **Journal セクション追記** — タスクファイルに作業サマリーを記録:
+   ```bash
+   cd {{WORKTREE_PATH}}
+   TASK_FILE=$(ls {{PROJECT_ROOT}}/.team/tasks/open/*-{{ROLE_ID}}.md 2>/dev/null | head -1)
+   if [ -n "$TASK_FILE" ]; then
+     FILES_CHANGED=$(git diff --stat HEAD~1 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+')
+     FILES_CHANGED=${FILES_CHANGED:-0}
+     cat >> "$TASK_FILE" << JOURNAL
+
+## Journal
+
+- summary: <1行の日本語サマリーを記述>
+- files_changed: ${FILES_CHANGED}
+JOURNAL
+   fi
+   ```
+5. **成果物の納品** — 以下のいずれかを選択:
    - **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
      ```bash
      cd {{PROJECT_ROOT}}
@@ -168,7 +184,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
      gh pr create --title "<タスク概要>" --body "<変更内容>"
      ```
    判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
-5. 結果サマリーを書き出す:
+6. 結果サマリーを書き出す:
    ```bash
    # {{OUTPUT_DIR}}/summary.md に以下を記録
    # - 完了したサブタスク一覧
@@ -176,7 +192,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
    # - テスト結果
    # - マージコミット or PR URL
    ```
-6. 停止する（❯ プロンプトに戻る）。daemon が worktree 削除とタスククローズを行う。
+7. 停止する（❯ プロンプトに戻る）。daemon が worktree 削除とタスククローズを行う。
 
 ## やらないこと（厳守）
 

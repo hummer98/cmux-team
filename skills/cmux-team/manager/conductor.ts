@@ -176,8 +176,8 @@ export async function checkConductorStatus(
 export async function collectResults(
   conductor: ConductorState,
   projectRoot: string
-): Promise<{ sessionId?: string; mergeCommit?: string }> {
-  const result: { sessionId?: string; mergeCommit?: string } = {};
+): Promise<{ sessionId?: string; mergeCommit?: string; journalSummary?: string }> {
+  const result: { sessionId?: string; mergeCommit?: string; journalSummary?: string } = {};
 
   // 1. (ペインクローズは上位層が担当)
 
@@ -198,7 +198,7 @@ export async function collectResults(
     );
   }
 
-  // 3. タスクをクローズ
+  // 3. タスクをクローズ（Journal セクションからサマリーを抽出してログに記録）
   try {
     const tasksDir = join(projectRoot, ".team/tasks/open");
     const closedDir = join(projectRoot, ".team/tasks/closed");
@@ -209,6 +209,18 @@ export async function collectResults(
       return fileId === conductor.taskId || fileId === conductor.taskId.replace(/^0+/, "");
     });
     if (taskFile) {
+      // Journal セクションからサマリーを抽出
+      try {
+        const content = await readFile(join(tasksDir, taskFile), "utf-8");
+        const journalMatch = content.match(/## Journal\s*\n([\s\S]*?)(?=\n## |\n---|$)/);
+        if (journalMatch) {
+          const journalText = journalMatch[1]?.trim() ?? "";
+          const summaryMatch = journalText.match(/summary:\s*(.+)/i);
+          if (summaryMatch) {
+            result.journalSummary = summaryMatch[1]?.trim();
+          }
+        }
+      } catch {}
       await rename(join(tasksDir, taskFile), join(closedDir, taskFile));
     }
   } catch {}

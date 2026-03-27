@@ -246,7 +246,7 @@ async function handleConductorDone(
   state: DaemonState,
   conductor: ConductorState
 ): Promise<void> {
-  const { sessionId, mergeCommit } = await collectResults(
+  const { sessionId, mergeCommit, journalSummary } = await collectResults(
     conductor,
     state.projectRoot
   );
@@ -255,7 +255,9 @@ async function handleConductorDone(
     "task_completed",
     `task_id=${conductor.taskId} conductor_id=${conductor.conductorId}${
       sessionId ? ` session=${sessionId}` : ""
-    }${mergeCommit ? ` merged=${mergeCommit}` : ""}`
+    }${mergeCommit ? ` merged=${mergeCommit}` : ""}${
+      journalSummary ? ` journal_summary=${journalSummary}` : ""
+    }`
   );
 
   state.conductors.delete(conductor.conductorId);
