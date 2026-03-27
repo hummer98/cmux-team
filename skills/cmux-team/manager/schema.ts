@@ -21,6 +21,9 @@ export const ConductorDoneMessage = z.object({
   sessionId: z.string().optional(),
   transcriptPath: z.string().optional(),
   surface: z.string(),
+  success: z.boolean(),
+  reason: z.string().optional(),
+  exitCode: z.number().optional(),
   timestamp: z.string().datetime(),
 });
 

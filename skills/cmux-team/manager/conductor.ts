@@ -5,7 +5,7 @@ import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, readdir, rename } from "fs/promises";
-import { join } from "path";
+import { join, dirname } from "path";
 import * as cmux from "./cmux";
 import { generateConductorPrompt } from "./template";
 import { log } from "./logger";
@@ -74,8 +74,24 @@ export async function spawnConductor(
       return null;
     }
 
-    // --- 5. Conductor 用 settings 生成（Agent spawn 検出 hook） ---
-    const hookScript = join(projectRoot, ".team/scripts/hook-agent-spawned.sh");
+    // --- 5. Conductor 用 settings 生成（Agent spawn 検出 + 完了通知 hook） ---
+    const mainTs = join(dirname(import.meta.path), "main.ts");
+
+    // PostToolUse hook: cmux new-split 実行時に AGENT_SPAWNED を通知
+    const postToolUseCmd = [
+      '[ "$TOOL_NAME" != "Bash" ] && exit 0;',
+      'echo "$TOOL_INPUT" | grep -q "cmux new-split" || exit 0;',
+      'SURFACE=$(echo "$TOOL_RESPONSE" | grep -o "surface:[0-9]*" | head -1);',
+      '[ -z "$SURFACE" ] && exit 0;',
+      'ROLE=$(echo "$TOOL_INPUT" | grep -o "Agent-[a-zA-Z]*" | head -1 | sed "s/Agent-//");',
+      `ARGS="AGENT_SPAWNED --conductor-id ${conductorId} --surface $SURFACE";`,
+      '[ -n "$ROLE" ] && ARGS="$ARGS --role $ROLE";',
+      `bun run "${mainTs}" send $ARGS >/dev/null 2>&1 || true`,
+    ].join(" ");
+
+    // Stop hook: Conductor 終了時に CONDUCTOR_DONE を通知
+    const stopCmd = `bun run "${mainTs}" send CONDUCTOR_DONE --conductor-id ${conductorId} --surface ${surface} --success true`;
+
     const conductorSettings = join(projectRoot, `.team/prompts/${conductorId}-settings.json`);
     await writeFile(conductorSettings, JSON.stringify({
       hooks: {
@@ -83,7 +99,13 @@ export async function spawnConductor(
           matcher: "Bash",
           hooks: [{
             type: "command",
-            command: `bash "${hookScript}" || true`,
+            command: `bash -c '${postToolUseCmd}'`,
+          }],
+        }],
+        Stop: [{
+          hooks: [{
+            type: "command",
+            command: stopCmd,
           }],
         }],
       },

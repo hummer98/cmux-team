@@ -178,6 +178,9 @@ async function cmdSend(): Promise<void> {
         type: "CONDUCTOR_DONE",
         conductorId: requireArg("conductor-id"),
         surface: getArg("surface") || "unknown",
+        success: getArg("success") !== "false",  // デフォルト true（後方互換）
+        reason: getArg("reason"),
+        exitCode: getArg("exit-code") ? Number(getArg("exit-code")) : undefined,
         sessionId: getArg("session-id"),
         transcriptPath: getArg("transcript-path"),
         timestamp: now,

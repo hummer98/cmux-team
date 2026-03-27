@@ -1,8 +1,7 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir, copyFile } from "fs/promises";
-import { dirname } from "path";
+import { readdir, readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
@@ -51,13 +50,8 @@ export async function initInfra(state: DaemonState): Promise<void> {
   await mkdir(join(root, ".team/logs"), { recursive: true });
   await ensureQueueDirs();
 
-  // hook スクリプトを .team/scripts/ にコピー
   const scriptsDir = join(root, ".team/scripts");
   await mkdir(scriptsDir, { recursive: true });
-  const hookSrc = join(dirname(import.meta.path), "../scripts/hook-agent-spawned.sh");
-  if (existsSync(hookSrc)) {
-    await copyFile(hookSrc, join(scriptsDir, "hook-agent-spawned.sh"));
-  }
 
   // .gitignore
   const gitignore = join(root, ".team/.gitignore");
@@ -132,9 +126,10 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
 
       case "CONDUCTOR_DONE": {
+        const isSuccess = message.success !== false;
         await log(
-          "conductor_done_signal",
-          `conductor_id=${message.conductorId}`
+          isSuccess ? "conductor_done_signal" : "conductor_error",
+          `conductor_id=${message.conductorId}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
         );
         const conductor = state.conductors.get(message.conductorId);
         if (conductor) {
