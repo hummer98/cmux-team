@@ -195,15 +195,35 @@ fi
      cmux close-surface --surface surface:N
    fi
    ```
-3. 結果サマリーを書き出す:
+3. 変更をコミットする:
+   ```bash
+   cd {{WORKTREE_PATH}}
+   git add -A
+   git diff --cached --quiet || git commit -m "feat: <タスク概要>"
+   ```
+4. **成果物の納品** — 以下のいずれかを選択:
+   - **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
+     ```bash
+     cd {{PROJECT_ROOT}}
+     git merge {{CONDUCTOR_ID}}/task
+     ```
+     コンフリクトが発生した場合は Conductor が内容を判断して解決する。
+   - **Pull Request**: レビューが必要な変更、共有リポジトリ、破壊的変更
+     ```bash
+     cd {{WORKTREE_PATH}}
+     git push origin {{CONDUCTOR_ID}}/task
+     gh pr create --title "<タスク概要>" --body "<変更内容>"
+     ```
+   判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
+5. 結果サマリーを書き出す:
    ```bash
    # {{OUTPUT_DIR}}/summary.md に以下を記録
    # - 完了したサブタスク一覧
    # - 変更ファイル一覧
    # - テスト結果
-   # - ブランチ名
+   # - マージコミット or PR URL
    ```
-4. 停止する（❯ プロンプトに戻る）。Manager が検出する。
+6. 停止する（❯ プロンプトに戻る）。daemon が worktree 削除とタスククローズを行う。
 
 ## やらないこと（厳守）
 

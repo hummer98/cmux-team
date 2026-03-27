@@ -155,52 +155,20 @@ export async function collectResults(
     // surface が既に閉じている場合
   }
 
-  // 2. worktree マージ
+  // 2. worktree クリーンアップ（マージは Conductor が完了前に実行済み）
   try {
     const branch = `${conductor.conductorId}/task`;
 
-    await execFile("git", ["add", "-A"], { cwd: conductor.worktreePath });
-
-    // 変更があればコミット
-    try {
-      await execFile("git", ["diff", "--cached", "--quiet"], {
-        cwd: conductor.worktreePath,
-      });
-    } catch {
-      await execFile(
-        "git",
-        ["commit", "-m", `feat: task ${conductor.taskId}`],
-        { cwd: conductor.worktreePath }
-      );
-    }
-
-    // メインブランチにマージ
-    const { stdout: logOutput } = await execFile(
-      "git",
-      ["log", "--oneline", "-1", branch],
-      { cwd: projectRoot }
-    );
-
-    if (logOutput.trim()) {
-      await execFile("git", ["merge", branch], { cwd: projectRoot });
-      const { stdout: head } = await execFile(
-        "git",
-        ["rev-parse", "--short", "HEAD"],
-        { cwd: projectRoot }
-      );
-      result.mergeCommit = head.trim();
-    }
-
-    await execFile("git", ["worktree", "remove", conductor.worktreePath], {
+    await execFile("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
       cwd: projectRoot,
-    });
+    }).catch(() => {});
     await execFile("git", ["branch", "-d", branch], {
       cwd: projectRoot,
     }).catch(() => {});
   } catch (e: any) {
     await log(
       "error",
-      `Merge failed for ${conductor.conductorId}: ${e.message}`
+      `Worktree cleanup failed for ${conductor.conductorId}: ${e.message}`
     );
   }
 

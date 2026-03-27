@@ -109,21 +109,22 @@ export async function generateConductorPrompt(
       .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
       .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
       .replace(/\{\{ROLE_ID\}\}/g, conductorId)
+      .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId)
       .replace(/\{\{TASK_DESCRIPTION\}\}/g, `task ${taskId}`)
       .replace(
         /\{\{OUTPUT_FILE\}\}/g,
         join(projectRoot, outputDir, "summary.md")
       );
 
-    // 完了マーカーを追記
+    // 完了マーカーを追記（daemon が完了検出に使用）
     content += `
 
-## 完了マーカー
+## 完了マーカー（daemon 検出用）
 
-タスク完了時、以下を必ず実行すること:
-1. 変更をコミット: \`cd ${worktreePath} && git add -A && git commit -m "feat: <タスク概要>"\`
-2. 結果サマリー: \`${join(projectRoot, outputDir, "summary.md")}\` に書き出す
-3. 完了マーカー: \`touch ${join(projectRoot, outputDir, "done")}\`
+上記「完了時の処理」を全て実行した後、最後に:
+\`\`\`bash
+touch ${join(projectRoot, outputDir, "done")}
+\`\`\`
 `;
 
     await writeFile(promptFile, content);
