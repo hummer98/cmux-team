@@ -107,10 +107,17 @@ export async function spawnConductor(
   }
 }
 
+const MIN_RUNTIME_MS = 30_000; // spawn 後 30 秒は "done" 判定しない
+
 export async function checkConductorStatus(
-  surface: string
+  surface: string,
+  startedAt: string
 ): Promise<"running" | "done" | "crashed"> {
   if (!(await cmux.validateSurface(surface))) return "crashed";
+
+  // ガード期間: spawn 直後の誤判定を防ぐ
+  const elapsed = Date.now() - new Date(startedAt).getTime();
+  if (elapsed < MIN_RUNTIME_MS) return "running";
 
   try {
     const screen = await cmux.readScreen(surface, 10);
@@ -200,7 +207,10 @@ export async function collectResults(
     const closedDir = join(projectRoot, ".team/tasks/closed");
     await mkdir(closedDir, { recursive: true });
     const files = await readdir(tasksDir);
-    const taskFile = files.find((f) => f.startsWith(conductor.taskId));
+    const taskFile = files.find((f) => {
+      const fileId = f.match(/^0*(\d+)/)?.[1];
+      return fileId === conductor.taskId || fileId === conductor.taskId.replace(/^0+/, "");
+    });
     if (taskFile) {
       await rename(join(tasksDir, taskFile), join(closedDir, taskFile));
     }

@@ -175,7 +175,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [id, conductor] of state.conductors) {
-    const status = await checkConductorStatus(conductor.surface);
+    const status = await checkConductorStatus(conductor.surface, conductor.startedAt);
 
     switch (status) {
       case "done":
