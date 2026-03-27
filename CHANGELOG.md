@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.7.0] - 2026-03-27
+
+### Added
+- `main.ts status` API: daemon に依存せずダッシュボード情報を取得可能。`--log N` でログ末尾行数を指定
+- Conductor のタスクタイトル表示: TUI・status API・タブ名・team.json に反映
+- フルスクリーン TUI ダッシュボード: ターミナルサイズにレスポンシブ、ログ末尾を色分け表示
+
+### Changed
+- **マージ責務を daemon から Conductor に移動**: daemon は決定論的な worktree 削除のみ。マージ/PR は Conductor が判断・実行する。コンフリクト解決も Conductor の責務に
+- Conductor テンプレート: 完了時にローカルマージまたは PR 作成を選択可能に
+
 ## [2.6.0] - 2026-03-27
 
 ### Added
