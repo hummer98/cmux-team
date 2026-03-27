@@ -144,7 +144,23 @@ created_at: <ISO タイムスタンプ>
 - カテゴリ分類、関連タスクのリンク
 - Conductor のリクエストに応じてオープンタスクを要約する
 
-## 7. 言語ルール
+## 7. daemon ステータス取得
+
+Manager daemon の状態を確認するには CLI を使う:
+
+```bash
+# ダッシュボード表示（Master / Conductors / Tasks / Log）
+bun run .team/manager/main.ts status
+
+# ログ末尾を多めに表示
+bun run .team/manager/main.ts status --log 20
+```
+
+**出力内容**: daemon の稼働状態、Master surface、稼働中 Conductor 一覧（タスクタイトル付き）、open/closed タスク数、manager.log 末尾。
+
+`cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
+
+## 8. 言語ルール
 
 - ドキュメント・コメント: 日本語
 - コード: 英語

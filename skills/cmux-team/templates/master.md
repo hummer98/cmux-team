@@ -93,16 +93,14 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 
 ユーザーに「状況は？」と聞かれたら:
 
-1. Manager の健全性を確認:
-   ```bash
-   MANAGER_PID=$(python3 -c "import json; d=json.load(open('.team/team.json')); print(d.get('manager',{}).get('pid',''))")
-   kill -0 $MANAGER_PID 2>/dev/null && echo "Manager: alive" || echo "Manager: dead"
-   ```
-2. Manager のログ出力を `cmux read-screen` で確認（正常動作中は `[manager]` ログが流れている）
-3. 稼働中の Conductor は `cmux tree` でペイン構成を確認
-4. オープンタスク数は `ls .team/tasks/open/ | wc -l` で確認
-5. 完了タスクの履歴は `.team/logs/manager.log` を参照（`grep task_completed`）
-6. Conductor のセッションログを追跡したい場合は `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し、`claude --resume <session-id>` で参照
+```bash
+# daemon ステータス一括取得（Master/Conductors/Tasks/Log）
+bun run .team/manager/main.ts status --log 10
+```
+
+詳細が必要な場合:
+- Conductor のセッションログ: `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し `claude --resume <session-id>` で参照
+- ペイン構成: `cmux tree`
 
 ## Manager の再起動
 
