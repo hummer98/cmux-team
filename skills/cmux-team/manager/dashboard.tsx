@@ -258,9 +258,19 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   );
 }
 
+let inkInstance: ReturnType<typeof render> | null = null;
+
+export function unmountDashboard(): void {
+  if (inkInstance) {
+    inkInstance.unmount();
+    inkInstance.cleanup();
+    inkInstance = null;
+  }
+}
+
 export function startDashboard(
   getState: () => DaemonState,
   opts?: { version?: string; onReload?: () => void; onQuit?: () => void }
 ): void {
-  render(<Dashboard getState={getState} version={opts?.version} onReload={opts?.onReload} onQuit={opts?.onQuit} />);
+  inkInstance = render(<Dashboard getState={getState} version={opts?.version} onReload={opts?.onReload} onQuit={opts?.onQuit} />);
 }

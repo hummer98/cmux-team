@@ -17,7 +17,7 @@ import { existsSync } from "fs";
 import { readFile, readdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, tick, updateTeamJson } from "./daemon";
-import { startDashboard } from "./dashboard";
+import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import type { QueueMessage } from "./schema";
 
@@ -116,10 +116,13 @@ async function cmdStart(): Promise<void> {
   startDashboard(() => state, {
     version,
     onReload: () => {
-      // 最新の main.ts を検索して再起動（バージョンアップ対応）
+      // ink を先に解放してから新プロセスを起動
+      unmountDashboard();
       log("daemon_reload").then(async () => {
         const latestMainTs = findLatestMainTs();
         await log("daemon_reload_target", latestMainTs);
+        state.running = false;
+        await updateTeamJson(state);
         Bun.spawn([process.execPath, "run", latestMainTs, "start"], {
           stdio: ["inherit", "inherit", "inherit"],
           cwd: process.cwd(),
