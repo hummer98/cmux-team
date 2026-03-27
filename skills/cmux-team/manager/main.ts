@@ -7,13 +7,14 @@
  *   ./main.ts send TASK_CREATED --task-id 035 --task-file ...
  *   ./main.ts send TODO --content "worktree 整理"
  *   ./main.ts send SHUTDOWN
- *   ./main.ts status                           # ステータス1回表示
+ *   ./main.ts status                           # ダッシュボード表示
+ *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
  */
 
 import { join } from "path";
 import { existsSync } from "fs";
-import { readFile } from "fs/promises";
+import { readFile, readdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, tick, updateTeamJson } from "./daemon";
 import { startDashboard } from "./dashboard";
@@ -158,20 +159,60 @@ async function cmdStatus(): Promise<void> {
 
   const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
   const pid = teamJson.manager?.pid;
+  const alive = pid && isProcessAlive(pid);
   const masterSurface = teamJson.master?.surface;
+  const conductors: Array<{ id: string; taskId: string; surface: string }> = teamJson.conductors || [];
+  const logLines = getArg("log") || "10";
 
-  console.log(`cmux-team status`);
-  console.log(`  Master: ${masterSurface || "not spawned"}`);
-  console.log(
-    `  Manager: PID ${pid || "none"} ${
-      pid && isProcessAlive(pid) ? "(alive)" : "(dead)"
-    }`
-  );
+  // --- ヘッダー ---
+  const status = alive ? "RUNNING" : "STOPPED";
+  console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}`);
 
-  const conductors = teamJson.conductors || [];
-  console.log(`  Conductors: ${conductors.length}`);
-  for (const c of conductors) {
-    console.log(`    ${c.surface} task=${c.taskId} (${c.id})`);
+  // --- Master ---
+  console.log(`─ Master ${"─".repeat(50)}`);
+  if (masterSurface) {
+    console.log(`  ● ${masterSurface}`);
+  } else {
+    console.log(`  ○ not spawned`);
+  }
+
+  // --- Conductors ---
+  console.log(`─ Conductors ${conductors.length} ${"─".repeat(44)}`);
+  if (conductors.length === 0) {
+    console.log(`  idle`);
+  } else {
+    for (const c of conductors) {
+      console.log(`  ● ${c.surface}  task=${c.taskId}  ${c.id}`);
+    }
+  }
+
+  // --- Tasks ---
+  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
+  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
+  let openCount = 0;
+  let closedCount = 0;
+  try { openCount = (await readdir(openDir)).filter(f => f.endsWith(".md")).length; } catch {}
+  try { closedCount = (await readdir(closedDir)).filter(f => f.endsWith(".md")).length; } catch {}
+  console.log(`─ Tasks ${"─".repeat(51)}`);
+  console.log(`  open: ${openCount}  closed: ${closedCount}`);
+
+  // --- Log tail ---
+  const n = Math.max(1, parseInt(logLines, 10) || 10);
+  console.log(`─ Log (last ${n}) ${"─".repeat(Math.max(0, 42 - String(n).length))}`);
+  try {
+    const log = await readFile(join(PROJECT_ROOT, ".team/logs/manager.log"), "utf-8");
+    const lines = log.trim().split("\n").filter(Boolean).slice(-n);
+    for (const line of lines) {
+      const m = line.match(/^\[([^\]]+)\]\s+(.*)/);
+      if (m) {
+        const time = (m[1] ?? "").slice(11, 19);
+        console.log(`  ${time} ${m[2]}`);
+      } else {
+        console.log(`  ${line}`);
+      }
+    }
+  } catch {
+    console.log(`  (no log)`);
   }
 }
 
