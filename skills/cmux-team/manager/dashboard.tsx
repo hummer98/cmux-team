@@ -146,14 +146,24 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
     <Box flexDirection="column">
       {conductors.map((c) => {
         const elapsed = formatElapsed(c.startedAt);
+        const agents = c.agents || [];
         return (
-          <Box key={c.conductorId} paddingLeft={1}>
-            <Text color="yellow">● </Text>
-            <Text>{c.surface}</Text>
-            <Text dimColor> task=</Text>
-            <Text bold>{c.taskId}</Text>
-            {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
-            <Text dimColor> {elapsed}</Text>
+          <Box key={c.conductorId} flexDirection="column">
+            <Box paddingLeft={1}>
+              <Text color="yellow">● </Text>
+              <Text>{c.surface}</Text>
+              <Text dimColor> task=</Text>
+              <Text bold>{c.taskId}</Text>
+              {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
+              <Text dimColor> {elapsed}</Text>
+            </Box>
+            {agents.map((a, i) => (
+              <Box key={a.surface} paddingLeft={3}>
+                <Text dimColor>{i === agents.length - 1 ? "└─ " : "├─ "}</Text>
+                <Text color="cyan">{a.surface}</Text>
+                {a.role && <Text> {a.role}</Text>}
+              </Box>
+            ))}
           </Box>
         );
       })}

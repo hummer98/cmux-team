@@ -4,7 +4,7 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, mkdir, readdir, rename } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir, rename } from "fs/promises";
 import { join } from "path";
 import * as cmux from "./cmux";
 import { generateConductorPrompt } from "./template";
@@ -74,16 +74,31 @@ export async function spawnConductor(
       return null;
     }
 
-    // --- 5. Claude Code 起動 ---
+    // --- 5. Conductor 用 settings 生成（Agent spawn 検出 hook） ---
+    const hookScript = join(projectRoot, ".team/scripts/hook-agent-spawned.sh");
+    const conductorSettings = join(projectRoot, `.team/prompts/${conductorId}-settings.json`);
+    await writeFile(conductorSettings, JSON.stringify({
+      hooks: {
+        PostToolUse: [{
+          matcher: "Bash",
+          hooks: [{
+            type: "command",
+            command: `bash "${hookScript}" || true`,
+          }],
+        }],
+      },
+    }));
+
+    // --- 6. Claude Code 起動 ---
     await cmux.send(
       surface,
-      `CONDUCTOR_ID=${conductorId} TASK_ID=${taskId} claude --dangerously-skip-permissions '${promptFile} を読んで指示に従って作業してください。'\n`
+      `CONDUCTOR_ID=${conductorId} TASK_ID=${taskId} PROJECT_ROOT=${projectRoot} claude --dangerously-skip-permissions --settings "${conductorSettings}" '${promptFile} を読んで指示に従って作業してください。'\n`
     );
 
-    // --- 6. Trust 承認 ---
+    // --- 7. Trust 承認 ---
     await cmux.waitForTrust(surface);
 
-    // --- 7. タブ名設定 ---
+    // --- 8. タブ名設定 ---
     const num = surface.replace("surface:", "");
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
     await cmux.renameTab(surface, `[${num}] ${shortTitle}`);
@@ -96,6 +111,7 @@ export async function spawnConductor(
       worktreePath,
       outputDir,
       startedAt: new Date().toISOString(),
+      agents: [],
     };
 
     await log(

@@ -171,12 +171,31 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "AGENT_SPAWNED":
+      message = {
+        type: "AGENT_SPAWNED",
+        conductorId: requireArg("conductor-id"),
+        surface: requireArg("surface"),
+        role: getArg("role"),
+        timestamp: now,
+      };
+      break;
+
+    case "AGENT_DONE":
+      message = {
+        type: "AGENT_DONE",
+        conductorId: requireArg("conductor-id"),
+        surface: requireArg("surface"),
+        timestamp: now,
+      };
+      break;
+
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TODO|CONDUCTOR_DONE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|TODO|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SHUTDOWN>");
       process.exit(1);
   }
 

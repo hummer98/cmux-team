@@ -24,6 +24,21 @@ export const ConductorDoneMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const AgentSpawnedMessage = z.object({
+  type: z.literal("AGENT_SPAWNED"),
+  conductorId: z.string(),
+  surface: z.string(),
+  role: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const AgentDoneMessage = z.object({
+  type: z.literal("AGENT_DONE"),
+  conductorId: z.string(),
+  surface: z.string(),
+  timestamp: z.string().datetime(),
+});
+
 export const ShutdownMessage = z.object({
   type: z.literal("SHUTDOWN"),
   timestamp: z.string().datetime(),
@@ -33,6 +48,8 @@ export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   TodoMessage,
   ConductorDoneMessage,
+  AgentSpawnedMessage,
+  AgentDoneMessage,
   ShutdownMessage,
 ]);
 
@@ -40,6 +57,14 @@ export type QueueMessage = z.infer<typeof QueueMessage>;
 export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
 export type TodoMessage = z.infer<typeof TodoMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
+
+// --- Agent 状態 ---
+
+export interface AgentState {
+  surface: string;
+  role?: string;
+  spawnedAt: string;
+}
 
 // --- Conductor 状態 ---
 
@@ -53,4 +78,6 @@ export const ConductorState = z.object({
   startedAt: z.string().datetime(),
 });
 
-export type ConductorState = z.infer<typeof ConductorState>;
+export type ConductorState = z.infer<typeof ConductorState> & {
+  agents: AgentState[];
+};
