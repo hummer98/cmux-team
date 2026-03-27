@@ -14,6 +14,7 @@ import type { DaemonState } from "./daemon";
 
 interface DashboardProps {
   getState: () => DaemonState;
+  version?: string;
   onReload?: () => void;
   onQuit?: () => void;
 }
@@ -210,7 +211,7 @@ function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
 }
 
 // --- メインダッシュボード ---
-function Dashboard({ getState, onReload, onQuit }: DashboardProps) {
+function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   const [state, setState] = useState(getState());
   const { columns: cols, rows } = useTerminalSize();
 
@@ -244,11 +245,14 @@ function Dashboard({ getState, onReload, onQuit }: DashboardProps) {
       <Box flexDirection="column" height={logLines} overflow="hidden">
         <LogSection lines={logTail} cols={cols} />
       </Box>
-      <Box>
-        <Text backgroundColor="gray" color="white" bold> r </Text>
-        <Text>reload </Text>
-        <Text backgroundColor="gray" color="white" bold> q </Text>
-        <Text>quit</Text>
+      <Box justifyContent="space-between" width={cols}>
+        <Box>
+          <Text backgroundColor="gray" color="white" bold> r </Text>
+          <Text>reload </Text>
+          <Text backgroundColor="gray" color="white" bold> q </Text>
+          <Text>quit</Text>
+        </Box>
+        {version && <Text dimColor>v{version}</Text>}
       </Box>
     </Box>
   );
@@ -256,7 +260,7 @@ function Dashboard({ getState, onReload, onQuit }: DashboardProps) {
 
 export function startDashboard(
   getState: () => DaemonState,
-  opts?: { onReload?: () => void; onQuit?: () => void }
+  opts?: { version?: string; onReload?: () => void; onQuit?: () => void }
 ): void {
-  render(<Dashboard getState={getState} onReload={opts?.onReload} onQuit={opts?.onQuit} />);
+  render(<Dashboard getState={getState} version={opts?.version} onReload={opts?.onReload} onQuit={opts?.onQuit} />);
 }

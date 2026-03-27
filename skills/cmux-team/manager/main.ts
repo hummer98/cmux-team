@@ -12,7 +12,7 @@
  *   ./main.ts stop                             # graceful shutdown
  */
 
-import { join } from "path";
+import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
@@ -103,8 +103,18 @@ async function cmdStart(): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  // バージョン取得（plugin.json から）
+  let version: string | undefined;
+  try {
+    const pluginJsonPath = join(dirname(import.meta.path), "../../..", ".claude-plugin/plugin.json");
+    if (existsSync(pluginJsonPath)) {
+      version = JSON.parse(await readFile(pluginJsonPath, "utf-8")).version;
+    }
+  } catch {}
+
   // ダッシュボード表示（キーボードショートカット付き）
   startDashboard(() => state, {
+    version,
     onReload: () => {
       // 最新の main.ts を検索して再起動（バージョンアップ対応）
       log("daemon_reload").then(async () => {
