@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.10.0] - 2026-03-27
+
+### Added
+- Stop hook によるイベント通知統一: Conductor 終了時に `main.ts send CONDUCTOR_DONE` で成功/失敗を Manager に通知。`hook-agent-spawned.sh` を廃止し全イベントを CLI 経由に一本化
+- `CONDUCTOR_DONE` メッセージに `success` / `reason` / `exitCode` フィールドを追加。エラー終了の検知とリカバリが可能に
+- TUI フッターにバージョン番号を表示
+
+### Changed
+- Conductor 完了時のペイン自動クローズを廃止。作業履歴の確認やデバッグが容易に
+
+### Fixed
+- TUI リロード時のクラッシュを修正（ink unmount してからプロセス再起動）
+- リロード時に `exec` でプロセスを置き換え、Master surface を保持するよう修正
+
 ## [2.9.0] - 2026-03-27
 
 ### Added
