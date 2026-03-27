@@ -10,15 +10,20 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
+ *   ./main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
+ *   ./main.ts agents                           # 稼働中エージェント一覧
+ *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
  */
 
 import { join, dirname } from "path";
 import { existsSync } from "fs";
-import { readFile, readdir } from "fs/promises";
+import { readFile, readdir, writeFile } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, tick, updateTeamJson } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
+import * as cmux from "./cmux";
+import { start as startProxy } from "./proxy";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -89,6 +94,16 @@ async function cmdStart(): Promise<void> {
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
   );
 
+  // ロギングプロキシ起動
+  let proxyHandle: { port: number; stop: () => void } | null = null;
+  try {
+    proxyHandle = await startProxy(PROJECT_ROOT);
+    await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
+    await log("proxy_started", `port=${proxyHandle.port}`);
+  } catch (e: any) {
+    await log("proxy_start_failed", e.message);
+  }
+
   // Master spawn
   await startMaster(state);
   await updateTeamJson(state);
@@ -96,6 +111,7 @@ async function cmdStart(): Promise<void> {
   // シグナルハンドリング
   const shutdown = async () => {
     state.running = false;
+    proxyHandle?.stop();
     await log("daemon_stopped");
     await updateTeamJson(state);
     process.exit(0);
@@ -297,6 +313,114 @@ async function cmdStop(): Promise<void> {
   console.log(`SHUTDOWN sent: ${path}`);
 }
 
+async function cmdSpawnAgent(): Promise<void> {
+  const conductorId = requireArg("conductor-id");
+  const role = requireArg("role");
+  const prompt = requireArg("prompt");
+
+  // --- 1. プロキシポート読み取り ---
+  const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
+  let proxyPort: string | undefined;
+  try {
+    proxyPort = (await readFile(proxyPortFile, "utf-8")).trim();
+  } catch {
+    // プロキシ未起動の場合はなしで続行
+  }
+
+  // --- 2. ペイン作成 ---
+  const surface = await cmux.newSplit("down");
+
+  if (!(await cmux.validateSurface(surface))) {
+    console.error(`Error: surface ${surface} validation failed`);
+    process.exit(1);
+  }
+
+  // --- 3. Claude Code 起動 ---
+  const envParts: string[] = [
+    `CONDUCTOR_ID=${conductorId}`,
+    `ROLE=${role}`,
+    `PROJECT_ROOT=${PROJECT_ROOT}`,
+  ];
+  if (proxyPort) {
+    envParts.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+  }
+
+  const claudeCmd = `${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
+  await cmux.send(surface, claudeCmd + "\n");
+
+  // --- 4. Trust 承認 ---
+  await cmux.waitForTrust(surface);
+
+  // --- 5. タブ名設定 ---
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] Agent-${role}`);
+
+  // --- 6. AGENT_SPAWNED をキューに送信 ---
+  await ensureQueueDirs();
+  await sendMessage({
+    type: "AGENT_SPAWNED",
+    conductorId,
+    surface,
+    role,
+    timestamp: new Date().toISOString(),
+  });
+
+  // --- 7. stdout に surface を出力 ---
+  console.log(`SURFACE=${surface}`);
+}
+
+async function cmdAgents(): Promise<void> {
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  if (!existsSync(teamJsonPath)) {
+    console.log("チーム未起動。");
+    return;
+  }
+
+  const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  const conductors: Array<{
+    id: string;
+    taskId: string;
+    taskTitle?: string;
+    surface: string;
+    agents?: Array<{ surface: string; role?: string }>;
+  }> = teamJson.conductors || [];
+
+  let agentCount = 0;
+  for (const c of conductors) {
+    const agents = c.agents || [];
+    for (const a of agents) {
+      agentCount++;
+      const rolePart = a.role ? `role=${a.role}` : "role=unknown";
+      console.log(`${a.surface}  ${rolePart}  conductor=${c.id}  task=${c.taskId}`);
+    }
+  }
+
+  if (agentCount === 0) {
+    console.log("稼働中のエージェントはありません。");
+  }
+}
+
+async function cmdKillAgent(): Promise<void> {
+  const surface = requireArg("surface");
+  const conductorId = getArg("conductor-id");
+
+  // --- 1. surface を閉じる ---
+  await cmux.closeSurface(surface);
+
+  // --- 2. AGENT_DONE をキューに送信 ---
+  if (conductorId) {
+    await ensureQueueDirs();
+    await sendMessage({
+      type: "AGENT_DONE",
+      conductorId,
+      surface,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  console.log(`OK killed ${surface}`);
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -324,6 +448,15 @@ switch (command) {
   case "stop":
     await cmdStop();
     break;
+  case "spawn-agent":
+    await cmdSpawnAgent();
+    break;
+  case "agents":
+    await cmdAgents();
+    break;
+  case "kill-agent":
+    await cmdKillAgent();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -333,6 +466,9 @@ Usage:
   cmux-team send TODO --content <text>
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
-  cmux-team stop                               graceful shutdown`);
+  cmux-team stop                               graceful shutdown
+  cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
+  cmux-team agents                             稼働中エージェント一覧
+  cmux-team kill-agent --surface <surface> [--conductor-id <id>]`);
     break;
 }
