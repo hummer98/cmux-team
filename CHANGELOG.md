@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.9.0] - 2026-03-27
+
+### Added
+- Agent surface のツリー表示: Conductor が spawn した Agent を TUI・status API・team.json にツリー構造で表示
+- PostToolUse hook による Agent 自動検出: Conductor の `cmux new-split` を hook で検出し daemon に通知。LLM の協力不要、完全に決定論的
+- Conductor 起動時に `--settings` で hook 付きカスタム設定を注入
+- daemon status API のドキュメントを共通スキル（cmux-agent-role）に追加。全ロールが `main.ts status` で daemon 状態を参照可能に
+
+### Changed
+- Master テンプレートの進捗報告を `main.ts status` に一本化（pid check + cmux read-screen の手動手順を廃止）
+
 ## [2.8.0] - 2026-03-27
 
 ### Added
