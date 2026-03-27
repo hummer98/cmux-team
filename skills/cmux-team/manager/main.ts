@@ -317,6 +317,7 @@ async function cmdSpawnAgent(): Promise<void> {
   const conductorId = requireArg("conductor-id");
   const role = requireArg("role");
   const prompt = requireArg("prompt");
+  const taskTitle = getArg("task-title");
 
   // --- 1. プロキシポート読み取り ---
   const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
@@ -353,7 +354,11 @@ async function cmdSpawnAgent(): Promise<void> {
 
   // --- 5. タブ名設定 ---
   const num = surface.replace("surface:", "");
-  await cmux.renameTab(surface, `[${num}] Agent-${role}`);
+  const shortTitle = taskTitle
+    ? (taskTitle.length > 25 ? taskTitle.slice(0, 25) + "…" : taskTitle)
+    : "";
+  const tabName = shortTitle ? `[${num}] ${role}: ${shortTitle}` : `[${num}] ${role}`;
+  await cmux.renameTab(surface, tabName);
 
   // --- 6. AGENT_SPAWNED をキューに送信 ---
   await ensureQueueDirs();
