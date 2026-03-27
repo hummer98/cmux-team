@@ -293,7 +293,8 @@ async function cmdStatus(): Promise<void> {
     for (const line of lines) {
       const m = line.match(/^\[([^\]]+)\]\s+(.*)/);
       if (m) {
-        const time = (m[1] ?? "").slice(11, 19);
+        const utcTs = m[1] ?? "";
+        const time = new Date(utcTs).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
         console.log(`  ${time} ${m[2]}`);
       } else {
         console.log(`  ${line}`);

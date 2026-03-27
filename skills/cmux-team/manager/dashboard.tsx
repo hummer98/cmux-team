@@ -90,7 +90,7 @@ function useJournalEntries(projectRoot: string): JournalEntry[] {
           const ts = match[1] ?? "";
           const event = match[2] ?? "";
           const detail = match[3] ?? "";
-          const time = ts.slice(11, 16); // HH:MM
+          const time = utcToLocal(ts); // HH:MM:SS（ローカル時刻）
 
           if (event === "task_received") {
             const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
@@ -124,6 +124,15 @@ function formatUptime(startMs: number): string {
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m${sec % 60}s`;
   return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`;
+}
+
+function utcToLocal(isoTimestamp: string): string {
+  return new Date(isoTimestamp).toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 function formatElapsed(isoDate: string): string {
@@ -236,7 +245,7 @@ function formatLogLine(line: string, cols: number): { time: string; event: strin
   const ts = match[1] ?? "";
   const event = match[2] ?? "";
   const detail = match[3] ?? "";
-  const time = ts.slice(11, 19);
+  const time = utcToLocal(ts);
   const isError = event === "error";
   const isComplete = event.includes("completed");
   const color = isError ? "red" : isComplete ? "green" : "white";
