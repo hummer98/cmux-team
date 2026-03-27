@@ -157,19 +157,7 @@ export async function collectResults(
 ): Promise<{ sessionId?: string; mergeCommit?: string }> {
   const result: { sessionId?: string; mergeCommit?: string } = {};
 
-  // 1. Conductor を /exit して session_id を取得
-  try {
-    await cmux.send(conductor.surface, "/exit\n");
-    await sleep(3000);
-
-    const exitScreen = await cmux.readScreen(conductor.surface, 20);
-    const match = exitScreen.match(/claude --resume ([a-f0-9-]+)/);
-    if (match) result.sessionId = match[1];
-
-    await cmux.closeSurface(conductor.surface);
-  } catch {
-    // surface が既に閉じている場合
-  }
+  // 1. (ペインクローズは上位層が担当)
 
   // 2. worktree クリーンアップ（マージは Conductor が完了前に実行済み）
   try {
