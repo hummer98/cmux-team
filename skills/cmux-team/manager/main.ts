@@ -354,11 +354,21 @@ async function cmdSpawnAgent(): Promise<void> {
   await cmux.waitForTrust(surface);
 
   // --- 5. タブ名設定 ---
+  const roleIcons: Record<string, string> = {
+    researcher: "🔍", research: "🔍",
+    architect: "📐", design: "📐",
+    implementer: "⚙", impl: "⚙",
+    reviewer: "👀", review: "👀",
+    tester: "🧪", test: "🧪",
+    dockeeper: "📝", docs: "📝",
+    "task-manager": "📋",
+  };
+  const roleIcon = roleIcons[role] ?? "▸";
   const num = surface.replace("surface:", "");
   const shortTitle = taskTitle
     ? (taskTitle.length > 25 ? taskTitle.slice(0, 25) + "…" : taskTitle)
     : "";
-  const tabName = shortTitle ? `[${num}] ${role}: ${shortTitle}` : `[${num}] ${role}`;
+  const tabName = shortTitle ? `[${num}] ${roleIcon} ${shortTitle}` : `[${num}] ${roleIcon} ${role}`;
   await cmux.renameTab(surface, tabName);
 
   // --- 6. AGENT_SPAWNED をキューに送信 ---

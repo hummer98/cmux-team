@@ -123,7 +123,7 @@ export async function spawnConductor(
     // --- 8. タブ名設定 ---
     const num = surface.replace("surface:", "");
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
-    await cmux.renameTab(surface, `[${num}] ${shortTitle}`);
+    await cmux.renameTab(surface, `[${num}] ♦ ${shortTitle}`);
 
     const state: ConductorState = {
       conductorId,
