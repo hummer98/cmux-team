@@ -73,6 +73,7 @@ export interface AgentState {
 
 export const ConductorState = z.object({
   conductorId: z.string(),
+  taskRunId: z.string().optional(),
   taskId: z.string().optional(),
   taskTitle: z.string().optional(),
   surface: z.string(),

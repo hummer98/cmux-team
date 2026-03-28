@@ -41,6 +41,17 @@ export interface DaemonState {
   taskList: TaskSummary[];
 }
 
+/** conductorId または taskRunId で Conductor を検索 */
+function findConductor(state: DaemonState, id: string): ConductorState | undefined {
+  const direct = state.conductors.get(id);
+  if (direct) return direct;
+  // taskRunId で検索（Conductor セッションが taskRunId を conductorId として送信する場合）
+  for (const c of state.conductors.values()) {
+    if (c.taskRunId === id) return c;
+  }
+  return undefined;
+}
+
 export async function createDaemon(projectRoot: string): Promise<DaemonState> {
   return {
     running: true,
@@ -175,7 +186,7 @@ async function processQueue(state: DaemonState): Promise<void> {
           isSuccess ? "conductor_done_signal" : "conductor_error",
           `conductor_id=${message.conductorId}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
         );
-        const conductor = state.conductors.get(message.conductorId);
+        const conductor = findConductor(state, message.conductorId);
         if (conductor) {
           await handleConductorDone(state, conductor);
         }
@@ -183,7 +194,7 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "AGENT_SPAWNED": {
-        const conductor = state.conductors.get(message.conductorId);
+        const conductor = findConductor(state, message.conductorId);
         if (conductor) {
           conductor.agents.push({
             surface: message.surface,
@@ -199,7 +210,7 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "AGENT_DONE": {
-        const conductor = state.conductors.get(message.conductorId);
+        const conductor = findConductor(state, message.conductorId);
         if (conductor) {
           conductor.agents = conductor.agents.filter(
             (a) => a.surface !== message.surface
@@ -372,6 +383,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     teamJson.phase = "running";
     teamJson.conductors = [...state.conductors.values()].map((c) => ({
       id: c.conductorId,
+      taskRunId: c.taskRunId,
       taskId: c.taskId,
       taskTitle: c.taskTitle,
       surface: c.surface,
