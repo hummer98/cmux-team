@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.17.0] - 2026-03-29
+
+### Added
+- TODO メッセージを廃止し `create-task --status ready` に一本化。軽微な作業もタスクとして追跡可能に
+
+### Fixed
+- Agent 起動時の `--bare` フラグを除去。`--bare` が OAuth 認証をスキップし Claude Max 環境で API Usage Billing にフォールバックする問題を修正
+- TUI ダッシュボードの Tasks セクションで open タスクが表示されない問題を修正。open タスクを優先表示し、残り枠で直近の closed タスクを表示するよう変更
+- TUI ダッシュボードで長文タイトルが改行を引き起こしレイアウトが崩れる問題を修正
+
 ## [2.16.0] - 2026-03-29
 
 ### Added
