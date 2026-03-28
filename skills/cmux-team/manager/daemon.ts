@@ -222,10 +222,12 @@ async function scanTasks(state: DaemonState): Promise<void> {
     ...closedMetas.map((t) => ({ ...t, isTodo: t.fileName.includes("-todo") })),
   ];
   allTasks.sort((a, b) => {
-    if (!a.createdAt && !b.createdAt) return 0;
-    if (!a.createdAt) return 1;
-    if (!b.createdAt) return -1;
-    return b.createdAt.localeCompare(a.createdAt);
+    const aTime = a.closedAt ?? a.createdAt ?? "";
+    const bTime = b.closedAt ?? b.createdAt ?? "";
+    if (!aTime && !bTime) return 0;
+    if (!aTime) return 1;
+    if (!bTime) return -1;
+    return bTime.localeCompare(aTime);
   });
   state.taskList = allTasks.slice(0, 5).map((t) => ({
     id: t.id,
