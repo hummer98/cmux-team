@@ -244,7 +244,7 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
   if (state.taskList.length === 0) {
     return (
       <Box paddingLeft={1}>
-        <Text dimColor>no open tasks</Text>
+        <Text dimColor>no tasks</Text>
       </Box>
     );
   }
@@ -258,14 +258,15 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
       {state.taskList.map((task) => {
         const assigned = assignedTaskIds.has(task.id);
         const color = assigned ? "green" : task.status === "ready" ? "yellow" : undefined;
-        const dimColor = !assigned && task.status === "draft";
+        const isClosed = task.status === "closed";
+        const dimColor = isClosed || (!assigned && task.status === "draft");
         const title = task.isTodo ? `TODO: ${task.title}` : task.title;
         const elapsed = task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
         return (
           <Box key={task.id} paddingLeft={1}>
-            <Text color={color} dimColor={dimColor}>● </Text>
+            <Text color={color} dimColor={dimColor}>{isClosed ? "○" : "●"} </Text>
             <Text bold dimColor={dimColor}>{task.id}</Text>
-            <Text dimColor={dimColor}> [{task.status}] {title}</Text>
+            <Text dimColor={dimColor}> [{assigned ? "running" : task.status}] {title}</Text>
             {elapsed && <Text dimColor>{elapsed}</Text>}
           </Box>
         );

@@ -203,7 +203,7 @@ async function processQueue(state: DaemonState): Promise<void> {
 }
 
 async function scanTasks(state: DaemonState): Promise<void> {
-  const { open, closed } = await loadTasks(state.projectRoot);
+  const { open, closed, closedMetas } = await loadTasks(state.projectRoot);
   state.openTasks = open.length;
 
   const assignedIds = new Set(
@@ -214,6 +214,25 @@ async function scanTasks(state: DaemonState): Promise<void> {
     filterExecutableTasks(open, closed, assignedIds)
   );
   state.pendingTasks = executable.length;
+
+  // taskList: open + closed を統合し createdAt 降順で直近5件
+  const allTasks = [
+    ...open.map((t) => ({ ...t, isTodo: t.fileName.includes("-todo") })),
+    ...closedMetas.map((t) => ({ ...t, isTodo: t.fileName.includes("-todo") })),
+  ];
+  allTasks.sort((a, b) => {
+    if (!a.createdAt && !b.createdAt) return 0;
+    if (!a.createdAt) return 1;
+    if (!b.createdAt) return -1;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+  state.taskList = allTasks.slice(0, 5).map((t) => ({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    isTodo: t.isTodo,
+    createdAt: t.createdAt,
+  }));
 
   for (const task of executable) {
     if (state.conductors.size >= state.maxConductors) {

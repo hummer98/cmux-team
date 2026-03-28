@@ -13,6 +13,7 @@ export interface TaskMeta {
   dependsOn: string[];
   filePath: string;
   fileName: string;
+  createdAt: string;  // ISO 8601 datetime
 }
 
 /**
@@ -28,6 +29,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
   const title = fm.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const status = fm.match(/^status:\s*(.+)$/m)?.[1]?.trim() ?? "ready";
   const priority = fm.match(/^priority:\s*(.+)$/m)?.[1]?.trim() ?? "medium";
+  const createdAt = fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "";
 
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
@@ -55,6 +57,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     dependsOn,
     filePath,
     fileName,
+    createdAt,
   };
 }
 
@@ -64,20 +67,25 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
 export async function loadTasks(projectRoot: string): Promise<{
   open: TaskMeta[];
   closed: Set<string>;
+  closedMetas: TaskMeta[];
 }> {
   const openDir = join(projectRoot, ".team/tasks/open");
   const closedDir = join(projectRoot, ".team/tasks/closed");
 
   const open: TaskMeta[] = [];
   const closed = new Set<string>();
+  const closedMetas: TaskMeta[] = [];
 
-  // closed タスクの ID を収集
+  // closed タスクの ID を収集 + メタデータ読み込み
   if (existsSync(closedDir)) {
     const files = await readdir(closedDir);
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
       const id = f.match(/^(\d+)/)?.[1];
       if (id) closed.add(id);
+      const content = await readFile(join(closedDir, f), "utf-8");
+      const meta = parseTaskMeta(content, f, join(closedDir, f));
+      if (meta) closedMetas.push(meta);
     }
   }
 
@@ -92,7 +100,7 @@ export async function loadTasks(projectRoot: string): Promise<{
     }
   }
 
-  return { open, closed };
+  return { open, closed, closedMetas };
 }
 
 /**

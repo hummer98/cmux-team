@@ -22,6 +22,18 @@ created_at: 2026-03-27T10:00:00Z
     expect(meta!.priority).toBe("high");
     expect(meta!.status).toBe("ready");
     expect(meta!.dependsOn).toEqual([]);
+    expect(meta!.createdAt).toBe("2026-03-27T10:00:00Z");
+  });
+
+  test("created_at がないタスクは空文字として扱う", () => {
+    const content = `---
+id: 036
+title: no date
+status: ready
+---
+`;
+    const meta = parseTaskMeta(content, "036-no-date.md", "/path/036-no-date.md");
+    expect(meta!.createdAt).toBe("");
   });
 
   test("depends_on（配列）をパースできる", () => {
@@ -101,6 +113,7 @@ describe("filterExecutableTasks", () => {
     dependsOn,
     filePath: `/path/${id}.md`,
     fileName: `${id}.md`,
+    createdAt: "",
   });
 
   test("ready かつ依存なしのタスクは実行可能", () => {
@@ -213,6 +226,7 @@ describe("sortByPriority", () => {
     dependsOn: [],
     filePath: "",
     fileName: "",
+    createdAt: "",
   });
 
   test("high > medium > low の順でソートされる", () => {
