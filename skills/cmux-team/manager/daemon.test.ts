@@ -147,7 +147,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     expect(executable.map((t) => t.id)).toEqual(["13"]);
   });
 
-  test("UC3: 実装タスク稼働中に TODO 割り込み", async () => {
+  test("UC3: 実装タスク稼働中に新規タスク割り込み", async () => {
     await createTask("20", "implement-feature", { priority: "medium" });
 
     // 実装タスクがアサイン済み
@@ -155,8 +155,8 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     let executable = filterExecutableTasks(open, closed, new Set(["20"]));
     expect(executable).toHaveLength(0);
 
-    // TODO がタスクとして追加される
-    await createTask("99999", "todo-cleanup", { priority: "medium" });
+    // 新規タスクが追加される
+    await createTask("99999", "cleanup", { priority: "medium" });
 
     ({ open, closed } = await loadTasks(testDir));
     executable = filterExecutableTasks(open, closed, new Set(["20"]));
@@ -212,31 +212,6 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
 import { readQueue, markProcessed, sendMessage, ensureQueueDirs } from "./queue";
 
 describe("キュー処理（ファイルシステム統合）", () => {
-  test("TODO → タスクファイル生成フロー", async () => {
-    // TODO メッセージをキューに追加
-    await enqueueMessage({
-      type: "TODO",
-      content: "git worktree prune で整理",
-      timestamp: new Date().toISOString(),
-    });
-
-    // キューから読み取り
-    const messages = await readQueue();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.type).toBe("TODO");
-
-    // 処理済みに移動
-    await markProcessed(messages[0]!.path);
-
-    // キューは空
-    const remaining = await readQueue();
-    expect(remaining).toHaveLength(0);
-
-    // processed に移動済み
-    const processed = await readdir(join(testDir, ".team/queue/processed"));
-    expect(processed).toHaveLength(1);
-  });
-
   test("SHUTDOWN メッセージが正しく伝達される", async () => {
     await enqueueMessage({
       type: "SHUTDOWN",
@@ -264,10 +239,11 @@ describe("キュー処理（ファイルシステム統合）", () => {
       })
     );
     await writeFile(
-      join(testDir, ".team/queue/002-todo.json"),
+      join(testDir, ".team/queue/002-agent-done.json"),
       JSON.stringify({
-        type: "TODO",
-        content: "test",
+        type: "AGENT_DONE",
+        conductorId: "conductor-1",
+        surface: "surface:1",
         timestamp: new Date().toISOString(),
       })
     );
@@ -275,7 +251,7 @@ describe("キュー処理（ファイルシステム統合）", () => {
     const messages = await readQueue();
     expect(messages.map((m) => m.message.type)).toEqual([
       "TASK_CREATED",
-      "TODO",
+      "AGENT_DONE",
       "SHUTDOWN",
     ]);
   });

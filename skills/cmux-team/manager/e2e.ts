@@ -11,7 +11,6 @@
  * Scenarios:
  *   sequential   — UC1: 順序付き依存実行 (調査→設計→実装)
  *   parallel     — UC2: 並列調査 → 統合レポート
- *   interrupt    — UC3: 実装中の割り込み TODO
  *   all          — 全シナリオ実行
  *
  * フロー:
@@ -495,63 +494,6 @@ async function scenarioParallel(): Promise<void> {
   console.log();
 }
 
-// --- シナリオ 3: 割り込み TODO ---
-
-async function scenarioInterrupt(): Promise<void> {
-  const start = Date.now();
-  console.log("━━━ Scenario 3: Implementation + Interrupt TODO ━━━");
-  console.log("  実装タスク実行中に TODO を割り込み:\n");
-
-  await createTaskFile("20", "implement-feature", {
-    content: `新しい機能を実装してください。
-
-具体的には:
-1. src/feature.ts を作成（簡単な関数を定義）
-2. 完了
-
-注意: この作業には時間がかかります。焦らず丁寧に実装してください。`,
-  });
-
-  await cliSend("TASK_CREATED", "--task-id", "20", "--task-file", ".team/tasks/open/020-implement-feature.md");
-
-  console.log("  Waiting for implementation to start...");
-  const implStarted = await waitForLog("conductor_started task_id=20", 60_000);
-  assert(implStarted, "Task 20 (implement) Conductor が spawn された");
-
-  console.log("  Sending interrupt TODO...");
-  await sleep(5000);
-  await cliSend("TODO", "--content", "README.md に「E2E テスト実行中」と追記してください");
-
-  const todoReceived = await waitForLog("todo_received", 30_000);
-  assert(todoReceived, "TODO メッセージが受信された");
-
-  const todoCreated = await waitForLog("todo_task_created", 30_000);
-  assert(todoCreated, "TODO からタスクが生成された");
-
-  // 2 つ目の Conductor spawn を待つ（ポーリング間隔 + spawn 時間）
-  await sleep(15_000);
-  const log = await readLog();
-  const starts = log.split("\n").filter((l) => l.includes("conductor_started"));
-  assert(starts.length >= 2, `2 つ以上の Conductor が spawn された (実際: ${starts.length})`);
-
-  // TODO の完了を待つ
-  console.log("  Waiting for TODO completion...");
-  const todoTaskId = log.match(/todo_task_created task_id=(\d+)/)?.[1];
-  if (todoTaskId) {
-    await waitForLog(`task_completed task_id=${todoTaskId}`, 120_000);
-  }
-
-  await captureSnapshot("interrupt");
-
-  results.push({
-    scenario: "interrupt",
-    status: implStarted && todoReceived && starts.length >= 2 ? "pass" : "fail",
-    detail: `impl: ${implStarted ? "yes" : "no"}, todo: ${todoReceived ? "yes" : "no"}, conductors: ${starts.length}`,
-    duration: Date.now() - start,
-  });
-  console.log();
-}
-
 // --- メイン ---
 
 async function main(): Promise<void> {
@@ -569,7 +511,6 @@ async function main(): Promise<void> {
   try {
     if (scenario === "all" || scenario === "sequential") await scenarioSequential();
     if (scenario === "all" || scenario === "parallel") await scenarioParallel();
-    if (scenario === "all" || scenario === "interrupt") await scenarioInterrupt();
   } finally {
     await stopDaemon();
     await captureSnapshot("final");

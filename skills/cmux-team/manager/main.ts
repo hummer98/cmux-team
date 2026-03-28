@@ -5,7 +5,6 @@
  * Usage:
  *   ./main.ts start                            # daemon 起動 + Master spawn + ダッシュボード
  *   ./main.ts send TASK_CREATED --task-id 035 --task-file ...
- *   ./main.ts send TODO --content "worktree 整理"
  *   ./main.ts send SHUTDOWN
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
@@ -227,14 +226,6 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
-    case "TODO":
-      message = {
-        type: "TODO",
-        content: requireArg("content"),
-        timestamp: now,
-      };
-      break;
-
     case "CONDUCTOR_DONE":
       message = {
         type: "CONDUCTOR_DONE",
@@ -273,7 +264,7 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TODO|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -621,7 +612,6 @@ switch (command) {
 Usage:
   cmux-team start                              daemon 起動 + Master spawn
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
-  cmux-team send TODO --content <text>
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown

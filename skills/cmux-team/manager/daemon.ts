@@ -23,7 +23,6 @@ export interface TaskSummary {
   id: string;
   title: string;
   status: string;
-  isTodo: boolean;
   createdAt: string;
   closedAt?: string;
 }
@@ -175,11 +174,6 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
       }
 
-      case "TODO":
-        await log("todo_received", `content=${message.content.slice(0, 50)}`);
-        await handleTodo(state, message.content);
-        break;
-
       case "CONDUCTOR_DONE": {
         const isSuccess = message.success !== false;
         await log(
@@ -248,8 +242,8 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
   // taskList: open + closed を統合し createdAt 降順で直近5件
   const allTasks = [
-    ...open.map((t) => ({ ...t, isTodo: t.fileName.includes("-todo") })),
-    ...closedMetas.map((t) => ({ ...t, isTodo: t.fileName.includes("-todo") })),
+    ...open,
+    ...closedMetas,
   ];
   allTasks.sort((a, b) => {
     const aTime = a.closedAt ?? a.createdAt ?? "";
@@ -263,7 +257,6 @@ async function scanTasks(state: DaemonState): Promise<void> {
     id: t.id,
     title: t.title,
     status: t.status,
-    isTodo: t.isTodo,
     createdAt: t.createdAt,
     closedAt: t.closedAt,
   }));
@@ -339,32 +332,6 @@ async function handleConductorDone(
 
   // Conductor をリセットして idle に戻す
   await resetConductor(conductor, state.projectRoot);
-}
-
-async function handleTodo(state: DaemonState, content: string): Promise<void> {
-  const taskId = String(Math.floor(Date.now() / 1000));
-  const taskFile = join(
-    state.projectRoot,
-    `.team/tasks/open/${taskId}-todo.md`
-  );
-  await writeFile(
-    taskFile,
-    `---
-id: ${taskId}
-title: ${content.slice(0, 80)}
-priority: medium
-status: ready
-created_at: ${new Date().toISOString()}
----
-
-## タスク
-${content}
-
-## 完了条件
-- 指示された作業が完了すること
-`
-  );
-  await log("todo_task_created", `task_id=${taskId}`);
 }
 
 export async function updateTeamJson(state: DaemonState): Promise<void> {

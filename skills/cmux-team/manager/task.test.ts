@@ -202,18 +202,18 @@ describe("filterExecutableTasks", () => {
     expect(result.map((t) => t.id)).toEqual(["13"]);
   });
 
-  // ユースケース 3: 実装中の割り込み TODO
-  test("UC3: 実装 Conductor 稼働中に TODO タスクが追加される", () => {
+  // ユースケース 3: 実装中の割り込み新規タスク
+  test("UC3: 実装 Conductor 稼働中に新規タスクが追加される", () => {
     const implTask = makeMeta("20", "ready");
-    const todoTask = makeMeta("99999", "ready"); // TODO から生成されたタスク
+    const newTask = makeMeta("99999", "ready");
 
-    // 実装タスクがアサイン済み、TODO は新規
+    // 実装タスクがアサイン済み、新規タスクは未アサイン
     const result = filterExecutableTasks(
-      [implTask, todoTask],
+      [implTask, newTask],
       new Set(),
       new Set(["20"]) // 実装はアサイン済み
     );
-    expect(result.map((t) => t.id)).toEqual(["99999"]); // TODO のみ実行可能
+    expect(result.map((t) => t.id)).toEqual(["99999"]); // 新規のみ実行可能
   });
 });
 

@@ -12,7 +12,6 @@
 - 完了した Conductor の Journal を読み取り、ログを記録する
 - Conductor をリセットする（`/clear` 送信 + done マーカー削除）
 - `.team/logs/manager.log` に状態変化を記録する
-- **Master からの `[TODO]` を受けて軽微な作業を即時実行する**
 
 ## やらないこと
 
@@ -25,61 +24,9 @@
 - **Conductor ペインを close する**（Conductor は常駐であり、close しない）
 - **worktree を削除する**（それは Conductor の責務）
 
-## TODO ワークフロー
-
-Master から `[TODO] <内容>` メッセージを受け取った場合、軽微な作業として即時実行する。
-
-### フロー
-
-1. `[TODO] <内容>` メッセージを受信
-2. Claude Code の TaskCreate で自身の TODO リストに追加
-3. `spawn-conductor.sh` で Conductor を起動して実行
-4. Conductor 完了後、TaskUpdate で done にする
-
-### TASK と TODO の違い
-
-| | TASK | TODO |
-|---|------|------|
-| **保存場所** | `.team/tasks/open/` にファイル作成 | ファイル不要。Manager の Claude Code セッション内で TaskCreate/TaskUpdate |
-| **フロー** | draft → ready、ユーザー承認あり | 即時実行。承認なし |
-| **用途** | 正式な開発作業（実装・設計・テスト等） | 軽微な作業（worktree 整理、ログクリーンアップ等） |
-
-### TODO の実行
-
-TODO を受けたら、通常のタスクと同様に idle Conductor にタスクを割り当てる:
-
-```bash
-# TODO 用の一時タスクファイルを作成
-TASK_ID=$(date +%s)
-cat > .team/tasks/open/${TASK_ID}-todo.md << 'TASK_EOF'
----
-id: ${TASK_ID}
-title: <TODO の内容>
-priority: medium
-status: ready
-created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
----
-
-## タスク
-<TODO の内容>
-
-## 完了条件
-- 指示された作業が完了すること
-TASK_EOF
-
-# daemon が idle Conductor を見つけてタスクを割り当てる
-```
-
 ## ループプロトコル
 
 以下のサイクルを繰り返す:
-
-### 0. 起動時の初期化
-
-```bash
-# 未完了の TODO があれば TaskCreate で復元
-ls .team/tasks/open/*-todo.md 2>/dev/null
-```
 
 ### 1. タスク走査
 
@@ -194,7 +141,6 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/ma
 | タスクエラー | `task_error id=<task-id> conductor=<conductor-id> reason=<概要>` | エラー検出時 |
 | アイドル開始 | `idle_start` | §6 アイドル停止に入る直前 |
 | アイドル解除 | `idle_wake trigger=TASK_CREATED` | `[TASK_CREATED]` 受信時 |
-| TODO 受信 | `todo_received content=<概要>` | `[TODO]` 受信時 |
 
 例:
 ```
@@ -226,20 +172,16 @@ Conductor が全て完了し、`status: ready` のタスクもない場合は **
 アイドル状態に入ります。[TASK_CREATED] メッセージを待機中。
 ```
 
-#### Master からの `[TASK_CREATED]` / `[TODO]` 通知による起床
+#### Master からの `[TASK_CREATED]` 通知による起床
 
-Master は以下のメッセージを `cmux send` で送ってくる:
+Master は `[TASK_CREATED]` メッセージを `cmux send` で送ってくる。これはタスクが作成されたことを意味する。
 
-- **`[TASK_CREATED]`** — 正式タスクが作成された。§1 タスク走査を実行
-- **`[TODO] <内容>`** — 軽微な作業の即時実行。TaskCreate で TODO を記録し、Conductor を起動
-
-いずれかのメッセージを受信したら:
+メッセージを受信したら:
 
 1. 即座にアイドル状態を解除
-2. `[TASK_CREATED]` の場合: §1 タスク走査を実行し、`status: ready` のタスクがあれば Conductor を spawn
-3. `[TODO]` の場合: TODO ワークフロー（上記）に従って即時実行
+2. §1 タスク走査を実行し、`status: ready` のタスクがあれば Conductor を spawn
 
-**注意:** アイドル停止中は何もしない。Master からの `[TASK_CREATED]` / `[TODO]` メッセージが唯一の起床トリガーとなる。
+**注意:** アイドル停止中は何もしない。Master からの `[TASK_CREATED]` メッセージが唯一の起床トリガーとなる。
 
 ## 最大同時実行数
 
