@@ -49,12 +49,22 @@ export async function start(
       const reqBody = req.body ? await req.arrayBuffer() : null;
       const requestBytes = reqBody?.byteLength ?? 0;
 
-      // 上流に転送
+      // Host ヘッダーを除外して転送（そのまま渡すと Bun が
+      // Host の値を接続先に使い、プロキシ自身に接続してしまう）
+      const fwdHeaders = new Headers(req.headers);
+      fwdHeaders.delete("host");
+      fwdHeaders.delete("accept-encoding");
+
       const upstreamRes = await fetch(targetUrl, {
         method: req.method,
-        headers: req.headers,
+        headers: fwdHeaders,
         body: reqBody,
       });
+
+      // Bun の fetch は自動解凍するので Content-Encoding / Content-Length を除去
+      const resHeaders = new Headers(upstreamRes.headers);
+      resHeaders.delete("content-encoding");
+      resHeaders.delete("content-length");
 
       // レスポンスが streaming かどうかを判定
       const contentType = upstreamRes.headers.get("content-type") || "";
@@ -80,7 +90,7 @@ export async function start(
         return new Response(clientStream, {
           status: upstreamRes.status,
           statusText: upstreamRes.statusText,
-          headers: upstreamRes.headers,
+          headers: resHeaders,
         });
       }
 
@@ -107,7 +117,7 @@ export async function start(
       return new Response(resBody, {
         status: upstreamRes.status,
         statusText: upstreamRes.statusText,
-        headers: upstreamRes.headers,
+        headers: resHeaders,
       });
     },
   });
