@@ -261,14 +261,16 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
         const isDraft = !assigned && task.status === "draft";
         const color = assigned ? "green" : task.status === "ready" ? "yellow" : isClosed ? "#aaaaaa" : undefined;
         const title = task.isTodo ? `TODO: ${task.title}` : task.title;
-        const elapsed = task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
+        const timeInfo = isClosed && task.closedAt
+          ? ` ${utcToLocal(task.closedAt).slice(0, 5)}`
+          : !isClosed && task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
         const label = assigned ? "running" : task.status;
         return (
           <Box key={task.id} paddingLeft={1}>
             <Text color={color}>{isClosed ? "○" : "●"} </Text>
             <Text color={color} bold={!isClosed}>{task.id.padStart(3, '0')}</Text>
             <Text color={color}> [{label}] {title}</Text>
-            {elapsed && <Text color={color}>{elapsed}</Text>}
+            {timeInfo && <Text color={color}>{timeInfo}</Text>}
           </Box>
         );
       })}

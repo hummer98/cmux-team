@@ -1,7 +1,7 @@
 /**
  * タスクファイルのパース・依存解決
  */
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -14,6 +14,7 @@ export interface TaskMeta {
   filePath: string;
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
+  closedAt?: string;  // ISO 8601 datetime (closed タスクのみ)
 }
 
 /**
@@ -87,6 +88,8 @@ export async function loadTasks(projectRoot: string): Promise<{
       const meta = parseTaskMeta(content, f, join(closedDir, f));
       if (meta) {
         meta.status = "closed";
+        const fileStat = await stat(join(closedDir, f));
+        meta.closedAt = fileStat.mtime.toISOString();
         closedMetas.push(meta);
       }
     }

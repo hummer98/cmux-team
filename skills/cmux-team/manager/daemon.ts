@@ -21,6 +21,7 @@ export interface TaskSummary {
   status: string;
   isTodo: boolean;
   createdAt: string;
+  closedAt?: string;
 }
 
 export interface DaemonState {
@@ -232,6 +233,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     status: t.status,
     isTodo: t.isTodo,
     createdAt: t.createdAt,
+    closedAt: t.closedAt,
   }));
 
   for (const task of executable) {
