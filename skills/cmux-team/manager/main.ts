@@ -363,11 +363,24 @@ async function cmdSpawnAgent(): Promise<void> {
     process.exit(1);
   }
 
-  // --- 1. プロキシポート読み取り ---
+  // --- 1. プロキシポート読み取り + 生存確認 ---
   const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
   let proxyPort: string | undefined;
   try {
-    proxyPort = (await readFile(proxyPortFile, "utf-8")).trim();
+    const port = (await readFile(proxyPortFile, "utf-8")).trim();
+    // 実際に接続できるか確認してから採用
+    const alive = await new Promise<boolean>((resolve) => {
+      const net = require("net");
+      const sock = net.connect({ port: Number(port), host: "127.0.0.1", timeout: 1000 }, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on("error", () => resolve(false));
+      sock.on("timeout", () => { sock.destroy(); resolve(false); });
+    });
+    if (alive) {
+      proxyPort = port;
+    }
   } catch {
     // プロキシ未起動の場合はなしで続行
   }
