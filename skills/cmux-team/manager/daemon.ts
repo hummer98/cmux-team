@@ -259,7 +259,17 @@ async function monitorConductors(state: DaemonState): Promise<void> {
 
     switch (status) {
       case "done":
-        await handleConductorDone(state, conductor);
+        if (conductor.doneCandidate) {
+          // 2回連続 done → 確定
+          await handleConductorDone(state, conductor);
+        } else {
+          // 1回目 → 候補としてマーク、次の tick で再確認
+          conductor.doneCandidate = true;
+        }
+        break;
+      case "running":
+        // 実行中に戻ったら候補をリセット
+        conductor.doneCandidate = false;
         break;
       case "crashed":
         await log(

@@ -105,6 +105,7 @@ async function cmdStart(): Promise<void> {
             role: a.role,
             spawnedAt: a.spawnedAt ?? new Date().toISOString(),
           })),
+          doneCandidate: false,
         });
       }
     }

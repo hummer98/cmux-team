@@ -134,6 +134,7 @@ export async function spawnConductor(
       outputDir,
       startedAt: new Date().toISOString(),
       agents: [],
+      doneCandidate: false,
     };
 
     await log(

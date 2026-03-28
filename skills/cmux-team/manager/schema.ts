@@ -83,4 +83,5 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
+  doneCandidate: boolean;
 };
