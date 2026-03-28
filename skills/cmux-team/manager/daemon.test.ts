@@ -278,12 +278,11 @@ describe("キュー処理（ファイルシステム統合）", () => {
 
 // --- テンプレート生成テスト ---
 
-import { generateConductorPrompt } from "./template";
+import { generateConductorRolePrompt, generateConductorTaskPrompt } from "./template";
 
 describe("テンプレート生成", () => {
-  test("Conductor プロンプトのフォールバック生成", async () => {
-    // テンプレートディレクトリがない場合のフォールバック
-    const promptFile = await generateConductorPrompt(
+  test("Conductor タスクプロンプトの生成", async () => {
+    const promptFile = await generateConductorTaskPrompt(
       testDir,
       "conductor-test",
       "42",
@@ -293,10 +292,10 @@ describe("テンプレート生成", () => {
     );
 
     const content = await readFile(promptFile, "utf-8");
-    expect(content).toContain("Conductor ロール");
+    expect(content).toContain("タスク割り当て");
     expect(content).toContain("テストタスクの内容");
     expect(content).toContain("/tmp/worktree");
-    expect(content).toContain("完了マーカー");
+    expect(content).toContain("done");
   });
 });
 

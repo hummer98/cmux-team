@@ -7,7 +7,7 @@ import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import { join, dirname } from "path";
 import * as cmux from "./cmux";
-import { generateConductorPrompt } from "./template";
+import { generateConductorRolePrompt, generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
@@ -59,11 +59,8 @@ export async function initializeConductorSlots(
 
     const surfaces = [surface1, surface2, surface3].slice(0, count);
 
-    // プロキシポート読み取り
-    let proxyPort: string | undefined;
-    try {
-      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
-    } catch {}
+    // ロールプロンプトファイル生成（全スロットで共有）
+    const rolePromptFile = await generateConductorRolePrompt(projectRoot);
 
     for (let i = 0; i < surfaces.length; i++) {
       const surface = surfaces[i]!;
@@ -75,7 +72,7 @@ export async function initializeConductorSlots(
 
       await cmux.send(
         surface,
-        `${exports.join(" && ")} && claude --dangerously-skip-permissions 'Conductor として待機中。タスク割り当てを待っています。'\n`
+        `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'Conductor として待機中。タスク割り当てを待っています。'\n`
       );
 
       // Trust 承認
@@ -151,7 +148,7 @@ export async function assignTask(
     const outputDir = `.team/output/${taskRunId}`;
     await mkdir(join(projectRoot, outputDir), { recursive: true });
 
-    const promptFile = await generateConductorPrompt(
+    const promptFile = await generateConductorTaskPrompt(
       projectRoot,
       taskRunId,
       taskId,
@@ -336,18 +333,15 @@ export async function spawnConductor(
       paneId,
     };
 
-    // プロキシポート読み取り
-    let proxyPort: string | undefined;
-    try {
-      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
-    } catch {}
+    // ロールプロンプトファイル生成
+    const rolePromptFile = await generateConductorRolePrompt(projectRoot);
 
     // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
     const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
     // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
     await cmux.send(
       surface,
-      `${exports.join(" && ")} && claude --dangerously-skip-permissions 'Conductor として待機中。'\n`
+      `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'Conductor として待機中。'\n`
     );
     await cmux.waitForTrust(surface);
 

@@ -69,7 +69,31 @@ export async function generateMasterPrompt(
   await cp(join(templateDir, "master.md"), dst);
 }
 
-export async function generateConductorPrompt(
+export async function generateConductorRolePrompt(
+  projectRoot: string
+): Promise<string> {
+  const templateDir = findTemplateDir();
+  if (!templateDir || !existsSync(join(templateDir, "conductor-role.md"))) {
+    throw new Error(
+      "Conductor role template not found. リカバリー:\n" +
+      "  1. plugin reinstall: /plugin install cmux-team@hummer98-cmux-team\n" +
+      "  2. 手動: ./install.sh"
+    );
+  }
+
+  const promptsDir = join(projectRoot, ".team/prompts");
+  await mkdir(promptsDir, { recursive: true });
+
+  const promptFile = join(promptsDir, "conductor-role.md");
+
+  let content = await readFile(join(templateDir, "conductor-role.md"), "utf-8");
+  content = content.replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot);
+
+  await writeFile(promptFile, content);
+  return promptFile;
+}
+
+export async function generateConductorTaskPrompt(
   projectRoot: string,
   conductorId: string,
   taskId: string,
@@ -78,9 +102,9 @@ export async function generateConductorPrompt(
   outputDir: string
 ): Promise<string> {
   const templateDir = findTemplateDir();
-  if (!templateDir || !existsSync(join(templateDir, "conductor.md"))) {
+  if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
     throw new Error(
-      "Conductor template not found. リカバリー:\n" +
+      "Conductor task template not found. リカバリー:\n" +
       "  1. plugin reinstall: /plugin install cmux-team@hummer98-cmux-team\n" +
       "  2. 手動: ./install.sh"
     );
@@ -91,44 +115,15 @@ export async function generateConductorPrompt(
 
   const promptFile = join(promptsDir, `${conductorId}.md`);
 
-  {
-    let content = await readFile(join(templateDir, "conductor.md"), "utf-8");
+  let content = await readFile(join(templateDir, "conductor-task.md"), "utf-8");
 
-    // {{COMMON_HEADER}} を展開（Conductor は使わないので削除）
-    content = content.replace(/\{\{COMMON_HEADER\}\}\n?/, "");
+  content = content
+    .replace(/\{\{TASK_CONTENT\}\}/g, taskContent)
+    .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
+    .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
+    .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
+    .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId);
 
-    // タスク読み込み指示を実際のタスク内容で置換
-    content = content.replace(
-      /このプロンプトに含まれるタスク指示を直接受け取る。（daemon が `\/clear` \+ プロンプト送信でタスクを割り当てる。）/,
-      taskContent
-    );
-
-    // テンプレート変数を置換
-    content = content
-      .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
-      .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
-      .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
-      .replace(/\{\{ROLE_ID\}\}/g, conductorId)
-      .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId)
-      .replace(/\{\{TASK_DESCRIPTION\}\}/g, `task ${taskId}`)
-      .replace(
-        /\{\{OUTPUT_FILE\}\}/g,
-        join(projectRoot, outputDir, "summary.md")
-      );
-
-    // 完了マーカーを追記（daemon が完了検出に使用）
-    content += `
-
-## 完了マーカー（daemon 検出用）
-
-上記「完了時の処理」を全て実行した後、最後に:
-\`\`\`bash
-touch ${join(projectRoot, outputDir, "done")}
-\`\`\`
-`;
-
-    await writeFile(promptFile, content);
-  }
-
+  await writeFile(promptFile, content);
   return promptFile;
 }
