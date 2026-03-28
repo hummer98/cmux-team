@@ -137,6 +137,13 @@ function utcToLocal(isoTimestamp: string): string {
   });
 }
 
+function truncate(text: string, maxLen: number): string {
+  if (maxLen <= 0) return "";
+  if (text.length <= maxLen) return text;
+  if (maxLen <= 1) return "…";
+  return text.slice(0, maxLen - 1) + "…";
+}
+
 function formatElapsed(isoDate: string): string {
   const sec = Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000);
   if (sec < 60) return `${sec}s`;
@@ -148,24 +155,38 @@ function formatElapsed(isoDate: string): string {
 function Header({ state, cols }: { state: DaemonState; cols: number }) {
   const status = state.running ? "RUNNING" : "STOPPED";
   const statusColor = state.running ? "green" : "red";
-  const uptime = formatUptime(state.lastUpdate.getTime() - (state.pollInterval * 10)); // 近似
+  const runningCount = [...state.conductors.values()].filter(c => c.status === "running").length;
+
+  // 各セグメントの幅を概算し、cols に収まらない場合は右から省略
+  // 最低限: " cmux-team  STATUS  conductors N/M  tasks N open" ≒ 50文字
+  const showPid = cols >= 65;
+  const showPoll = cols >= 75;
+  const showReady = cols >= 85 && state.pendingTasks > 0;
 
   return (
     <Box width={cols}>
       <Text bold color="cyan"> cmux-team </Text>
       <Text> </Text>
       <Text bold color={statusColor}>{status}</Text>
-      <Text>  PID </Text>
-      <Text bold>{process.pid}</Text>
-      <Text>  poll </Text>
-      <Text>{state.pollInterval / 1000}s</Text>
+      {showPid && (
+        <>
+          <Text>  PID </Text>
+          <Text bold>{process.pid}</Text>
+        </>
+      )}
+      {showPoll && (
+        <>
+          <Text>  poll </Text>
+          <Text>{state.pollInterval / 1000}s</Text>
+        </>
+      )}
       <Text>  conductors </Text>
-      <Text bold color="yellow">{[...state.conductors.values()].filter(c => c.status === "running").length}</Text>
+      <Text bold color="yellow">{runningCount}</Text>
       <Text>/{state.maxConductors}</Text>
       <Text>  tasks </Text>
       <Text bold>{state.openTasks}</Text>
       <Text> open</Text>
-      {state.pendingTasks > 0 && (
+      {showReady && (
         <>
           <Text> </Text>
           <Text bold color="green">{state.pendingTasks}</Text>
@@ -228,11 +249,21 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
               {isIdle ? (
                 <Text dimColor> idle</Text>
               ) : (
-                <>
-                  <Text bold={!isDone} color={isDone ? "gray" : undefined}> #{(c.taskId ?? "").padStart(3, '0')}</Text>
-                  {c.taskTitle && <Text color={isDone ? "gray" : "white"}> {c.taskTitle}</Text>}
-                  <Text dimColor> {elapsed}</Text>
-                </>
+                (() => {
+                  const surfaceText = `[${c.surface.replace("surface:", "")}]`;
+                  const taskIdText = ` #${(c.taskId ?? "").padStart(3, '0')}`;
+                  const elapsedText = ` ${elapsed}`;
+                  // paddingLeft(1) + icon(2) + surface + taskId + elapsed + space(1)
+                  const fixedWidth = 1 + 2 + surfaceText.length + taskIdText.length + elapsedText.length + 1;
+                  const maxTitle = cols - fixedWidth;
+                  return (
+                    <>
+                      <Text bold={!isDone} color={isDone ? "gray" : undefined}>{taskIdText}</Text>
+                      {c.taskTitle && <Text color={isDone ? "gray" : "white"}> {truncate(c.taskTitle, maxTitle)}</Text>}
+                      <Text dimColor>{elapsedText}</Text>
+                    </>
+                  );
+                })()
               )}
             </Box>
             {agents.map((a, i) => (
@@ -275,11 +306,14 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
           ? ` ${utcToLocal(task.closedAt).slice(0, 5)}`
           : !isClosed && task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
         const label = assigned ? "running" : task.status;
+        // paddingLeft(1) + icon(2) + taskId(3) + " [label] "(label.length+3) + timeInfo
+        const fixedWidth = 1 + 2 + 3 + label.length + 3 + timeInfo.length;
+        const maxTitle = cols - fixedWidth;
         return (
           <Box key={task.id} paddingLeft={1}>
             <Text color={color}>{isClosed ? "○" : "●"} </Text>
             <Text color={color} bold={!isClosed}>{task.id.padStart(3, '0')}</Text>
-            <Text color={color}> [{label}] {title}</Text>
+            <Text color={color}> [{label}] {truncate(title, maxTitle)}</Text>
             {timeInfo && <Text color={color}>{timeInfo}</Text>}
           </Box>
         );
