@@ -86,7 +86,7 @@ cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 AGENT_PROMPT
 
 # 2. Agent spawn（--prompt-file でファイルパスだけを渡す）
-# --bare モードで不要なコンテキスト読み込みをスキップ
+# 注意: --bare は OAuth 認証（Claude Max）をスキップするため使用禁止
 RESULT=$(bun run "$MAIN_TS" spawn-agent \
   --conductor-id $CONDUCTOR_ID \
   --role impl \

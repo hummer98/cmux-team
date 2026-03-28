@@ -407,9 +407,8 @@ async function cmdSpawnAgent(): Promise<void> {
 
   let claudeCmd: string;
   if (promptFile) {
-    // --prompt-file: ファイル経由 + --bare モードでコンテキスト最適化
-    const bareFlags = `--bare --add-dir ${PROJECT_ROOT}/.team`;
-    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${bareFlags} '${promptFile} を読んで指示に従ってください。'`;
+    // --bare は OAuth 認証（Claude Max）をスキップするため使用しない
+    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions '${promptFile} を読んで指示に従ってください。'`;
   } else {
     // 後方互換: --prompt でインライン渡し
     claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions '${prompt}'`;

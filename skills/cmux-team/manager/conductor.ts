@@ -71,9 +71,7 @@ export async function initializeConductorSlots(
 
       // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
       const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-      if (proxyPort) {
-        exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
-      }
+      // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
 
       await cmux.send(
         surface,
@@ -346,9 +344,7 @@ export async function spawnConductor(
 
     // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
     const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-    if (proxyPort) {
-      exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
-    }
+    // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
     await cmux.send(
       surface,
       `${exports.join(" && ")} && claude --dangerously-skip-permissions 'Conductor として待機中。'\n`
