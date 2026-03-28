@@ -39,20 +39,21 @@ async function getPaneIdForSurface(surface: string): Promise<string | undefined>
 
 export async function initializeConductorSlots(
   projectRoot: string,
-  count: number = 3
+  count: number = 3,
+  daemonSurface?: string
 ): Promise<ConductorState[]> {
   const slots: ConductorState[] = [];
 
   try {
-    // 1. 右上: Conductor-1
-    const surface1 = await cmux.newSplit("right");
+    // 1. daemon を右に split → Conductor-1
+    const surface1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
     await log("conductor_slot_created", `slot=1 surface=${surface1}`);
 
-    // 2. 左下: Conductor-2（Master の下）
-    const surface2 = await cmux.newSplit("down");
+    // 2. daemon を下に split → Conductor-2
+    const surface2 = await cmux.newSplit("down", daemonSurface ? { surface: daemonSurface } : undefined);
     await log("conductor_slot_created", `slot=2 surface=${surface2}`);
 
-    // 3. 右下: Conductor-3（Conductor-1 の下）
+    // 3. Conductor-1 を下に split → Conductor-3
     const surface3 = await cmux.newSplit("down", { surface: surface1 });
     await log("conductor_slot_created", `slot=3 surface=${surface3}`);
 

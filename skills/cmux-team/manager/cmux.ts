@@ -119,6 +119,16 @@ export async function waitForTrust(
   }
 }
 
+export async function getCallerSurface(): Promise<string> {
+  const { stdout } = await execFile("cmux", ["identify"]);
+  const data = JSON.parse(stdout);
+  const surface = data?.caller?.surface_ref;
+  if (!surface?.startsWith("surface:")) {
+    throw new Error(`Failed to get caller surface: ${stdout}`);
+  }
+  return surface;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
