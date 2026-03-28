@@ -192,7 +192,13 @@ JOURNAL
    # - テスト結果
    # - マージコミット or PR URL
    ```
-7. 停止する（❯ プロンプトに戻る）。daemon が worktree 削除とタスククローズを行う。
+7. worktree を削除する:
+   ```bash
+   cd {{PROJECT_ROOT}}
+   git worktree remove {{WORKTREE_PATH}} --force 2>/dev/null || true
+   git branch -d {{CONDUCTOR_ID}}/task 2>/dev/null || true
+   ```
+8. 停止する（❯ プロンプトに戻る）。daemon がタスククローズを行う。
 
 ## やらないこと（厳守）
 

@@ -182,23 +182,7 @@ export async function collectResults(
   const result: { sessionId?: string; mergeCommit?: string; journalSummary?: string } = {};
 
   // 1. (ペインクローズは上位層が担当)
-
-  // 2. worktree クリーンアップ（マージは Conductor が完了前に実行済み）
-  try {
-    const branch = `${conductor.conductorId}/task`;
-
-    await execFile("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
-      cwd: projectRoot,
-    }).catch(() => {});
-    await execFile("git", ["branch", "-d", branch], {
-      cwd: projectRoot,
-    }).catch(() => {});
-  } catch (e: any) {
-    await log(
-      "error",
-      `Worktree cleanup failed for ${conductor.conductorId}: ${e.message}`
-    );
-  }
+  // 2. worktree クリーンアップは Conductor の責務（テンプレート参照）
 
   // 3. タスクをクローズ（Journal セクションからサマリーを抽出してログに記録）
   try {
