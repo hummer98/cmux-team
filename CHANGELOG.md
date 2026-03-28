@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.1] - 2026-03-29
+
+### Fixed
+- spawn-agent でプロキシの生存確認を行い、プロキシが死んでいる場合は `ANTHROPIC_BASE_URL` を設定せず直接 API 接続にフォールバック
+- `.team/tasks/` を git 管理外にし、worktree マージ時にタスク状態が巻き戻る問題を防止
+
 ## [2.18.0] - 2026-03-29
 
 ### Added

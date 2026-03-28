@@ -76,12 +76,14 @@ echo "$COMMITS"
 
 Edit ツールで `.claude-plugin/plugin.json` の `version` を新バージョンに更新する。
 
-### 5. コミット・push
+### 5. コミット・push・タグ
 
 ```bash
 git add -A
 git commit -m "chore: release v${NEW_VERSION}"
+git tag "v${NEW_VERSION}"
 git push origin main
+git push origin "v${NEW_VERSION}"
 ```
 
 ### 6. GitHub Release を作成
@@ -141,6 +143,7 @@ claude plugin install cmux-team@hummer98-cmux-team
 リリース完了: v${CURRENT} → v${NEW_VERSION}
 
 - コミット: <hash>
+- タグ: v${NEW_VERSION}
 - push: origin/main
 - GitHub Release: <url>
 - plugin: 更新済み（要セッション再起動）
