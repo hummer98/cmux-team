@@ -365,10 +365,12 @@ async function cmdSpawnAgent(): Promise<void> {
 
   // --- 2. タブ作成（paneId があればタブ、なければペイン分割） ---
   let paneId: string | undefined;
+  let worktreePath: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
     paneId = conductor?.paneId;
+    worktreePath = conductor?.worktreePath;
   } catch {}
 
   let surface: string;
@@ -393,7 +395,8 @@ async function cmdSpawnAgent(): Promise<void> {
     envParts.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
   }
 
-  const claudeCmd = `${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
+  const cdPrefix = worktreePath ? `cd ${worktreePath} && ` : "";
+  const claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
   await cmux.send(surface, claudeCmd + "\n");
 
   // --- 4. Trust 承認 ---
