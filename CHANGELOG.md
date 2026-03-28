@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.12.0] - 2026-03-28
+
+### Added
+- CLI `create-task` コマンド: ID 自動採番・タスクファイル生成・Manager 通知を一括実行
+- 完了 Conductor を TUI に表示継続: surface 消失時に自動削除
+- Conductor タブ名にタスク番号を追加
+
+### Changed
+- worktree 削除を daemon から Conductor の責務に移譲
+
+### Fixed
+- closed タスク ID のゼロパディング不一致を修正
+- ジャーナルから daemon_reload イベントを除外（ログタブのみに表示）
+- TUI Tasks の表示改善: ソート順、色分け、完了時刻表示、ゼロパディング統一
+- Conductor 完了判定を2回連続 done で確定に変更（誤検知防止）
+
 ## [2.11.0] - 2026-03-28
 
 ### Added
