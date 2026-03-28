@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.18.0] - 2026-03-29
+
+### Added
+- Conductor 起動時に `--append-system-prompt-file` でロール定義をシステムプロンプトに永続化。`/clear` 後もロール定義が維持される
+
+### Fixed
+- Conductor スロット初期化時のプロンプトを明確化。曖昧な待機指示により Conductor が自主的にタスクを検索・実行してしまう問題を防止
+
 ## [2.17.0] - 2026-03-29
 
 ### Added
