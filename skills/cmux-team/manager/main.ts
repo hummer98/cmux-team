@@ -134,11 +134,20 @@ async function cmdStart(): Promise<void> {
     await log("proxy_start_failed", e.message);
   }
 
-  // Master spawn
-  await startMaster(state);
+  // daemon surface 取得
+  let daemonSurface: string | undefined;
+  try {
+    daemonSurface = await cmux.getCallerSurface();
+    await log("daemon_surface", `surface=${daemonSurface}`);
+  } catch (e: any) {
+    await log("daemon_surface_fallback", e.message);
+  }
 
-  // 固定レイアウト作成
-  await initializeLayout(state);
+  // Conductor を先に作成（全インフラ準備完了後に Master を起動）
+  await initializeLayout(state, daemonSurface);
+
+  // Master spawn（最後に作成）
+  await startMaster(state, daemonSurface);
 
   await updateTeamJson(state);
 

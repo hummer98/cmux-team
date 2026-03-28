@@ -10,14 +10,15 @@ export interface MasterState {
 }
 
 export async function spawnMaster(
-  projectRoot: string
+  projectRoot: string,
+  daemonSurface?: string
 ): Promise<MasterState | null> {
   try {
     // プロンプト生成
     await generateMasterPrompt(projectRoot);
 
-    // ペイン作成
-    const surface = await cmux.newSplit("right");
+    // ペイン作成（daemon surface を右に split）
+    const surface = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
 
     if (!(await cmux.validateSurface(surface))) {
       await log("error", `Master surface ${surface} validation failed`);

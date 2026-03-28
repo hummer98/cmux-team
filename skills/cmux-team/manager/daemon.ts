@@ -98,7 +98,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   }
 }
 
-export async function startMaster(state: DaemonState): Promise<void> {
+export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {
   // 既存 Master の存在チェック
   try {
     const teamJson = JSON.parse(
@@ -119,13 +119,13 @@ export async function startMaster(state: DaemonState): Promise<void> {
   }
 
   // Master spawn
-  const master = await spawnMaster(state.projectRoot);
+  const master = await spawnMaster(state.projectRoot, daemonSurface);
   if (master) {
     state.masterSurface = master.surface;
   }
 }
 
-export async function initializeLayout(state: DaemonState): Promise<void> {
+export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
   // team.json に既存 Conductor があり surface が生きていればスキップ
   if (state.conductors.size > 0) {
     const checks = await Promise.all(
@@ -134,7 +134,7 @@ export async function initializeLayout(state: DaemonState): Promise<void> {
     if (checks.some(alive => alive)) return;
   }
 
-  const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors);
+  const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors, daemonSurface);
   for (const slot of slots) {
     state.conductors.set(slot.conductorId, slot);
   }
