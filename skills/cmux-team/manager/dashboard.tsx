@@ -105,6 +105,8 @@ function useJournalEntries(projectRoot: string): JournalEntry[] {
             const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
             const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
             result.push({ time, icon: "[✓]", taskId, message: summary || title || detail, color: "green" });
+          } else if (event === "daemon_reload") {
+            result.push({ time, icon: "[↻]", taskId: "-", message: "daemon reloaded", color: "magenta" });
           }
         }
 
