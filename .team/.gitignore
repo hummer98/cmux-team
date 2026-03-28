@@ -2,3 +2,6 @@ output/
 prompts/
 docs-snapshot/
 status.json
+logs/
+queue/
+tasks/
