@@ -26,11 +26,12 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
 
   const fm = fmMatch[1];
 
-  const id = fm.match(/^id:\s*(.+)$/m)?.[1]?.trim() ?? "";
-  const title = fm.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
-  const status = fm.match(/^status:\s*(.+)$/m)?.[1]?.trim() ?? "ready";
-  const priority = fm.match(/^priority:\s*(.+)$/m)?.[1]?.trim() ?? "medium";
-  const createdAt = fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  const unquote = (s: string) => s.replace(/^["']|["']$/g, "");
+  const id = unquote(fm.match(/^id:\s*(.+)$/m)?.[1]?.trim() ?? "");
+  const title = unquote(fm.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "");
+  const status = unquote(fm.match(/^status:\s*(.+)$/m)?.[1]?.trim() ?? "ready");
+  const priority = unquote(fm.match(/^priority:\s*(.+)$/m)?.[1]?.trim() ?? "medium");
+  const createdAt = unquote(fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "");
 
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
