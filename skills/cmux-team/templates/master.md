@@ -22,57 +22,40 @@
 
 **「自分でやった方が早い」と思ってもタスクを作ること。**
 
-## タスクファイル形式
+## タスク作成（CLI 経由）
 
-`.team/tasks/open/<id>-<slug>.md` に以下の形式で作成:
-
-```markdown
----
-id: <連番>
-title: <タスク名>
-priority: high|medium|low
-status: draft
-created_at: <ISO 8601>
----
-
-## タスク
-<タスク内容>
-
-## 対象ファイル
-<修正が必要なファイル一覧（わかる範囲で）>
-
-## 完了条件
-<何をもって完了とするか>
-```
-
-## タスクの status フロー（draft → ready）
-
-タスクは必ず `status: draft` で作成する。Manager は `draft` のタスクを無視するため、作成直後にタスクが走り出すことはない。
-
-### フロー
-
-1. **draft で作成** — ユーザーの指示を受けてタスクを作成
-2. **ユーザーに内容を確認** — タスクの内容を表示し、問題がないか確認する
-3. **ready に変更** — ユーザーの承認を得たら `status: ready` に変更する
-4. **Manager に通知** — CLI でキューにメッセージを送信
+タスクは CLI コマンドで作成する。ID 自動採番・ファイル生成・Manager 通知を一括で行う:
 
 ```bash
-# draft → ready への変更（ユーザー承認後）
-sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
+# タスク作成（ID 自動採番）
+bun run .team/manager/main.ts create-task \
+  --title "タスク名" \
+  --priority high \
+  --body "タスクの詳細"
+
+# status 省略時は draft、priority 省略時は medium
 ```
 
-**注意:** ユーザーが「すぐやって」と明示的に指示した場合は、最初から `status: ready` で作成してもよい。
+### status フロー（draft → ready）
 
-## タスク作成後の Manager 通知
+| パターン | コマンド |
+|---------|---------|
+| すぐ実行（ready で作成 → 自動通知） | `bun run .team/manager/main.ts create-task --title "タスク名" --status ready --body "詳細"` |
+| draft で作成 → 確認後に ready | 下記 2 ステップ |
 
-タスクファイルを `.team/tasks/open/` に書き出し、status を ready にした後、CLI でキューに通知を送る:
+draft で作成した場合の手順:
 
 ```bash
-# CLI でキューにメッセージを追加（Manager が次のポーリングサイクルで処理）
-.team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
+# 1. draft で作成
+bun run .team/manager/main.ts create-task --title "タスク名" --body "詳細"
+
+# 2. ユーザー承認後に ready に変更 + Manager 通知
+sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-slug.md
+bun run .team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
 ```
 
-**注意:** Manager は定期的にキューをポーリングしているため、通知は数秒以内に処理される。`cmux send` は使わない。
+**通常フロー:** draft で作成 → ユーザーに内容を確認 → 承認後に ready。
+**即時実行:** ユーザーが「すぐやって」と指示した場合は `--status ready` で作成（自動通知される）。
 
 ## TODO メッセージ（軽微な作業の即時実行）
 
