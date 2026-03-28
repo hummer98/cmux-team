@@ -17,7 +17,7 @@ created_at: 2026-03-27T10:00:00Z
 `;
     const meta = parseTaskMeta(content, "035-fix-bug.md", "/path/035-fix-bug.md");
     expect(meta).not.toBeNull();
-    expect(meta!.id).toBe("35");
+    expect(meta!.id).toBe("035");
     expect(meta!.title).toBe("バグ修正");
     expect(meta!.priority).toBe("high");
     expect(meta!.status).toBe("ready");
@@ -33,7 +33,7 @@ depends_on: [035, 036]
 ---
 `;
     const meta = parseTaskMeta(content, "037-report.md", "/path/037-report.md");
-    expect(meta!.dependsOn).toEqual(["35", "36"]);
+    expect(meta!.dependsOn).toEqual(["035", "036"]);
   });
 
   test("depends_on（単一値）をパースできる", () => {
@@ -45,10 +45,10 @@ depends_on: 035
 ---
 `;
     const meta = parseTaskMeta(content, "036-impl.md", "/path/036-impl.md");
-    expect(meta!.dependsOn).toEqual(["35"]);
+    expect(meta!.dependsOn).toEqual(["035"]);
   });
 
-  test("depends_on がゼロパディングされていても正規化される", () => {
+  test("depends_on がゼロパディングされていてもそのまま保持される", () => {
     const content = `---
 id: 037
 title: test
@@ -57,7 +57,7 @@ depends_on: [035, 036]
 ---
 `;
     const meta = parseTaskMeta(content, "037-test.md", "/path/037-test.md");
-    expect(meta!.dependsOn).toEqual(["35", "36"]);
+    expect(meta!.dependsOn).toEqual(["035", "036"]);
   });
 
   test("status がない場合は ready として扱う", () => {
@@ -83,7 +83,7 @@ status: ready
 ---
 `;
     const meta = parseTaskMeta(content, "042-no-id.md", "/path/042-no-id.md");
-    expect(meta!.id).toBe("42");
+    expect(meta!.id).toBe("042");
   });
 });
 
@@ -117,15 +117,15 @@ describe("filterExecutableTasks", () => {
   });
 
   test("依存タスクが全て closed なら実行可能", () => {
-    const tasks = [makeMeta("3", "ready", ["1", "2"])];
-    const closed = new Set(["1", "2"]);
+    const tasks = [makeMeta("003", "ready", ["001", "002"])];
+    const closed = new Set(["001", "002"]);
     const result = filterExecutableTasks(tasks, closed, new Set());
     expect(result).toHaveLength(1);
   });
 
   test("依存タスクが一部未完了なら実行不可", () => {
-    const tasks = [makeMeta("3", "ready", ["1", "2"])];
-    const closed = new Set(["1"]); // 2 がまだ
+    const tasks = [makeMeta("003", "ready", ["001", "002"])];
+    const closed = new Set(["001"]); // 002 がまだ
     const result = filterExecutableTasks(tasks, closed, new Set());
     expect(result).toHaveLength(0);
   });

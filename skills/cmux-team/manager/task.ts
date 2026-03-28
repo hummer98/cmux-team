@@ -39,16 +39,16 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
       dependsOn = raw
         .replace(/[\[\]]/g, "")
         .split(",")
-        .map((s) => s.trim().replace(/^0+/, ""))
+        .map((s) => s.trim())
         .filter(Boolean);
     } else {
       // single value: 033
-      dependsOn = [raw.replace(/^0+/, "")];
+      dependsOn = [raw.trim()];
     }
   }
 
   return {
-    id: id.replace(/^0+/, "") || fileName.match(/^0*(\d+)/)?.[1] || "",
+    id: id || fileName.match(/^(\d+)/)?.[1] || "",
     title,
     status,
     priority,
@@ -76,7 +76,7 @@ export async function loadTasks(projectRoot: string): Promise<{
     const files = await readdir(closedDir);
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
-      const id = f.match(/^0*(\d+)/)?.[1];
+      const id = f.match(/^(\d+)/)?.[1];
       if (id) closed.add(id);
     }
   }
