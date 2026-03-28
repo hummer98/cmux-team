@@ -224,6 +224,9 @@ async function scanTasks(state: DaemonState): Promise<void> {
       break;
     }
 
+    // spawn 前にロック（次の tick での二重起動を防止）
+    assignedIds.add(task.id);
+
     const conductor = await spawnConductor(task.id, state.projectRoot);
     if (conductor) {
       state.conductors.set(conductor.conductorId, conductor);
@@ -316,6 +319,9 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       taskId: c.taskId,
       taskTitle: c.taskTitle,
       surface: c.surface,
+      worktreePath: c.worktreePath,
+      outputDir: c.outputDir,
+      startedAt: c.startedAt,
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,

@@ -87,6 +87,32 @@ function requireArg(name: string): string {
 async function cmdStart(): Promise<void> {
   const state = await createDaemon(PROJECT_ROOT);
 
+  // team.json から Conductor 状態を復元（リロード時の二重起動防止）
+  try {
+    const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
+    for (const c of teamJson.conductors ?? []) {
+      if (c.surface && await cmux.validateSurface(c.surface)) {
+        state.conductors.set(c.id, {
+          conductorId: c.id,
+          taskId: c.taskId,
+          taskTitle: c.taskTitle,
+          surface: c.surface,
+          worktreePath: c.worktreePath ?? "",
+          outputDir: c.outputDir ?? "",
+          startedAt: c.startedAt ?? new Date().toISOString(),
+          agents: (c.agents ?? []).map((a: any) => ({
+            surface: a.surface,
+            role: a.role,
+            spawnedAt: a.spawnedAt ?? new Date().toISOString(),
+          })),
+        });
+      }
+    }
+    if (state.conductors.size > 0) {
+      await log("conductors_restored", `count=${state.conductors.size}`);
+    }
+  } catch {}
+
   // インフラ準備
   await initInfra(state);
   await log(
