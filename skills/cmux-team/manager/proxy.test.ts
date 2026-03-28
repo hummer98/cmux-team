@@ -141,4 +141,87 @@ describe("proxy", () => {
     expect(handle.port).toBeGreaterThan(0);
     handle.stop();
   });
+
+  test("GET /state が DaemonState 相当の JSON を返す", async () => {
+    const mockState = {
+      running: true,
+      masterSurface: "surface:1",
+      conductors: new Map([
+        ["cond-1", { conductorId: "cond-1", taskId: "001", surface: "surface:2", agents: [] }],
+      ]),
+      projectRoot: testDir,
+      pollInterval: 10000,
+      maxConductors: 3,
+      lastUpdate: new Date("2026-03-29T00:00:00Z"),
+      pendingTasks: 1,
+      openTasks: 2,
+      taskList: [{ id: "001", title: "テスト", status: "ready", isTodo: false, createdAt: "2026-03-29T00:00:00Z" }],
+    };
+
+    const handle = await start(testDir, { getState: () => mockState });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/state`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+
+    const body = await res.json();
+    expect(body.running).toBe(true);
+    expect(body.masterSurface).toBe("surface:1");
+    expect(body.lastUpdate).toBe("2026-03-29T00:00:00.000Z");
+    expect(body.conductors["cond-1"].conductorId).toBe("cond-1");
+    handle.stop();
+  });
+
+  test("GET /tasks が taskList 配列を返す", async () => {
+    const mockState = {
+      conductors: new Map(),
+      lastUpdate: new Date(),
+      taskList: [
+        { id: "001", title: "タスクA", status: "ready", isTodo: false, createdAt: "2026-03-29T00:00:00Z" },
+        { id: "002", title: "タスクB", status: "done", isTodo: true, createdAt: "2026-03-29T01:00:00Z" },
+      ],
+    };
+
+    const handle = await start(testDir, { getState: () => mockState });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/tasks`);
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBe(2);
+    expect(body[0].id).toBe("001");
+    handle.stop();
+  });
+
+  test("GET /conductors が Map をオブジェクトとして返す", async () => {
+    const mockState = {
+      conductors: new Map([
+        ["c1", { conductorId: "c1", taskId: "010", surface: "surface:3", agents: [] }],
+        ["c2", { conductorId: "c2", taskId: "011", surface: "surface:4", agents: [] }],
+      ]),
+      lastUpdate: new Date(),
+      taskList: [],
+    };
+
+    const handle = await start(testDir, { getState: () => mockState });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/conductors`);
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.c1.conductorId).toBe("c1");
+    expect(body.c2.taskId).toBe("011");
+    handle.stop();
+  });
+
+  test("getState 未設定時に /state が 404 を返す", async () => {
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/state`);
+    expect(res.status).toBe(404);
+
+    const res2 = await fetch(`http://127.0.0.1:${handle.port}/tasks`);
+    expect(res2.status).toBe(404);
+
+    const res3 = await fetch(`http://127.0.0.1:${handle.port}/conductors`);
+    expect(res3.status).toBe(404);
+    handle.stop();
+  });
 });
