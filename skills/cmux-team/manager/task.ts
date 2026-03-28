@@ -85,7 +85,10 @@ export async function loadTasks(projectRoot: string): Promise<{
       if (id) closed.add(id);
       const content = await readFile(join(closedDir, f), "utf-8");
       const meta = parseTaskMeta(content, f, join(closedDir, f));
-      if (meta) closedMetas.push(meta);
+      if (meta) {
+        meta.status = "closed";
+        closedMetas.push(meta);
+      }
     }
   }
 
