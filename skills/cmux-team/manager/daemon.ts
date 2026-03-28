@@ -240,20 +240,15 @@ async function scanTasks(state: DaemonState): Promise<void> {
   );
   state.pendingTasks = executable.length;
 
-  // taskList: open + closed を統合し createdAt 降順で直近5件
-  const allTasks = [
-    ...open,
-    ...closedMetas,
-  ];
-  allTasks.sort((a, b) => {
-    const aTime = a.closedAt ?? a.createdAt ?? "";
-    const bTime = b.closedAt ?? b.createdAt ?? "";
-    if (!aTime && !bTime) return 0;
-    if (!aTime) return 1;
-    if (!bTime) return -1;
-    return bTime.localeCompare(aTime);
-  });
-  state.taskList = allTasks.slice(0, 5).map((t) => ({
+  // taskList: open を優先表示、残り枠で closed（直近）を表示
+  const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const openTasks = [...open]
+    .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1));
+  const closedTasks = [...closedMetas]
+    .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
+  const maxItems = Math.max(5, openTasks.length);
+  const combined = [...openTasks, ...closedTasks.slice(0, maxItems - openTasks.length)];
+  state.taskList = combined.map((t) => ({
     id: t.id,
     title: t.title,
     status: t.status,
