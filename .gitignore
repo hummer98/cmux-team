@@ -13,3 +13,4 @@
 .team/queue/
 .team/e2e-results/
 .worktrees/
+.claude/worktrees/
