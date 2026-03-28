@@ -9,12 +9,6 @@ export const TaskCreatedMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
-export const TodoMessage = z.object({
-  type: z.literal("TODO"),
-  content: z.string().min(1),
-  timestamp: z.string().datetime(),
-});
-
 export const ConductorDoneMessage = z.object({
   type: z.literal("CONDUCTOR_DONE"),
   conductorId: z.string(),
@@ -49,7 +43,6 @@ export const ShutdownMessage = z.object({
 
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
-  TodoMessage,
   ConductorDoneMessage,
   AgentSpawnedMessage,
   AgentDoneMessage,
@@ -58,7 +51,6 @@ export const QueueMessage = z.discriminatedUnion("type", [
 
 export type QueueMessage = z.infer<typeof QueueMessage>;
 export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
-export type TodoMessage = z.infer<typeof TodoMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 
 // --- Agent 状態 ---

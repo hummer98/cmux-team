@@ -85,20 +85,6 @@ describe("Queue", () => {
     expect(messages[0]!.message.taskId).toBe("035");
   });
 
-  test("TODO メッセージを送信・読み取りできる", async () => {
-    const q = await getQueue();
-    await q.send({
-      type: "TODO",
-      content: "worktree を整理して",
-      timestamp: new Date().toISOString(),
-    });
-
-    const messages = await q.read();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.type).toBe("TODO");
-    expect(messages[0]!.message.content).toBe("worktree を整理して");
-  });
-
   test("複数メッセージが順序通りに読み取れる", async () => {
     const q = await getQueue();
     await q.send({
@@ -108,20 +94,14 @@ describe("Queue", () => {
       timestamp: new Date().toISOString(),
     });
     await q.send({
-      type: "TODO",
-      content: "test",
-      timestamp: new Date().toISOString(),
-    });
-    await q.send({
       type: "SHUTDOWN",
       timestamp: new Date().toISOString(),
     });
 
     const messages = await q.read();
-    expect(messages).toHaveLength(3);
+    expect(messages).toHaveLength(2);
     expect(messages[0]!.message.type).toBe("TASK_CREATED");
-    expect(messages[1]!.message.type).toBe("TODO");
-    expect(messages[2]!.message.type).toBe("SHUTDOWN");
+    expect(messages[1]!.message.type).toBe("SHUTDOWN");
   });
 
   test("処理済みメッセージが processed/ に移動される", async () => {
@@ -144,13 +124,6 @@ describe("Queue", () => {
     const q = await getQueue();
     expect(() =>
       q.send({ type: "INVALID_TYPE", timestamp: new Date().toISOString() } as any)
-    ).toThrow();
-  });
-
-  test("空の content を持つ TODO はバリデーションエラーになる", async () => {
-    const q = await getQueue();
-    expect(() =>
-      q.send({ type: "TODO", content: "", timestamp: new Date().toISOString() } as any)
     ).toThrow();
   });
 

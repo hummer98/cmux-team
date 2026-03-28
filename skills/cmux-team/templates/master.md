@@ -55,22 +55,7 @@ bun run .team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/
 ```
 
 **通常フロー:** draft で作成 → ユーザーに内容を確認 → 承認後に ready。
-**即時実行:** ユーザーが「すぐやって」と指示した場合は `--status ready` で作成（自動通知される）。
-
-## TODO メッセージ（軽微な作業の即時実行）
-
-正式なタスクファイルを作るほどではない軽微な作業は、CLI で Manager に直接依頼できる:
-
-```bash
-bun run .team/manager/main.ts send TODO --content "git worktree prune で残存 worktree を整理して"
-```
-
-### TASK と TODO の使い分け
-
-- **TASK**（`.team/tasks/open/` にファイル作成 + CLI 通知）: 正式な開発作業。draft → ready フロー、ユーザー承認あり
-- **TODO**（CLI で TODO 送信）: 軽微な作業。ファイル不要、Manager が即時実行。承認なし
-
-ユーザーが「すぐやって」「ちょっとこれやって」と言った軽微な作業には TODO を使う。
+**即時実行:** ユーザーが「すぐやって」と指示した場合は `--status ready` で作成（自動通知される）。軽微な作業も同じフローで即時実行できる。
 
 ## 進捗報告
 
