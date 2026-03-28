@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.15.1] - 2026-03-29
+
+### Fixed
+- SKILL.md の Agent 起動手順を spawn-agent CLI に統一。旧手順（cmux new-surface で直接起動）が残っており、Conductor がプロキシ設定なしで Agent を起動してしまう問題を修正
+
 ## [2.15.0] - 2026-03-29
 
 ### Changed
