@@ -13,11 +13,12 @@
  *   ./main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
+ *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
  */
 
 import { join, dirname } from "path";
 import { existsSync } from "fs";
-import { readFile, readdir, writeFile } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, tick, updateTeamJson } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
@@ -465,6 +466,79 @@ async function cmdKillAgent(): Promise<void> {
   console.log(`OK killed ${surface}`);
 }
 
+async function cmdCreateTask(): Promise<void> {
+  const title = requireArg("title");
+  const priority = getArg("priority") || "medium";
+  const status = getArg("status") || "draft";
+  const body = getArg("body") || "";
+
+  // --- 1. 最大 ID を取得 ---
+  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
+  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
+  await mkdir(openDir, { recursive: true });
+  await mkdir(closedDir, { recursive: true });
+
+  let maxId = 0;
+  for (const dir of [openDir, closedDir]) {
+    try {
+      const files = await readdir(dir);
+      for (const f of files) {
+        const m = f.match(/^(\d+)/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n > maxId) maxId = n;
+        }
+      }
+    } catch {}
+  }
+
+  const newId = String(maxId + 1).padStart(3, "0");
+
+  // --- 2. slug 生成 ---
+  const slug = title
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^\p{L}\p{N}\-]/gu, "")
+    .slice(0, 40);
+
+  const filename = `${newId}-${slug}.md`;
+  const filepath = join(openDir, filename);
+
+  // --- 3. タスクファイル書き出し ---
+  const now = new Date().toISOString();
+  const content = `---
+id: ${newId}
+title: ${title}
+priority: ${priority}
+status: ${status}
+created_at: ${now}
+---
+
+## タスク
+${body}
+
+## 対象ファイル
+(未定)
+
+## 完了条件
+(未定)
+`;
+  await writeFile(filepath, content);
+  console.log(`OK ${filepath}`);
+
+  // --- 4. ready なら TASK_CREATED を通知 ---
+  if (status === "ready") {
+    await ensureQueueDirs();
+    const path = await sendMessage({
+      type: "TASK_CREATED",
+      taskId: newId,
+      taskFile: `.team/tasks/open/${filename}`,
+      timestamp: now,
+    });
+    console.log(`TASK_CREATED sent: ${path}`);
+  }
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -501,6 +575,9 @@ switch (command) {
   case "kill-agent":
     await cmdKillAgent();
     break;
+  case "create-task":
+    await cmdCreateTask();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -513,6 +590,7 @@ Usage:
   cmux-team stop                               graceful shutdown
   cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
-  cmux-team kill-agent --surface <surface> [--conductor-id <id>]`);
+  cmux-team kill-agent --surface <surface> [--conductor-id <id>]
+  cmux-team create-task --title <title> [--priority high|medium|low] [--status draft|ready] [--body <text>]`);
     break;
 }

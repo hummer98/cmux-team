@@ -22,9 +22,26 @@
 
 **「自分でやった方が早い」と思ってもタスクを作ること。**
 
-## タスクファイル形式
+## タスク作成（CLI 推奨）
 
-`.team/tasks/open/<id>-<slug>.md` に以下の形式で作成:
+CLI でタスクを作成する（ID 自動採番、ファイル生成、ready なら TASK_CREATED 通知まで一括実行）:
+
+```bash
+# draft で作成（デフォルト）
+bun run .team/manager/main.ts create-task --title "タスク名" --body "タスク内容"
+
+# すぐ実行する場合（ready で作成 → 自動通知）
+bun run .team/manager/main.ts create-task --title "タスク名" --status ready --body "タスク内容"
+
+# priority 指定
+bun run .team/manager/main.ts create-task --title "タスク名" --priority high --body "タスク内容"
+```
+
+### タスクファイル形式
+
+CLI が生成するファイル形式（手動作成時も同じ形式に従うこと）:
+
+`.team/tasks/open/<id>-<slug>.md`:
 
 ```markdown
 ---
@@ -58,7 +75,13 @@ created_at: <ISO 8601>
 
 ```bash
 # draft → ready への変更（ユーザー承認後）
-sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
+sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-slug.md
+```
+
+または、最初から `status: ready` で CLI 作成すればこのステップは不要:
+
+```bash
+bun run .team/manager/main.ts create-task --title "タスク名" --status ready --body "タスク内容"
 ```
 
 **注意:** ユーザーが「すぐやって」と明示的に指示した場合は、最初から `status: ready` で作成してもよい。
@@ -69,17 +92,20 @@ sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-*.md
 
 ```bash
 # CLI でキューにメッセージを追加（Manager が次のポーリングサイクルで処理）
-.team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
+bun run .team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
 ```
 
-**注意:** Manager は定期的にキューをポーリングしているため、通知は数秒以内に処理される。`cmux send` は使わない。
+**注意:** `create-task --status ready` で作成した場合は通知も自動送信されるため、上記コマンドは不要。
+手動でタスクファイルを作成した場合や、draft → ready に変更した場合にのみ上記を実行する。
+
+Manager は定期的にキューをポーリングしているため、通知は数秒以内に処理される。`cmux send` は使わない。
 
 ## TODO メッセージ（軽微な作業の即時実行）
 
 正式なタスクファイルを作るほどではない軽微な作業は、CLI で Manager に直接依頼できる:
 
 ```bash
-.team/manager/main.ts send TODO --content "git worktree prune で残存 worktree を整理して"
+bun run .team/manager/main.ts send TODO --content "git worktree prune で残存 worktree を整理して"
 ```
 
 ### TASK と TODO の使い分け
