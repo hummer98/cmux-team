@@ -1,187 +1,50 @@
 # Seed: Slash Commands
 
-All commands are placed in `~/.claude/commands/` and reference the `cmux-team` skill.
+コマンドは `commands/` に配置。プラグインインストール時は自動で参照され、
+install.sh 使用時は `~/.claude/commands/` にコピーされる。
+
+全13コマンド。
 
 ---
 
-## /team-init
+## /start
 
-**File:** `team-init.md`
+**File:** `start.md`
 
-**Purpose:** Initialize `.team/` directory structure in the current project.
+**Purpose:** チーム体制を構築する（daemon + 固定2x2レイアウト + Master 起動）。
 
 **Behavior:**
-1. Create `.team/` directory structure:
-   ```
-   .team/
-   ├── team.json
-   ├── specs/
-   ├── output/
-   ├── tasks/open/
-   ├── tasks/closed/
-   ├── prompts/
-   └── docs-snapshot/
-   ```
-2. Initialize `team.json` with project name (derived from directory) and empty agents list
-3. Add `.team/output/` and `.team/prompts/` to `.gitignore` (ephemeral)
-4. Keep `.team/specs/` and `.team/tasks/` tracked in git
-5. Print summary of initialized structure
+1. Manager daemon の実行ファイル（`manager/main.ts`）を検索（プラグインキャッシュ or ローカル）
+2. 依存関係インストール（`bun install`）
+3. `bun run main.ts start` で daemon 起動
+4. daemon が自動で以下を実行:
+   - `.team/` インフラ作成（ディレクトリ、team.json、.gitignore）
+   - 固定2x2レイアウト構築（4ペイン、5 surface）
+   - Conductor 3台を常駐 Claude セッションとして起動
+   - Master surface で Claude 起動
+   - TUI ダッシュボード表示
+   - プロキシサーバー起動
 
-**Arguments:** `$ARGUMENTS` = project description (optional, stored in team.json)
+**Arguments:** なし
+
+**allowed-tools:** `Bash, Read`
 
 ---
 
-## /team-research
+## /master
 
-**File:** `team-research.md`
+**File:** `master.md`
 
-**Purpose:** Spawn researcher agents to investigate a topic in parallel.
-
-**Behavior:**
-1. Parse topic from `$ARGUMENTS`
-2. Decompose topic into 3 sub-questions (or use user-provided list)
-3. Generate researcher prompts → `.team/prompts/researcher-{1,2,3}.md`
-4. Spawn 3 researcher agents via cmux (1+3 layout)
-5. Wait for all 3 to complete (`cmux wait-for`)
-6. Read `.team/output/researcher-{1,2,3}.md`
-7. Synthesize findings and present to user
-8. Optionally save synthesis to `.team/specs/research.md`
-
-**Arguments:** `$ARGUMENTS` = research topic or comma-separated sub-topics
-
----
-
-## /team-spec
-
-**File:** `team-spec.md`
-
-**Purpose:** Interactive spec brainstorming with user. May spawn researchers.
+**Purpose:** Master ロールを再読み込みする（`/clear` 後の復帰用）。
 
 **Behavior:**
-1. If `.team/specs/requirements.md` exists, load it as starting point
-2. Engage user in conversation about requirements
-3. If research is needed, offer to run `/team-research`
-4. Generate/update `.team/specs/requirements.md`
-5. Ask for user approval before proceeding
+1. `.team/prompts/master.md` を読む
+2. ファイルの指示に従い Master として動作開始
+3. `.team/` が存在しない場合は `/start` の実行を案内
 
-**Arguments:** none (interactive)
+**Arguments:** なし
 
----
-
-## /team-design
-
-**File:** `team-design.md`
-
-**Purpose:** Spawn architect + reviewers for design phase.
-
-**Behavior:**
-1. Verify `.team/specs/requirements.md` exists and is approved
-2. Generate architect prompt (include requirements + any research)
-3. Spawn Architect agent (1 pane)
-4. Wait for architect to complete → `.team/output/architect.md`
-5. Copy architect output to `.team/specs/design.md`
-6. Spawn 2 Reviewer agents with design as input
-7. Wait for reviewers → `.team/output/reviewer-{1,2}.md`
-8. Synthesize review feedback, present to user
-9. If changes needed, iterate (respawn architect with feedback)
-10. Finalize `.team/specs/design.md`
-
-**Arguments:** none
-
----
-
-## /team-impl
-
-**File:** `team-impl.md`
-
-**Purpose:** Spawn implementer agents for coding tasks.
-
-**Behavior:**
-1. Verify `.team/specs/design.md` and `.team/specs/tasks.md` exist
-2. If tasks.md doesn't exist, generate it from design.md first
-3. Parse tasks, identify parallel-safe tasks (marked with `(P)`)
-4. Assign tasks to implementer agents
-5. Spawn implementers (up to tier limit)
-6. Monitor progress via `cmux read-screen` and status updates
-7. As agents complete, assign next pending tasks
-8. Collect all outputs → `.team/output/implementer-{N}.md`
-9. Report completion status to user
-
-**Arguments:** `$ARGUMENTS` = optional task numbers to implement (e.g., "1,2,3" or "all")
-
----
-
-## /team-review
-
-**File:** `team-review.md`
-
-**Purpose:** Spawn reviewer agent for implementation review.
-
-**Behavior:**
-1. Collect git diff of changes since last review (or since team-init)
-2. Read `.team/specs/requirements.md` and `.team/specs/design.md`
-3. Generate reviewer prompt with diff + specs
-4. Spawn Reviewer agent
-5. Wait for completion → `.team/output/reviewer-impl.md`
-6. Present review results to user
-7. Create issues for any findings
-
-**Arguments:** none
-
----
-
-## /team-test
-
-**File:** `team-test.md`
-
-**Purpose:** Spawn tester agents for test creation and execution.
-
-**Behavior:**
-1. Read implementation outputs and git diff
-2. Generate tester prompts (split by: unit, integration, e2e if applicable)
-3. Spawn tester agents (up to 3)
-4. Wait for completion
-5. Collect test results → `.team/output/tester-{N}.md`
-6. Run test suites and report pass/fail
-7. Create issues for failures
-
-**Arguments:** `$ARGUMENTS` = optional test scope ("unit", "integration", "e2e", or "all")
-
----
-
-## /team-sync-docs
-
-**File:** `team-sync-docs.md`
-
-**Purpose:** Synchronize `docs/` with current `.team/specs/` state.
-
-**Behavior:**
-1. Read all files in `.team/specs/`
-2. Compare with `.team/docs-snapshot/` (last synced state)
-3. If no changes, report "docs are up to date"
-4. If changes detected:
-   a. Generate/update `docs/<project>/` structure
-   b. Format specs into clean documentation
-   c. Update `.team/docs-snapshot/` with current state
-5. Show diff summary to user
-6. Optionally create git commit
-
-**Arguments:** none
-
----
-
-## /team-task
-
-**File:** `team-task.md`
-
-**Purpose:** Create, list, close, and manage tasks.
-
-**Behavior:**
-- `$ARGUMENTS` = "" → list all open tasks
-- `$ARGUMENTS` = "create <title>" → create new task interactively
-- `$ARGUMENTS` = "close <id>" → move task to closed/
-- `$ARGUMENTS` = "show <id>" → display task details
-- `$ARGUMENTS` = "<title>" → shorthand for create
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
 
 ---
 
@@ -189,17 +52,21 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
 
 **File:** `team-status.md`
 
-**Purpose:** Show current team status.
+**Purpose:** チームの現在の状態を表示する。
 
 **Behavior:**
-1. Read `.team/team.json`
-2. For each agent: show role, status, surface, current task
-3. Run `cmux tree --all` for topology
-4. Show open task count
-5. Show phase progress
-6. Check agent health via `cmux read-screen` (detect crashes)
+1. `.team/team.json` を読む
+2. 真のソースから直接情報を取得:
+   - Manager 画面: `cmux read-screen`
+   - Conductor 一覧: `cmux tree`
+   - タスク状態: `ls .team/tasks/` + `cat .team/task-state.json`
+   - 完了履歴: `grep task_completed .team/logs/manager.log`
+3. アーキテクチャサマリー表示（4層構造）
+4. Manager 健全性チェック
 
-**Arguments:** none
+**Arguments:** なし
+
+**allowed-tools:** `Bash, Read, Glob, Grep`
 
 ---
 
@@ -207,17 +74,223 @@ All commands are placed in `~/.claude/commands/` and reference the `cmux-team` s
 
 **File:** `team-disband.md`
 
-**Purpose:** Close all sub-agent panes.
+**Purpose:** 全層を終了しチームを解散する（bottom-up: Agent → Conductor → Manager → cleanup）。
 
 **Behavior:**
-1. Read `.team/team.json` for active agents
-2. For each agent:
-   a. Send `/exit` command
-   b. Wait briefly
-   c. Close surface: `cmux close-surface --surface <ref>`
-   d. Clear status: `cmux clear-status <role>`
-3. Clear progress bar
-4. Update team.json (clear agents list)
-5. Report summary
+1. `.team/team.json` の存在確認
+2. **Layer 1**: Agent 終了（`/exit\n` + surface close）
+3. **Layer 2**: Conductor 終了（`/exit\n` + surface close）
+4. **Layer 3**: git worktree クリーンアップ
+   - 未マージの worktree は警告（`force` 引数で強制削除）
+5. **Layer 4**: Manager daemon 終了（SHUTDOWN メッセージ → 最大15秒待機 → SIGTERM）
+6. Manager ペインの close
+7. サイドバー状態クリア
+8. サマリー表示
 
-**Arguments:** `$ARGUMENTS` = optional "force" to skip graceful shutdown
+**Arguments:** `$ARGUMENTS = "force"` → グレースフル停止をスキップ
+
+**allowed-tools:** `Bash, Read, Write, Edit`
+
+---
+
+## /team-research
+
+**File:** `team-research.md`
+
+**Purpose:** リサーチエージェントを起動しトピックを並列調査する（最大3体）。
+
+**Behavior:**
+1. 前提チェック（team.json, CMUX_SOCKET_PATH, cmux）
+2. トピック分析:
+   - カンマ区切り → そのまま使用
+   - 単一トピック → 3つのサブ質問に分解
+   - 空 → ユーザーに質問
+3. プロンプト生成（`common-header.md` + `researcher.md` テンプレート）
+4. Agent を **1体ずつ** spawn（Trust 確認 → プロンプト送信 → 起動確認）
+5. 完了待ち（`cmux wait-for` タイムアウト300秒）
+6. 結果統合（サマリー・共通発見・相違点・推奨事項）
+7. `.team/specs/research.md` に保存
+
+**Arguments:** `$ARGUMENTS` = リサーチトピック or カンマ区切りサブトピック
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-spec
+
+**File:** `team-spec.md`
+
+**Purpose:** 要件を対話的にブレストし仕様を策定する。
+
+**Behavior:**
+1. 既存 specs を読み込み（requirements.md, research.md, team.json）
+2. コードベース構造をスキャン
+3. 対話的ブレスト（2-3問ずつ）:
+   - プロジェクト概要（What/Why/Who）
+   - 機能要件（Must/Nice/Out of scope）
+   - 非機能要件（性能・セキュリティ・互換性）
+   - 技術的制約・前提条件
+4. `.team/specs/requirements.md` を生成（REQ-001 形式）
+5. ユーザー承認 → ステータス + タイムスタンプ追記
+6. 次ステップ案内（`/team-design` or `/team-research`）
+
+**Arguments:** `$ARGUMENTS` = 初期プロジェクト概要（任意）
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-design
+
+**File:** `team-design.md`
+
+**Purpose:** アーキテクト + レビュアーエージェントで設計フェーズを実行する。
+
+**Behavior:**
+1. 前提チェック（requirements.md の承認ステータス確認）
+2. コンテキスト収集（要件・リサーチ・タスク・コードベース構造）
+3. Architect spawn（タイムアウト600秒）
+4. `.team/specs/design.md` に設計をコピー
+5. ユーザー確認 → Reviewer 2体 spawn（タイムアウト300秒）
+6. レビュー統合（Approved / Changes Requested）
+7. 変更要求時: Architect に再フィードバック → 再設計ループ
+8. 承認時: タスク生成オプション（`tasks.md` に書き出し）
+
+**Arguments:** なし
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-impl
+
+**File:** `team-impl.md`
+
+**Purpose:** 実装エージェントを起動しコーディングタスクを並列実行する。
+
+**Behavior:**
+1. 前提チェック（design.md 存在確認）
+2. タスク準備:
+   - `tasks.md` 存在 → パース＋ステータス確認
+   - なし → design.md から自動生成（コンポーネント分割、依存関係分析、`(P)` フラグ）
+3. タスク選択（引数ベース: `all` / `1,2,3` / 空=全 `(P)` 未着手）
+4. Implementer spawn（1体ずつ）
+5. 進捗モニタ（30秒間隔チェック）
+6. 完了待ち（タイムアウト600秒）
+7. バッチ処理（タスク > Agent 数の場合、ペイン再利用）
+8. 結果統合（完了タスク・変更ファイル・テスト結果）
+
+**Arguments:** `$ARGUMENTS` = タスク ID（"1,2,3" or "all"）、任意
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-review
+
+**File:** `team-review.md`
+
+**Purpose:** レビューエージェントを起動し実装をレビューする。
+
+**Behavior:**
+1. レビュー対象収集: `git diff HEAD~10 --stat -- . ':!.team'`
+2. diff サイズに応じてレビュアー数決定:
+   - ≤200行 → 1体
+   - 200-500行 → 2体（ファイル分割）
+   - \>500行 → 3体（モジュール分割）
+3. Reviewer spawn + 完了待ち（タイムアウト300秒）
+4. 結果統合（Approved / Changes Requested）
+5. Critical/Major findings からタスクを自動作成
+6. アクション提案（手動修正 / `/team-impl` 再実行 / `/team-review` 再実行）
+
+**Arguments:** なし
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-test
+
+**File:** `team-test.md`
+
+**Purpose:** テストエージェントを起動しテストを作成・実行する。
+
+**Behavior:**
+1. テストスコープ決定（引数ベース: `unit` / `integration` / `e2e` / `all` / 空=自動検出）
+2. コンテキスト収集（requirements, design, implementer outputs, 既存テスト, git diff）
+3. Tester spawn（スコープごとに1体、最大3体）
+4. 完了待ち（タイムアウト300秒）
+5. テスト結果収集（Agent 出力 + 直接テスト実行）
+6. テスト失敗からタスクを自動作成
+
+**Arguments:** `$ARGUMENTS` = テストスコープ（"unit", "integration", "e2e", "all"）、任意
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-sync-docs
+
+**File:** `team-sync-docs.md`
+
+**Purpose:** ドキュメントをスペックと同期する。
+
+**Behavior:**
+1. `.team/specs/` の全ファイルを読み込み
+2. `.team/docs-snapshot/` との差分検出
+3. 変更なし → "already current" で終了
+4. 変更あり → `docs/` 配下を生成・更新
+5. スナップショット更新
+6. git commit オプション
+7. DocKeeper Agent のオプション起動
+
+**Arguments:** なし
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-task
+
+**File:** `team-task.md`
+
+**Purpose:** タスクの作成・一覧・クローズ・表示を管理する。
+
+**Behavior:**
+- `""` → 全タスク一覧（Open / Closed 分離表示）
+- `"create <title>"` → 新規タスク作成（`bun run main.ts create-task` 使用）
+- `"close <id>"` → タスク close（`bun run main.ts close-task` 使用）
+- `"show <id>"` → 詳細表示
+- `"<title>"` → create の短縮形
+
+**タスク状態管理:**
+- ステータスは Markdown ファイルではなく `task-state.json` で管理
+- 新規タスクは `draft` から開始（Manager は `ready` になるまで無視）
+- `ready` になると Manager が Conductor に割り当て
+
+**Arguments:** サブコマンド + 引数
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /team-archive
+
+**File:** `team-archive.md`
+
+**Purpose:** 完了タスクをアーカイブする（closed → archived）。
+
+**Behavior:**
+1. アーカイブディレクトリ作成: `.team/tasks/archived/$(date +%Y-%m-%d)/`
+2. `task-state.json` から closed タスクを特定
+3. 引数に応じて対象選定:
+   - 空 → 全 closed タスク
+   - `"N-M"` → ID 範囲
+   - `"N"` → 単一 ID
+4. タスクファイルを `archived/` に移動
+5. `task-state.json` のステータスを `archived` に更新
+
+**Arguments:** `$ARGUMENTS` = アーカイブ範囲（"", "1-33", "15"）
+
+**allowed-tools:** `Bash, Read`

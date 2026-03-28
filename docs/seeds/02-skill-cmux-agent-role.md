@@ -1,12 +1,11 @@
-# Seed: cmux-agent-role Skill (Sub-Agent Behavior)
+# Seed: cmux-agent-role Skill（サブエージェント行動規範）
 
-## File: `.claude/skills/cmux-agent-role/SKILL.md`
+## File: `skills/cmux-agent-role/SKILL.md`
 
 ## Purpose
 
-Loaded by sub-agent Claude sessions spawned by the Conductor.
-Teaches the sub-agent HOW to behave: where to write output, how to signal completion,
-how to create issues, and how to report status.
+Conductor によって起動されたサブエージェント（Agent）の行動規範。
+出力プロトコル、タスク作成方法、作業境界、daemon ステータス取得方法を定義する。
 
 ## Frontmatter
 
@@ -17,166 +16,118 @@ description: >
   Activated when running as a cmux-team sub-agent.
   Triggers: .team/team.json exists AND current session was spawned by Conductor
   (detect via: initial prompt contains "[CMUX-TEAM-AGENT]" marker).
-  Provides: output protocol, completion signaling, task creation, status reporting.
+  Provides: output protocol, task creation, inter-agent coordination.
 ---
 ```
 
-## Content Sections to Implement
+## Content Sections（実装済み）
 
-### 1. Agent Identity
+### 1. エージェント識別
 
-On startup, the agent receives a prompt with:
+起動時にマーカー付きプロンプトを受け取る:
 ```
 [CMUX-TEAM-AGENT]
-Role: researcher-1
-Task: <task description>
-Output: .team/output/researcher-1.md
-Signal: cmux wait-for -S "researcher-1-done"
+Role: <role-id>
+Task: <タスク内容>
+Output: .team/output/<role-id>.md
 ```
 
-The agent MUST:
-- Parse role and task from the prompt
-- Know its output file path
-- Know its completion signal
+**完了したら停止するだけ。報告は不要。上位が監視する。**
 
-### 2. Output Protocol
+### 2. 出力プロトコル
 
-All deliverables MUST be written to the designated output file:
-
+すべての成果物は指定された出力ファイルに書き込む:
 ```markdown
-# Output: researcher-1
+# Output: <role-id>
 ## Task
-<original task description>
-
+<元のタスク内容>
 ## Findings
-<structured findings>
-
+<構造化された結果>
 ## Recommendations
-<if applicable>
-
+<該当する場合>
 ## Tasks Raised
-- See .team/tasks/open/NNN-*.md
+- See .team/tasks/NNN-*.md
 ```
 
-Rules:
-- Write incrementally (append sections as work progresses)
-- Use clear markdown structure
-- Include references to files read, commands run
-- Do NOT write to files outside the project unless explicitly told to
+ルール:
+- インクリメンタルに書き込む
+- 明確な Markdown 構造を使用
+- 読んだファイル、実行したコマンドへの参照を含める
+- 明示的な指示がない限り、プロジェクト外のファイルに書き込まない
 
-### 3. Status Reporting
+### 3. 作業境界
 
-During work, report status via cmux CLI:
-```bash
-cmux set-status <role> "<brief status>" --icon hammer --color "#0099ff"
-```
+- 割り当てられた git worktree の範囲内で作業
+- worktree 外のファイルを直接変更しない
+- 共有データは `.team/` ディレクトリを通じてやり取り
 
-Status transitions:
-1. `spawning` (set by Conductor) → `running` (agent starts work)
-2. `running` → update description as work progresses
-3. `running` → `done` (work complete) or `error` (work failed)
+### 4. タスク作成
+
+判断が必要な事項、ブロッカー、発見事項がある場合に CLI でタスクを作成:
 
 ```bash
-# While working
-cmux set-status researcher-1 "reading codebase" --icon hammer --color "#0099ff"
-cmux set-status researcher-1 "analyzing patterns" --icon hammer --color "#0099ff"
-
-# On completion
-cmux set-status researcher-1 "done" --icon sparkle --color "#00cc00"
-
-# On error
-cmux set-status researcher-1 "error" --icon sparkle --color "#ff3333"
+bun run .team/manager/main.ts create-task --title "タイトル" --body "詳細"
 ```
 
-### 4. Completion Signal
-
-When ALL work is done and output file is written:
-```bash
-cmux wait-for -S "<role>-done"
-```
-
-IMPORTANT: Signal AFTER writing the output file, not before.
-
-### 5. Task Creation
-
-When the agent encounters decisions, blockers, or findings that need tracking:
-
-```bash
-# Determine next task number
-ls .team/tasks/open/ | wc -l  # → N, use N+1
-
-# Create task file
-```
-
-Task format:
+タスク形式:
 ```markdown
 ---
 id: NNN
-title: <concise title>
+title: <簡潔なタイトル>
 type: decision|blocker|finding|question
-raised_by: <role>
-created_at: <ISO timestamp>
+raised_by: <role-id>
+created_at: <ISO タイムスタンプ>
 ---
-
 ## Context
-<what led to this task>
-
+<経緯>
 ## Options
-1. <option A> — pros/cons
-2. <option B> — pros/cons
-
+1. <選択肢 A>
+2. <選択肢 B>
 ## Recommendation
-<agent's recommendation if any>
+<推奨案>
 ```
 
-### 6. Interaction with Other Agents
+### 5. 他エージェントとの連携
 
-Sub-agents do NOT directly communicate with each other.
-All coordination goes through:
-- Shared files in `.team/`
-- The Conductor (via cmux)
+サブエージェント同士は直接通信しない。すべての連携:
+- `.team/` 内の共有ファイル
+- Conductor（cmux 経由）
 
-If an agent needs input from another agent's work:
-- Read `.team/output/<other-role>.md` if it exists
-- If not available, raise a task with type `blocker`
+他エージェントの成果が必要な場合:
+- `.team/output/<other-role>.md` が存在すれば読む
+- 存在しない場合は `blocker` タイプのタスクを作成
 
-### 7. Role-Specific Guidelines
+### 6. ロール別ガイドライン
 
-#### Researcher
-- Focus on gathering facts, not making design decisions
-- Cite sources (URLs, file paths, documentation references)
-- Structure findings as: Context → Facts → Analysis → Recommendations
+| ロール | 主な責務 |
+|--------|---------|
+| **Researcher** | 事実の収集、ソース引用。設計判断はしない |
+| **Architect** | リサーチャー出力を読んで設計。Mermaid ダイアグラム使用 |
+| **Reviewer** | 要件・設計に照らし合わせてチェック。Approved / Changes Requested |
+| **Implementer** | design.md に厳密に従いコード実装。スコープ外リファクタ禁止 |
+| **Tester** | 要件を検証するテスト作成・実行。失敗はタスク起票 |
+| **DocKeeper** | docs/ を現在の状態に反映。簡潔かつ正確に |
+| **TaskManager** | タスク監視・分類・要約。ブロッカーのフラグ |
 
-#### Architect
-- Read all researcher outputs before designing
-- Reference requirements from `.team/specs/requirements.md`
-- Produce design decisions with rationale
-- Use Mermaid diagrams for architecture
+### 7. daemon ステータス取得
 
-#### Reviewer
-- Read the artifact being reviewed
-- Check against requirements and design
-- Output: Approved/Changes Requested + specific feedback items
-- Raise issues for non-trivial concerns
+```bash
+# ダッシュボード表示
+bun run .team/manager/main.ts status
 
-#### Implementer
-- Follow `.team/specs/design.md` strictly
-- Read `.team/specs/tasks.md` for assigned tasks
-- Write code, then update output with files changed
-- Do NOT refactor unrelated code
+# ログ末尾を多めに表示
+bun run .team/manager/main.ts status --log 20
+```
 
-#### Tester
-- Read implementation output to understand what was built
-- Write tests that verify requirements
-- Run tests and report results
-- Raise issues for test failures
+`cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
 
-#### DocKeeper
-- Read all outputs and specs
-- Update `docs/` to reflect current state
-- Keep documentation concise and accurate
+### 8. 言語ルール
 
-#### TaskManager
-- Monitor `.team/tasks/open/` for new tasks
-- Categorize, link related tasks
-- Summarize open tasks for Conductor on request
+- ドキュメント・コメント: 日本語
+- コード: 英語
+
+## 旧仕様からの変更点
+
+- **`cmux set-status` / `cmux wait-for -S` は廃止**: Agent はステータス報告も完了シグナルも送らない。完了したら停止するだけ
+- **タスク作成は CLI 経由**: `bun run main.ts create-task` で ID 自動採番 + task-state.json 更新
+- **`tasks/open/` / `tasks/closed/` は廃止**: フラット構造 `tasks/` + `task-state.json`

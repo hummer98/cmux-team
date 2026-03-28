@@ -22,9 +22,9 @@ cmux 内で Claude Code を使う開発者。Claude Max 推奨（複数セッシ
 | 構成要素 | 実体 | 責務 |
 |----------|------|------|
 | **Master** | Claude Code セッション（Opus） | ユーザー対話、タスク作成、進捗報告 |
-| **daemon** | TypeScript プロセス（bun） | タスク監視、Conductor spawn、結果回収、TUI ダッシュボード |
-| **Conductor** | Claude Code セッション（Opus） | 1タスクを自律実行。Agent 起動・監視・結果統合 |
-| **Agent** | Claude Code セッション（Opus） | 実作業（実装・テスト・リサーチ等） |
+| **daemon** | TypeScript プロセス（bun） | タスク監視、Conductor スロット管理、結果回収、TUI ダッシュボード |
+| **Conductor** | Claude Code セッション（Opus）× 3（固定スロット） | 1タスクを自律実行。Agent 起動・監視・結果統合。常駐し `/clear` で再利用 |
+| **Agent** | Claude Code セッション（Opus） | 実作業（実装・テスト・リサーチ等）。完了したら停止 |
 
 ### 起動フロー
 
@@ -33,68 +33,69 @@ cmux 内で Claude Code を使う開発者。Claude Max 推奨（複数セッシ
   → daemon (main.ts start) 起動
     → インフラ初期化 (.team/ ディレクトリ構造)
     → ロギングプロキシ起動
+    → 固定2x2レイアウト構築（Conductor 3スロット）
+    → 各 Conductor で Claude Code 起動（--append-system-prompt-file conductor-role.md）
     → Master ペイン spawn (cmux new-split right → Claude Code)
     → TUI ダッシュボード表示
-    → メインループ開始（タスクスキャン + Conductor 監視）
+    → メインループ開始（キュー処理 + タスクスキャン + Conductor 監視）
 ```
 
 ### 通信モデル
 
 | 方向 | 手段 |
 |------|------|
-| Master → daemon | CLI (`main.ts send`) → `.team/queue/*.json` |
-| daemon → Conductor | `cmux new-split` + Claude Code 起動 |
-| Conductor → daemon | Stop hook → `.team/queue/*.json`（CONDUCTOR_DONE）+ `cmux read-screen` ポーリング |
-| Conductor → Agent | `main.ts spawn-agent` CLI |
-| Agent → daemon | PostToolUse hook（AGENT_SPAWNED）/ AGENT_DONE キューメッセージ |
+| Master → daemon | CLI (`main.ts create-task` / `main.ts send`) → `.team/queue/*.json` |
+| daemon → Conductor | `cmux send`（`/clear` + タスクプロンプト送信）— Conductor は常駐、再 spawn しない |
+| Conductor → daemon | done マーカーファイル（`<outputDir>/done`）+ CONDUCTOR_DONE キューメッセージ（Stop hook 経由） |
+| Conductor → Agent | `main.ts spawn-agent` CLI（タブ作成 + プロキシ設定 + Trust 承認） |
+| Agent → daemon | AGENT_SPAWNED キューメッセージ（spawn-agent CLI が送信） |
 | daemon → Master | なし（Master が `manager.log` / `main.ts status` を直接参照） |
 
 ## 機能要件
 
 ### Must-have
 
-- [ ] REQ-001: daemon 起動 — `main.ts start` で daemon + Master を起動し TUI ダッシュボードを表示
-- [ ] REQ-002: タスク作成 — Master が `.team/tasks/open/<id>-<slug>.md` にタスクファイルを作成し CLI でキューに通知
-- [ ] REQ-003: タスクステータスフロー — `draft` → `ready` の2段階。daemon は `ready` のみ処理
-- [ ] REQ-004: タスク依存解決 — YAML frontmatter の `depends_on` フィールドで依存順序を自動解決
-- [ ] REQ-005: 優先度ソート — `high` > `medium` > `low` で実行順を決定
-- [ ] REQ-006: Conductor spawn — daemon がタスク検出時に git worktree 作成 + cmux ペイン分割 + Claude Code 起動
-- [ ] REQ-007: Conductor 監視（pull 型） — `cmux read-screen` で `❯` + `esc to interrupt` の有無で状態判定
-- [ ] REQ-008: Conductor 監視（push 型） — Claude Code Stop hook → CONDUCTOR_DONE キューメッセージ
-- [ ] REQ-009: 結果回収 — Conductor 完了検出時に worktree 削除 + タスクファイル closed 移動 + journal サマリー抽出
-- [ ] REQ-010: Conductor 同時実行制限 — `CMUX_TEAM_MAX_CONDUCTORS`（デフォルト 3）で上限制御
-- [ ] REQ-011: Agent spawn — `main.ts spawn-agent` CLI でペイン作成・Trust 承認・タブ名設定・daemon 通知を一括実行
-- [ ] REQ-012: Agent 監視 — Conductor が `cmux read-screen` で完了検出（pull 型）
-- [ ] REQ-013: TODO メッセージ — 軽微な作業を CLI で即時タスク化（`main.ts send TODO --content "..."`)
-- [ ] REQ-014: ファイルキュー — `.team/queue/*.json` に zod スキーマ検証済みメッセージを書き込み、daemon が定期ポーリングで処理
-- [ ] REQ-015: TUI ダッシュボード — ink/React ベースのフルスクリーン表示（Header, Master, Conductors, Tasks, Journal/Log タブ）
-- [ ] REQ-016: ダッシュボードキーバインド — `1`=journal, `2`=log, `Tab`=切替, `r`=reload, `q`=quit
-- [ ] REQ-017: git worktree 隔離 — Conductor は `.worktrees/<conductor-id>/` で作業。main ブランチは無傷
-- [ ] REQ-018: worktree ブートストラップ — `package.json` があれば `npm install` を自動実行
-- [ ] REQ-019: Trust 自動承認 — `cmux read-screen` で「Yes, I trust」検出時に `cmux send-key return`
-- [ ] REQ-020: タブ名自動設定 — `[surface番号] タスクタイトル` 形式でタブをリネーム
-- [ ] REQ-021: graceful shutdown — `main.ts stop` / SHUTDOWN キューメッセージ / `q` キーで停止
-- [ ] REQ-022: ステータス CLI — `main.ts status` で Master/Conductors/Tasks/Log を一括表示
-- [ ] REQ-023: Agent 一覧 CLI — `main.ts agents` で稼働中エージェントを表示
-- [ ] REQ-024: Agent kill CLI — `main.ts kill-agent` で surface クローズ + AGENT_DONE 通知
-- [ ] REQ-025: Master テンプレート — `templates/master.md` をコピーして `.team/prompts/master.md` を生成
-- [ ] REQ-026: Conductor テンプレート — `templates/conductor.md` のプレースホルダーを変数展開して `.team/prompts/<conductor-id>.md` を生成
-- [ ] REQ-027: テンプレート検索 — daemon 自身の相対パス → plugin キャッシュ → プロジェクトローカル → 手動インストール先の順で検索
-- [ ] REQ-028: ロギング — `.team/logs/manager.log` に `[ISO8601] event detail` 形式で追記
-- [ ] REQ-029: ロギングプロキシ — Anthropic API への透過プロキシ。リクエスト/レスポンスを `.team/logs/traces/api-trace.jsonl` に JSONL 記録。streaming 対応
-- [ ] REQ-030: プロキシポート伝搬 — `.team/proxy-port` にポート番号を書き出し、Agent 起動時に `ANTHROPIC_BASE_URL` を設定
-- [ ] REQ-031: Conductor 完了通知 Hook — Conductor 用 settings.json に Stop hook を生成し、CONDUCTOR_DONE を自動送信
-- [ ] REQ-032: Agent spawn 検出 Hook — Conductor 用 settings.json に PostToolUse hook を生成し、`cmux new-split` 実行時に AGENT_SPAWNED を自動送信
-- [ ] REQ-033: hot reload — ダッシュボード `r` キーで最新の main.ts にプロセスを exec 置換
-- [ ] REQ-034: Conductor レビュー判断 — コードファイルの変更がある場合のみ Reviewer Agent を起動
-- [ ] REQ-035: Conductor 納品 — ローカルマージ（デフォルト）または Pull Request の選択
-- [ ] REQ-036: Journal セクション — Conductor 完了時にタスクファイルに作業サマリーを追記。daemon がログに記録
+- [x] REQ-001: daemon 起動 — `main.ts start` で daemon + 固定レイアウト + Conductor 3スロット + Master を起動し TUI ダッシュボードを表示
+- [x] REQ-002: タスク作成 — `main.ts create-task --title <title>` で `.team/tasks/<id>-<slug>.md` にタスクファイルを作成し、`task-state.json` に状態を記録。`--status ready` の場合は TASK_CREATED をキューに送信
+- [x] REQ-003: タスクステータスフロー — `draft` → `ready` → `closed`（`task-state.json` で管理）。daemon は `ready` のタスクのみ処理
+- [x] REQ-004: タスク依存解決 — YAML frontmatter の `depends_on` フィールドで依存順序を自動解決。依存先がすべて `closed` になるまで実行しない
+- [x] REQ-005: 優先度ソート — `high` > `medium` > `low` で実行順を決定
+- [x] REQ-006: Conductor タスク割り当て — daemon がタスク検出時に idle Conductor を選択し、git worktree 作成 + `/clear` + タスクプロンプト送信で割り当て
+- [x] REQ-007: Conductor 監視（pull 型） — done マーカーファイル（`<outputDir>/done`）の存在で完了判定。フォールバックとして surface 消失でクラッシュ判定
+- [x] REQ-008: Conductor 監視（push 型） — CONDUCTOR_DONE キューメッセージ（Stop hook 経由）で即時完了検出
+- [x] REQ-009: 結果回収 — Conductor 完了検出時に `task-state.json` から journal サマリーを読み取り、ログに記録。Conductor リセット（Agent タブ閉じ + worktree 削除 + タブ名リセット + 状態を idle に戻す）
+- [x] REQ-010: Conductor 同時実行制限 — `CMUX_TEAM_MAX_CONDUCTORS`（デフォルト 3）で固定スロット数を制御
+- [x] REQ-011: Agent spawn — `main.ts spawn-agent` CLI でタブ作成（paneId があれば `cmux new-surface --pane`）・プロキシ設定・Trust 承認・タブ名設定・AGENT_SPAWNED キュー送信を一括実行
+- [x] REQ-012: Agent 監視 — Conductor が `cmux read-screen` で `❯` + `esc to interrupt` の有無で完了検出（pull 型）
+- [x] REQ-013: ファイルキュー — `.team/queue/*.json` に zod スキーマ検証済みメッセージを書き込み、daemon が定期ポーリングで処理。処理済みは `processed/` に移動
+- [x] REQ-014: TUI ダッシュボード — ink/React ベースのフルスクリーン表示（Header, Master, Conductors（Agent ツリー付き）, Tasks, Journal/Log タブ切り替え）。2秒間隔で自動更新
+- [x] REQ-015: ダッシュボードキーバインド — `1`=journal, `2`=log, `Tab`=切替, `r`=reload, `q`=quit
+- [x] REQ-016: git worktree 隔離 — タスク割り当て時に daemon が `.worktrees/<taskRunId>/` を作成。Conductor が完了時に削除
+- [x] REQ-017: worktree ブートストラップ — `package.json` があれば `npm install` を自動実行（daemon の `assignTask()` 内）
+- [x] REQ-018: Trust 自動承認 — `cmux read-screen` で「Yes, I trust」検出時に `cmux send-key return`（`cmux.waitForTrust()`）
+- [x] REQ-019: タブ名自動設定 — Conductor: `[num] ♦ #taskId title`（idle 時 `[num] ♦ idle`）、Agent: `[num] roleIcon title`
+- [x] REQ-020: graceful shutdown — `main.ts stop` / SHUTDOWN キューメッセージ / `q` キーで停止
+- [x] REQ-021: ステータス CLI — `main.ts status` で Master/Conductors/Tasks/Log を一括表示
+- [x] REQ-022: Agent 一覧 CLI — `main.ts agents` で稼働中エージェントを Conductor 別に表示
+- [x] REQ-023: Agent kill CLI — `main.ts kill-agent` で surface クローズ + AGENT_DONE キュー送信
+- [x] REQ-024: Master テンプレート — `templates/master.md` をコピーして `.team/prompts/master.md` を生成
+- [x] REQ-025: Conductor テンプレート — `conductor-role.md`（`--append-system-prompt-file` で永続ロール知識）+ `conductor-task.md`（タスク割り当て時にプレースホルダー展開して `.team/prompts/<taskRunId>.md` を生成）の2ファイル構成
+- [x] REQ-026: テンプレート検索 — daemon 自身の相対パス → plugin キャッシュ → プロジェクトローカル → 手動インストール先の順で検索（`findTemplateDir()`）
+- [x] REQ-027: ロギング — `.team/logs/manager.log` に `[ISO8601] event detail` 形式で追記
+- [x] REQ-028: ロギングプロキシ — Anthropic API への透過プロキシ。リクエスト/レスポンスを `.team/logs/traces/api-trace.jsonl` に JSONL 記録。streaming 対応。デバッグエンドポイント（`/state`, `/tasks`, `/conductors`）付き
+- [x] REQ-029: プロキシポート伝搬 — `.team/proxy-port` にポート番号を書き出し、`spawn-agent` CLI が Agent 起動時に `ANTHROPIC_BASE_URL` を設定
+- [x] REQ-030: hot reload — ダッシュボード `r` キーで plugin キャッシュの最新 `main.ts` を検索し、`exec` でプロセスを置換
+- [x] REQ-031: Conductor レビュー判断 — コードファイル（.ts, .py, .go 等）の変更がある場合のみ Reviewer Agent を起動（`conductor-role.md` テンプレートで定義）
+- [x] REQ-032: Conductor 納品 — ローカルマージ（デフォルト）または Pull Request の選択（`conductor-role.md` テンプレートで定義）
+- [x] REQ-033: Journal セクション — Conductor 完了時に `close-task --journal` でサマリーを `task-state.json` に記録。daemon が `collectResults()` で journal_summary を抽出してログに記録。TUI の Journal タブに表示
+- [x] REQ-034: タスク状態更新 CLI — `main.ts update-task --task-id <id> --status <status>` でタスクの状態を変更。`ready` への変更時は TASK_CREATED を送信
+- [x] REQ-035: Conductor リセット — タスク完了後に daemon が Agent タブ閉じ + worktree 削除 + タブ名リセット + ConductorState を idle に戻す（`resetConductor()`）
+- [x] REQ-036: Conductor 状態復元 — daemon リロード時に `team.json` から Conductor 状態を復元し、二重起動を防止
+- [x] REQ-037: done マーカー二重確認 — `doneCandidate` フラグで2回連続 done 判定されたときのみ完了処理（起動直後の誤判定防止）
 
 ### Nice-to-have
 
-- [ ] REQ-N01: ペインレイアウト最適化 — `right` と `down` を組み合わせたグリッドレイアウト（2x2, 2x3）
-- [ ] REQ-N02: ワークスペース分離 — 7ペイン以上はワークスペースを分けて対応
-- [ ] REQ-N03: E2E テストランナー — `e2e.ts` による自動化テスト（sequential, parallel, interrupt シナリオ）
+- [ ] REQ-N01: E2E テストランナー — `e2e.ts` による自動化テスト（sequential, parallel, interrupt シナリオ）
 
 ### Out of scope
 
@@ -107,7 +108,7 @@ cmux 内で Claude Code を使う開発者。Claude Max 推奨（複数セッシ
 
 - NFR-001: ポーリング間隔 — `CMUX_TEAM_POLL_INTERVAL`（デフォルト 10秒）で設定可能
 - NFR-002: 同時 Conductor 数 — `CMUX_TEAM_MAX_CONDUCTORS`（デフォルト 3）で設定可能
-- NFR-003: Conductor spawn 後ガード期間 — 30秒間は「done」判定しない（起動中の誤判定防止）
+- NFR-003: done マーカー二重確認 — `doneCandidate` フラグで2 tick 連続 done 判定時のみ完了処理（起動中の誤判定防止）
 - NFR-004: API トレース — streaming レスポンスはブロックせず非同期でバイト数を記録
 - NFR-005: 言語 — ドキュメント・コメント: 日本語、コード: 英語
 - NFR-006: ライセンス — MIT
@@ -133,48 +134,43 @@ cmux 内で Claude Code を使う開発者。Claude Max 推奨（複数セッシ
 
 ## キューメッセージスキーマ
 
-zod で定義された6種類のメッセージ:
+zod で定義された5種類のメッセージ:
 
 | メッセージ | 方向 | 用途 |
 |-----------|------|------|
-| `TASK_CREATED` | Master → daemon | タスク作成通知 |
-| `TODO` | Master → daemon | 軽微な作業の即時実行依頼 |
-| `CONDUCTOR_DONE` | Conductor → daemon | Conductor 完了通知（success/failure + 理由） |
-| `AGENT_SPAWNED` | Conductor → daemon | Agent 起動通知（surface + role） |
-| `AGENT_DONE` | CLI → daemon | Agent 完了/kill 通知 |
+| `TASK_CREATED` | Master → daemon | タスク作成通知（`taskId`, `taskFile`） |
+| `CONDUCTOR_DONE` | Conductor → daemon | Conductor 完了通知（`conductorId`, `surface`, `success`, `reason?`, `exitCode?`, `sessionId?`, `transcriptPath?`） |
+| `AGENT_SPAWNED` | spawn-agent CLI → daemon | Agent 起動通知（`conductorId`, `surface`, `role?`） |
+| `AGENT_DONE` | kill-agent CLI → daemon | Agent 完了/kill 通知（`conductorId`, `surface`） |
 | `SHUTDOWN` | CLI → daemon | graceful shutdown 要求 |
 
 ## ファイルシステム構造
 
 ```
 .team/
-├── team.json              # チーム状態（daemon が更新）
+├── team.json              # チーム状態（daemon が自動更新）
+├── task-state.json        # タスク状態（status, closedAt, journal）
 ├── queue/                 # メッセージキュー
 │   ├── *.json             # 未処理メッセージ
 │   └── processed/         # 処理済みメッセージ
-├── tasks/
-│   ├── open/              # Master が作成、daemon が読む
-│   │   └── <id>-<slug>.md # YAML frontmatter + Markdown
-│   ├── closed/            # daemon が完了時に移動
-│   └── archived/          # 手動アーカイブ
+├── tasks/                 # タスクファイル（フラット構造）
+│   └── <id>-<slug>.md    # YAML frontmatter + Markdown
 ├── output/
-│   └── conductor-<N>/     # Conductor が書く、daemon が読む
+│   └── <taskRunId>/       # Conductor が書く、daemon が読む
 │       ├── summary.md
 │       └── done           # 完了マーカー
 ├── prompts/               # テンプレートから生成されたプロンプト
 │   ├── master.md
-│   ├── conductor-<N>.md
-│   └── conductor-<N>-settings.json  # Conductor 用 hook 設定
-├── specs/                 # 仕様書（git tracked）
+│   ├── conductor-role.md  # 全 Conductor 共有のロールプロンプト
+│   └── <taskRunId>.md     # タスク別プロンプト
+├── specs/                 # 仕様書
 ├── logs/
 │   ├── manager.log        # daemon ログ
 │   └── traces/
 │       └── api-trace.jsonl # API トレース
 ├── scripts/               # ランタイムスクリプト
-├── manager/               # daemon ランタイム（起動時にコピー/参照）
 ├── proxy-port             # ロギングプロキシのポート番号
-├── e2e-results/           # E2E テスト結果
-└── .gitignore             # output/, prompts/, logs/, queue/ を除外
+└── .gitignore             # output/, prompts/, logs/, queue/, task-state.json を除外
 ```
 
 ## タスクファイル形式
@@ -184,7 +180,6 @@ zod で定義された6種類のメッセージ:
 id: <連番>
 title: <タスク名>
 priority: high|medium|low
-status: draft|ready
 created_at: <ISO 8601>
 depends_on: [<id>, ...]    # オプション
 ---
@@ -197,27 +192,27 @@ depends_on: [<id>, ...]    # オプション
 
 ## 完了条件
 <何をもって完了とするか>
-
-## Journal                  # Conductor が完了時に追記
-- summary: <1行サマリー>
-- files_changed: <数>
 ```
+
+**注意**: `status` フィールドはタスクファイル内ではなく `task-state.json` で管理する。タスクファイルの frontmatter に `status` があっても、`task-state.json` の値で上書きされる。
 
 ## daemon CLI インターフェース
 
 ```
-main.ts start                                          daemon 起動 + Master spawn + ダッシュボード
+main.ts start                                          daemon 起動 + レイアウト構築 + Master spawn + ダッシュボード
 main.ts send TASK_CREATED --task-id <id> --task-file <path>
-main.ts send TODO --content <text>
-main.ts send CONDUCTOR_DONE --conductor-id <id> --surface <s> [--success true|false] [--reason <msg>]
+main.ts send CONDUCTOR_DONE --conductor-id <id> --surface <s> [--success true|false] [--reason <msg>] [--exit-code <n>] [--session-id <id>] [--transcript-path <path>]
 main.ts send AGENT_SPAWNED --conductor-id <id> --surface <s> [--role <role>]
 main.ts send AGENT_DONE --conductor-id <id> --surface <s>
 main.ts send SHUTDOWN
 main.ts status [--log <N>]                             ステータス表示
 main.ts stop                                           graceful shutdown
-main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt> [--task-title <title>]
+main.ts spawn-agent --conductor-id <id> --role <role> (--prompt <prompt> | --prompt-file <path>) [--task-title <title>]
 main.ts agents                                         稼働中エージェント一覧
 main.ts kill-agent --surface <s> [--conductor-id <id>]
+main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
+main.ts update-task --task-id <id> --status <status>
+main.ts close-task --task-id <id> [--journal <text>]
 ```
 
 ## スラッシュコマンド一覧
@@ -244,12 +239,12 @@ main.ts kill-agent --surface <s> [--conductor-id <id>]
 |------|-----------|------|
 | `PROJECT_ROOT` | 自動検出 | プロジェクトルート |
 | `CMUX_TEAM_POLL_INTERVAL` | `10000` | daemon ポーリング間隔（ms） |
-| `CMUX_TEAM_MAX_CONDUCTORS` | `3` | 同時 Conductor 数上限 |
+| `CMUX_TEAM_MAX_CONDUCTORS` | `3` | 同時 Conductor 数上限（固定スロット数） |
 | `CMUX_SOCKET_PATH` | （cmux 環境で自動設定） | cmux ソケットパス |
 | `ANTHROPIC_API_URL` | `https://api.anthropic.com` | プロキシのアップストリーム |
 | `ANTHROPIC_BASE_URL` | （プロキシが設定） | Agent に渡すプロキシ URL |
-| `CONDUCTOR_ID` | （daemon が設定） | Conductor の識別子 |
-| `TASK_ID` | （daemon が設定） | タスクの識別子 |
+| `CONDUCTOR_ID` | （spawn-agent が設定） | Agent に渡す Conductor 識別子 |
+| `ROLE` | （spawn-agent が設定） | Agent に渡すロール名 |
 
 ## 前提条件
 
@@ -261,104 +256,6 @@ main.ts kill-agent --surface <s> [--conductor-id <id>]
 ## 未決事項
 
 - daemon のクラッシュリカバリ: 現状は手動再起動が必要。プロセス監視や自動再起動の仕組みはない
-- Conductor の最大リトライ回数: クラッシュ時に再 spawn するかどうかの方針が未定義
+- Conductor の最大リトライ回数: クラッシュ時は idle に戻すが、再試行ポリシーが未定義
 - API トレースからのコスト集計: JSONL データは蓄積されるが、集計 UI や分析ツールはない
 - E2E テストの CI 統合: cmux 環境が必要なため、CI での自動実行方法が未定
-
----
-
-## `skills/cmux-team/SKILL.md` との相違点
-
-以下は **`skills/cmux-team/SKILL.md`**（Master が読み込む4層アーキテクチャ定義スキル）の記述と実装の間の乖離一覧。修正判断は別途行う。
-
-### 1. Manager の実体（SKILL.md §0, §2 全般）
-
-**SKILL.md の記述**: Manager は別ペインで動作する Claude Code セッション（Sonnet モデル）。`cmux send` でプロンプト送信、イベント駆動で起床。
-
-**実装**: Manager は **TypeScript daemon** (`main.ts`)。Claude セッションではない。bun で実行され、ink ベースの TUI ダッシュボードを表示する。
-
-**影響範囲**: §2 の全サブセクション（2.1〜2.5）が大幅に異なる。
-
-### 2. Manager spawn 手順（SKILL.md §1「Manager spawn 手順」）
-
-**SKILL.md の記述**: `cmux new-split right` → `cmux send` で `claude --dangerously-skip-permissions --model sonnet` を起動。
-
-**実装**: daemon は `bun run main.ts start` で起動。Master を spawn するのは daemon の `startMaster()` 関数。Master テンプレート (`master.md`) にも「Manager は TypeScript プロセスで動作する」と正しく記載されている。
-
-### 3. 通信方式（SKILL.md §5）
-
-**SKILL.md の記述**: `Master → Manager` は `.team/tasks/open/` + `cmux send` 通知。
-
-**実装**: `Master → daemon` は **CLI** (`main.ts send`) → `.team/queue/*.json` ファイルキュー。`cmux send` は使わない。
-
-### 4. Conductor 起動方式（SKILL.md §2.2）
-
-**SKILL.md の記述**: `.team/scripts/spawn-conductor.sh` にシェルスクリプトとして委譲。
-
-**実装**: `conductor.ts` の `spawnConductor()` 関数で TypeScript から直接実行。シェルスクリプトではない。`spawn-conductor.sh` はレガシーとして `.team/scripts/` に残存するが使用されていない。
-
-### 5. Conductor 完了検出（SKILL.md §2.3）
-
-**SKILL.md の記述**: pull 型のみ（`cmux read-screen` で `❯` 検出）。
-
-**実装**: pull 型（`cmux read-screen`）**+ push 型**（Claude Code Stop hook → CONDUCTOR_DONE キューメッセージ）のハイブリッド。push 型が先に検出されることが多い。
-
-### 6. Agent 起動方式（SKILL.md §3.3）
-
-**SKILL.md の記述**: Conductor が `cmux new-split` + `cmux send` で直接起動。
-
-**実装**: Conductor が **`main.ts spawn-agent` CLI** を呼び出す。CLI がペイン作成・Trust 承認・タブ名設定・daemon 通知（AGENT_SPAWNED）を一括実行する。
-
-### 7. Conductor Hook 設定（SKILL.md 未記載）
-
-**SKILL.md**: Hook ベースのイベント検出に関する記述なし。
-
-**実装**: Conductor spawn 時に `<conductor-id>-settings.json` を生成し、`--settings` オプションで渡す。PostToolUse hook（Agent spawn 検出）+ Stop hook（Conductor 完了通知）を自動設定。
-
-### 8. ロギングプロキシ（SKILL.md 未記載）
-
-**SKILL.md**: API トレース機能に関する記述なし。
-
-**実装**: `proxy.ts` が Anthropic API への透過プロキシを提供。リクエスト/レスポンスの JSONL トレース記録。Agent には `ANTHROPIC_BASE_URL` でプロキシ経由を指定。
-
-### 9. TUI ダッシュボード（SKILL.md 未記載）
-
-**SKILL.md**: Manager のダッシュボード機能に関する記述なし。
-
-**実装**: `dashboard.tsx` が ink/React ベースのフルスクリーン TUI を提供。Header、Master、Conductors（Agent ツリー付き）、Tasks、Journal/Log タブ。2秒間隔で自動更新。キーボードショートカット対応。
-
-### 10. team.json の構造（SKILL.md §6）
-
-**SKILL.md の記述**: `manager` フィールドに `surface` と `status` のみ。
-
-**実装**: `manager` フィールドに `pid`（プロセスID）と `type: "typescript"` を含む。`conductors` に `taskTitle` と `agents` 配列を含む。
-
-### 11. hot reload（SKILL.md 未記載）
-
-**SKILL.md**: reload 機能に関する記述なし。
-
-**実装**: ダッシュボード `r` キーで plugin キャッシュの最新 `main.ts` を検索し、`exec` でプロセスを置換。
-
-### 12. レビュー判断（SKILL.md 未記載）
-
-**SKILL.md**: Conductor のレビュー判断ロジックに関する記述なし。
-
-**実装**: `conductor.md` テンプレートにレビュー判断基準が定義。コードファイル（.ts, .py, .go 等）の変更がある場合のみ Reviewer Agent を起動。
-
-### 13. Journal セクション（SKILL.md 未記載）
-
-**SKILL.md**: タスク完了時の Journal 追記に関する記述なし。
-
-**実装**: Conductor が完了時にタスクファイルに `## Journal` セクションを追記（summary, files_changed）。daemon が `collectResults()` で journal_summary を抽出してログに記録。TUI の Journal タブに表示。
-
-### 14. spawn-agent CLI（SKILL.md 未記載）
-
-**SKILL.md**: daemon の `spawn-agent` サブコマンドに関する記述なし。
-
-**実装**: `main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt>` で Agent のペイン作成・Trust 承認・タブ名設定・AGENT_SPAWNED 通知を一括実行。Conductor テンプレートからも参照されている。
-
-### 15. E2E テストランナー（SKILL.md 未記載）
-
-**SKILL.md**: E2E テストに関する記述なし。
-
-**実装**: `e2e.ts` が3シナリオ（sequential dependencies, parallel + consolidation, interrupt TODO）の自動テストを提供。独立した cmux workspace で daemon のフルライフサイクルを検証。
