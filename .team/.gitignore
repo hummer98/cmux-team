@@ -4,4 +4,4 @@ docs-snapshot/
 status.json
 logs/
 queue/
-tasks/
+task-state.json

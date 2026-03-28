@@ -68,8 +68,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
 
 export async function initInfra(state: DaemonState): Promise<void> {
   const root = state.projectRoot;
-  await mkdir(join(root, ".team/tasks/open"), { recursive: true });
-  await mkdir(join(root, ".team/tasks/closed"), { recursive: true });
+  await mkdir(join(root, ".team/tasks"), { recursive: true });
   await mkdir(join(root, ".team/output"), { recursive: true });
   await mkdir(join(root, ".team/prompts"), { recursive: true });
   await mkdir(join(root, ".team/logs"), { recursive: true });
@@ -228,24 +227,33 @@ async function processQueue(state: DaemonState): Promise<void> {
 }
 
 async function scanTasks(state: DaemonState): Promise<void> {
-  const { open, closed, closedMetas } = await loadTasks(state.projectRoot);
-  state.openTasks = open.length;
+  const { tasks, taskState } = await loadTasks(state.projectRoot);
+
+  const closed = new Set(
+    Object.entries(taskState)
+      .filter(([_, s]) => s.status === "closed")
+      .map(([id]) => id)
+  );
+
+  const openTasksList = tasks.filter(t => t.status !== "closed");
+  state.openTasks = openTasksList.length;
 
   const assignedIds = new Set(
     [...state.conductors.values()].map((c) => c.taskId).filter((id): id is string => !!id)
   );
 
   const executable = sortByPriority(
-    filterExecutableTasks(open, closed, assignedIds)
+    filterExecutableTasks(openTasksList, closed, assignedIds)
   );
   state.pendingTasks = executable.length;
 
   // taskList: open を優先表示、残り枠で closed（直近）を表示
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  const openTasks = [...open]
+  const openTasks = [...openTasksList]
     .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1));
+  const closedMetas = tasks.filter(t => t.status === "closed");
   const closedTasks = [...closedMetas]
-    .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
+    .sort((a, b) => (taskState[b.id]?.closedAt ?? "").localeCompare(taskState[a.id]?.closedAt ?? ""));
   const maxItems = Math.max(5, openTasks.length);
   const combined = [...openTasks, ...closedTasks.slice(0, maxItems - openTasks.length)];
   state.taskList = combined.map((t) => ({
@@ -253,7 +261,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     title: t.title,
     status: t.status,
     createdAt: t.createdAt,
-    closedAt: t.closedAt,
+    closedAt: taskState[t.id]?.closedAt,
   }));
 
   for (const task of executable) {

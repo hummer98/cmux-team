@@ -19,13 +19,14 @@
 
 import { join, dirname } from "path";
 import { existsSync } from "fs";
-import { readFile, readdir, writeFile, mkdir, rename } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
+import { loadTaskState, saveTaskState } from "./task";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -312,12 +313,12 @@ async function cmdStatus(): Promise<void> {
   }
 
   // --- Tasks ---
-  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
-  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
-  let openCount = 0;
-  let closedCount = 0;
-  try { openCount = (await readdir(openDir)).filter(f => f.endsWith(".md")).length; } catch {}
-  try { closedCount = (await readdir(closedDir)).filter(f => f.endsWith(".md")).length; } catch {}
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
+  let totalCount = 0;
+  try { totalCount = (await readdir(tasksDir)).filter(f => f.endsWith(".md")).length; } catch {}
+  const closedCount = Object.values(taskState).filter(s => s.status === "closed").length;
+  const openCount = totalCount - closedCount;
   console.log(`─ Tasks ${"─".repeat(51)}`);
   console.log(`  open: ${openCount}  closed: ${closedCount}`);
 
@@ -519,32 +520,27 @@ async function cmdCreateTask(): Promise<void> {
   if (!slug) slug = "task";
 
   // 最大 ID 取得
-  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
-  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
-  await mkdir(openDir, { recursive: true });
-  await mkdir(closedDir, { recursive: true });
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
+  await mkdir(tasksDir, { recursive: true });
 
   let maxId = 0;
-  for (const dir of [openDir, closedDir]) {
-    try {
-      const files = await readdir(dir);
-      for (const f of files) {
-        const n = parseInt(f, 10);
-        if (!isNaN(n) && n > maxId) maxId = n;
-      }
-    } catch {}
-  }
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      const n = parseInt(f, 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+    }
+  } catch {}
 
   const newId = String(maxId + 1).padStart(3, "0");
   const fileName = `${newId}-${slug}.md`;
-  const filePath = join(openDir, fileName);
+  const filePath = join(tasksDir, fileName);
 
-  // タスクファイル生成
+  // タスクファイル生成（status は含めない — task-state.json で管理）
   const content = `---
 id: ${newId}
 title: ${title}
 priority: ${priority}
-status: ${status}
 created_at: ${new Date().toISOString()}
 ---
 
@@ -552,6 +548,11 @@ created_at: ${new Date().toISOString()}
 ${body}
 `;
   await writeFile(filePath, content);
+
+  // task-state.json に初期状態を書き込む
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  taskState[newId] = { status };
+  await saveTaskState(PROJECT_ROOT, taskState);
 
   // status が ready の場合のみ TASK_CREATED を送信
   if (status === "ready") {
@@ -564,7 +565,7 @@ ${body}
     });
   }
 
-  const relPath = `.team/tasks/open/${fileName}`;
+  const relPath = `.team/tasks/${fileName}`;
   console.log(`TASK_ID=${newId} FILE=${relPath}`);
 }
 
@@ -572,14 +573,14 @@ async function cmdUpdateTask(): Promise<void> {
   const taskId = requireArg("task-id");
   const newStatus = requireArg("status");
 
-  // open/ からタスクファイルを検索
-  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
+  // tasks/ からタスクファイルを検索（存在確認のみ）
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
   let taskFile: string | undefined;
   try {
-    const files = await readdir(openDir);
+    const files = await readdir(tasksDir);
     for (const f of files) {
       if (f.endsWith(".md") && f.startsWith(taskId)) {
-        taskFile = join(openDir, f);
+        taskFile = join(tasksDir, f);
         break;
       }
     }
@@ -588,13 +589,13 @@ async function cmdUpdateTask(): Promise<void> {
   if (!taskFile) {
     // ファイル名が数値IDで始まらない場合、frontmatter の id でも検索
     try {
-      const files = await readdir(openDir);
+      const files = await readdir(tasksDir);
       for (const f of files) {
         if (!f.endsWith(".md")) continue;
-        const content = await readFile(join(openDir, f), "utf-8");
+        const content = await readFile(join(tasksDir, f), "utf-8");
         const idMatch = content.match(/^id:\s*(.+)$/m);
         if (idMatch && idMatch[1].trim() === taskId) {
-          taskFile = join(openDir, f);
+          taskFile = join(tasksDir, f);
           break;
         }
       }
@@ -602,14 +603,14 @@ async function cmdUpdateTask(): Promise<void> {
   }
 
   if (!taskFile) {
-    console.error(`Error: task ${taskId} not found in .team/tasks/open/`);
+    console.error(`Error: task ${taskId} not found in .team/tasks/`);
     process.exit(1);
   }
 
-  // frontmatter の status を書き換え
-  let content = await readFile(taskFile, "utf-8");
-  content = content.replace(/^status:\s*.+$/m, `status: ${newStatus}`);
-  await writeFile(taskFile, content);
+  // task-state.json の status を更新（ファイル自体は変更しない）
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  taskState[taskId] = { ...taskState[taskId], status: newStatus };
+  await saveTaskState(PROJECT_ROOT, taskState);
 
   // ready に変更された場合は TASK_CREATED を送信
   if (newStatus === "ready") {
@@ -629,54 +630,48 @@ async function cmdCloseTask(): Promise<void> {
   const taskId = requireArg("task-id");
   const journal = getArg("journal");
 
-  // open/ からタスクファイルを検索
-  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
-  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
+  // tasks/ からタスクファイルを検索（存在確認のみ）
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
   let taskFile: string | undefined;
-  let taskFileName: string | undefined;
   try {
-    const files = await readdir(openDir);
+    const files = await readdir(tasksDir);
     for (const f of files) {
       if (f.endsWith(".md") && f.startsWith(taskId)) {
-        taskFile = join(openDir, f);
-        taskFileName = f;
+        taskFile = join(tasksDir, f);
         break;
       }
     }
   } catch {}
 
-  if (!taskFile || !taskFileName) {
+  if (!taskFile) {
     // frontmatter の id でも検索
     try {
-      const files = await readdir(openDir);
+      const files = await readdir(tasksDir);
       for (const f of files) {
         if (!f.endsWith(".md")) continue;
-        const content = await readFile(join(openDir, f), "utf-8");
+        const content = await readFile(join(tasksDir, f), "utf-8");
         const idMatch = content.match(/^id:\s*(.+)$/m);
         if (idMatch && idMatch[1].trim() === taskId) {
-          taskFile = join(openDir, f);
-          taskFileName = f;
+          taskFile = join(tasksDir, f);
           break;
         }
       }
     } catch {}
   }
 
-  if (!taskFile || !taskFileName) {
-    console.error(`Error: task ${taskId} not found in .team/tasks/open/`);
+  if (!taskFile) {
+    console.error(`Error: task ${taskId} not found in .team/tasks/`);
     process.exit(1);
   }
 
-  // Journal 追記
-  if (journal) {
-    let content = await readFile(taskFile, "utf-8");
-    content += `\n## Journal\n\n- summary: ${journal}\n- closed_at: ${new Date().toISOString()}\n`;
-    await writeFile(taskFile, content);
-  }
-
-  // closed/ に移動
-  await mkdir(closedDir, { recursive: true });
-  await rename(taskFile, join(closedDir, taskFileName));
+  // task-state.json で closed + closedAt + journal を設定（ファイルは移動しない）
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  taskState[taskId] = {
+    status: "closed",
+    closedAt: new Date().toISOString(),
+    ...(journal ? { journal } : {}),
+  };
+  await saveTaskState(PROJECT_ROOT, taskState);
 
   console.log(`OK closed ${taskId}`);
 }

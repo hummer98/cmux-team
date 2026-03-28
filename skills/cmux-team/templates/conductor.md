@@ -244,7 +244,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
    git worktree remove {{WORKTREE_PATH}} --force 2>/dev/null || true
    git branch -d {{CONDUCTOR_ID}}/task 2>/dev/null || true
    ```
-7. **タスクファイルを closed/ に移動する**（Journal 追記 + closed/ 移動を一括実行）:
+7. **タスクを close する**（task-state.json に状態を記録）:
    ```bash
    bun run "$MAIN_TS" close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
    ```

@@ -11,8 +11,7 @@ beforeEach(async () => {
   process.env.PROJECT_ROOT = testDir;
 
   // .team 構造を作成
-  await mkdir(join(testDir, ".team/tasks/open"), { recursive: true });
-  await mkdir(join(testDir, ".team/tasks/closed"), { recursive: true });
+  await mkdir(join(testDir, ".team/tasks"), { recursive: true });
   await mkdir(join(testDir, ".team/queue/processed"), { recursive: true });
   await mkdir(join(testDir, ".team/output"), { recursive: true });
   await mkdir(join(testDir, ".team/prompts"), { recursive: true });
@@ -50,7 +49,6 @@ async function createTask(
 id: ${id}
 title: ${slug}
 priority: ${priority}
-status: ${status}
 created_at: ${new Date().toISOString()}`;
 
   if (dependsOn?.length) {
@@ -60,21 +58,23 @@ created_at: ${new Date().toISOString()}`;
   yaml += `\n---\n\n## タスク\n${content}\n`;
 
   await writeFile(
-    join(testDir, `.team/tasks/open/${id.padStart(3, "0")}-${slug}.md`),
+    join(testDir, `.team/tasks/${id.padStart(3, "0")}-${slug}.md`),
     yaml
   );
+
+  // task-state.json に状態を書き込む
+  const { saveTaskState, loadTaskState } = await import("./task");
+  const taskState = await loadTaskState(testDir);
+  taskState[id] = { status };
+  await saveTaskState(testDir, taskState);
 }
 
-// ヘルパー: タスクを closed に移動
+// ヘルパー: タスクを closed にする（task-state.json を更新）
 async function closeTask(id: string): Promise<void> {
-  const openDir = join(testDir, ".team/tasks/open");
-  const closedDir = join(testDir, ".team/tasks/closed");
-  const files = await readdir(openDir);
-  const file = files.find((f) => f.match(new RegExp(`^0*${id}-`)));
-  if (file) {
-    const { rename } = await import("fs/promises");
-    await rename(join(openDir, file), join(closedDir, file));
-  }
+  const { saveTaskState, loadTaskState } = await import("./task");
+  const taskState = await loadTaskState(testDir);
+  taskState[id] = { status: "closed", closedAt: new Date().toISOString() };
+  await saveTaskState(testDir, taskState);
 }
 
 // ヘルパー: キューメッセージを作成
@@ -90,6 +90,18 @@ async function enqueueMessage(message: any): Promise<void> {
 // --- task.ts の統合テスト（ファイルシステム経由）---
 
 import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
+import type { TaskMeta, TaskStateMap } from "./task";
+
+// ヘルパー: loadTasks の結果から open タスクと closed ID セットを導出
+function deriveOpenClosed(result: { tasks: TaskMeta[]; taskState: TaskStateMap }) {
+  const closed = new Set(
+    Object.entries(result.taskState)
+      .filter(([_, s]) => s.status === "closed")
+      .map(([id]) => id)
+  );
+  const open = result.tasks.filter(t => t.status !== "closed");
+  return { open, closed };
+}
 
 describe("タスク依存解決（ファイルシステム統合）", () => {
   test("UC1: 連鎖依存 A→B→C の段階的実行", async () => {
@@ -98,7 +110,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("3", "implement", { dependsOn: ["2"] });
 
     // Phase 1: A のみ実行可能
-    let { open, closed } = await loadTasks(testDir);
+    let { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     let executable = filterExecutableTasks(open, closed, new Set());
     expect(executable.map((t) => t.id)).toEqual(["1"]);
 
@@ -106,7 +118,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await closeTask("1");
 
     // Phase 2: B が実行可能
-    ({ open, closed } = await loadTasks(testDir));
+    ({ open, closed } = deriveOpenClosed(await loadTasks(testDir)));
     executable = filterExecutableTasks(open, closed, new Set());
     expect(executable.map((t) => t.id)).toEqual(["2"]);
 
@@ -114,7 +126,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await closeTask("2");
 
     // Phase 3: C が実行可能
-    ({ open, closed } = await loadTasks(testDir));
+    ({ open, closed } = deriveOpenClosed(await loadTasks(testDir)));
     executable = filterExecutableTasks(open, closed, new Set());
     expect(executable.map((t) => t.id)).toEqual(["3"]);
   });
@@ -126,7 +138,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("13", "consolidate-report", { dependsOn: ["10", "11", "12"] });
 
     // Phase 1: 3 つの調査が並列実行可能
-    let { open, closed } = await loadTasks(testDir);
+    let { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     let executable = sortByPriority(filterExecutableTasks(open, closed, new Set()));
     expect(executable.map((t) => t.id).sort()).toEqual(["10", "11", "12"]);
 
@@ -134,7 +146,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await closeTask("10");
     await closeTask("11");
 
-    ({ open, closed } = await loadTasks(testDir));
+    ({ open, closed } = deriveOpenClosed(await loadTasks(testDir)));
     executable = filterExecutableTasks(open, closed, new Set(["12"]));
     // 統合はまだ不可（12 が未完了）
     expect(executable.map((t) => t.id)).toEqual([]);
@@ -142,7 +154,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     // 12 完了
     await closeTask("12");
 
-    ({ open, closed } = await loadTasks(testDir));
+    ({ open, closed } = deriveOpenClosed(await loadTasks(testDir)));
     executable = filterExecutableTasks(open, closed, new Set());
     expect(executable.map((t) => t.id)).toEqual(["13"]);
   });
@@ -151,14 +163,14 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("20", "implement-feature", { priority: "medium" });
 
     // 実装タスクがアサイン済み
-    let { open, closed } = await loadTasks(testDir);
+    let { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     let executable = filterExecutableTasks(open, closed, new Set(["20"]));
     expect(executable).toHaveLength(0);
 
     // 新規タスクが追加される
     await createTask("99999", "cleanup", { priority: "medium" });
 
-    ({ open, closed } = await loadTasks(testDir));
+    ({ open, closed } = deriveOpenClosed(await loadTasks(testDir)));
     executable = filterExecutableTasks(open, closed, new Set(["20"]));
     expect(executable.map((t) => t.id)).toEqual(["99999"]);
   });
@@ -170,7 +182,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("4", "task-d", { priority: "medium" });
     await createTask("5", "task-e", { priority: "low" });
 
-    const { open, closed } = await loadTasks(testDir);
+    const { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     const executable = sortByPriority(
       filterExecutableTasks(open, closed, new Set())
     );
@@ -189,7 +201,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("1", "draft-task", { status: "draft" });
     await createTask("2", "ready-task", { status: "ready" });
 
-    const { open, closed } = await loadTasks(testDir);
+    const { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     const executable = filterExecutableTasks(open, closed, new Set());
     expect(executable.map((t) => t.id)).toEqual(["2"]);
   });
@@ -199,7 +211,7 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
     await createTask("2", "high-priority", { priority: "high" });
     await createTask("3", "medium-priority", { priority: "medium" });
 
-    const { open, closed } = await loadTasks(testDir);
+    const { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     const executable = sortByPriority(
       filterExecutableTasks(open, closed, new Set())
     );
@@ -303,29 +315,29 @@ describe("テンプレート生成", () => {
 
 describe("エラーハンドリング", () => {
   test("タスクディレクトリが存在しない場合でもクラッシュしない", async () => {
-    await rm(join(testDir, ".team/tasks/open"), { recursive: true, force: true });
+    await rm(join(testDir, ".team/tasks"), { recursive: true, force: true });
 
-    const { open, closed } = await loadTasks(testDir);
-    expect(open).toEqual([]);
+    const { tasks } = await loadTasks(testDir);
+    expect(tasks).toEqual([]);
   });
 
   test("frontmatter なしのタスクファイルはスキップされる", async () => {
     await writeFile(
-      join(testDir, ".team/tasks/open/001-bad.md"),
+      join(testDir, ".team/tasks/001-bad.md"),
       "# ただのマークダウン\n\nfrontmatter なし"
     );
     await createTask("2", "good-task");
 
-    const { open } = await loadTasks(testDir);
-    expect(open).toHaveLength(1);
-    expect(open[0]!.id).toBe("2");
+    const { tasks } = await loadTasks(testDir);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.id).toBe("2");
   });
 
   test("循環依存のタスクは永久に実行されない（安全に停止）", async () => {
     await createTask("1", "task-a", { dependsOn: ["2"] });
     await createTask("2", "task-b", { dependsOn: ["1"] });
 
-    const { open, closed } = await loadTasks(testDir);
+    const { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     const executable = filterExecutableTasks(open, closed, new Set());
     // どちらも依存が解決されないので実行不可
     expect(executable).toHaveLength(0);
@@ -334,7 +346,7 @@ describe("エラーハンドリング", () => {
   test("存在しない依存先を持つタスクは実行されない", async () => {
     await createTask("1", "task-a", { dependsOn: ["999"] });
 
-    const { open, closed } = await loadTasks(testDir);
+    const { open, closed } = deriveOpenClosed(await loadTasks(testDir));
     const executable = filterExecutableTasks(open, closed, new Set());
     expect(executable).toHaveLength(0);
   });
