@@ -259,16 +259,16 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
         const assigned = assignedTaskIds.has(task.id);
         const isClosed = task.status === "closed";
         const isDraft = !assigned && task.status === "draft";
-        const color = assigned ? "green" : task.status === "ready" ? "yellow" : isClosed ? "#888888" : undefined;
+        const color = assigned ? "green" : task.status === "ready" ? "yellow" : isClosed ? "#aaaaaa" : undefined;
         const title = task.isTodo ? `TODO: ${task.title}` : task.title;
         const elapsed = task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
         const label = assigned ? "running" : task.status;
         return (
           <Box key={task.id} paddingLeft={1}>
-            <Text color={color} dimColor={isClosed}>{isClosed ? "○" : "●"} </Text>
-            <Text color={color} bold={!isClosed} dimColor={isClosed}>{task.id.padStart(3, '0')}</Text>
-            <Text color={color} dimColor={isClosed}> [{label}] {title}</Text>
-            {elapsed && <Text color={color} dimColor={isClosed}>{elapsed}</Text>}
+            <Text color={color}>{isClosed ? "○" : "●"} </Text>
+            <Text color={color} bold={!isClosed}>{task.id.padStart(3, '0')}</Text>
+            <Text color={color}> [{label}] {title}</Text>
+            {elapsed && <Text color={color}>{elapsed}</Text>}
           </Box>
         );
       })}
