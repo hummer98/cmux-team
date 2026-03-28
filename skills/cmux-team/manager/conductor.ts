@@ -6,6 +6,7 @@ import { promisify } from "util";
 import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import { join, dirname } from "path";
+import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorRolePrompt, generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
@@ -116,7 +117,7 @@ export async function assignTask(
     const taskRunId = `run-${Math.floor(Date.now() / 1000)}`;
 
     // --- 1. タスクファイル検索 ---
-    const tasksDir = join(projectRoot, ".team/tasks/open");
+    const tasksDir = join(projectRoot, ".team/tasks");
     const files = await readdir(tasksDir);
     const taskFile = files.find((f) => {
       const id = f.match(/^0*(\d+)/)?.[1];
@@ -286,20 +287,13 @@ export async function collectResults(
 ): Promise<{ journalSummary?: string }> {
   const result: { journalSummary?: string } = {};
 
-  // Journal サマリーを抽出（closed/ から検索）
+  // Journal サマリーを task-state.json から読み取る
   try {
-    const closedDir = join(projectRoot, ".team/tasks/closed");
-    const files = await readdir(closedDir);
-    const taskFile = files.find((f) => {
-      const fileId = f.match(/^0*(\d+)/)?.[1];
-      return conductor.taskId && (fileId === conductor.taskId || fileId === conductor.taskId.replace(/^0+/, ""));
-    });
-    if (taskFile) {
-      const content = await readFile(join(closedDir, taskFile), "utf-8");
-      const journalMatch = content.match(/## Journal\s*\n([\s\S]*?)(?=\n## |\n---|$)/);
-      if (journalMatch) {
-        const summaryMatch = journalMatch[1]?.match(/summary:\s*(.+)/i);
-        if (summaryMatch) result.journalSummary = summaryMatch[1]?.trim();
+    if (conductor.taskId) {
+      const taskState = await loadTaskState(projectRoot);
+      const state = taskState[conductor.taskId];
+      if (state?.journal) {
+        result.journalSummary = state.journal;
       }
     }
   } catch {}

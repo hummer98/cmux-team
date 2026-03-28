@@ -1,7 +1,7 @@
 /**
  * タスクファイルのパース・依存解決
  */
-import { readdir, readFile, stat } from "fs/promises";
+import { readdir, readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -14,8 +14,15 @@ export interface TaskMeta {
   filePath: string;
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
-  closedAt?: string;  // ISO 8601 datetime (closed タスクのみ)
 }
+
+export interface TaskState {
+  status: string;     // "draft" | "ready" | "in_progress" | "closed"
+  closedAt?: string;  // ISO 8601
+  journal?: string;   // 完了時のサマリー
+}
+
+export type TaskStateMap = Record<string, TaskState>;
 
 /**
  * YAML frontmatter からメタデータを抽出
@@ -64,53 +71,55 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
 }
 
 /**
- * open/ と closed/ のタスクを読み込み
+ * task-state.json の読み込み
+ */
+export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> {
+  const filePath = join(projectRoot, ".team/task-state.json");
+  if (!existsSync(filePath)) return {};
+  try {
+    return JSON.parse(await readFile(filePath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * task-state.json の書き込み
+ */
+export async function saveTaskState(projectRoot: string, state: TaskStateMap): Promise<void> {
+  const filePath = join(projectRoot, ".team/task-state.json");
+  await writeFile(filePath, JSON.stringify(state, null, 2) + "\n");
+}
+
+/**
+ * フラットな tasks/ からタスクを読み込み、task-state.json で状態を上書き
  */
 export async function loadTasks(projectRoot: string): Promise<{
-  open: TaskMeta[];
-  closed: Set<string>;
-  closedMetas: TaskMeta[];
+  tasks: TaskMeta[];
+  taskState: TaskStateMap;
 }> {
-  const openDir = join(projectRoot, ".team/tasks/open");
-  const closedDir = join(projectRoot, ".team/tasks/closed");
+  const tasksDir = join(projectRoot, ".team/tasks");
+  const taskState = await loadTaskState(projectRoot);
+  const tasks: TaskMeta[] = [];
 
-  const open: TaskMeta[] = [];
-  const closed = new Set<string>();
-  const closedMetas: TaskMeta[] = [];
-
-  // closed タスクの ID を収集 + メタデータ読み込み
-  if (existsSync(closedDir)) {
-    const files = await readdir(closedDir);
+  if (existsSync(tasksDir)) {
+    const files = await readdir(tasksDir);
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
-      const content = await readFile(join(closedDir, f), "utf-8");
-      const meta = parseTaskMeta(content, f, join(closedDir, f));
+      const filePath = join(tasksDir, f);
+      const content = await readFile(filePath, "utf-8");
+      const meta = parseTaskMeta(content, f, filePath);
       if (meta) {
-        closed.add(meta.id); // frontmatter の id を使う（ゼロパディング問題を回避）
-        meta.status = "closed";
-        const fileStat = await stat(join(closedDir, f));
-        meta.closedAt = fileStat.mtime.toISOString();
-        closedMetas.push(meta);
-      } else {
-        // meta パース失敗時のフォールバック
-        const id = f.match(/^(\d+)/)?.[1];
-        if (id) closed.add(id);
+        // task-state.json の状態で上書き（後方互換: なければファイルの frontmatter 値を使用）
+        if (taskState[meta.id]) {
+          meta.status = taskState[meta.id]!.status;
+        }
+        tasks.push(meta);
       }
     }
   }
 
-  // open タスクを読み込み
-  if (existsSync(openDir)) {
-    const files = await readdir(openDir);
-    for (const f of files) {
-      if (!f.endsWith(".md")) continue;
-      const content = await readFile(join(openDir, f), "utf-8");
-      const meta = parseTaskMeta(content, f, join(openDir, f));
-      if (meta) open.push(meta);
-    }
-  }
-
-  return { open, closed, closedMetas };
+  return { tasks, taskState };
 }
 
 /**
