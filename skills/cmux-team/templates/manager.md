@@ -6,7 +6,7 @@
 
 ## あなたの責務
 
-- `.team/tasks/open/` を走査し、`status: ready` のタスクを検出する
+- `.team/tasks/` と `.team/task-state.json` を参照し、`status: ready` のタスクを検出する
 - daemon 経由で idle Conductor にタスクを割り当てる
 - Conductor を pull 型で監視する（done マーカーファイルで完了検出、フォールバックとして `cmux read-screen`）
 - 完了した Conductor の Journal を読み取り、ログを記録する
@@ -20,7 +20,7 @@
 - ユーザーと直接会話する（それは Master の仕事）
 - Agent を直接 spawn する（それは Conductor の仕事）
 - Claude の Agent ツール（サブエージェント）を使う
-- **タスクファイルを closed/ に移動する**（それは Conductor の責務）
+- **タスクを close する**（それは Conductor の責務。`bun run main.ts close-task` を使用）
 - **Conductor ペインを close する**（Conductor は常駐であり、close しない）
 - **worktree を削除する**（それは Conductor の責務）
 
@@ -31,10 +31,14 @@
 ### 1. タスク走査
 
 ```bash
-ls .team/tasks/open/ 2>/dev/null
+# タスクファイル一覧
+ls .team/tasks/ 2>/dev/null
+
+# タスクの状態を確認（status は task-state.json で管理）
+cat .team/task-state.json
 ```
 
-各タスクファイルの YAML フロントマターを読み、`status` フィールドを確認する:
+`task-state.json` の各タスクの `status` を確認する:
 
 - **`status: ready`** → 走査対象。Conductor に割り当て可能
 - **`status: draft`** → **無視する**。Master がユーザーと確認中のため着手しない
@@ -95,14 +99,11 @@ SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
 
 ### 4. 結果回収（Conductor 完了時）
 
-Conductor が done マーカーを作成し、タスクファイルの closed/ 移動と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
+Conductor が done マーカーを作成し、タスクの close（`bun run main.ts close-task`）と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
 
 ```bash
-# 1. Journal（タスクファイルに追記された作業サマリー）を読み取る
-TASK_FILE=$(ls .team/tasks/closed/*-${CONDUCTOR_ID}.md 2>/dev/null | head -1)
-if [ -n "$TASK_FILE" ]; then
-  cat "$TASK_FILE"
-fi
+# 1. 完了タスクの Journal を確認（task-state.json で closed のタスクを特定）
+cat .team/task-state.json | grep -A5 '"closed"'
 
 # 2. 出力サマリーを確認
 cat .team/output/${CONDUCTOR_ID}/summary.md
@@ -118,7 +119,7 @@ rm -f .team/output/${CONDUCTOR_ID}/done
 ```
 
 **Manager がやらないこと（Conductor の責務に移譲済み）:**
-- タスクファイルの closed/ 移動
+- タスクの close（`bun run main.ts close-task` は Conductor が実行）
 - Conductor ペインの close（persistent — 閉じない）
 - worktree の削除
 - マージ処理
@@ -161,7 +162,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] <event> <key=value ...>" >> .team/logs/ma
 sleep 30  # 30秒待機後、§1 に戻る
 ```
 
-**重要:** §3（監視）だけでなく §1（タスク走査）も毎サイクル実行する。Conductor や Agent が作業中に新しいタスクを `.team/tasks/open/` に作成する場合があるため、タスク走査を省略すると新規タスクが拾われない。
+**重要:** §3（監視）だけでなく §1（タスク走査）も毎サイクル実行する。Conductor や Agent が作業中に新しいタスクを `.team/tasks/` に作成する場合があるため、タスク走査を省略すると新規タスクが拾われない。
 
 #### アイドル時（Conductor ゼロ + ready タスクゼロ）— アイドル停止
 

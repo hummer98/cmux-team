@@ -131,11 +131,10 @@ async function captureSnapshot(label: string): Promise<void> {
   } catch {}
 
   try {
-    const closedDir = join(WORKSPACE_DIR, ".team/tasks/closed");
-    if (existsSync(closedDir)) {
-      for (const f of await readdir(closedDir)) {
-        await cp(join(closedDir, f), join(snapDir, `${label}-closed-${f}`));
-      }
+    // task-state.json から closed タスクを特定してスナップショット
+    const stateFile = join(WORKSPACE_DIR, ".team/task-state.json");
+    if (existsSync(stateFile)) {
+      await cp(stateFile, join(snapDir, `${label}-task-state.json`));
     }
   } catch {}
 }
@@ -152,8 +151,9 @@ function assert(condition: boolean, message: string): void {
 
 async function countClosedTasks(): Promise<number> {
   try {
-    return (await readdir(join(WORKSPACE_DIR, ".team/tasks/closed")))
-      .filter((f) => f.endsWith(".md")).length;
+    const stateFile = join(WORKSPACE_DIR, ".team/task-state.json");
+    const state = JSON.parse(await readFile(stateFile, "utf-8"));
+    return Object.values(state).filter((s: any) => s.status === "closed").length;
   } catch {
     return 0;
   }
@@ -171,7 +171,7 @@ async function createTaskFile(
   yaml += `---\n\n## タスク\n${content}\n\n## 完了条件\n- 指示された成果物が作成されていること\n`;
 
   const fileName = `${id.padStart(3, "0")}-${slug}.md`;
-  const filePath = join(WORKSPACE_DIR, `.team/tasks/open/${fileName}`);
+  const filePath = join(WORKSPACE_DIR, `.team/tasks/${fileName}`);
   await writeFile(filePath, yaml);
   return filePath;
 }
@@ -199,7 +199,7 @@ async function setup(): Promise<void> {
   await mkdir(RESULTS_DIR, { recursive: true });
 
   // .team 基本構造
-  for (const d of ["tasks/open", "tasks/closed", "queue/processed", "output", "prompts", "logs"]) {
+  for (const d of ["tasks", "queue/processed", "output", "prompts", "logs"]) {
     await mkdir(join(WORKSPACE_DIR, `.team/${d}`), { recursive: true });
   }
 
@@ -379,7 +379,7 @@ async function scenarioSequential(): Promise<void> {
 3. 完了`,
   });
 
-  await cliSend("TASK_CREATED", "--task-id", "1", "--task-file", ".team/tasks/open/001-research-api.md");
+  await cliSend("TASK_CREATED", "--task-id", "1", "--task-file", ".team/tasks/001-research-api.md");
 
   console.log("  Waiting for Task 1 (research)...");
   const t1 = await waitForLog("task_completed task_id=1", 180_000);
@@ -460,7 +460,7 @@ async function scenarioParallel(): Promise<void> {
 3. 完了`,
   });
 
-  await cliSend("TASK_CREATED", "--task-id", "10", "--task-file", ".team/tasks/open/010-research-frontend.md");
+  await cliSend("TASK_CREATED", "--task-id", "10", "--task-file", ".team/tasks/010-research-frontend.md");
 
   console.log("  Waiting for parallel spawns...");
   const s10 = await waitForLog("conductor_started task_id=10", 60_000);

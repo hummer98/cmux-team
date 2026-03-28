@@ -13,7 +13,7 @@ cd "$PROJECT_ROOT"
 
 # --- 1. task ファイルの存在確認 ---
 # ゼロパディングあり/なし両方で検索
-TASK_FILE=$(ls .team/tasks/open/${TASK_ID}-*.md .team/tasks/open/0${TASK_ID}-*.md .team/tasks/open/00${TASK_ID}-*.md 2>/dev/null | head -1) || true
+TASK_FILE=$(ls .team/tasks/${TASK_ID}-*.md .team/tasks/0${TASK_ID}-*.md .team/tasks/00${TASK_ID}-*.md 2>/dev/null | head -1) || true
 if [[ -z "$TASK_FILE" ]]; then
   TASK_FILE=$(ls .team/issues/open/${TASK_ID}-*.md .team/issues/open/0${TASK_ID}-*.md .team/issues/open/00${TASK_ID}-*.md 2>/dev/null | head -1) || true
 fi

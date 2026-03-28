@@ -51,7 +51,7 @@ for candidate in \
 done
 
 # --- 3. インフラ準備 ---
-mkdir -p .team/{specs,output,tasks/open,tasks/closed,prompts,docs-snapshot,logs,scripts}
+mkdir -p .team/{specs,output,tasks,prompts,docs-snapshot,logs,scripts}
 
 # team.json 初期化（未存在時のみ）
 if [[ ! -f .team/team.json ]]; then

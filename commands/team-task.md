@@ -23,9 +23,10 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
 
 ### 手順
 
-1. `.team/tasks/open/` と `.team/tasks/closed/` の全ファイルを読み込む
-2. 各タスクの YAML フロントマターを解析
-3. 一覧を表形式で表示:
+1. `.team/tasks/` の全ファイルを読み込む
+2. `cat .team/task-state.json` でタスク状態を取得
+3. 各タスクの YAML フロントマターと状態を組み合わせて解析
+4. 一覧を表形式で表示:
 
 ```
 ## オープンタスク (N件)
@@ -52,8 +53,8 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
 
 1. **次のタスク番号を決定**:
    ```bash
-   # open/ と closed/ の全ファイルから最大の ID を取得
-   ls .team/tasks/open/ .team/tasks/closed/ 2>/dev/null | grep -oE '^[0-9]+' | sort -n | tail -1
+   # tasks/ の全ファイルから最大の ID を取得
+   ls .team/tasks/ 2>/dev/null | grep -oE '^[0-9]+' | sort -n | tail -1
    # → 最大 ID + 1。ファイルがなければ 001 から開始
    ```
 
@@ -65,7 +66,7 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
    - **推奨案**（あれば）
 
 3. **タスクファイルを作成**:
-   ファイル名: `.team/tasks/open/NNN-<slug>.md`
+   ファイル名: `.team/tasks/NNN-<slug>.md`
    （slug はタイトルから英数字・ハイフンに変換、30 文字以内）
 
    ```markdown
@@ -73,7 +74,6 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
    id: NNN
    title: "<タイトル>"
    type: <タイプ>
-   status: draft
    raised_by: conductor
    created_at: <ISO 8601 タイムスタンプ>
    ---
@@ -89,11 +89,14 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
    <推奨案>
    ```
 
+   タスクファイルには status を含めない（title, body, priority のみ）。
+   status は `task-state.json` で管理する。
+
    **status について:**
    - `draft` — 作成直後。Manager は無視する（ユーザー確認待ち）
    - `ready` — 着手 OK。Manager が走査して Conductor を起動する
 
-   新規作成時は常に `status: draft` で作成する。
+   新規作成時は `bun run main.ts create-task --title <title> --priority <p> --status draft` を使用。
 
 4. **作成確認**:
    作成したタスクの内容を表示。
@@ -106,27 +109,18 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
 
 1. **タスクファイルを検索**:
    ```bash
-   ls .team/tasks/open/ | grep "^$ID"
+   ls .team/tasks/ | grep "^$ID"
    ```
 
 2. **タスクが見つからない場合**:
    「ID: $ID のオープンタスクが見つかりません」と表示
 
-3. **タスクファイルを移動**:
+3. **CLI でタスクをクローズ**:
    ```bash
-   mv .team/tasks/open/NNN-*.md .team/tasks/closed/
+   bun run main.ts close-task --task-id $ID --journal "closed by user"
    ```
 
-4. **クローズ情報を追記**:
-   ファイル末尾に追記:
-   ```markdown
-
-   ---
-   Closed at: <ISO 8601 タイムスタンプ>
-   Resolution: <ユーザーに確認、または "closed by conductor">
-   ```
-
-5. **確認表示**:
+4. **確認表示**:
    「タスク #NNN をクローズしました: <タイトル>」
 
 ---
@@ -136,16 +130,15 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
 ### 手順
 
 1. **タスクファイルを検索**:
-   `.team/tasks/open/` と `.team/tasks/closed/` の両方を検索:
    ```bash
-   ls .team/tasks/open/ .team/tasks/closed/ 2>/dev/null | grep "^$ID"
+   ls .team/tasks/ 2>/dev/null | grep "^$ID"
    ```
 
 2. **タスクが見つからない場合**:
    「ID: $ID のタスクが見つかりません」と表示
 
 3. **タスクの全内容を表示**:
-   ファイルの全内容を読み込んで整形表示。
+   ファイルの全内容を読み込み、`task-state.json` の状態と合わせて整形表示。
 
 ---
 

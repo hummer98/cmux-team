@@ -173,7 +173,7 @@ cmux wait-for "tester-e2e-done" --timeout 300
 
 失敗したテストに対して自動的にタスクを作成:
 
-`.team/tasks/open/NNN-test-failure-<name>.md`:
+`.team/tasks/NNN-test-failure-<name>.md`:
 ```markdown
 ---
 id: NNN

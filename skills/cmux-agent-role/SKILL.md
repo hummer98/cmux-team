@@ -46,7 +46,7 @@ Output: .team/output/<role-id>.md
 <該当する場合>
 
 ## Tasks Raised
-- See .team/tasks/open/NNN-*.md
+- See .team/tasks/NNN-*.md
 ```
 
 **ルール**:
@@ -66,8 +66,8 @@ Output: .team/output/<role-id>.md
 判断が必要な事項、ブロッカー、発見事項がある場合にタスクを作成:
 
 ```bash
-# 次のタスク番号を決定
-ls .team/tasks/open/ | wc -l  # → N, use N+1
+# タスク作成は CLI で行う（ID 自動採番・task-state.json 更新を一括実行）
+bun run .team/manager/main.ts create-task --title "タイトル" --body "詳細"
 ```
 
 タスク形式:
@@ -140,7 +140,7 @@ created_at: <ISO タイムスタンプ>
 - ドキュメントは簡潔かつ正確に
 
 ### TaskManager（タスク管理者）
-- `.team/tasks/open/` の新しいタスクを監視する
+- `.team/tasks/` と `task-state.json` で新しいタスクを監視する
 - カテゴリ分類、関連タスクのリンク
 - Conductor のリクエストに応じてオープンタスクを要約する
 

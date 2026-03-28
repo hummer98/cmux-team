@@ -73,7 +73,7 @@ describe("Queue", () => {
     const path = await q.send({
       type: "TASK_CREATED",
       taskId: "035",
-      taskFile: ".team/tasks/open/035-fix.md",
+      taskFile: ".team/tasks/035-fix.md",
       timestamp: new Date().toISOString(),
     });
 
@@ -90,7 +90,7 @@ describe("Queue", () => {
     await q.send({
       type: "TASK_CREATED",
       taskId: "035",
-      taskFile: ".team/tasks/open/035.md",
+      taskFile: ".team/tasks/035.md",
       timestamp: new Date().toISOString(),
     });
     await q.send({

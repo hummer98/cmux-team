@@ -246,7 +246,7 @@ describe("キュー処理（ファイルシステム統合）", () => {
       JSON.stringify({
         type: "TASK_CREATED",
         taskId: "1",
-        taskFile: ".team/tasks/open/001.md",
+        taskFile: ".team/tasks/001.md",
         timestamp: new Date().toISOString(),
       })
     );

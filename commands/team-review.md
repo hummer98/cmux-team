@@ -43,7 +43,7 @@ git diff HEAD~10 -- . ':!.team'
 - `.team/specs/requirements.md` — 要件定義
 - `.team/specs/design.md` — 設計ドキュメント
 - `.team/output/implementer-*.md` — 実装エージェントの出力（あれば）
-- `.team/tasks/open/` — オープンタスク
+- `.team/tasks/` — オープンタスク（`task-state.json` で状態確認）
 
 ### 3. レビュアー数の決定
 
@@ -155,7 +155,7 @@ cmux wait-for "reviewer-impl-done" --timeout 300
 
 Critical/Major の指摘に対して自動的にタスクを作成:
 
-各指摘に対して `.team/tasks/open/NNN-<slug>.md` を作成:
+各指摘に対して `.team/tasks/NNN-<slug>.md` を作成:
 ```markdown
 ---
 id: NNN

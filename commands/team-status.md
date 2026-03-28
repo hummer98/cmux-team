@@ -13,9 +13,9 @@ description: "チームの現在の状態を表示する"
 2. 以下の真のソースから直接情報を取得して表示:
    - **Manager の状態**: `cmux read-screen --surface <manager-surface> --lines 5` で画面を確認
    - **稼働中の Conductor**: `cmux tree` でペイン構成を確認
-   - **オープンタスク**: `ls .team/tasks/open/` でファイル一覧
+   - **オープンタスク**: `ls .team/tasks/` でファイル一覧 + `cat .team/task-state.json` で状態を確認
    - **完了タスク履歴**: `grep task_completed .team/logs/manager.log`
-   - **クローズ済みタスク数**: `ls .team/tasks/closed/ | wc -l`
+   - **クローズ済みタスク数**: `cat .team/task-state.json` の closed エントリ数
 3. アーキテクチャ: 4-tier (Master → Manager → Conductor → Agent)
 4. Manager が応答しているか cmux read-screen で簡易ヘルスチェック
 

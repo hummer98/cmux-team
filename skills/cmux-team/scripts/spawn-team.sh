@@ -70,7 +70,7 @@ if [[ -z "$MANAGER_SRC" ]]; then
 fi
 
 # --- 3. インフラ準備 ---
-mkdir -p .team/{specs,output,tasks/open,tasks/closed,prompts,docs-snapshot,logs,scripts,manager,queue/processed}
+mkdir -p .team/{specs,output,tasks,prompts,docs-snapshot,logs,scripts,manager,queue/processed}
 
 # team.json 初期化（未存在時のみ）
 if [[ ! -f .team/team.json ]]; then
