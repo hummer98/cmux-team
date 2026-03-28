@@ -49,9 +49,8 @@ draft で作成した場合の手順:
 # 1. draft で作成
 bun run .team/manager/main.ts create-task --title "タスク名" --body "詳細"
 
-# 2. ユーザー承認後に ready に変更 + Manager 通知
-sed -i '' 's/^status: draft$/status: ready/' .team/tasks/open/NNN-slug.md
-bun run .team/manager/main.ts send TASK_CREATED --task-id NNN --task-file .team/tasks/open/NNN-slug.md
+# 2. ユーザー承認後に ready に変更（status 更新 + Manager 通知を一括実行）
+bun run .team/manager/main.ts update-task --task-id NNN --status ready
 ```
 
 **通常フロー:** draft で作成 → ユーザーに内容を確認 → 承認後に ready。

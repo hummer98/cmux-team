@@ -216,23 +216,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
    git add -A
    git diff --cached --quiet || git commit -m "feat: <タスク概要>"
    ```
-4. **Journal セクション追記** — タスクファイルに作業サマリーを記録:
-   ```bash
-   cd {{WORKTREE_PATH}}
-   TASK_FILE=$(ls {{PROJECT_ROOT}}/.team/tasks/open/*-{{ROLE_ID}}.md 2>/dev/null | head -1)
-   if [ -n "$TASK_FILE" ]; then
-     FILES_CHANGED=$(git diff --stat HEAD~1 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+')
-     FILES_CHANGED=${FILES_CHANGED:-0}
-     cat >> "$TASK_FILE" << JOURNAL
-
-## Journal
-
-- summary: <1行の日本語サマリーを記述>
-- files_changed: ${FILES_CHANGED}
-JOURNAL
-   fi
-   ```
-5. **成果物の納品** — 以下のいずれかを選択:
+4. **成果物の納品** — 以下のいずれかを選択:
    - **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
      ```bash
      cd {{PROJECT_ROOT}}
@@ -246,7 +230,7 @@ JOURNAL
      gh pr create --title "<タスク概要>" --body "<変更内容>"
      ```
    判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
-6. 結果サマリーを書き出す:
+5. 結果サマリーを書き出す:
    ```bash
    # {{OUTPUT_DIR}}/summary.md に以下を記録
    # - 完了したサブタスク一覧
@@ -254,25 +238,21 @@ JOURNAL
    # - テスト結果
    # - マージコミット or PR URL
    ```
-7. **worktree を削除する**（Conductor の責務）:
+6. **worktree を削除する**（Conductor の責務）:
    ```bash
    cd {{PROJECT_ROOT}}
    git worktree remove {{WORKTREE_PATH}} --force 2>/dev/null || true
    git branch -d {{CONDUCTOR_ID}}/task 2>/dev/null || true
    ```
-8. **タスクファイルを closed/ に移動する**（Conductor の責務）:
+7. **タスクファイルを closed/ に移動する**（Journal 追記 + closed/ 移動を一括実行）:
    ```bash
-   TASK_FILE=$(ls {{PROJECT_ROOT}}/.team/tasks/open/*-{{ROLE_ID}}.md 2>/dev/null | head -1)
-   if [ -n "$TASK_FILE" ]; then
-     mkdir -p {{PROJECT_ROOT}}/.team/tasks/closed
-     mv "$TASK_FILE" {{PROJECT_ROOT}}/.team/tasks/closed/
-   fi
+   bun run "$MAIN_TS" close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
    ```
-9. **done マーカーを作成する**:
+8. **done マーカーを作成する**:
    ```bash
    touch {{OUTPUT_DIR}}/done
    ```
-10. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信 + done マーカー削除）を行う。
+9. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信 + done マーカー削除）を行う。
 
 ## やらないこと（厳守）
 

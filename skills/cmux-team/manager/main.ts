@@ -13,11 +13,13 @@
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
+ *   ./main.ts update-task --task-id <id> --status <status>
+ *   ./main.ts close-task --task-id <id> [--journal <text>]
  */
 
 import { join, dirname } from "path";
 import { existsSync } from "fs";
-import { readFile, readdir, writeFile, mkdir } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir, rename } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
@@ -566,6 +568,119 @@ ${body}
   console.log(`TASK_ID=${newId} FILE=${relPath}`);
 }
 
+async function cmdUpdateTask(): Promise<void> {
+  const taskId = requireArg("task-id");
+  const newStatus = requireArg("status");
+
+  // open/ からタスクファイルを検索
+  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
+  let taskFile: string | undefined;
+  try {
+    const files = await readdir(openDir);
+    for (const f of files) {
+      if (f.endsWith(".md") && f.startsWith(taskId)) {
+        taskFile = join(openDir, f);
+        break;
+      }
+    }
+  } catch {}
+
+  if (!taskFile) {
+    // ファイル名が数値IDで始まらない場合、frontmatter の id でも検索
+    try {
+      const files = await readdir(openDir);
+      for (const f of files) {
+        if (!f.endsWith(".md")) continue;
+        const content = await readFile(join(openDir, f), "utf-8");
+        const idMatch = content.match(/^id:\s*(.+)$/m);
+        if (idMatch && idMatch[1].trim() === taskId) {
+          taskFile = join(openDir, f);
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  if (!taskFile) {
+    console.error(`Error: task ${taskId} not found in .team/tasks/open/`);
+    process.exit(1);
+  }
+
+  // frontmatter の status を書き換え
+  let content = await readFile(taskFile, "utf-8");
+  content = content.replace(/^status:\s*.+$/m, `status: ${newStatus}`);
+  await writeFile(taskFile, content);
+
+  // ready に変更された場合は TASK_CREATED を送信
+  if (newStatus === "ready") {
+    await ensureQueueDirs();
+    await sendMessage({
+      type: "TASK_CREATED",
+      taskId,
+      taskFile,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  console.log(`OK updated ${taskId} status=${newStatus}`);
+}
+
+async function cmdCloseTask(): Promise<void> {
+  const taskId = requireArg("task-id");
+  const journal = getArg("journal");
+
+  // open/ からタスクファイルを検索
+  const openDir = join(PROJECT_ROOT, ".team/tasks/open");
+  const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
+  let taskFile: string | undefined;
+  let taskFileName: string | undefined;
+  try {
+    const files = await readdir(openDir);
+    for (const f of files) {
+      if (f.endsWith(".md") && f.startsWith(taskId)) {
+        taskFile = join(openDir, f);
+        taskFileName = f;
+        break;
+      }
+    }
+  } catch {}
+
+  if (!taskFile || !taskFileName) {
+    // frontmatter の id でも検索
+    try {
+      const files = await readdir(openDir);
+      for (const f of files) {
+        if (!f.endsWith(".md")) continue;
+        const content = await readFile(join(openDir, f), "utf-8");
+        const idMatch = content.match(/^id:\s*(.+)$/m);
+        if (idMatch && idMatch[1].trim() === taskId) {
+          taskFile = join(openDir, f);
+          taskFileName = f;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  if (!taskFile || !taskFileName) {
+    console.error(`Error: task ${taskId} not found in .team/tasks/open/`);
+    process.exit(1);
+  }
+
+  // Journal 追記
+  if (journal) {
+    let content = await readFile(taskFile, "utf-8");
+    content += `\n## Journal\n\n- summary: ${journal}\n- closed_at: ${new Date().toISOString()}\n`;
+    await writeFile(taskFile, content);
+  }
+
+  // closed/ に移動
+  await mkdir(closedDir, { recursive: true });
+  await rename(taskFile, join(closedDir, taskFileName));
+
+  console.log(`OK closed ${taskId}`);
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -605,6 +720,12 @@ switch (command) {
   case "create-task":
     await cmdCreateTask();
     break;
+  case "update-task":
+    await cmdUpdateTask();
+    break;
+  case "close-task":
+    await cmdCloseTask();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -617,6 +738,8 @@ Usage:
   cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface> [--conductor-id <id>]
-  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]`);
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
+  cmux-team update-task --task-id <id> --status <status>
+  cmux-team close-task --task-id <id> [--journal <text>]`);
     break;
 }
