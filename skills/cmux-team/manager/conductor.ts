@@ -138,7 +138,7 @@ export async function spawnConductor(
 
     await log(
       "conductor_started",
-      `task_id=${taskId} conductor_id=${conductorId} surface=${surface}`
+      `task_id=${taskId} conductor_id=${conductorId} surface=${surface} title=${taskTitle}`
     );
 
     return state;
