@@ -201,7 +201,9 @@ function Header({ state, cols }: { state: DaemonState; cols: number }) {
 function Sep({ cols, label }: { cols: number; label: string }) {
   const line = "─".repeat(Math.max(0, cols - label.length - 3));
   return (
-    <Text dimColor>─ <Text bold dimColor={false}>{label}</Text> {line}</Text>
+    <Box>
+      <Text dimColor>─ <Text bold dimColor={false}>{label}</Text> {line}</Text>
+    </Box>
   );
 }
 
@@ -350,9 +352,13 @@ function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
         const { time, event, detail, color } = formatLogLine(line, cols);
         return (
           <Box key={i} paddingLeft={1}>
-            <Text dimColor>{time} </Text>
-            <Text color={color}>{event} </Text>
-            <Text>{detail}</Text>
+            <Text>
+              <Text dimColor>{time}</Text>
+              {' '}
+              <Text color={color}>{event}</Text>
+              {' '}
+              <Text>{detail}</Text>
+            </Text>
           </Box>
         );
       })}
@@ -375,10 +381,15 @@ function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: numb
         const maxMsg = Math.max(0, cols - entry.time.length - entry.icon.length - entry.taskId.length - 7);
         return (
           <Box key={i} paddingLeft={1}>
-            <Text dimColor>{entry.time} </Text>
-            <Text color={entry.color}>{entry.icon} </Text>
-            <Text bold>#{entry.taskId.padStart(3, '0')} </Text>
-            <Text>{entry.message.slice(0, maxMsg)}</Text>
+            <Text>
+              <Text dimColor>{entry.time}</Text>
+              {' '}
+              <Text color={entry.color}>{entry.icon}</Text>
+              {' '}
+              <Text bold>#{entry.taskId.padStart(3, '0')}</Text>
+              {' '}
+              <Text>{entry.message.slice(0, maxMsg)}</Text>
+            </Text>
           </Box>
         );
       })}
