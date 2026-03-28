@@ -72,7 +72,7 @@ export async function initializeConductorSlots(
 
       await cmux.send(
         surface,
-        `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'Conductor として待機中。タスク割り当てを待っています。'\n`
+        `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。'\n`
       );
 
       // Trust 承認
@@ -341,7 +341,7 @@ export async function spawnConductor(
     // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
     await cmux.send(
       surface,
-      `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'Conductor として待機中。'\n`
+      `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。'\n`
     );
     await cmux.waitForTrust(surface);
 
