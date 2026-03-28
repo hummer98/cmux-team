@@ -351,8 +351,14 @@ async function cmdStop(): Promise<void> {
 async function cmdSpawnAgent(): Promise<void> {
   const conductorId = requireArg("conductor-id");
   const role = requireArg("role");
-  const prompt = requireArg("prompt");
+  const prompt = getArg("prompt");
+  const promptFile = getArg("prompt-file");
   const taskTitle = getArg("task-title");
+
+  if (!prompt && !promptFile) {
+    console.error("Error: --prompt or --prompt-file is required");
+    process.exit(1);
+  }
 
   // --- 1. プロキシポート読み取り ---
   const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
@@ -396,7 +402,16 @@ async function cmdSpawnAgent(): Promise<void> {
   }
 
   const cdPrefix = worktreePath ? `cd ${worktreePath} && ` : "";
-  const claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
+
+  let claudeCmd: string;
+  if (promptFile) {
+    // --prompt-file: ファイル経由 + --bare モードでコンテキスト最適化
+    const bareFlags = `--bare --add-dir ${PROJECT_ROOT}/.team`;
+    claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions ${bareFlags} '${promptFile} を読んで指示に従ってください。'`;
+  } else {
+    // 後方互換: --prompt でインライン渡し
+    claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
+  }
   await cmux.send(surface, claudeCmd + "\n");
 
   // --- 4. Trust 承認 ---
