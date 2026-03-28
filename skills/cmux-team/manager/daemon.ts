@@ -132,9 +132,17 @@ async function processQueue(state: DaemonState): Promise<void> {
 
   for (const { path, message } of messages) {
     switch (message.type) {
-      case "TASK_CREATED":
-        await log("task_received", `task_id=${message.taskId}`);
+      case "TASK_CREATED": {
+        let title = "";
+        if (message.taskFile && existsSync(message.taskFile)) {
+          try {
+            const content = await readFile(message.taskFile, "utf-8");
+            title = content.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
+          } catch {}
+        }
+        await log("task_received", `task_id=${message.taskId}${title ? ` title=${title}` : ""}`);
         break;
+      }
 
       case "TODO":
         await log("todo_received", `content=${message.content.slice(0, 50)}`);
@@ -254,10 +262,10 @@ async function handleConductorDone(
   await log(
     "task_completed",
     `task_id=${conductor.taskId} conductor_id=${conductor.conductorId}${
-      sessionId ? ` session=${sessionId}` : ""
-    }${mergeCommit ? ` merged=${mergeCommit}` : ""}${
-      journalSummary ? ` journal_summary=${journalSummary}` : ""
-    }`
+      conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
+    }${sessionId ? ` session=${sessionId}` : ""}${
+      mergeCommit ? ` merged=${mergeCommit}` : ""
+    }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
   );
 
   state.conductors.delete(conductor.conductorId);
