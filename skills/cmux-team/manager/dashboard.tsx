@@ -94,15 +94,17 @@ function useJournalEntries(projectRoot: string): JournalEntry[] {
 
           if (event === "task_received") {
             const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-            result.push({ time, icon: "[+]", taskId, message: detail, color: "cyan" });
+            result.push({ time, icon: "[+]", taskId, message: "", color: "cyan" });
           } else if (event === "conductor_started") {
             const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
             const conductorId = detail.match(/conductor_id=(\S+)/)?.[1] ?? "";
             result.push({ time, icon: "[▶]", taskId, message: `${conductorId} started`, color: "yellow" });
           } else if (event === "task_completed") {
             const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-            const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? detail;
-            result.push({ time, icon: "[✓]", taskId, message: summary, color: "green" });
+            const conductorId = detail.match(/conductor_id=(\S+)/)?.[1] ?? "";
+            const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
+            const msg = summary || (conductorId ? `${conductorId} done` : "");
+            result.push({ time, icon: "[✓]", taskId, message: msg, color: "green" });
           }
         }
 
