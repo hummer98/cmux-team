@@ -190,7 +190,7 @@ function MasterSection({ state }: { state: DaemonState }) {
     return (
       <Box paddingLeft={1}>
         <Text color="green">● </Text>
-        <Text>{state.masterSurface}</Text>
+        <Text>[{state.masterSurface.replace("surface:", "")}]</Text>
       </Box>
     );
   }
@@ -220,16 +220,15 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
           <Box key={c.conductorId} flexDirection="column">
             <Box paddingLeft={1}>
               <Text color="yellow">● </Text>
-              <Text>{c.surface}</Text>
-              <Text dimColor> task=</Text>
-              <Text bold>{c.taskId}</Text>
+              <Text>[{c.surface.replace("surface:", "")}]</Text>
+              <Text bold> #{c.taskId}</Text>
               {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
               <Text dimColor> {elapsed}</Text>
             </Box>
             {agents.map((a, i) => (
               <Box key={a.surface} paddingLeft={3}>
                 <Text dimColor>{i === agents.length - 1 ? "└─ " : "├─ "}</Text>
-                <Text color="cyan">{a.surface}</Text>
+                <Text color="cyan">[{a.surface.replace("surface:", "")}]</Text>
                 {a.role && <Text> {a.role}</Text>}
               </Box>
             ))}

@@ -258,7 +258,7 @@ async function cmdStatus(): Promise<void> {
   // --- Master ---
   console.log(`─ Master ${"─".repeat(50)}`);
   if (masterSurface) {
-    console.log(`  ● ${masterSurface}`);
+    console.log(`  ● [${masterSurface.replace("surface:", "")}]`);
   } else {
     console.log(`  ○ not spawned`);
   }
@@ -270,7 +270,7 @@ async function cmdStatus(): Promise<void> {
   } else {
     for (const c of conductors) {
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
-      console.log(`  ● ${c.surface}  task=${c.taskId}${title}  ${c.id}`);
+      console.log(`  ● [${c.surface.replace("surface:", "")}]  #${c.taskId}${title}  ${c.id}`);
     }
   }
 
