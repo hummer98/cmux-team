@@ -20,6 +20,21 @@ export async function newSplit(
   return surface;
 }
 
+export async function newSurface(paneId: string): Promise<string> {
+  const args = ["new-surface", "--pane", paneId];
+  const { stdout } = await execFile("cmux", args);
+  const surface = stdout.trim().split(/\s+/)[1];
+  if (!surface?.startsWith("surface:")) {
+    throw new Error(`Failed to create surface: ${stdout}`);
+  }
+  return surface;
+}
+
+export async function listPaneSurfaces(paneId: string): Promise<string[]> {
+  const { stdout } = await execFile("cmux", ["list-pane-surfaces", "--pane", paneId]);
+  return stdout.trim().split(/\s+/).filter(s => s.startsWith("surface:"));
+}
+
 export async function send(
   surface: string,
   text: string,

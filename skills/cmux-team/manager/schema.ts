@@ -73,16 +73,17 @@ export interface AgentState {
 
 export const ConductorState = z.object({
   conductorId: z.string(),
-  taskId: z.string(),
+  taskId: z.string().optional(),
   taskTitle: z.string().optional(),
   surface: z.string(),
-  worktreePath: z.string(),
-  outputDir: z.string(),
+  worktreePath: z.string().optional(),
+  outputDir: z.string().optional(),
   startedAt: z.string().datetime(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
   doneCandidate: boolean;
-  status: "running" | "done";
+  status: "idle" | "running" | "done";
+  paneId?: string;
 };

@@ -9,8 +9,12 @@ import {
   spawnConductor,
   checkConductorStatus,
   collectResults,
+  initializeConductorSlots,
+  assignTask,
+  resetConductor,
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
+import * as cmux from "./cmux";
 import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
@@ -121,6 +125,21 @@ export async function startMaster(state: DaemonState): Promise<void> {
   }
 }
 
+export async function initializeLayout(state: DaemonState): Promise<void> {
+  // team.json に既存 Conductor があり surface が生きていればスキップ
+  if (state.conductors.size > 0) {
+    const checks = await Promise.all(
+      [...state.conductors.values()].map(c => cmux.validateSurface(c.surface))
+    );
+    if (checks.some(alive => alive)) return;
+  }
+
+  const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors);
+  for (const slot of slots) {
+    state.conductors.set(slot.conductorId, slot);
+  }
+}
+
 export async function tick(state: DaemonState): Promise<void> {
   state.lastUpdate = new Date();
   await processQueue(state);
@@ -208,7 +227,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
   state.openTasks = open.length;
 
   const assignedIds = new Set(
-    [...state.conductors.values()].map((c) => c.taskId)
+    [...state.conductors.values()].map((c) => c.taskId).filter((id): id is string => !!id)
   );
 
   const executable = sortByPriority(
@@ -239,50 +258,46 @@ async function scanTasks(state: DaemonState): Promise<void> {
   }));
 
   for (const task of executable) {
-    const runningCount = [...state.conductors.values()].filter(c => c.status === "running").length;
-    if (runningCount >= state.maxConductors) {
-      await log(
-        "throttled",
-        `task_id=${task.id} conductors=${state.conductors.size}/${state.maxConductors}`
-      );
+    // idle Conductor を探す
+    const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
+    if (!idleConductor) {
+      await log("throttled", `task_id=${task.id} no_idle_conductor`);
       break;
     }
 
     // spawn 前にロック（次の tick での二重起動を防止）
     assignedIds.add(task.id);
 
-    const conductor = await spawnConductor(task.id, state.projectRoot);
-    if (conductor) {
-      state.conductors.set(conductor.conductorId, conductor);
+    const updated = await assignTask(idleConductor, task.id, state.projectRoot);
+    if (updated) {
+      state.conductors.set(updated.conductorId, updated);
     }
   }
 }
 
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [id, conductor] of state.conductors) {
+    if (conductor.status === "idle") continue;
+
     if (conductor.status === "done") {
-      const status = await checkConductorStatus(conductor.surface, conductor.startedAt);
-      if (status === "crashed") {
-        await log("conductor_surface_closed", `conductor_id=${id} surface=${conductor.surface}`);
-        state.conductors.delete(id);
+      // 既に done 処理済み、surface 消失チェックのみ
+      if (!(await cmux.validateSurface(conductor.surface))) {
+        await log("conductor_surface_lost", `conductor_id=${id}`);
       }
       continue;
     }
 
-    const status = await checkConductorStatus(conductor.surface, conductor.startedAt);
+    const status = await checkConductorStatus(conductor);
 
     switch (status) {
       case "done":
         if (conductor.doneCandidate) {
-          // 2回連続 done → 確定
           await handleConductorDone(state, conductor);
         } else {
-          // 1回目 → 候補としてマーク、次の tick で再確認
           conductor.doneCandidate = true;
         }
         break;
       case "running":
-        // 実行中に戻ったら候補をリセット
         conductor.doneCandidate = false;
         break;
       case "crashed":
@@ -290,7 +305,9 @@ async function monitorConductors(state: DaemonState): Promise<void> {
           "conductor_crashed",
           `conductor_id=${id} surface=${conductor.surface}`
         );
-        state.conductors.delete(id);
+        // persistent Conductor がクラッシュ → idle に戻す
+        conductor.status = "idle";
+        conductor.taskId = undefined;
         break;
     }
   }
@@ -300,21 +317,17 @@ async function handleConductorDone(
   state: DaemonState,
   conductor: ConductorState
 ): Promise<void> {
-  const { sessionId, mergeCommit, journalSummary } = await collectResults(
-    conductor,
-    state.projectRoot
-  );
+  const { journalSummary } = await collectResults(conductor, state.projectRoot);
 
   await log(
     "task_completed",
     `task_id=${conductor.taskId} conductor_id=${conductor.conductorId}${
       conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
-    }${sessionId ? ` session=${sessionId}` : ""}${
-      mergeCommit ? ` merged=${mergeCommit}` : ""
     }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
   );
 
-  conductor.status = "done";
+  // Conductor をリセットして idle に戻す
+  await resetConductor(conductor, state.projectRoot);
 }
 
 async function handleTodo(state: DaemonState, content: string): Promise<void> {
@@ -366,6 +379,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
       startedAt: c.startedAt,
+      paneId: c.paneId,
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,

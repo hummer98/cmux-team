@@ -20,7 +20,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
-import { createDaemon, initInfra, startMaster, tick, updateTeamJson } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -98,8 +98,8 @@ async function cmdStart(): Promise<void> {
           taskId: c.taskId,
           taskTitle: c.taskTitle,
           surface: c.surface,
-          worktreePath: c.worktreePath ?? "",
-          outputDir: c.outputDir ?? "",
+          worktreePath: c.worktreePath,
+          outputDir: c.outputDir,
           startedAt: c.startedAt ?? new Date().toISOString(),
           agents: (c.agents ?? []).map((a: any) => ({
             surface: a.surface,
@@ -108,6 +108,7 @@ async function cmdStart(): Promise<void> {
           })),
           doneCandidate: false,
           status: c.status || "running",
+          paneId: c.paneId,
         });
       }
     }
@@ -135,6 +136,10 @@ async function cmdStart(): Promise<void> {
 
   // Master spawn
   await startMaster(state);
+
+  // 固定レイアウト作成
+  await initializeLayout(state);
+
   await updateTeamJson(state);
 
   // シグナルハンドリング
@@ -358,8 +363,20 @@ async function cmdSpawnAgent(): Promise<void> {
     // プロキシ未起動の場合はなしで続行
   }
 
-  // --- 2. ペイン作成 ---
-  const surface = await cmux.newSplit("down");
+  // --- 2. タブ作成（paneId があればタブ、なければペイン分割） ---
+  let paneId: string | undefined;
+  try {
+    const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
+    const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
+    paneId = conductor?.paneId;
+  } catch {}
+
+  let surface: string;
+  if (paneId) {
+    surface = await cmux.newSurface(paneId);
+  } else {
+    surface = await cmux.newSplit("down");
+  }
 
   if (!(await cmux.validateSurface(surface))) {
     console.error(`Error: surface ${surface} validation failed`);
