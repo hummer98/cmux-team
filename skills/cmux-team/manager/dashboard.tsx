@@ -212,7 +212,7 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
     );
   }
   return (
-    <Box flexDirection="column">
+    <>
       {conductors.map((c) => {
         const isIdle = c.status === "idle";
         const isDone = c.status === "done";
@@ -245,7 +245,7 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
           </Box>
         );
       })}
-    </Box>
+    </>
   );
 }
 
@@ -264,7 +264,7 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
   );
 
   return (
-    <Box flexDirection="column">
+    <>
       {state.taskList.map((task) => {
         const assigned = assignedTaskIds.has(task.id);
         const isClosed = task.status === "closed";
@@ -284,7 +284,7 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
           </Box>
         );
       })}
-    </Box>
+    </>
   );
 }
 
@@ -374,10 +374,11 @@ function Dashboard({ getState, version, onReload, onQuit }: DashboardProps) {
   });
 
   // レイアウト計算
-  // header=1, sep=1, master=1, sep=1, conductor=max(1,N), sep=1, tasks=max(1,N), sep=1, footer=1, keyhint=1
-  const conductorCount = Math.max(1, state.conductors.size);
+  // header=1, sep=1, master=1, sep=1, conductor=max(1,N+agents), sep=1, tasks=max(1,M), sep=1, keyhint=1
+  const conductorLines = [...state.conductors.values()].reduce((sum, c) => sum + 1 + (c.agents?.length ?? 0), 0);
+  const conductorCount = Math.max(1, conductorLines);
   const tasksCount = Math.max(1, state.taskList.length);
-  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + tasksCount + 1 + 1 + 1;
+  const fixedLines = 1 + 1 + 1 + 1 + conductorCount + 1 + tasksCount + 1 + 1;
   const contentLines = Math.max(1, rows - fixedLines);
   const logTail = useLogTail(state.projectRoot, contentLines);
   const journalEntries = useJournalEntries(state.projectRoot);
