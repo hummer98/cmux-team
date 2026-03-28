@@ -86,8 +86,7 @@ cmux new-split right  # → surface:S
 各テスターに対して（**1体ずつ、cmux-team SKILL.md §2.1 の手順に従う**）:
 
 ```bash
-# a. team.json にエージェント登録
-# b. ステータス設定
+# a. ステータス設定
 cmux set-status tester-<scope> "spawning" --icon sparkle --color "#ffcc00"
 
 # c. Claude 起動（シェルコマンドは \n で送信可能）
@@ -202,9 +201,7 @@ severity: major
 ### 12. クリーンアップと状態更新
 
 - テストエージェントのペインを閉じる
-- team.json:
-  - phase を `"test"` に更新
-  - completed_outputs に出力ファイルを追加
+- （team.json は daemon が自動更新する）
 - プログレスバーをクリア
 
 ### 13. 次のステップ案内
