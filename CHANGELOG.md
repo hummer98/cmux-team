@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.16.0] - 2026-03-29
+
+### Added
+- Conductor テンプレートに TaskCreate/TaskUpdate によるサブタスク管理を追加。Agent の起動・完了をタスクとして追跡可能に
+- Master 起動時に `--append-system-prompt-file` でロール定義をシステムプロンプトに永続化
+
+### Fixed
+- Conductor 完了判定を done マーカーファイルのみに変更。interrupt 後に誤って done と判定される問題を修正
+
 ## [2.15.1] - 2026-03-29
 
 ### Fixed
