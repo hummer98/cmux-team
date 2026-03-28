@@ -239,7 +239,8 @@ async function scanTasks(state: DaemonState): Promise<void> {
   }));
 
   for (const task of executable) {
-    if (state.conductors.size >= state.maxConductors) {
+    const runningCount = [...state.conductors.values()].filter(c => c.status === "running").length;
+    if (runningCount >= state.maxConductors) {
       await log(
         "throttled",
         `task_id=${task.id} conductors=${state.conductors.size}/${state.maxConductors}`
@@ -259,6 +260,15 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [id, conductor] of state.conductors) {
+    if (conductor.status === "done") {
+      const status = await checkConductorStatus(conductor.surface, conductor.startedAt);
+      if (status === "crashed") {
+        await log("conductor_surface_closed", `conductor_id=${id} surface=${conductor.surface}`);
+        state.conductors.delete(id);
+      }
+      continue;
+    }
+
     const status = await checkConductorStatus(conductor.surface, conductor.startedAt);
 
     switch (status) {
@@ -304,7 +314,7 @@ async function handleConductorDone(
     }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
   );
 
-  state.conductors.delete(conductor.conductorId);
+  conductor.status = "done";
 }
 
 async function handleTodo(state: DaemonState, content: string): Promise<void> {
@@ -352,6 +362,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       taskId: c.taskId,
       taskTitle: c.taskTitle,
       surface: c.surface,
+      status: c.status,
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
       startedAt: c.startedAt,

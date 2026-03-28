@@ -162,7 +162,7 @@ function Header({ state, cols }: { state: DaemonState; cols: number }) {
       <Text>  poll </Text>
       <Text>{state.pollInterval / 1000}s</Text>
       <Text>  conductors </Text>
-      <Text bold color="yellow">{state.conductors.size}</Text>
+      <Text bold color="yellow">{[...state.conductors.values()].filter(c => c.status === "running").length}</Text>
       <Text>/{state.maxConductors}</Text>
       <Text>  tasks </Text>
       <Text bold>{state.openTasks}</Text>
@@ -216,15 +216,16 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
   return (
     <Box flexDirection="column">
       {conductors.map((c) => {
+        const isDone = c.status === "done";
         const elapsed = formatElapsed(c.startedAt);
         const agents = c.agents || [];
         return (
           <Box key={c.conductorId} flexDirection="column">
             <Box paddingLeft={1}>
-              <Text color="yellow">● </Text>
-              <Text>[{c.surface.replace("surface:", "")}]</Text>
-              <Text bold> #{c.taskId.padStart(3, '0')}</Text>
-              {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
+              <Text color={isDone ? "gray" : "yellow"}>{isDone ? "✓ " : "● "}</Text>
+              <Text color={isDone ? "gray" : undefined}>[{c.surface.replace("surface:", "")}]</Text>
+              <Text bold={!isDone} color={isDone ? "gray" : undefined}> #{c.taskId.padStart(3, '0')}</Text>
+              {c.taskTitle && <Text color={isDone ? "gray" : "white"}> {c.taskTitle}</Text>}
               <Text dimColor> {elapsed}</Text>
             </Box>
             {agents.map((a, i) => (

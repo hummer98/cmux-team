@@ -106,6 +106,7 @@ async function cmdStart(): Promise<void> {
             spawnedAt: a.spawnedAt ?? new Date().toISOString(),
           })),
           doneCandidate: false,
+          status: c.status || "running",
         });
       }
     }
