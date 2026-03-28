@@ -267,33 +267,20 @@ export async function resetConductor(
 
 // --- checkConductorStatus ---
 
-const MIN_RUNTIME_MS = 30_000; // spawn 後 30 秒は "done" 判定しない
-
 export async function checkConductorStatus(
   conductor: ConductorState
 ): Promise<"idle" | "running" | "done" | "crashed"> {
   if (conductor.status === "idle") return "idle";
 
-  // done マーカーファイルを確認
+  // done マーカーファイルのみで完了判定（画面判定はしない）
   if (conductor.outputDir && existsSync(join(conductor.outputDir, "done"))) {
     return "done";
   }
 
-  // フォールバック: スクリーン読み取り
+  // surface 消失 → クラッシュ
   if (!(await cmux.validateSurface(conductor.surface))) return "crashed";
 
-  const elapsed = Date.now() - new Date(conductor.startedAt).getTime();
-  if (elapsed < MIN_RUNTIME_MS) return "running";
-
-  try {
-    const screen = await cmux.readScreen(conductor.surface, 10);
-    const hasPrompt = screen.includes("❯");
-    const isExecuting = screen.includes("esc to interrupt");
-    if (hasPrompt && !isExecuting) return "done";
-    return "running";
-  } catch {
-    return "crashed";
-  }
+  return "running";
 }
 
 // --- collectResults ---
