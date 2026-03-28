@@ -57,7 +57,7 @@ describe("proxy", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body.ok).toBe(true);
 
     // ログが書き込まれるのを少し待つ
@@ -163,11 +163,11 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("application/json");
 
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body.running).toBe(true);
     expect(body.masterSurface).toBe("surface:1");
     expect(body.lastUpdate).toBe("2026-03-29T00:00:00.000Z");
-    expect(body.conductors["cond-1"].conductorId).toBe("cond-1");
+    expect((body.conductors as Record<string, any>)["cond-1"].conductorId).toBe("cond-1");
     handle.stop();
   });
 
@@ -185,7 +185,7 @@ describe("proxy", () => {
     const res = await fetch(`http://127.0.0.1:${handle.port}/tasks`);
     expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const body = (await res.json()) as any[];
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBe(2);
     expect(body[0].id).toBe("001");
@@ -206,7 +206,7 @@ describe("proxy", () => {
     const res = await fetch(`http://127.0.0.1:${handle.port}/conductors`);
     expect(res.status).toBe(200);
 
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, any>;
     expect(body.c1.conductorId).toBe("c1");
     expect(body.c2.taskId).toBe("011");
     handle.stop();
