@@ -122,7 +122,7 @@ created_at: 2026-03-23T00:00:00Z
 
 ## 2. Manager プロトコル
 
-Manager は別ペインでイベント駆動で動作する（Sonnet モデル）。テンプレート `templates/manager.md` 参照。
+Manager は **TypeScript daemon** (`skills/cmux-team/manager/main.ts`) として動作する。Sonnet の Claude セッションではなく、Bun で実行される Node/Bun プロセスとして常駐し、キューベースのイベント駆動でタスク検出・Conductor 割り当て・完了検出を行う。
 
 ### 2.1 タスク検出
 
@@ -220,7 +220,7 @@ rm -f .team/output/conductor-N/done
 
 ## 3. Conductor プロトコル
 
-Conductor は1つのタスクを自律的に完遂する。テンプレート `templates/conductor.md` 参照。
+Conductor は **常駐 Claude セッション** として固定ペインに配置される。タスクを割り当てられると自律的に完遂し、完了後は idle 状態に戻って daemon から次のタスクの割り当てを待つ。テンプレート `templates/conductor.md` 参照。
 
 ### 3.1 タスク受領
 
@@ -352,7 +352,9 @@ cmux send-key --surface surface:M "return"
 
 ## 6. チーム状態管理
 
-### team.json（Master が初期化）
+### team.json（daemon が自動管理）
+
+team.json は daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
 
 ```json
 {
@@ -362,8 +364,12 @@ cmux send-key --surface surface:M "return"
   "architecture": "4-tier",
   "created_at": "2026-03-23T00:00:00Z",
   "manager": {
+    "pid": 12345,
     "surface": "surface:N",
     "status": "running"
+  },
+  "master": {
+    "surface": "surface:M"
   },
   "conductors": [],
   "completed_outputs": []
@@ -515,7 +521,26 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
 | `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
 
-### 手動オーバーライド（Manager を経由せず直接実行）
+### daemon CLI サブコマンド
+
+正規フローは daemon 経由（`cmux-team start` → タスク作成 → Manager → Conductor → Agent）で実行される。
+
+| コマンド | 説明 |
+|---------|------|
+| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築 |
+| `cmux-team status` | ステータス表示（team.json + ログ末尾） |
+| `cmux-team stop` | graceful shutdown（SHUTDOWN メッセージ送信） |
+| `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
+| `cmux-team send TODO` | TODO 通知（`--content` 必須） |
+| `cmux-team send SHUTDOWN` | シャットダウン通知 |
+| `cmux-team spawn-agent` | Agent spawn（`--conductor-id`, `--role`, `--prompt` or `--prompt-file`） |
+| `cmux-team agents` | 稼働中エージェント一覧 |
+| `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-id` 任意） |
+| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
+
+### 手動オーバーライド（daemon 未起動時・デバッグ用）
+
+以下のコマンドは daemon を経由せず Master が直接実行するためのもの。daemon が起動していない環境やデバッグ時に使用する。
 
 | コマンド | 説明 |
 |---------|------|
