@@ -99,7 +99,7 @@ export async function generateConductorPrompt(
 
     // タスク読み込み指示を実際のタスク内容で置換
     content = content.replace(
-      /`.team\/tasks\/\{\{ROLE_ID\}\}.md` を読んでタスク内容を確認してください。/,
+      /このプロンプトに含まれるタスク指示を直接受け取る。（daemon が `\/clear` \+ プロンプト送信でタスクを割り当てる。）/,
       taskContent
     );
 

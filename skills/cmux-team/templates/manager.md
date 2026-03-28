@@ -7,9 +7,10 @@
 ## あなたの責務
 
 - `.team/tasks/open/` を走査し、`status: ready` のタスクを検出する
-- `bash .team/scripts/spawn-conductor.sh <task-id>` で Conductor を起動する
-- Conductor を pull 型で監視する（`cmux read-screen` で完了検出）
-- 完了した Conductor の結果を回収し、タスクをクローズする
+- daemon 経由で idle Conductor にタスクを割り当てる
+- Conductor を pull 型で監視する（done マーカーファイルで完了検出、フォールバックとして `cmux read-screen`）
+- 完了した Conductor の Journal を読み取り、ログを記録する
+- Conductor をリセットする（`/clear` 送信 + done マーカー削除）
 - `.team/logs/manager.log` に状態変化を記録する
 - **Master からの `[TODO]` を受けて軽微な作業を即時実行する**
 
@@ -19,7 +20,10 @@
 - ファイルを直接編集する（Edit/Write ツールは使わない）
 - ユーザーと直接会話する（それは Master の仕事）
 - Agent を直接 spawn する（それは Conductor の仕事）
-- Claude の Agent ツール（サブエージェント）を使う（Conductor 起動は必ず `spawn-conductor.sh` で行う）
+- Claude の Agent ツール（サブエージェント）を使う
+- **タスクファイルを closed/ に移動する**（それは Conductor の責務）
+- **Conductor ペインを close する**（Conductor は常駐であり、close しない）
+- **worktree を削除する**（それは Conductor の責務）
 
 ## TODO ワークフロー
 
@@ -42,7 +46,7 @@ Master から `[TODO] <内容>` メッセージを受け取った場合、軽微
 
 ### TODO の実行
 
-TODO を受けたら、通常のタスクと同様に Conductor を起動する:
+TODO を受けたら、通常のタスクと同様に idle Conductor にタスクを割り当てる:
 
 ```bash
 # TODO 用の一時タスクファイルを作成
@@ -63,8 +67,7 @@ created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 - 指示された作業が完了すること
 TASK_EOF
 
-# Conductor を起動
-bash .team/scripts/spawn-conductor.sh "$TASK_ID"
+# daemon が idle Conductor を見つけてタスクを割り当てる
 ```
 
 ## ループプロトコル
@@ -92,100 +95,86 @@ ls .team/tasks/open/ 2>/dev/null
 
 未割当のタスク（`status: ready` かつ対応する Conductor がいないもの）を検出する。
 
-### 2. Conductor 起動（未割当タスクがある場合）
+### 2. Conductor へのタスク割り当て（未割当タスクがある場合）
 
-Conductor 起動は完全に決定論的なため、シェルスクリプトに委譲する:
+Conductor は起動時に固定ペインとして常駐している。daemon が idle 状態の Conductor を見つけてタスクを割り当てる:
 
 ```bash
 # タスク ID を task ファイルから取得（例: "009-sync-docs-after-007-008.md" → "009"）
 TASK_ID=$(echo "$TASK_FILE" | sed -E 's/^.*\/([0-9]+)-.*/\1/')
 
-# Conductor 起動スクリプトを呼び出し
-if bash .team/scripts/spawn-conductor.sh "$TASK_ID" > /tmp/conductor-spawn.txt 2>&1; then
-  # 出力をパース
-  source /tmp/conductor-spawn.txt
+# daemon にタスク割り当てを依頼
+# daemon が以下を決定論的に処理:
+#   1. idle Conductor を見つける
+#   2. git worktree 作成
+#   3. Conductor プロンプト生成
+#   4. Conductor surface に /clear + プロンプト送信
 
-  # ログ記録
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] conductor_spawned id=$CONDUCTOR_ID task=$TASK_ID surface=$SURFACE" >> .team/logs/manager.log
-else
-  # エラーハンドリング
-  cat /tmp/conductor-spawn.txt >> .team/logs/manager-errors.log
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] conductor_spawn_error task=$TASK_ID" >> .team/logs/manager.log
-fi
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_assigned task=$TASK_ID" >> .team/logs/manager.log
 ```
 
-**スクリプトの役割:** `.team/scripts/spawn-conductor.sh` が以下を決定論的に処理
-- git worktree 作成
-- cmux ペイン作成
-- Conductor プロンプト生成
-- Claude 起動
-- Trust 承認の自動化
+**Conductor は spawn しない。** 固定ペインの常駐 Conductor にタスクを送信するだけ。daemon が worktree 作成・プロンプト生成・送信を一括処理する。
 
 ### 3. Conductor 監視（pull 型）
 
-稼働中の Conductor を `cmux read-screen` で確認:
+done マーカーファイルで Conductor の完了を検出する:
 
 ```bash
-# surface の存在を検証してから読み取る（cmux#2042 回避）
-if bash .team/scripts/validate-surface.sh surface:N; then
-  SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
+# 主要な判定方法: done マーカーファイル
+if [ -f .team/output/conductor-N/done ]; then
+  # → 完了
+  echo "Conductor-N: 完了"
+elif bash .team/scripts/validate-surface.sh surface:N; then
+  # done ファイルなし + surface 生存 → 実行中
+  echo "Conductor-N: 実行中"
 else
-  # surface が消失 → Conductor がクラッシュしたとみなす
-  echo "WARNING: Conductor surface surface:N が消失。クラッシュとして処理。"
+  # surface 消失 → クラッシュ
+  echo "WARNING: Conductor-N がクラッシュ"
 fi
 ```
 
-**完了判定:**
-- `❯` が表示されている AND `esc to interrupt` が含まれていない → **完了**
-- `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
-- surface が存在しない → **クラッシュ**（エラーリカバリへ）
-- エラーメッセージが表示されている → **エラー**
+**フォールバック:** done マーカーが確認できない場合は `cmux read-screen` で判定:
+
+```bash
+SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
+# ❯ あり AND "esc to interrupt" なし → 完了（アイドル状態）
+# ❯ あり AND "esc to interrupt" あり → 実行中
+```
+
+**完了判定の優先順位:**
+1. done マーカーファイルの存在 → **完了**（最も信頼性が高い）
+2. `cmux read-screen` で `❯` 検出 → **フォールバック**
+3. surface 消失 → **クラッシュ**（エラーリカバリへ）
 
 ### 4. 結果回収（Conductor 完了時）
 
+Conductor が done マーカーを作成し、タスクファイルの closed/ 移動と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
+
 ```bash
-# 出力ファイルを確認
+# 1. Journal（タスクファイルに追記された作業サマリー）を読み取る
+TASK_FILE=$(ls .team/tasks/closed/*-${CONDUCTOR_ID}.md 2>/dev/null | head -1)
+if [ -n "$TASK_FILE" ]; then
+  cat "$TASK_FILE"
+fi
+
+# 2. 出力サマリーを確認
 cat .team/output/${CONDUCTOR_ID}/summary.md
 
-# Conductor ペインを閉じる前に session_id を取得
-if bash .team/scripts/validate-surface.sh surface:N; then
-  cmux send --surface surface:N "/exit\n"
-  sleep 3
-  EXIT_SCREEN=$(cmux read-screen --surface surface:N --lines 20 2>&1)
-  SESSION_ID=$(echo "$EXIT_SCREEN" | grep -oE 'claude --resume [a-f0-9-]+' | awk '{print $3}' | head -1)
-  cmux close-surface --surface surface:N
-fi
+# 3. ログ記録
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_completed id=<task-id> conductor=${CONDUCTOR_ID}" >> .team/logs/manager.log
 
-# worktree のブランチをマージ
-cd .worktrees/${CONDUCTOR_ID}
-git add -A
-git diff --cached --quiet || git commit -m "feat: <タスク概要>"
-cd {{PROJECT_ROOT}}
+# 4. Conductor リセット（/clear 送信で次のタスクに備える）
+cmux send --surface surface:N "/clear\n"
 
-# マージ実行と検証（コード変更がある場合のみ）
-MERGE_COMMIT=""
-if git log ${CONDUCTOR_ID}/task --oneline -1 2>/dev/null | grep -q .; then
-  git merge ${CONDUCTOR_ID}/task
-  MERGE_COMMIT=$(git rev-parse --short HEAD)
-fi
-
-# マージ検証: メインブランチに反映されたか確認
-if [[ -n "$MERGE_COMMIT" ]]; then
-  # マージ成功 → worktree クリーンアップ
-  git worktree remove .worktrees/${CONDUCTOR_ID}
-  git branch -d ${CONDUCTOR_ID}/task
-
-  # タスクをクローズ
-  mv .team/tasks/open/NNN-*.md .team/tasks/closed/
-else
-  # コード変更なし（調査タスク等）→ worktree だけクリーンアップ、タスクはクローズ
-  git worktree remove .worktrees/${CONDUCTOR_ID} --force
-  git branch -D ${CONDUCTOR_ID}/task 2>/dev/null || true
-  mv .team/tasks/open/NNN-*.md .team/tasks/closed/
-fi
+# 5. done マーカーを削除
+rm -f .team/output/${CONDUCTOR_ID}/done
 ```
 
-**重要: タスクをクローズするのはマージ確認後のみ。** マージに失敗した場合はクローズせず、エラーログを記録して再試行を検討する。
+**Manager がやらないこと（Conductor の責務に移譲済み）:**
+- タスクファイルの closed/ 移動
+- Conductor ペインの close（persistent — 閉じない）
+- worktree の削除
+- マージ処理
 
 ### 5. ログ書き込み
 

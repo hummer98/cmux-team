@@ -214,17 +214,26 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
   return (
     <Box flexDirection="column">
       {conductors.map((c) => {
+        const isIdle = c.status === "idle";
         const isDone = c.status === "done";
         const elapsed = formatElapsed(c.startedAt);
         const agents = c.agents || [];
         return (
           <Box key={c.conductorId} flexDirection="column">
             <Box paddingLeft={1}>
-              <Text color={isDone ? "gray" : "yellow"}>{isDone ? "✓ " : "● "}</Text>
-              <Text color={isDone ? "gray" : undefined}>[{c.surface.replace("surface:", "")}]</Text>
-              <Text bold={!isDone} color={isDone ? "gray" : undefined}> #{c.taskId.padStart(3, '0')}</Text>
-              {c.taskTitle && <Text color={isDone ? "gray" : "white"}> {c.taskTitle}</Text>}
-              <Text dimColor> {elapsed}</Text>
+              <Text color={isIdle ? "gray" : isDone ? "gray" : "yellow"}>
+                {isIdle ? "○ " : isDone ? "✓ " : "● "}
+              </Text>
+              <Text color={isIdle || isDone ? "gray" : undefined}>[{c.surface.replace("surface:", "")}]</Text>
+              {isIdle ? (
+                <Text dimColor> idle</Text>
+              ) : (
+                <>
+                  <Text bold={!isDone} color={isDone ? "gray" : undefined}> #{(c.taskId ?? "").padStart(3, '0')}</Text>
+                  {c.taskTitle && <Text color={isDone ? "gray" : "white"}> {c.taskTitle}</Text>}
+                  <Text dimColor> {elapsed}</Text>
+                </>
+              )}
             </Box>
             {agents.map((a, i) => (
               <Box key={a.surface} paddingLeft={3}>
