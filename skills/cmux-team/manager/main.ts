@@ -95,6 +95,7 @@ async function cmdStart(): Promise<void> {
       if (c.surface && await cmux.validateSurface(c.surface)) {
         state.conductors.set(c.id, {
           conductorId: c.id,
+          taskRunId: c.taskRunId,
           taskId: c.taskId,
           taskTitle: c.taskTitle,
           surface: c.surface,

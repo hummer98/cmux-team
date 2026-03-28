@@ -118,7 +118,7 @@ export async function assignTask(
   projectRoot: string
 ): Promise<ConductorState | null> {
   try {
-    const conductorId = `conductor-${Math.floor(Date.now() / 1000)}`;
+    const taskRunId = `run-${Math.floor(Date.now() / 1000)}`;
 
     // --- 1. タスクファイル検索 ---
     const tasksDir = join(projectRoot, ".team/tasks/open");
@@ -137,8 +137,8 @@ export async function assignTask(
     const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || taskFile.replace(/^\d+-/, "").replace(/\.md$/, "");
 
     // --- 2. git worktree 作成 ---
-    const worktreePath = join(projectRoot, ".worktrees", conductorId);
-    const branch = `${conductorId}/task`;
+    const worktreePath = join(projectRoot, ".worktrees", taskRunId);
+    const branch = `${taskRunId}/task`;
 
     await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
       cwd: projectRoot,
@@ -150,12 +150,12 @@ export async function assignTask(
     }
 
     // --- 3. Conductor プロンプト生成 ---
-    const outputDir = `.team/output/${conductorId}`;
+    const outputDir = `.team/output/${taskRunId}`;
     await mkdir(join(projectRoot, outputDir), { recursive: true });
 
     const promptFile = await generateConductorPrompt(
       projectRoot,
-      conductorId,
+      taskRunId,
       taskId,
       taskContent,
       worktreePath,
@@ -183,7 +183,7 @@ export async function assignTask(
     await cmux.renameTab(conductor.surface, `[${num}] ♦ #${taskId} ${shortTitle}`);
 
     // --- 6. ConductorState 更新 ---
-    conductor.conductorId = conductorId;
+    conductor.taskRunId = taskRunId;
     conductor.taskId = taskId;
     conductor.taskTitle = taskTitle;
     conductor.worktreePath = worktreePath;
@@ -195,7 +195,7 @@ export async function assignTask(
 
     await log(
       "conductor_started",
-      `task_id=${taskId} conductor_id=${conductorId} surface=${conductor.surface} title=${taskTitle}`
+      `task_id=${taskId} conductor_id=${conductor.conductorId} task_run_id=${taskRunId} surface=${conductor.surface} title=${taskTitle}`
     );
 
     return conductor;
@@ -237,10 +237,12 @@ export async function resetConductor(
         });
       } catch {}
       // ブランチ削除
-      const branch = `${conductor.conductorId}/task`;
-      try {
-        await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
-      } catch {}
+      if (conductor.taskRunId) {
+        const branch = `${conductor.taskRunId}/task`;
+        try {
+          await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
+        } catch {}
+      }
     }
 
     // 3. タブ名をリセット
@@ -249,6 +251,7 @@ export async function resetConductor(
 
     // 4. ConductorState リセット
     conductor.status = "idle";
+    conductor.taskRunId = undefined;
     conductor.taskId = undefined;
     conductor.taskTitle = undefined;
     conductor.worktreePath = undefined;
