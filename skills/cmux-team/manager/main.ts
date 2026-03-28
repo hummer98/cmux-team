@@ -472,7 +472,15 @@ async function cmdCreateTask(): Promise<void> {
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
 
-  // --- 1. 最大 ID を取得 ---
+  // slug 生成
+  let slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!slug) slug = "task";
+
+  // 最大 ID 取得
   const openDir = join(PROJECT_ROOT, ".team/tasks/open");
   const closedDir = join(PROJECT_ROOT, ".team/tasks/closed");
   await mkdir(openDir, { recursive: true });
@@ -483,60 +491,43 @@ async function cmdCreateTask(): Promise<void> {
     try {
       const files = await readdir(dir);
       for (const f of files) {
-        const m = f.match(/^(\d+)/);
-        if (m) {
-          const n = parseInt(m[1], 10);
-          if (n > maxId) maxId = n;
-        }
+        const n = parseInt(f, 10);
+        if (!isNaN(n) && n > maxId) maxId = n;
       }
     } catch {}
   }
 
   const newId = String(maxId + 1).padStart(3, "0");
+  const fileName = `${newId}-${slug}.md`;
+  const filePath = join(openDir, fileName);
 
-  // --- 2. slug 生成 ---
-  const slug = title
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^\p{L}\p{N}\-]/gu, "")
-    .slice(0, 40);
-
-  const filename = `${newId}-${slug}.md`;
-  const filepath = join(openDir, filename);
-
-  // --- 3. タスクファイル書き出し ---
-  const now = new Date().toISOString();
+  // タスクファイル生成
   const content = `---
 id: ${newId}
 title: ${title}
 priority: ${priority}
 status: ${status}
-created_at: ${now}
+created_at: ${new Date().toISOString()}
 ---
 
 ## タスク
 ${body}
-
-## 対象ファイル
-(未定)
-
-## 完了条件
-(未定)
 `;
-  await writeFile(filepath, content);
-  console.log(`OK ${filepath}`);
+  await writeFile(filePath, content);
 
-  // --- 4. ready なら TASK_CREATED を通知 ---
+  // status が ready の場合のみ TASK_CREATED を送信
   if (status === "ready") {
     await ensureQueueDirs();
-    const path = await sendMessage({
+    await sendMessage({
       type: "TASK_CREATED",
       taskId: newId,
-      taskFile: `.team/tasks/open/${filename}`,
-      timestamp: now,
+      taskFile: filePath,
+      timestamp: new Date().toISOString(),
     });
-    console.log(`TASK_CREATED sent: ${path}`);
   }
+
+  const relPath = `.team/tasks/open/${fileName}`;
+  console.log(`TASK_ID=${newId} FILE=${relPath}`);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -591,6 +582,6 @@ Usage:
   cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface> [--conductor-id <id>]
-  cmux-team create-task --title <title> [--priority high|medium|low] [--status draft|ready] [--body <text>]`);
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]`);
     break;
 }
