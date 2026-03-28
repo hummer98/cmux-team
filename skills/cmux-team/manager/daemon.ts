@@ -82,7 +82,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
-      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\n"
+      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\ntask-state.json\n"
     );
   }
 
