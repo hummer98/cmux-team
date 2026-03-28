@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.15.0] - 2026-03-29
+
+### Changed
+- Conductor の Map キーを固定スロット ID（conductor-slot-1/2/3）に変更。タスク割り当てごとに ID が変わり Map エントリが重複蓄積する問題を解消
+- 起動時の surface 分割順序を修正。全 split で daemon surface を明示指定し、フォーカス状態に依存しないレイアウト構築に変更
+- 手動コマンド（/team-impl 等）から team.json 直接操作を削除し、daemon 管理に統一
+- SKILL.md を TypeScript daemon ベースのアーキテクチャに合わせて全面更新
+
+### Fixed
+- daemon リロード時にプロキシポートを再利用。既存 Conductor の ANTHROPIC_BASE_URL が旧ポートのままハングする問題を修正
+
 ## [2.14.0] - 2026-03-29
 
 ### Added
