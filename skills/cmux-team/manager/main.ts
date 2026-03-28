@@ -392,13 +392,14 @@ async function cmdSpawnAgent(): Promise<void> {
   }
 
   // --- 3. Claude Code 起動 ---
-  const envParts: string[] = [
-    `CONDUCTOR_ID=${conductorId}`,
-    `ROLE=${role}`,
-    `PROJECT_ROOT=${PROJECT_ROOT}`,
+  // 環境変数を export（Conductor のシェルセッションに永続化し子プロセスに自動継承）
+  const exports: string[] = [
+    `export CONDUCTOR_ID=${conductorId}`,
+    `export ROLE=${role}`,
+    `export PROJECT_ROOT=${PROJECT_ROOT}`,
   ];
   if (proxyPort) {
-    envParts.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+    exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
   }
 
   const cdPrefix = worktreePath ? `cd ${worktreePath} && ` : "";
@@ -407,10 +408,10 @@ async function cmdSpawnAgent(): Promise<void> {
   if (promptFile) {
     // --prompt-file: ファイル経由 + --bare モードでコンテキスト最適化
     const bareFlags = `--bare --add-dir ${PROJECT_ROOT}/.team`;
-    claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions ${bareFlags} '${promptFile} を読んで指示に従ってください。'`;
+    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${bareFlags} '${promptFile} を読んで指示に従ってください。'`;
   } else {
     // 後方互換: --prompt でインライン渡し
-    claudeCmd = `${cdPrefix}${envParts.join(" ")} claude --dangerously-skip-permissions '${prompt}'`;
+    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions '${prompt}'`;
   }
   await cmux.send(surface, claudeCmd + "\n");
 

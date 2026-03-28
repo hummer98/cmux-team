@@ -68,15 +68,15 @@ export async function initializeConductorSlots(
       const surface = surfaces[i]!;
       const slotId = `conductor-slot-${i + 1}`;
 
-      // Claude を idle 待機状態で起動
-      const envParts: string[] = [`PROJECT_ROOT=${projectRoot}`];
+      // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
+      const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
       if (proxyPort) {
-        envParts.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+        exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
       }
 
       await cmux.send(
         surface,
-        `${envParts.join(" ")} claude --dangerously-skip-permissions 'Conductor として待機中。タスク割り当てを待っています。'\n`
+        `${exports.join(" && ")} && claude --dangerously-skip-permissions 'Conductor として待機中。タスク割り当てを待っています。'\n`
       );
 
       // Trust 承認
@@ -353,14 +353,14 @@ export async function spawnConductor(
       proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
     } catch {}
 
-    // Claude を起動
-    const envParts: string[] = [`PROJECT_ROOT=${projectRoot}`];
+    // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
+    const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
     if (proxyPort) {
-      envParts.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+      exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
     }
     await cmux.send(
       surface,
-      `${envParts.join(" ")} claude --dangerously-skip-permissions 'Conductor として待機中。'\n`
+      `${exports.join(" && ")} && claude --dangerously-skip-permissions 'Conductor として待機中。'\n`
     );
     await cmux.waitForTrust(surface);
 
