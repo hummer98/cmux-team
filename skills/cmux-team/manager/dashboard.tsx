@@ -221,7 +221,7 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
             <Box paddingLeft={1}>
               <Text color="yellow">● </Text>
               <Text>[{c.surface.replace("surface:", "")}]</Text>
-              <Text bold> #{c.taskId}</Text>
+              <Text bold> #{c.taskId.padStart(3, '0')}</Text>
               {c.taskTitle && <Text color="white"> {c.taskTitle}</Text>}
               <Text dimColor> {elapsed}</Text>
             </Box>
@@ -265,7 +265,7 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
         return (
           <Box key={task.id} paddingLeft={1}>
             <Text color={color} dimColor={dimColor}>{isClosed ? "○" : "●"} </Text>
-            <Text bold dimColor={dimColor}>{task.id}</Text>
+            <Text bold dimColor={dimColor}>{task.id.padStart(3, '0')}</Text>
             <Text dimColor={dimColor}> [{assigned ? "running" : task.status}] {title}</Text>
             {elapsed && <Text dimColor>{elapsed}</Text>}
           </Box>
@@ -330,7 +330,7 @@ function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: numb
           <Box key={i} paddingLeft={1}>
             <Text dimColor>{entry.time} </Text>
             <Text color={entry.color}>{entry.icon} </Text>
-            <Text bold>#{entry.taskId} </Text>
+            <Text bold>#{entry.taskId.padStart(3, '0')} </Text>
             <Text>{entry.message.slice(0, maxMsg)}</Text>
           </Box>
         );
