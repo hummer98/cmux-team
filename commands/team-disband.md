@@ -65,9 +65,7 @@ description: "全層を終了しチームを解散する"
    - cmux のサイドバーステータスをすべてクリア
 
 7. **team.json 更新**
-   - phase: "disbanded"
-   - manager: null
-   - conductors: []
+   daemon の stop コマンド（手順5）が team.json の状態を自動更新する（phase: "disbanded" 等）。直接書き込みは不要。
 
 8. サマリー表示
 

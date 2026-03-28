@@ -110,11 +110,9 @@ description: "要件を対話的にブレストし仕様を策定する"
   Approved at: <ISO 8601 タイムスタンプ>
   ```
 
-### 7. team.json 更新
+### 7. 次のステップ案内
 
-- phase を `"spec"` に更新
-
-### 8. 次のステップ案内
+（team.json の phase 更新は daemon が自動的に行う）
 
 ```
 要件定義が完了しました。

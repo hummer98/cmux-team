@@ -81,8 +81,7 @@ cmux new-split right  # → surface:S
 各レビュアーに対して（**1体ずつ、cmux-team SKILL.md §2.1 の手順に従う**）:
 
 ```bash
-# a. team.json にエージェント登録
-# b. ステータス設定
+# a. ステータス設定
 cmux set-status reviewer-impl "spawning" --icon sparkle --color "#ffcc00"
 
 # c. Claude 起動（シェルコマンドは \n で送信可能）
@@ -195,9 +194,7 @@ severity: critical|major
 ### 10. クリーンアップと状態更新
 
 - レビュアーペインを閉じる
-- team.json:
-  - phase を `"review"` に更新
-  - completed_outputs に出力ファイルを追加
+- （team.json は daemon が自動更新する）
 - プログレスバーをクリア
 
 ### 11. 次のステップ案内

@@ -85,8 +85,7 @@ cmux new-split right  # → surface:S2
 各エージェントに対して（**1体ずつ確実に起動、cmux-team SKILL.md §2.1 の手順に従う**）:
 
 ```bash
-# a. team.json にエージェント登録
-# b. ステータス設定
+# a. ステータス設定
 cmux set-status implementer-N "spawning" --icon sparkle --color "#ffcc00"
 
 # c. Claude 起動（シェルコマンドは \n で送信可能）
@@ -148,8 +147,7 @@ cmux wait-for "implementer-N-done" --timeout 600
 エージェントが完了したら:
 1. 出力を収集（`.team/output/implementer-N.md`）
 2. tasks.md の対応タスクを完了マークに更新
-3. team.json の completed_outputs に追加
-4. プログレスバーを更新
+3. プログレスバーを更新
 
 **次バッチの処理**（タスクがエージェント数を超えている場合）:
 1. 完了したエージェントのペインを再利用
@@ -172,9 +170,7 @@ cmux wait-for "implementer-N-done" --timeout 600
 ### 10. クリーンアップと状態更新
 
 - エージェントペインの処理をユーザーに確認
-- team.json:
-  - phase を `"implementation"` に更新
-  - 完了したエージェントの情報を更新
+- （team.json は daemon が自動更新する）
 - プログレスバーをクリア
 
 ### 11. 次のステップ案内

@@ -64,11 +64,6 @@ cmux new-split right  # → surface:S3
 各リサーチャー（N=1,2,3）に対して:
 
 ```bash
-# team.json にエージェントを登録
-# agents 配列に追加: { "id": "researcher-N", "role": "researcher",
-#   "surface": "surface:SN", "workspace": "workspace:W",
-#   "status": "spawning", "task": "<サブ質問>", "started_at": "<ISO 8601>" }
-
 # サイドバーステータス設定
 cmux set-status researcher-N "spawning" --icon sparkle --color "#ffcc00"
 
@@ -166,8 +161,7 @@ cat .team/output/researcher-3.md
 
 ユーザーに確認後:
 - 統合結果を `.team/specs/research.md` に保存
-- team.json の phase を `"research"` に更新
-- team.json の completed_outputs に追加
+- （team.json は daemon が自動更新する）
 
 ### 10. クリーンアップ
 
