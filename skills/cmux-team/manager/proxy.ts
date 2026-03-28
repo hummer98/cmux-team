@@ -170,7 +170,7 @@ export async function start(
   }
 
   return {
-    port: server.port,
+    port: server.port!,
     stop: () => server.stop(),
   };
 }

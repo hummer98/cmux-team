@@ -607,7 +607,7 @@ async function cmdUpdateTask(): Promise<void> {
         if (!f.endsWith(".md")) continue;
         const content = await readFile(join(tasksDir, f), "utf-8");
         const idMatch = content.match(/^id:\s*(.+)$/m);
-        if (idMatch && idMatch[1].trim() === taskId) {
+        if (idMatch && idMatch[1]?.trim() === taskId) {
           taskFile = join(tasksDir, f);
           break;
         }
@@ -664,7 +664,7 @@ async function cmdCloseTask(): Promise<void> {
         if (!f.endsWith(".md")) continue;
         const content = await readFile(join(tasksDir, f), "utf-8");
         const idMatch = content.match(/^id:\s*(.+)$/m);
-        if (idMatch && idMatch[1].trim() === taskId) {
+        if (idMatch && idMatch[1]?.trim() === taskId) {
           taskFile = join(tasksDir, f);
           break;
         }
