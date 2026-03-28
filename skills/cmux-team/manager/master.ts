@@ -28,7 +28,7 @@ export async function spawnMaster(
     // Claude Code 起動
     await cmux.send(
       surface,
-      "claude --dangerously-skip-permissions '.team/prompts/master.md を読んで指示に従ってください。ユーザーからのタスクを待ってください。'\n"
+      "claude --dangerously-skip-permissions --append-system-prompt-file .team/prompts/master.md 'ユーザーからのタスクを待ってください。'\n"
     );
 
     // Trust 承認
