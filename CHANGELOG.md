@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.19.0] - 2026-03-29
+
+### Added
+- タスク定義と状態の分離 — `tasks/` をフラット構造に変更し、`task-state.json` で状態を管理
+
+### Fixed
+- TUI ダッシュボード: `Sep` を `Box` でラップし全セクションの1行目空白バグを修正
+- TUI ダッシュボード: Journal/Log のスペーストリム問題を修正
+- `main.ts` / `proxy.test.ts` / `proxy.ts` の TypeScript コンパイルエラー修正
+- `initInfra` の `.gitignore` テンプレートに `task-state.json` を追加
+- テンプレート・コマンド・スクリプト・テストの `tasks/open`, `tasks/closed` 参照をフラット構造に更新
+- `.claude/worktrees/` を git 管理外に変更
+
 ## [2.18.1] - 2026-03-29
 
 ### Fixed
