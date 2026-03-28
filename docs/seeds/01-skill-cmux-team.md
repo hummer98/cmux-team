@@ -1,12 +1,11 @@
-# Seed: cmux-team Skill (Conductor Orchestration)
+# Seed: cmux-team Skill（4層アーキテクチャ定義）
 
-## File: `.claude/skills/cmux-team/SKILL.md`
+## File: `skills/cmux-team/SKILL.md`
 
 ## Purpose
 
-The core orchestration skill loaded by the Conductor (parent Claude).
-Teaches the Conductor how to spawn, monitor, communicate with, and collect results
-from sub-agent Claude sessions via cmux CLI.
+4層アーキテクチャ（Master → Manager → Conductor → Agent）全体の定義スキル。
+**Master（ユーザーセッション）** が読み込み、タスク作成・Manager 監視・進捗報告を行う。
 
 ## Frontmatter
 
@@ -21,145 +20,167 @@ description: >
 ---
 ```
 
-## Content Sections to Implement
+## Content Sections（実装済み）
 
-### 1. Quick Orientation
-- Detect cmux environment: `CMUX_SOCKET_PATH` must be set
-- Check `.team/team.json` for existing team state
-- `cmux tree --all --json` to see current topology
+### 0. アーキテクチャ概要
 
-### 2. Agent Lifecycle Protocol
+- 4層構造の図解（Master ↔ ユーザー、Manager daemon、Conductor 常駐、Agent 実作業）
+- 各層の責務テーブル
+- 通信方式テーブル（ファイルベース + cmux コマンド）
 
-#### Spawning
+### 1. Master の行動原則
+
+Master の「やること」「やらないこと」を明示:
+
+**やること:**
+- ユーザーの指示を解釈し `bun run main.ts create-task` でタスクを作成
+- `bun run main.ts status` で進捗を報告
+- Manager の健全性を `cmux read-screen` で確認
+
+**やらないこと:**
+- コードの読解・実装・テスト・レビュー
+- Conductor / Agent の直接起動・監視
+- ポーリング・ループ実行
+
+**Manager spawn 手順:**
 ```bash
-# 1. Create pane
-cmux new-split right  # → surface:N
-
-# 2. Register in team.json
-# { "agents": [{ "role": "researcher-1", "surface": "surface:N", "status": "spawning" }] }
-
-# 3. Set sidebar status
-cmux set-status <role> "spawning" --icon sparkle --color "#ffcc00"
-
-# 4. Launch autonomous Claude
-cmux send --surface surface:N "claude --dangerously-skip-permissions\n"
-
-# 5. Wait for Claude to boot (detect prompt ❯ via read-screen)
-# Poll: cmux read-screen --surface surface:N | grep '❯'
-
-# 6. Send task prompt
-cmux send --surface surface:N "<prompt content>\n"
-
-# 7. Update status
-cmux set-status <role> "running" --icon hammer --color "#0099ff"
+cmux new-split right  # → surface:M
+cmux rename-tab --surface surface:M "[M] Manager"
+cmux send --surface surface:M "claude --dangerously-skip-permissions --model sonnet '...'\n"
+# Trust 確認の自動承認ループ
 ```
 
-#### Monitoring
-```bash
-# Read current screen
-cmux read-screen --surface surface:N --lines 50
+**タスクファイル形式:**
+- `.team/tasks/<task-id>.md`（YAML frontmatter: id, title, priority）
+- 状態は `.team/task-state.json` で管理（draft/ready/assigned/closed）
 
-# Read with scrollback for full output
-cmux read-screen --surface surface:N --scrollback --lines 200
+### 2. Manager プロトコル
 
-# Check if agent is idle (prompt visible again)
-cmux read-screen --surface surface:N | tail -5 | grep '❯'
+Manager は **TypeScript daemon**（`skills/cmux-team/manager/main.ts`）として Bun で動作。
+
+**2.1 タスク検出:**
+- `task-state.json` で `status: ready` のタスクをスキャン
+- 依存関係（`depends_on`）が全て closed であることを確認
+
+**2.2 Conductor へのタスク割り当て:**
+- idle Conductor を見つけ `/clear` + 新プロンプトを送信
+- git worktree 作成 + プロンプト生成を daemon が実行
+- Conductor は spawn しない（起動時に作成された固定ペインを再利用）
+
+**2.3 Conductor 監視（pull 型）:**
+- done マーカーファイル（`.team/output/conductor-N/done`）で完了検出
+- 2 tick 連続で検出 → 完了確定（`doneCandidate` パターン）
+- フォールバック: `cmux read-screen` で `❯` 検出
+- surface 消失 → クラッシュ検出
+
+**2.4 結果回収:**
+- Journal 読み取り（task-state.json の closed タスク）
+- ログ記録（`manager.log`）
+- Conductor リセット（`/clear` 送信 + done マーカー削除）
+- **Manager がやらないこと**: タスクの close、Conductor ペインの close、worktree 削除、マージ
+
+**2.5 ループ継続・アイドル化:**
+- 10秒ポーリング間隔（メインループ）
+- アイドル時: `idle_start` をログに記録
+
+### 3. Conductor プロトコル
+
+Conductor は **常駐 Claude セッション**。タスクを割り当てられると自律的に完遂し、完了後は idle に戻る。
+
+**3.1 タスク受領:** daemon が `/clear` + プロンプト送信
+**3.2 git worktree 内で作業:** `.worktrees/run-<EPOCH>/` 内で全作業
+**3.3 Agent 起動:** `spawn-agent` CLI で起動（直接 `cmux new-surface` 禁止）
+**3.4 Agent 監視:** `cmux read-screen` で `❯` 検出（pull 型、30秒間隔）
+**3.5 結果統合:** Agent 出力確認 + テスト実行
+**3.6 完了:**
+1. Agent タブを close
+2. worktree を削除
+3. `bun run main.ts close-task` でタスクを close（journal 記録）
+4. `touch <outputDir>/done` で done マーカー作成
+5. idle 状態に戻る
+
+### 4. Agent プロトコル
+
+- 割り当てられたタスクを実行
+- 指定された出力ファイルに結果を書く
+- **完了したら停止する。報告は不要。** 上位が検出する
+- worktree 内で作業
+
+### 5. 通信プロトコル
+
+**ファイルベース通信:**
+```
+.team/
+├── tasks/             # タスクファイル（フラット構造）
+├── task-state.json    # タスク状態管理
+├── output/conductor-N/ # Conductor 出力 + done マーカー
+├── queue/             # ファイルベースメッセージキュー
+├── prompts/           # プロンプト（監査証跡）
+├── specs/             # 要件・設計ドキュメント
+└── team.json          # チーム構成（daemon 自動管理）
 ```
 
-#### Collecting Results
-```bash
-# Option A: File-based (preferred)
-cat .team/output/<role>.md
+**cmux コマンド:**
+| コマンド | 用途 |
+|---------|------|
+| `cmux send` | 上位→下位のプロンプト送信 |
+| `cmux send-key return` | 複数行プロンプトの送信確定 |
+| `cmux read-screen` | pull 型監視 |
+| `cmux close-surface` | Agent タブの終了 |
+| `bun run main.ts spawn-agent` | Agent 起動 |
 
-# Option B: Screen scraping (fallback)
-cmux read-screen --surface surface:N --scrollback
-```
+### 6. チーム状態管理
 
-#### Completion Synchronization
-```bash
-# Conductor waits:
-cmux wait-for "<role>-done" --timeout 300
-
-# Agent signals (instructed via prompt):
-# cmux wait-for -S "<role>-done"
-```
-
-#### Teardown
-```bash
-# Close specific agent
-cmux send --surface surface:N "/exit\n"
-cmux close-surface --surface surface:N
-
-# Close all agents
-# Read team.json, iterate surfaces, close each
-```
-
-### 3. Prompt Generation Protocol
-
-The Conductor generates prompts for each agent role by:
-1. Reading `.team/specs/` for current requirements/design
-2. Reading `.team/tasks/open/` for relevant context
-3. Composing role-specific prompt from template + context
-4. Writing to `.team/prompts/<role>.md` for auditability
-5. Sending to agent via `cmux send`
-
-### 4. Team State Management (team.json)
-
+**team.json（daemon 自動管理）:**
 ```json
 {
   "project": "project-name",
-  "phase": "design",
-  "created_at": "2026-03-18T00:00:00Z",
-  "agents": [
-    {
-      "id": "researcher-1",
-      "role": "researcher",
-      "surface": "surface:21",
-      "workspace": "workspace:5",
-      "status": "running",
-      "task": "Investigate auth patterns",
-      "started_at": "2026-03-18T00:01:00Z"
-    }
-  ],
-  "completed_outputs": [
-    "output/researcher-1.md"
+  "phase": "init",
+  "architecture": "4-tier",
+  "manager": { "pid": 12345, "surface": "surface:N", "status": "running" },
+  "master": { "surface": "surface:M" },
+  "conductors": [
+    { "conductorId": "conductor-1", "surface": "surface:C", "status": "idle|running|done", ... }
   ]
 }
 ```
 
-### 5. Layout Strategies
+**進捗情報の取得方法（Master 向け）:**
+- Manager の状態: `cmux read-screen`
+- 稼働中 Conductor: `cmux tree`
+- タスク状態: `cat .team/task-state.json`
+- 完了履歴: `cat .team/logs/manager.log`
 
+### 7. レイアウト戦略
+
+固定2x2レイアウト（4ペイン、5 surface）:
 ```
-# 1+3 (Small): vertical splits
-[Conductor] | [Agent A] | [Agent B] | [Agent C]
-
-# 1+5 (Medium): grid
-[Conductor] | [Agent A] | [Agent B]
-            | [Agent C] | [Agent D] | [Agent E]
-
-# 1+7 (Large): use separate workspaces
-workspace:1 → Conductor
-workspace:2 → Agent A, Agent B (split)
-workspace:3 → Agent C, Agent D (split)
-workspace:4 → Agent E, Agent F, Agent G (3-way split)
+[Manager|Master] | [Conductor-1]
+[Conductor-2   ] | [Conductor-3]
 ```
+- 4ペインは不動（close しない）
+- サブエージェントは `spawn-agent` CLI でタブ作成
+- 最大3タスク並列、4つ目以降はキューイング
 
-For 1+5 and 1+7, prefer new workspaces over deep splits for readability:
-```bash
-cmux new-workspace --cwd $(pwd)  # → workspace:N, surface:M
-```
+### 8. git worktree プロトコル
 
-### 6. Progress Tracking
-```bash
-# Per-agent status in sidebar
-cmux set-status researcher-1 "reading files" --icon hammer --color "#0099ff"
+- 作成: `git worktree add .worktrees/run-<EPOCH> -b <branch>`
+- ブートストラップ: `npm install`, `.envrc` 等の初期化
+- 成功時: Conductor が commit → マージ（ローカル or PR）→ worktree 削除
+- 失敗時: `git worktree remove --force`
 
-# Phase progress
-cmux set-progress 0.33 --label "Research: 1/3 agents done"
-```
+### 9. エラーリカバリ
 
-### 7. Error Recovery
+| 障害 | 検出者 | 対応 |
+|------|--------|------|
+| Agent クラッシュ | Conductor | 再 spawn |
+| Conductor クラッシュ | Manager | リセット、タスク reopen |
+| Manager クラッシュ | Master | 再 spawn |
 
-- If `cmux read-screen` shows an error in agent pane → log to `.team/tasks/open/`
-- If `cmux wait-for` times out → read-screen to diagnose, notify user
-- If agent crashes → detect via missing prompt, offer to respawn
+### 10. コマンド一覧
+
+**基本コマンド:** `/start`, `/team-status`, `/team-disband`, `/team-spec`, `/team-task`
+
+**daemon CLI サブコマンド:** `start`, `send`, `status`, `stop`, `spawn-agent`, `agents`, `kill-agent`, `create-task`, `update-task`, `close-task`
+
+**手動オーバーライド:** `/team-research`, `/team-design`, `/team-impl`, `/team-review`, `/team-test`, `/team-sync-docs`
