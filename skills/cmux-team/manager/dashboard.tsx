@@ -266,8 +266,8 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
         return (
           <Box key={task.id} paddingLeft={1}>
             <Text color={color} dimColor={isClosed}>{isClosed ? "○" : "●"} </Text>
-            <Text bold dimColor={isClosed}>{task.id.padStart(3, '0')}</Text>
-            <Text dimColor={isClosed}> [{label}] {title}</Text>
+            <Text color={color} bold dimColor={isClosed}>{task.id.padStart(3, '0')}</Text>
+            <Text color={color} dimColor={isClosed}> [{label}] {title}</Text>
             {elapsed && <Text dimColor>{elapsed}</Text>}
           </Box>
         );
