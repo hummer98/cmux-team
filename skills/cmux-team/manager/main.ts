@@ -126,7 +126,7 @@ async function cmdStart(): Promise<void> {
   // ロギングプロキシ起動
   let proxyHandle: { port: number; stop: () => void } | null = null;
   try {
-    proxyHandle = await startProxy(PROJECT_ROOT);
+    proxyHandle = await startProxy(PROJECT_ROOT, { getState: () => state });
     await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
     await log("proxy_started", `port=${proxyHandle.port}`);
   } catch (e: any) {

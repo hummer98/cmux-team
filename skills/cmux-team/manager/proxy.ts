@@ -30,7 +30,7 @@ interface TraceEntry {
 
 export async function start(
   projectRoot: string,
-  opts?: { conductorId?: string; taskId?: string; role?: string }
+  opts?: { conductorId?: string; taskId?: string; role?: string; getState?: () => any }
 ): Promise<ProxyHandle> {
   const upstream = process.env.ANTHROPIC_API_URL || DEFAULT_UPSTREAM;
   const tracesDir = join(projectRoot, ".team/logs/traces");
@@ -42,6 +42,34 @@ export async function start(
     port: 0, // OS が空きポートを割り当て
     async fetch(req) {
       const url = new URL(req.url);
+
+      // デバッグエンドポイント
+      if (req.method === "GET") {
+        const jsonHeaders = { "Content-Type": "application/json" };
+
+        if (url.pathname === "/state") {
+          if (!opts?.getState) return new Response("Not Found", { status: 404 });
+          const state = opts.getState();
+          const serialized = {
+            ...state,
+            conductors: Object.fromEntries(state.conductors),
+            lastUpdate: state.lastUpdate instanceof Date ? state.lastUpdate.toISOString() : state.lastUpdate,
+          };
+          return new Response(JSON.stringify(serialized), { headers: jsonHeaders });
+        }
+
+        if (url.pathname === "/tasks") {
+          if (!opts?.getState) return new Response("Not Found", { status: 404 });
+          const state = opts.getState();
+          return new Response(JSON.stringify(state.taskList), { headers: jsonHeaders });
+        }
+
+        if (url.pathname === "/conductors") {
+          if (!opts?.getState) return new Response("Not Found", { status: 404 });
+          const state = opts.getState();
+          return new Response(JSON.stringify(Object.fromEntries(state.conductors)), { headers: jsonHeaders });
+        }
+      }
       const targetUrl = `${upstream}${url.pathname}${url.search}`;
       const startTime = Date.now();
 
