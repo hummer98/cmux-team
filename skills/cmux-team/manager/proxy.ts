@@ -5,7 +5,7 @@
  * リクエスト/レスポンスを .team/logs/traces/ に記録する。
  * レスポンスは streaming のまま返し、ログは非同期で書き込む。
  */
-import { mkdir, appendFile } from "fs/promises";
+import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -38,9 +38,17 @@ export async function start(
 
   const traceFile = join(tracesDir, "api-trace.jsonl");
 
-  const server = Bun.serve({
-    port: 0, // OS が空きポートを割り当て
-    async fetch(req) {
+  // 前回ポートの読み取り（daemon リロード時に同じポートを再利用）
+  let preferredPort = 0;
+  try {
+    const saved = await readFile(join(projectRoot, ".team/proxy-port"), "utf-8");
+    const parsed = parseInt(saved.trim(), 10);
+    if (parsed > 0) preferredPort = parsed;
+  } catch {
+    // ファイルなし（初回起動）→ ランダムポート
+  }
+
+  const fetchHandler = async (req: Request) => {
       const url = new URL(req.url);
 
       // デバッグエンドポイント
@@ -147,8 +155,19 @@ export async function start(
         statusText: upstreamRes.statusText,
         headers: resHeaders,
       });
-    },
-  });
+  };
+
+  // 前回ポートで起動を試み、失敗時はランダムポートにフォールバック
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({ port: preferredPort, fetch: fetchHandler });
+  } catch {
+    if (preferredPort !== 0) {
+      server = Bun.serve({ port: 0, fetch: fetchHandler });
+    } else {
+      throw new Error("Failed to start proxy");
+    }
+  }
 
   return {
     port: server.port,
