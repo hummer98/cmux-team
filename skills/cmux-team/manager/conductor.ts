@@ -135,6 +135,7 @@ export async function spawnConductor(
       startedAt: new Date().toISOString(),
       agents: [],
       doneCandidate: false,
+      status: "running",
     };
 
     await log(
