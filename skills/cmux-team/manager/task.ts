@@ -82,15 +82,18 @@ export async function loadTasks(projectRoot: string): Promise<{
     const files = await readdir(closedDir);
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
-      const id = f.match(/^(\d+)/)?.[1];
-      if (id) closed.add(id);
       const content = await readFile(join(closedDir, f), "utf-8");
       const meta = parseTaskMeta(content, f, join(closedDir, f));
       if (meta) {
+        closed.add(meta.id); // frontmatter の id を使う（ゼロパディング問題を回避）
         meta.status = "closed";
         const fileStat = await stat(join(closedDir, f));
         meta.closedAt = fileStat.mtime.toISOString();
         closedMetas.push(meta);
+      } else {
+        // meta パース失敗時のフォールバック
+        const id = f.match(/^(\d+)/)?.[1];
+        if (id) closed.add(id);
       }
     }
   }
