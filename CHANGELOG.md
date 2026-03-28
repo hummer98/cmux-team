@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.13.0] - 2026-03-29
+
+### Added
+- デバッグ用 HTTP API: プロキシサーバーに `/state`, `/tasks`, `/conductors` エンドポイントを追加。Manager 内部状態を外部から JSON で取得可能に
+- Surface 管理を固定 2x2 レイアウト + タブベースサブエージェントに再設計
+
+### Fixed
+- spawn-agent で Agent が worktree ではなくメインリポジトリで作業してしまう問題を修正
+- TUI の Conductors/Tasks セクションで1行目が表示されないバグを修正
+- YAML frontmatter パースで title のダブルクォートが除去されない問題を修正
+- Conductor テンプレート変更に合わせて template.ts の正規表現を更新
+
 ## [2.12.0] - 2026-03-28
 
 ### Added
