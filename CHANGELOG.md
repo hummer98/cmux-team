@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.14.0] - 2026-03-29
+
+### Added
+- spawn-agent に `--prompt-file` オプションと `--bare` モードを追加。Agent 起動時のコンテキスト溢れを防止
+
+### Fixed
+- Conductor/Agent 起動時の環境変数が子プロセスに継承されず、Agent が API 認証エラー（Not logged in）になる問題を修正
+
 ## [2.13.0] - 2026-03-29
 
 ### Added
