@@ -22,7 +22,7 @@ import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher } from "./daemon";
-import { startDashboard, unmountDashboard } from "./dashboard";
+import { startDashboard, unmountDashboard } from "./dashboard-rezi";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";

@@ -109,6 +109,7 @@ interface AppState {
   journalEntries: JournalEntry[];
   logScrollTop: number;
   journalScrollTop: number;
+  tasksScrollTop: number;
   version: string;
 }
 
@@ -210,103 +211,7 @@ function buildTaskRow(task: TaskSummary, assigned: boolean) {
   ]);
 }
 
-function buildView(state: AppState) {
-  const { daemon } = state;
-  const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
-  const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
-
-  // ヘッダー情報
-  const headerSubtitle = [
-    daemon.running ? "RUNNING" : "STOPPED",
-    `PID ${process.pid}`,
-    `conductors ${runningCount}/${daemon.maxConductors}`,
-    `tasks ${daemon.openTasks} open`,
-    daemon.pendingTasks > 0 ? `${daemon.pendingTasks} ready` : null,
-  ].filter(Boolean).join("  ");
-
-  // タスク一覧
-  const tasksContent = daemon.taskList.length === 0
-    ? [ui.text("no tasks", { dim: true })]
-    : daemon.taskList.map(t => buildTaskRow(t, assignedTaskIds.has(t.id)));
-
-  // ジャーナルタブの内容
-  const journalLogEntries = state.journalEntries.map((entry, i) => ({
-    id: `journal-${i}`,
-    timestamp: Date.now(),
-    level: entry.level,
-    source: entry.icon,
-    message: `#${entry.taskId.padStart(3, "0")} ${entry.message}`,
-  }));
-
-  // タブ
-  const tabs = [
-    {
-      key: "journal",
-      label: "Journal",
-      content: state.journalEntries.length === 0
-        ? ui.text("no journal entries", { dim: true })
-        : ui.logsConsole({
-            id: "journal-console",
-            entries: journalLogEntries,
-            autoScroll: true,
-            scrollTop: state.journalScrollTop,
-            showTimestamps: false,
-            showSource: true,
-            onScroll: () => {},
-          }),
-    },
-    {
-      key: "log",
-      label: "Log",
-      content: state.logEntries.length === 0
-        ? ui.text("no log entries", { dim: true })
-        : ui.logsConsole({
-            id: "log-console",
-            entries: state.logEntries,
-            autoScroll: true,
-            scrollTop: state.logScrollTop,
-            showTimestamps: true,
-            showSource: false,
-            onScroll: () => {},
-          }),
-    },
-  ];
-
-  return ui.page({
-    header: ui.header({
-      title: "cmux-team",
-      subtitle: headerSubtitle,
-      actions: state.version ? [ui.text(`v${state.version}`, { dim: true })] : [],
-    }),
-    body: ui.column({ gap: 0 }, [
-      // Master セクション
-      ui.panel("Master", [buildMasterSection(daemon)]),
-      // Conductors セクション
-      ui.panel(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`, [buildConductorsSection(daemon)]),
-      // Tasks セクション
-      ui.panel("Tasks", tasksContent),
-      // タブ（Journal / Log）
-      ui.tabs({
-        id: "main-tabs",
-        tabs,
-        activeTab: state.activeTab,
-        onChange: () => {},
-      }),
-    ]),
-    footer: ui.statusBar({
-      left: [
-        ui.kbd("1"),
-        ui.text("journal"),
-        ui.kbd("2"),
-        ui.text("log"),
-        ui.kbd("r"),
-        ui.text("reload"),
-        ui.kbd("q"),
-        ui.text("quit"),
-      ],
-    }),
-  });
-}
+// buildView は startDashboard 内のクロージャとして定義（app.update へのアクセスが必要なため）
 
 // --- アプリインスタンス管理 ---
 
@@ -327,11 +232,121 @@ export function startDashboard(
       journalEntries: [],
       logScrollTop: 0,
       journalScrollTop: 0,
+      tasksScrollTop: 0,
       version: opts?.version ?? "",
     },
   });
 
-  app.view(buildView);
+  // buildView を app をキャプチャするクロージャとして定義
+  function buildViewWithApp(state: AppState) {
+    const { daemon } = state;
+    const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
+    const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
+
+    // ヘッダー情報
+    const headerSubtitle = [
+      daemon.running ? "RUNNING" : "STOPPED",
+      `PID ${process.pid}`,
+      `conductors ${runningCount}/${daemon.maxConductors}`,
+      `tasks ${daemon.openTasks} open`,
+      daemon.pendingTasks > 0 ? `${daemon.pendingTasks} ready` : null,
+    ].filter(Boolean).join("  ");
+
+    // タスク一覧（スクロール対応）
+    const tasksWidget = daemon.taskList.length === 0
+      ? ui.text("no tasks", { dim: true })
+      : ui.virtualList({
+          id: "tasks-list",
+          items: daemon.taskList,
+          itemHeight: 1,
+          overscan: 3,
+          renderItem: (task: TaskSummary, _index: number, focused: boolean) => {
+            const assigned = assignedTaskIds.has(task.id);
+            return buildTaskRow(task, assigned);
+          },
+          onScroll: (top: number) => app.update((s) => ({ ...s, tasksScrollTop: top })),
+        });
+
+    // ジャーナルタブの内容
+    const journalLogEntries = state.journalEntries.map((entry, i) => ({
+      id: `journal-${i}`,
+      timestamp: Date.now(),
+      level: entry.level,
+      source: entry.icon,
+      message: `#${entry.taskId.padStart(3, "0")} ${entry.message}`,
+    }));
+
+    // タブ
+    const tabs = [
+      {
+        key: "journal",
+        label: "Journal",
+        content: state.journalEntries.length === 0
+          ? ui.text("no journal entries", { dim: true })
+          : ui.logsConsole({
+              id: "journal-console",
+              entries: journalLogEntries,
+              autoScroll: true,
+              scrollTop: state.journalScrollTop,
+              showTimestamps: false,
+              showSource: true,
+              onScroll: (top: number) => app.update((s) => ({ ...s, journalScrollTop: top })),
+            }),
+      },
+      {
+        key: "log",
+        label: "Log",
+        content: state.logEntries.length === 0
+          ? ui.text("no log entries", { dim: true })
+          : ui.logsConsole({
+              id: "log-console",
+              entries: state.logEntries,
+              autoScroll: true,
+              scrollTop: state.logScrollTop,
+              showTimestamps: true,
+              showSource: false,
+              onScroll: (top: number) => app.update((s) => ({ ...s, logScrollTop: top })),
+            }),
+      },
+    ];
+
+    return ui.page({
+      header: ui.header({
+        title: "cmux-team",
+        subtitle: headerSubtitle,
+        actions: state.version ? [ui.text(`v${state.version}`, { dim: true })] : [],
+      }),
+      body: ui.column({ gap: 0 }, [
+        // Master セクション
+        ui.panel("Master", [buildMasterSection(daemon)]),
+        // Conductors セクション
+        ui.panel(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`, [buildConductorsSection(daemon)]),
+        // Tasks セクション
+        ui.panel("Tasks", [tasksWidget]),
+        // タブ（Journal / Log）
+        ui.tabs({
+          id: "main-tabs",
+          tabs,
+          activeTab: state.activeTab,
+          onChange: () => {},
+        }),
+      ]),
+      footer: ui.statusBar({
+        left: [
+          ui.kbd("1"),
+          ui.text("journal"),
+          ui.kbd("2"),
+          ui.text("log"),
+          ui.kbd("r"),
+          ui.text("reload"),
+          ui.kbd("q"),
+          ui.text("quit"),
+        ],
+      }),
+    });
+  }
+
+  app.view(buildViewWithApp);
 
   // キーバインド
   app.keys({
