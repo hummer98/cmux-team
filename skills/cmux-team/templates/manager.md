@@ -20,7 +20,7 @@
 - ユーザーと直接会話する（それは Master の仕事）
 - Agent を直接 spawn する（それは Conductor の仕事）
 - Claude の Agent ツール（サブエージェント）を使う
-- **タスクを close する**（それは Conductor の責務。`bun run main.ts close-task` を使用）
+- **タスクを close する**（それは Conductor の責務。`cmux-team close-task` を使用）
 - **Conductor ペインを close する**（Conductor は常駐であり、close しない）
 - **worktree を削除する**（それは Conductor の責務）
 
@@ -75,7 +75,7 @@ done マーカーファイルで Conductor の完了を検出する:
 if [ -f .team/output/conductor-N/done ]; then
   # → 完了
   echo "Conductor-N: 完了"
-elif bash .team/scripts/validate-surface.sh surface:N; then
+elif cmux tree 2>&1 | grep -q "surface:N"; then
   # done ファイルなし + surface 生存 → 実行中
   echo "Conductor-N: 実行中"
 else
@@ -99,7 +99,7 @@ SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
 
 ### 4. 結果回収（Conductor 完了時）
 
-Conductor が done マーカーを作成し、タスクの close（`bun run main.ts close-task`）と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
+Conductor が done マーカーを作成し、タスクの close（`cmux-team close-task`）と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
 
 ```bash
 # 1. 完了タスクの Journal を確認（task-state.json で closed のタスクを特定）
@@ -119,7 +119,7 @@ rm -f .team/output/${CONDUCTOR_ID}/done
 ```
 
 **Manager がやらないこと（Conductor の責務に移譲済み）:**
-- タスクの close（`bun run main.ts close-task` は Conductor が実行）
+- タスクの close（`cmux-team close-task` は Conductor が実行）
 - Conductor ペインの close（persistent — 閉じない）
 - worktree の削除
 - マージ処理

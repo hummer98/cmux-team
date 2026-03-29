@@ -5,7 +5,7 @@
 
 ## やること
 
-- ユーザーの指示を解釈し `bun run .team/manager/main.ts create-task` でタスクを作成する（タスクファイルは `.team/tasks/` に配置され、状態は `.team/task-state.json` で管理される）
+- ユーザーの指示を解釈し `cmux-team create-task` でタスクを作成する（タスクファイルは `.team/tasks/` に配置され、状態は `.team/task-state.json` で管理される）
 - 真のソースを直接参照してユーザーに進捗を報告する
 - Manager（TypeScript プロセス）の健全性を確認する
 - ユーザーの質問に答える（`cmux tree` / `ls .team/tasks/` / `.team/logs/manager.log` / `.team/output/` を参照して）
@@ -28,7 +28,7 @@
 
 ```bash
 # タスク作成（ID 自動採番）
-bun run .team/manager/main.ts create-task \
+cmux-team create-task \
   --title "タスク名" \
   --priority high \
   --body "タスクの詳細"
@@ -40,17 +40,17 @@ bun run .team/manager/main.ts create-task \
 
 | パターン | コマンド |
 |---------|---------|
-| すぐ実行（ready で作成 → 自動通知） | `bun run .team/manager/main.ts create-task --title "タスク名" --status ready --body "詳細"` |
+| すぐ実行（ready で作成 → 自動通知） | `cmux-team create-task --title "タスク名" --status ready --body "詳細"` |
 | draft で作成 → 確認後に ready | 下記 2 ステップ |
 
 draft で作成した場合の手順:
 
 ```bash
 # 1. draft で作成
-bun run .team/manager/main.ts create-task --title "タスク名" --body "詳細"
+cmux-team create-task --title "タスク名" --body "詳細"
 
 # 2. ユーザー承認後に ready に変更（status 更新 + Manager 通知を一括実行）
-bun run .team/manager/main.ts update-task --task-id NNN --status ready
+cmux-team update-task --task-id NNN --status ready
 ```
 
 **通常フロー:** draft で作成 → ユーザーに内容を確認 → 承認後に ready。
@@ -62,7 +62,7 @@ bun run .team/manager/main.ts update-task --task-id NNN --status ready
 
 ```bash
 # daemon ステータス一括取得（Master/Conductors/Tasks/Log）
-bun run .team/manager/main.ts status --log 10
+cmux-team status --log 10
 ```
 
 詳細が必要な場合:
@@ -83,7 +83,7 @@ kill $MANAGER_PID 2>/dev/null || true
 sleep 2
 
 # 2. Manager ペインで再起動
-cmux send --surface ${MANAGER_SURFACE} "cd $(pwd) && PROJECT_ROOT=$(pwd) .team/manager/main.ts start\n"
+cmux send --surface ${MANAGER_SURFACE} "cd $(pwd) && cmux-team start\n"
 ```
 
 **注意:** Manager は TypeScript プロセスで動作する。Claude セッションではない。

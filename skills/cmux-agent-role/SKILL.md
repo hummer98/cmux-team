@@ -67,7 +67,7 @@ Output: .team/output/<role-id>.md
 
 ```bash
 # タスク作成は CLI で行う（ID 自動採番・task-state.json 更新を一括実行）
-bun run .team/manager/main.ts create-task --title "タイトル" --body "詳細"
+cmux-team create-task --title "タイトル" --body "詳細"
 ```
 
 タスク形式:
@@ -150,10 +150,10 @@ Manager daemon の状態を確認するには CLI を使う:
 
 ```bash
 # ダッシュボード表示（Master / Conductors / Tasks / Log）
-bun run .team/manager/main.ts status
+cmux-team status
 
 # ログ末尾を多めに表示
-bun run .team/manager/main.ts status --log 20
+cmux-team status --log 20
 ```
 
 **出力内容**: daemon の稼働状態、Master surface、稼働中 Conductor 一覧（タスクタイトル付き）、open/closed タスク数、manager.log 末尾。

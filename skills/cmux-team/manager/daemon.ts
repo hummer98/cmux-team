@@ -74,9 +74,6 @@ export async function initInfra(state: DaemonState): Promise<void> {
   await mkdir(join(root, ".team/logs"), { recursive: true });
   await ensureQueueDirs();
 
-  const scriptsDir = join(root, ".team/scripts");
-  await mkdir(scriptsDir, { recursive: true });
-
   // .gitignore
   const gitignore = join(root, ".team/.gitignore");
   if (!existsSync(gitignore)) {
@@ -136,11 +133,23 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
 
 export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
   // team.json に既存 Conductor があり surface が生きていればスキップ
+  // ただし daemon 自身の surface は除外（再起動時の誤認防止）
   if (state.conductors.size > 0) {
-    const checks = await Promise.all(
-      [...state.conductors.values()].map(c => cmux.validateSurface(c.surface))
-    );
-    if (checks.some(alive => alive)) return;
+    const validConductors = [...state.conductors.values()]
+      .filter(c => c.surface !== daemonSurface);
+    if (validConductors.length > 0) {
+      const checks = await Promise.all(
+        validConductors.map(c => cmux.validateSurface(c.surface))
+      );
+      if (checks.some(alive => alive)) return;
+    }
+    // daemon surface と一致する stale エントリを除去
+    for (const [id, c] of state.conductors) {
+      if (c.surface === daemonSurface) {
+        state.conductors.delete(id);
+        await log("conductor_stale_removed", `id=${id} surface=${c.surface} reason=daemon_surface`);
+      }
+    }
   }
 
   const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors, daemonSurface);

@@ -1,6 +1,6 @@
 {
   "name": "@hummer98/cmux-team",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
   "type": "module",
   "bin": {

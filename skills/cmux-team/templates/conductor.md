@@ -59,16 +59,6 @@ cmux read-screen で ❯ 検出 → TaskUpdate: task-1 → completed
 ## Agent 起動手順
 
 ```bash
-# main.ts のパスは環境変数 CONDUCTOR_MAIN_TS または npm グローバルから検出
-if [ -n "$CONDUCTOR_MAIN_TS" ]; then
-  MAIN_TS="$CONDUCTOR_MAIN_TS"
-elif command -v cmux-team >/dev/null 2>&1; then
-  MAIN_TS="$(npm prefix -g)/lib/node_modules/cmux-team/skills/cmux-team/manager/main.ts"
-else
-  echo "ERROR: cmux-team がインストールされていません。npm install -g cmux-team を実行してください。"
-  exit 1
-fi
-
 # 1. プロンプトファイルを書き出す（CLI 引数の長さ制限・エスケープ問題を回避）
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
 mkdir -p "$PROMPT_DIR"
@@ -97,7 +87,7 @@ AGENT_PROMPT
 # pane の取得（cmux identify で自分の pane を取得）
 MY_PANE=$(cmux identify | jq -r '.caller.pane_id // empty')
 
-RESULT=$(bun run "$MAIN_TS" spawn-agent \
+RESULT=$(cmux-team spawn-agent \
   --conductor-id $CONDUCTOR_ID \
   --role impl \
   --task-title "<サブタスクの簡潔な説明>" \
@@ -118,7 +108,7 @@ Agent を起動したら、30秒間隔でポーリングして完了を待つ。
 while true; do
   ALL_DONE=true
   for AGENT_SURFACE in $AGENT_SURFACES; do
-    if bash .team/scripts/validate-surface.sh "$AGENT_SURFACE"; then
+    if cmux tree 2>&1 | grep -q "$AGENT_SURFACE"; then
       SCREEN=$(cmux read-screen --surface "$AGENT_SURFACE" --lines 10 2>&1)
       if echo "$SCREEN" | grep -q '❯' && ! echo "$SCREEN" | grep -q 'esc to interrupt'; then
         # ❯ あり AND "esc to interrupt" なし → 完了
@@ -187,7 +177,7 @@ cat > "$REVIEWER_PROMPT" << REVIEW_PROMPT
 REVIEW_PROMPT
 
 # Reviewer Agent spawn（--prompt-file でファイルパスだけを渡す）
-RESULT=$(bun run "$MAIN_TS" spawn-agent \
+RESULT=$(cmux-team spawn-agent \
   --conductor-id $CONDUCTOR_ID \
   --role reviewer \
   --task-title "Code Review" \
@@ -208,7 +198,7 @@ Reviewer 完了後、`{{OUTPUT_DIR}}/review.md` を確認する:
 
 Reviewer のタブは確認後に閉じる:
 ```bash
-bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
+cmux-team kill-agent --surface $REVIEWER_SURFACE
 ```
 
 ### レビューをスキップする場合
@@ -220,7 +210,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
 1. 全 Agent が完了し、テストがパスしたことを確認
 2. Agent のタブを閉じる:
    ```bash
-   bun run "$MAIN_TS" kill-agent --surface $AGENT_SURFACE
+   cmux-team kill-agent --surface $AGENT_SURFACE
    ```
 3. 変更をコミットする:
    ```bash
@@ -258,7 +248,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
    ```
 7. **タスクを close する**（task-state.json に状態を記録）:
    ```bash
-   bun run "$MAIN_TS" close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
+   cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
    ```
 8. **done マーカーを作成する**:
    ```bash
@@ -269,7 +259,7 @@ bun run "$MAIN_TS" kill-agent --surface $REVIEWER_SURFACE
 ## やらないこと（厳守）
 
 - **自分でコードを書く・ファイルを編集する** — Edit/Write ツールを使わない。必ず Agent に委譲する
-- **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `bun run "$MAIN_TS" spawn-agent` で別タブに spawn する
+- **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
 - main ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）

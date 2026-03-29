@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.3] - 2026-03-29
+
+### Fixed
+- daemon 再起動時に Conductor スロットが作成されない問題を修正（daemon 自身の surface を生きた Conductor と誤認していた）
+- 全テンプレート・コマンドの CLI パスを `cmux-team` に統一（`bun run .team/manager/main.ts` や `bun run main.ts` の残存参照を除去）
+- `validate-surface.sh` 参照をインラインの `cmux tree` チェックに置換
+
+### Changed
+- 旧スクリプト `spawn-conductor.sh`, `validate-surface.sh` を削除（TypeScript daemon に移行済み）
+- daemon が不要な `.team/scripts/` ディレクトリを作成しなくなった
+
 ## [3.0.2] - 2026-03-29
 
 ### Fixed

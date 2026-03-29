@@ -96,7 +96,7 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
    - `draft` — 作成直後。Manager は無視する（ユーザー確認待ち）
    - `ready` — 着手 OK。Manager が走査して Conductor を起動する
 
-   新規作成時は `bun run main.ts create-task --title <title> --priority <p> --status draft` を使用。
+   新規作成時は `cmux-team create-task --title <title> --priority <p> --status draft` を使用。
 
 4. **作成確認**:
    作成したタスクの内容を表示。
@@ -117,7 +117,7 @@ description: "タスクの作成・一覧・クローズ・表示を管理する
 
 3. **CLI でタスクをクローズ**:
    ```bash
-   bun run main.ts close-task --task-id $ID --journal "closed by user"
+   cmux-team close-task --task-id $ID --journal "closed by user"
    ```
 
 4. **確認表示**:
