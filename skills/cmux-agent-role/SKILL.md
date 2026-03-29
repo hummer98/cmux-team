@@ -160,7 +160,22 @@ cmux-team status --log 20
 
 `cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
 
-## 8. 言語ルール
+## 8. トレース検索
+
+過去の API リクエスト履歴を検索できる:
+
+```bash
+# タスクに関連するトレースを表示
+cmux-team trace --task <task-id>
+
+# 全文検索
+cmux-team trace --search "keyword"
+
+# 特定トレースの詳細（リクエスト/レスポンス本文含む）
+cmux-team trace --show <trace-id>
+```
+
+## 9. 言語ルール
 
 - ドキュメント・コメント: 日本語
 - コード: 英語

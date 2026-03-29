@@ -313,6 +313,8 @@ Agent は実作業を担当する。`cmux-agent-role` スキル参照。
 │       └── summary.md
 ├── prompts/           # 各層がプロンプト生成時に書き出す（監査証跡）
 ├── specs/             # 要件・設計ドキュメント
+├── traces/            # SQLite トレースDB + JSONL ログ
+│   └── traces.db      # FTS5 全文検索対応
 └── team.json          # チーム構成（Master が初期化）
 ```
 
@@ -532,3 +534,59 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
+| `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`） |
+
+## 11. トレーサビリティ
+
+daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQLite FTS5 データベースに記録する。Master が過去の作業ログを検索・分析する際に活用できる。
+
+### 自動プロキシ設定
+
+daemon が起動すると Proxy が自動で立ち上がり、Master および Conductor に `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` を設定する。これにより全 API リクエストが Proxy 経由になり、リクエスト/レスポンスが自動記録される。
+
+### メタデータ伝播
+
+リクエストヘッダーからメタデータを動的に抽出し、トレースに紐付ける:
+
+| ヘッダー | 内容 |
+|---------|------|
+| `x-cmux-task-id` | タスクID |
+| `x-cmux-conductor-id` | Conductor ID |
+| `x-cmux-role` | エージェントロール |
+| `x-claude-code-session-id` | Claude Code セッションID |
+
+### trace CLI
+
+`cmux-team trace` コマンドでトレースを検索・表示できる:
+
+```bash
+# タスクIDでフィルタ
+cmux-team trace --task 035
+
+# 全文検索（SQLite FTS5）
+cmux-team trace --search "error"
+
+# 特定トレースの詳細表示（リクエスト/レスポンス本文含む）
+cmux-team trace --show 42
+
+# Conductor IDでフィルタ
+cmux-team trace --conductor conductor-1
+
+# ロールでフィルタ
+cmux-team trace --role impl
+
+# 結果数制限（デフォルト20）
+cmux-team trace --limit 50
+```
+
+### 活用例
+
+Master がユーザーに進捗報告する際、過去の API リクエスト履歴を参照できる:
+
+```bash
+# あるタスクでどんな API リクエストが行われたか確認
+cmux-team trace --task 035
+
+# エラーに関連するリクエストを全文検索
+cmux-team trace --search "rate_limit"
+```

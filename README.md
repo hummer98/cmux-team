@@ -67,6 +67,7 @@ Claude: → Sends TODO to queue via CLI
 | `cmux-team status` | Show team status | Anytime |
 | `cmux-team stop` | Graceful shutdown | When done |
 | `cmux-team create-task` | Create a task | Task creation |
+| `cmux-team trace` | Search API traces | Debugging, analysis |
 
 #### Slash Commands (run within Claude)
 
@@ -124,6 +125,25 @@ depends_on: [10, 11, 12]  # waits for all to complete
 | Master → daemon | CLI (`main.ts send`) → `.team/queue/*.json` |
 | daemon → Conductor | `cmux new-split` + Claude Code launch |
 | Conductor → daemon | SessionEnd hook + `cmux list-status` polling |
+
+## Traceability
+
+All API requests are automatically recorded through the built-in proxy when the daemon is running.
+
+### Searching Traces
+
+```bash
+# Filter by task ID
+cmux-team trace --task 035
+
+# Full-text search (SQLite FTS5)
+cmux-team trace --search "error"
+
+# Show trace details (including request/response bodies)
+cmux-team trace --show 42
+```
+
+Traces are stored in `.team/traces/traces.db` with request/response bodies in `.team/logs/traces/bodies/`.
 
 ## Troubleshooting
 
