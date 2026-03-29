@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash, Read, Edit, Write
-description: "バージョン自動判定・CHANGELOG 更新・コミット・push・GitHub Release・plugin 更新を一括実行する"
+description: "バージョン自動判定・CHANGELOG 更新・コミット・push・GitHub Release・npm publish・plugin 更新を一括実行する"
 ---
 
 # /cmux-team:release
@@ -121,7 +121,28 @@ for dir in "$CACHE_BASE"/*/; do
 done
 ```
 
-### 9. plugin を再インストール
+### 9. npm publish
+
+npm パッケージを公開する。OTP 認証が必要なため、別 surface でインタラクティブに実行する:
+
+```bash
+# 別 surface で npm publish を実行（OTP ブラウザ認証が必要）
+cmux send --surface surface:$(cmux new-surface) "cd $(pwd) && npm publish\n"
+```
+
+publish 完了を確認後、作成した surface を閉じる:
+
+```bash
+cmux close-surface --surface surface:<作成した surface>
+```
+
+cmux 環境外の場合はユーザーに手動実行を案内する:
+```
+npm publish には OTP 認証が必要です。以下を実行してください:
+! npm publish
+```
+
+### 10. plugin を再インストール
 
 marketplace キャッシュ更新後、uninstall → install で最新バージョンを反映する:
 
@@ -137,7 +158,7 @@ claude plugin install cmux-team@hummer98-cmux-team
 ! claude plugin uninstall cmux-team@hummer98-cmux-team && claude plugin install cmux-team@hummer98-cmux-team
 ```
 
-### 10. 完了報告
+### 11. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
