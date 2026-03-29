@@ -100,7 +100,7 @@ npx tsc --noEmit
 |---------|-------------|
 | `skills/cmux-team/templates/master.md` を編集 | `.team/prompts/master.md` を直接編集 |
 | `skills/cmux-team/templates/manager.md` を編集 | `.team/prompts/manager.md` を直接編集 |
-| 編集後に `/start` で再生成 | ランタイムだけ書き換えて終わり |
+| 編集後に `cmux-team start` で再生成 | ランタイムだけ書き換えて終わり |
 
 ## リリース
 

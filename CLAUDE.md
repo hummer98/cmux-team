@@ -39,7 +39,7 @@ Master（ユーザー対話）→ Manager（イベント駆動監視）→ Condu
 
 - **「動くか？」が最優先** — 理論的な美しさより実際に動作すること
 - **実験で検証してから本実装** — cmux-team-lab 等で試してから SKILL.md に反映
-- **既存の動作を壊さない** — 手動オーバーライドコマンド（/cmux-team:start-research 等）は残す
+- **既存の動作を壊さない** — CLI コマンドのインターフェースを安定させる
 - **ユーザーに聞く** — 設計判断で迷ったら issue を作ってユーザーの判断を仰ぐ
 
 ## GitHub issue 作成ガイドライン
@@ -94,18 +94,11 @@ cmux-team/
 │   │       └── task-manager.md       #   タスク管理者ロール
 │   └── cmux-agent-role/
 │       └── SKILL.md                  # サブエージェント行動規範スキル
-├── commands/                         # スラッシュコマンド定義 (11個)
-│   ├── start.md                      #   チーム体制構築（Master + Manager）
+├── commands/                         # スラッシュコマンド定義 (4個)
+│   ├── master.md                     #   Master ロール再読み込み（/clear 復帰用）
 │   ├── team-spec.md                  #   要件ブレスト（対話型）
-│   ├── team-research.md              #   並列リサーチ
-│   ├── team-design.md                #   設計 + レビュー
-│   ├── team-impl.md                  #   並列実装
-│   ├── team-review.md                #   実装レビュー
-│   ├── team-test.md                  #   テスト作成・実行
-│   ├── team-sync-docs.md             #   ドキュメント同期
 │   ├── team-task.md                  #   タスク管理
-│   ├── team-status.md                #   チーム状態表示
-│   └── team-disband.md               #   全エージェント終了
+│   └── team-archive.md              #   完了タスクのアーカイブ
 ├── docs/seeds/                       # 設計シードドキュメント（実装時の入力仕様）
 │   ├── 00-project-overview.md
 │   ├── 01-skill-cmux-team.md
@@ -217,46 +210,42 @@ npm install -g @hummer98/cmux-team
 npm uninstall -g @hummer98/cmux-team
 ```
 
-### 機能テスト（cmux 内で実行）
+### 機能テスト（ターミナルで実行）
 
 ```bash
-# 1. cmux を起動し Claude Code を立ち上げる
+# 1. cmux を起動
 cmux
-# Claude Code 内で:
 
-# 2. チーム体制構築（Master + Manager 起動）
-/cmux-team:start
+# 2. チーム体制構築（daemon + Master + Conductor 起動）
+cmux-team start
 # → .team/ が作成され team.json が正しいこと
-# → Master が Manager を spawn すること
-# → Manager がイベント駆動でタスク待機を開始すること
+# → daemon が起動し Manager として機能すること
+# → Master Claude セッションが spawn されること
+# → 3つの Conductor が固定ペインに配置されること
 
-# 3. リサーチ（Manager → Conductor → Agent の流れ）
-/cmux-team:start-research テストトピック
-# → Manager が Conductor を spawn すること
-# → Conductor が Agent を spawn し、ペインが分割されること
-# → Agent が起動・実行・完了すること
-# → .team/output/researcher-*.md に結果が書き出されること
-# → Conductor がフェーズ完了を Manager に報告すること
+# 3. タスク作成（Master セッション内で）
+cmux-team create-task --title "テストタスク" --status ready --body "テスト用"
+# → .team/tasks/ にタスクファイルが作成されること
+# → daemon がタスクを検出し idle Conductor に割り当てること
+# → Conductor がタスクを自律実行すること
 
 # 4. ステータス確認
-/cmux-team:start-status
-# → 各層（Manager, Conductor, Agent）の状態が表示されること
+cmux-team status
+# → daemon 状態、Conductor 一覧、タスク数、ログが表示されること
 
 # 5. クリーンアップ
-/cmux-team:start-disband
-# → 全ペインが閉じること
-# → git worktree が削除されること
+cmux-team stop
+# → daemon が graceful shutdown すること
 ```
 
 ### 確認ポイント
 
-- 4層構造（Master → Manager → Conductor → Agent）が正しく機能すること
-- Manager が Conductor の完了を検知し次のフェーズに進むこと
+- 4層構造（Master → Manager(daemon) → Conductor → Agent）が正しく機能すること
+- daemon がタスクを検出し idle Conductor に割り当てること
+- Conductor がタスク完了後に done マーカーを作成し idle に戻ること
 - Agent は git worktree 内で作業し、メインブランチを汚さないこと
 - `cmux send` 後に `cmux send-key return` で送信されること
 - Trust 確認が出た場合に自動承認されること
-- 完了シグナル (`cmux wait-for`) が正しく受信されること
-- サイドバーにステータスが表示されること
 
 ## コーディング規約
 
@@ -275,26 +264,25 @@ cmux
 |---------|-------------|
 | `skills/cmux-team/templates/master.md` を編集 | `.team/prompts/master.md` を直接編集 |
 | `skills/cmux-team/templates/manager.md` を編集 | `.team/prompts/manager.md` を直接編集 |
-| 編集後に `/start` で再生成 or テンプレートからコピー | ランタイムだけ書き換えて「動いた」で終わり |
+| 編集後に `cmux-team start` で再生成 or テンプレートからコピー | ランタイムだけ書き換えて「動いた」で終わり |
 
-**理由:** ランタイムプロンプトだけ書き換えると、テンプレートとの乖離が蓄積する。次回の `/start` や別プロジェクトでの起動時に変更が消失する。
+**理由:** ランタイムプロンプトだけ書き換えると、テンプレートとの乖離が蓄積する。次回の `cmux-team start` や別プロジェクトでの起動時に変更が消失する。
 
 プロンプトを変更する場合の手順:
 1. `skills/cmux-team/templates/*.md` を編集
-2. `.team/prompts/*.md` にコピー（または `/start` で再生成）
+2. `.team/prompts/*.md` にコピー（または `cmux-team start` で再生成）
 3. 他プロジェクト（Dear 等）のランタイムプロンプトも更新
 4. コミット・リリース
 
 ## 既知の注意点
 
-### Manager の動作仕様
+### Manager（daemon）の動作仕様
 
-- **モデル**: `--model sonnet` で起動
-- **権限**: `--dangerously-skip-permissions`（Sonnet はテンプレートの指示に忠実に従うため権限制限不要）
-- **イベント駆動**: アイドル時は停止し、Master からの `[TASK_CREATED]` 通知で起床する。ポーリングしない
-- **Conductor 起動**: `.team/scripts/spawn-conductor.sh` にスクリプト化。worktree 作成・ペイン分割・プロンプト生成・Claude 起動・Trust 承認を決定論的に処理
+- **実装**: TypeScript daemon（`skills/cmux-team/manager/main.ts`）を Bun で実行
+- **イベント駆動**: `cmux-team send TASK_CREATED` 通知でタスクを検出し Conductor に割り当て
+- **Conductor 管理**: 起動時に固定3ペインを作成。idle Conductor を検出してタスクを割り当て
 - **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
-- **status.json は廃止**: Master は真のソース（`cmux list-status`, `cmux tree`, `ls .team/tasks/`, `manager.log`）を直接参照する
+- **状態確認**: `cmux-team status` で daemon 状態・Conductor 一覧・タスク数・ログ末尾を表示
 
 ### `cmux send` の改行問題
 
@@ -322,7 +310,7 @@ cmux send-key --surface surface:M --workspace workspace:N "return"
 
 ### git worktree のクリーンアップ
 
-Agent は git worktree 上で作業する。`/cmux-team:start-disband` 実行時に worktree は自動削除されるが、異常終了した場合は手動でクリーンアップが必要。
+Agent は git worktree 上で作業する。`cmux-team stop` 実行時に worktree は自動削除されるが、異常終了した場合は手動でクリーンアップが必要。
 
 ```bash
 # 残存 worktree の確認

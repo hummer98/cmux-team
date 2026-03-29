@@ -67,9 +67,8 @@ description: >
 ### やること
 
 - ユーザーの指示を解釈し `cmux-team create-task` でタスクを作成（`.team/tasks/` に配置、状態は `task-state.json` で管理）
-- `/team-init` で Manager を spawn
-- 真のソースを直接参照してユーザーに進捗を報告（`cmux tree`, `ls .team/tasks/`, `manager.log`, `cmux list-status`）
-- Manager の健全性を `cmux list-status` で確認（画面内容の取得が必要な場合は `cmux read-screen`。Manager が止まっていたら再 spawn）
+- 真のソースを直接参照してユーザーに進捗を報告（`cmux-team status`, `ls .team/tasks/`, `manager.log`）
+- Manager の健全性を確認（`cmux-team status` で daemon 状態を確認）
 
 ### やらないこと
 
@@ -77,29 +76,6 @@ description: >
 - Conductor / Agent の直接起動・監視
 - ポーリング・ループ実行
 - `.team/` 管理ファイル以外のファイル操作
-
-### Manager spawn 手順
-
-```bash
-# 1. Manager 用ペインを作成
-cmux new-split right  # → surface:M
-cmux rename-tab --surface surface:M "[M] Manager"
-
-# 2. Claude を初期プロンプト付きで起動（Sonnet）
-cmux send --surface surface:M "claude --dangerously-skip-permissions --model sonnet '.team/prompts/manager.md を読んで指示に従って作業を開始してください。'\n"
-
-# 3. Trust 確認が出たら承認
-for i in $(seq 1 10); do
-  SCREEN=$(cmux read-screen --surface surface:M 2>&1)
-  if echo "$SCREEN" | grep -q "Yes, I trust"; then
-    cmux send-key --surface surface:M "return"
-    sleep 3; break
-  elif echo "$SCREEN" | grep -qE '(Thinking|Reading|❯)'; then
-    break
-  fi
-  sleep 3
-done
-```
 
 ### タスクファイル形式
 
@@ -529,19 +505,18 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 
 ## 10. コマンド一覧
 
-### 基本コマンド
+### スラッシュコマンド（Claude 内）
 
 | コマンド | 説明 |
 |---------|------|
-| `/start` | チーム体制構築（Master + Manager 起動） |
-| `/team-status` | ステータス表示（真のソース直接参照） |
-| `/team-disband` | 全層終了（Agent → Conductor → Manager の順で bottom-up） |
+| `/master` | Master ロール再読み込み（`/clear` 後の復帰用） |
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
 | `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
+| `/team-archive` | 完了タスクのアーカイブ（closed → archived） |
 
-### daemon CLI サブコマンド
+### CLI サブコマンド
 
-正規フローは daemon 経由（`cmux-team start` → タスク作成 → Manager → Conductor → Agent）で実行される。
+チーム体制の構築・管理はすべて CLI 経由で行う:
 
 | コマンド | 説明 |
 |---------|------|
@@ -555,16 +530,5 @@ SCREEN=$(cmux read-screen --surface surface:X 2>&1)
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-id` 任意） |
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
-
-### 手動オーバーライド（daemon 未起動時・デバッグ用）
-
-以下のコマンドは daemon を経由せず Master が直接実行するためのもの。daemon が起動していない環境やデバッグ時に使用する。
-
-| コマンド | 説明 |
-|---------|------|
-| `/team-research` | リサーチ直接実行 |
-| `/team-design` | 設計直接実行 |
-| `/team-impl` | 実装直接実行 |
-| `/team-review` | レビュー直接実行 |
-| `/team-test` | テスト直接実行 |
-| `/team-sync-docs` | ドキュメント同期直接実行 |
+| `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
+| `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |

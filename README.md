@@ -59,21 +59,23 @@ Claude: → Sends TODO to queue via CLI
 
 ### Commands
 
+#### CLI Commands (run from terminal)
+
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `/cmux-team:start` | Start daemon + Master | Once per session |
+| `cmux-team start` | Start daemon + Master + Conductors | Once per session |
+| `cmux-team status` | Show team status | Anytime |
+| `cmux-team stop` | Graceful shutdown | When done |
+| `cmux-team create-task` | Create a task | Task creation |
+
+#### Slash Commands (run within Claude)
+
+| Command | What it does | When to use |
+|---------|-------------|-------------|
 | `/cmux-team:master` | Reload Master role | After `/clear` |
 | `/team-spec [summary]` | Brainstorm requirements | Deciding what to build |
-| `/team-research <topic>` | Parallel research | Technical research |
-| `/team-design` | Design + review | After requirements |
-| `/team-impl [task\|all]` | Parallel implementation | After design |
-| `/team-review` | Implementation review | After implementation |
-| `/team-test [scope\|all]` | Create & run tests | After implementation |
-| `/team-sync-docs` | Sync documentation | When specs change |
 | `/team-task [action]` | Task management | Record decisions |
 | `/team-archive [range]` | Archive closed tasks | Task cleanup |
-| `/team-status` | Show team status | Anytime |
-| `/team-disband [force]` | Terminate all agents | When done |
 
 ## Architecture
 
@@ -133,7 +135,7 @@ depends_on: [10, 11, 12]  # waits for all to complete
 
 ### Panes too narrow
 
-Too many panes cause cmux commands to fail. Use `/team-disband` and set `CMUX_TEAM_MAX_CONDUCTORS=1` to limit concurrency.
+Too many panes cause cmux commands to fail. Use `cmux-team stop` and set `CMUX_TEAM_MAX_CONDUCTORS=1` to limit concurrency.
 
 ### View Conductor session logs
 
