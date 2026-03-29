@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.0] - 2026-03-29
+
+### Added
+- Agent の状態判定を `cmux read-screen` パターンマッチから `cmux list-status` API に移行し、信頼性を大幅に向上
+
+### Fixed
+- TUI ダッシュボードで running 状態の Conductor/Task 行の●マーカー後にスペースが欠落する表示バグを修正
+
 ## [3.0.3] - 2026-03-29
 
 ### Fixed
