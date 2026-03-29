@@ -15,6 +15,7 @@
     "skills/cmux-team/SKILL.md",
     "skills/cmux-team/templates/",
     "skills/cmux-team/manager/**/*.ts",
+    "skills/cmux-team/manager/**/*.tsx",
     "!skills/cmux-team/manager/**/*.test.ts",
     "skills/cmux-team/manager/package.json",
     "skills/cmux-team/manager/bun.lock",
