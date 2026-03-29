@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.2] - 2026-03-29
+
+### Fixed
+- `cmux-team` コマンド実行時に `Cannot find module './dashboard'` エラーが発生する問題を修正（`.tsx` ファイルがパッケージに含まれていなかった）
+
+### Changed
+- 不要な `spawn-team.sh` を削除（CLI に統合済み）
+
 ## [3.0.1] - 2026-03-29
 
 ### Fixed
