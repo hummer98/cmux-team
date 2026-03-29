@@ -66,7 +66,7 @@ function useLogTail(projectRoot: string, lineCount: number) {
 }
 
 // --- ジャーナルエントリ ---
-interface JournalEntry {
+export interface JournalEntry {
   time: string;  // HH:MM
   icon: string;  // [+], [▶], [✓]
   taskId: string;
@@ -138,7 +138,7 @@ function utcToLocal(isoTimestamp: string): string {
   });
 }
 
-function truncate(text: string, maxLen: number): string {
+export function truncate(text: string, maxLen: number): string {
   if (maxLen <= 0) return "";
   const w = stringWidth(text);
   if (w <= maxLen) return text;
@@ -236,7 +236,7 @@ function MasterSection({ state }: { state: DaemonState }) {
 }
 
 // --- Conductor セクション ---
-function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }) {
+export function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }) {
   const conductors = [...state.conductors.values()];
   if (conductors.length === 0) {
     return (
@@ -308,7 +308,7 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
 }
 
 // --- タスクセクション ---
-function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
+export function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
   if (state.taskList.length === 0) {
     return (
       <Box paddingLeft={1}>
@@ -354,7 +354,7 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
 }
 
 // --- ログセクション ---
-function formatLogLine(line: string, cols: number): { time: string; event: string; detail: string; color: string } {
+export function formatLogLine(line: string, cols: number): { time: string; event: string; detail: string; color: string } {
   const match = line.match(/^\[([^\]]+)\]\s+(\S+)\s*(.*)/);
   if (!match) return { time: "", event: "", detail: line.slice(0, cols - 2), color: "white" };
   const ts = match[1] ?? "";
@@ -368,7 +368,7 @@ function formatLogLine(line: string, cols: number): { time: string; event: strin
   return { time, event, detail: truncate(detail, maxDetail), color };
 }
 
-function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
+export function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
   if (lines.length === 0) {
     return (
       <Box paddingLeft={1}>
@@ -397,7 +397,7 @@ function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
 }
 
 // --- ジャーナルセクション ---
-function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: number }) {
+export function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: number }) {
   if (entries.length === 0) {
     return (
       <Box paddingLeft={1}>

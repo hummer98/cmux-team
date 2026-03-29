@@ -5,7 +5,8 @@
   "private": true,
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/react": "^19.2.14"
+    "@types/react": "^19.2.14",
+    "ink-testing-library": "^4.0.0"
   },
   "peerDependencies": {
     "typescript": "^5"
