@@ -9,7 +9,7 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
- *   ./main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
+ *   ./main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt> [--pane <paneId>]
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
@@ -358,6 +358,7 @@ async function cmdSpawnAgent(): Promise<void> {
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
   const taskTitle = getArg("task-title");
+  const pane = getArg("pane");
 
   if (!prompt && !promptFile) {
     console.error("Error: --prompt or --prompt-file is required");
@@ -386,13 +387,13 @@ async function cmdSpawnAgent(): Promise<void> {
     // プロキシ未起動の場合はなしで続行
   }
 
-  // --- 2. タブ作成（paneId があればタブ、なければペイン分割） ---
-  let paneId: string | undefined;
+  // --- 2. タブ作成（--pane 直接指定 → team.json lookup → split フォールバック） ---
+  let paneId: string | undefined = pane;  // --pane が最優先
   let worktreePath: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
-    paneId = conductor?.paneId;
+    if (!paneId) paneId = conductor?.paneId;
     worktreePath = conductor?.worktreePath;
   } catch {}
 
@@ -743,7 +744,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt>
+  cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt> [--pane <paneId>]
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface> [--conductor-id <id>]
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
