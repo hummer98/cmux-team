@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.4.0] - 2026-03-29
+
+### Added
+- トレーサビリティ基盤: Proxy が API リクエスト/レスポンス本文を SQLite に記録。`cmux-team trace` CLI でセッション横断検索（FTS5 全文検索対応）
+- Conductor/Master からのリクエストにメタデータ（conductor-id, task-id, role 等）を自動伝播
+
 ## [3.3.0] - 2026-03-29
 
 ### Added
