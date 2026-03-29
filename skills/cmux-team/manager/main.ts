@@ -26,7 +26,7 @@ import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
-import { loadTaskState, saveTaskState } from "./task";
+import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -323,12 +323,9 @@ async function cmdStatus(): Promise<void> {
   }
 
   // --- Tasks ---
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
-  let totalCount = 0;
-  try { totalCount = (await readdir(tasksDir)).filter(f => f.endsWith(".md")).length; } catch {}
-  const closedCount = Object.values(taskState).filter(s => s.status === "closed").length;
-  const openCount = totalCount - closedCount;
+  const { tasks } = await loadTasks(PROJECT_ROOT);
+  const closedCount = tasks.filter(t => t.status === "closed").length;
+  const openCount = tasks.length - closedCount;
   console.log(`─ Tasks ${"─".repeat(51)}`);
   console.log(`  open: ${openCount}  closed: ${closedCount}`);
 
