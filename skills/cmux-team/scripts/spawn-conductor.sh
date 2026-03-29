@@ -43,13 +43,12 @@ OUTPUT_DIR=".team/output/${CONDUCTOR_ID}"
 PROMPT_FILE=".team/prompts/${CONDUCTOR_ID}.md"
 mkdir -p "$OUTPUT_DIR" "$(dirname "$PROMPT_FILE")"
 
-# テンプレート検索（最新バージョン優先）
+# テンプレート検索
 TEMPLATE_DIR=""
-LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1)
+NPM_PREFIX=$(npm prefix -g 2>/dev/null || echo "")
 for candidate in \
-  "$LATEST_CACHE" \
-  "${PROJECT_ROOT}/skills/cmux-team/templates" \
-  "${HOME}/.claude/skills/cmux-team/templates"; do
+  "${NPM_PREFIX}/lib/node_modules/cmux-team/skills/cmux-team/templates" \
+  "${PROJECT_ROOT}/skills/cmux-team/templates"; do
   if [[ -n "$candidate" ]] && [[ -f "${candidate}/conductor.md" ]]; then
     TEMPLATE_DIR="$candidate"
     break

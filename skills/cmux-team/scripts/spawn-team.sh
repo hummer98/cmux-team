@@ -21,13 +21,12 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- 1. テンプレート検索（最新バージョン優先） ---
+# --- 1. テンプレート検索 ---
 TEMPLATE_DIR=""
-LATEST_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/templates 2>/dev/null | sort -V | tail -1 || echo "")
+NPM_PREFIX=$(npm prefix -g 2>/dev/null || echo "")
 for candidate in \
-  "$LATEST_CACHE" \
-  "${PROJECT_ROOT}/skills/cmux-team/templates" \
-  "${HOME}/.claude/skills/cmux-team/templates"; do
+  "${NPM_PREFIX}/lib/node_modules/cmux-team/skills/cmux-team/templates" \
+  "${PROJECT_ROOT}/skills/cmux-team/templates"; do
   if [[ -n "$candidate" ]] && [[ -f "${candidate}/master.md" ]]; then
     TEMPLATE_DIR="$candidate"
     break
@@ -41,11 +40,9 @@ fi
 
 # --- 2. スクリプト・Manager ソース検索 ---
 SCRIPT_DIR=""
-LATEST_SCRIPT_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/scripts 2>/dev/null | sort -V | tail -1 || echo "")
 for candidate in \
-  "$LATEST_SCRIPT_CACHE" \
-  "${PROJECT_ROOT}/skills/cmux-team/scripts" \
-  "${HOME}/.claude/skills/cmux-team/scripts"; do
+  "${NPM_PREFIX}/lib/node_modules/cmux-team/skills/cmux-team/scripts" \
+  "${PROJECT_ROOT}/skills/cmux-team/scripts"; do
   if [[ -n "$candidate" ]] && [[ -f "${candidate}/spawn-conductor.sh" ]]; then
     SCRIPT_DIR="$candidate"
     break
@@ -53,11 +50,9 @@ for candidate in \
 done
 
 MANAGER_SRC=""
-LATEST_MANAGER_CACHE=$(ls -d ${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager 2>/dev/null | sort -V | tail -1 || echo "")
 for candidate in \
-  "$LATEST_MANAGER_CACHE" \
-  "${PROJECT_ROOT}/skills/cmux-team/manager" \
-  "${HOME}/.claude/skills/cmux-team/manager"; do
+  "${NPM_PREFIX}/lib/node_modules/cmux-team/skills/cmux-team/manager" \
+  "${PROJECT_ROOT}/skills/cmux-team/manager"; do
   if [[ -n "$candidate" ]] && [[ -f "${candidate}/manager.ts" ]]; then
     MANAGER_SRC="$candidate"
     break
