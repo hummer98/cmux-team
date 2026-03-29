@@ -72,8 +72,14 @@ export async function initializeConductorSlots(
       console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Claude 起動中 (${surface})...`);
 
       // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
+      let proxyPort: string | undefined;
+      try {
+        proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
+      } catch {}
       const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-
+      if (proxyPort) {
+        exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+      }
 
       await cmux.send(
         surface,
@@ -339,8 +345,14 @@ export async function spawnConductor(
     const rolePromptFile = await generateConductorRolePrompt(projectRoot);
 
     // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
+    let proxyPort: string | undefined;
+    try {
+      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
+    } catch {}
     const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-    // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
+    if (proxyPort) {
+      exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+    }
     await cmux.send(
       surface,
       `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。'\n`

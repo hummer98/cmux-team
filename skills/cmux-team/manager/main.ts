@@ -26,6 +26,7 @@ import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
+import { initDB, searchTraces, getTrace } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import type { QueueMessage } from "./schema";
 
@@ -710,6 +711,77 @@ async function cmdCloseTask(): Promise<void> {
   console.log(`OK closed ${taskId}`);
 }
 
+async function cmdTrace(): Promise<void> {
+  const db = initDB(PROJECT_ROOT);
+  const taskId = getArg("task");
+  const conductorId = getArg("conductor");
+  const role = getArg("role");
+  const search = getArg("search");
+  const showId = getArg("show");
+  const limit = getArg("limit");
+
+  if (showId) {
+    const trace = getTrace(db, Number(showId));
+    if (!trace) {
+      console.log("Trace not found");
+      db.close();
+      return;
+    }
+    console.log(JSON.stringify(trace, null, 2));
+    // リクエスト/レスポンス本文表示
+    if (trace.request_body_path && existsSync(trace.request_body_path)) {
+      console.log("\n--- Request Body ---");
+      const body = await readFile(trace.request_body_path, "utf-8");
+      try {
+        const parsed = JSON.parse(body);
+        console.log(`model: ${parsed.model || "unknown"}`);
+        if (parsed.messages?.length) {
+          console.log(`messages: ${parsed.messages.length}`);
+          const first = parsed.messages[0];
+          const content = typeof first.content === "string"
+            ? first.content.slice(0, 200)
+            : JSON.stringify(first.content).slice(0, 200);
+          console.log(`first: ${content}...`);
+        }
+      } catch {
+        console.log(body.slice(0, 500));
+      }
+    }
+    db.close();
+    return;
+  }
+
+  const traces = searchTraces(db, {
+    taskId,
+    conductorId,
+    role,
+    search,
+    limit: limit ? Number(limit) : 20,
+  });
+
+  if (traces.length === 0) {
+    console.log("No traces found");
+    db.close();
+    return;
+  }
+
+  // テーブル形式で出力
+  console.log(`${"ID".padStart(6)}  ${"TIME".padEnd(19)}  ${"TASK".padEnd(6)}  ${"ROLE".padEnd(10)}  ${"METHOD".padEnd(6)}  ${"PATH".padEnd(30)}  ${"STATUS".padEnd(6)}  ${"DUR".padEnd(8)}  BYTES`);
+  console.log("\u2500".repeat(110));
+  for (const t of traces) {
+    const time = t.timestamp?.slice(0, 19) || "";
+    const task = (t.task_id || "-").padEnd(6);
+    const r = (t.role || "-").padEnd(10);
+    const method = (t.method || "-").padEnd(6);
+    const path = (t.path || "-").padEnd(30).slice(0, 30);
+    const status = String(t.status || "-").padEnd(6);
+    const dur = t.duration_ms != null ? `${t.duration_ms}ms`.padEnd(8) : "-".padEnd(8);
+    const bytes = `${t.request_bytes || 0}\u2192${t.response_bytes || 0}`;
+    console.log(`${String(t.id).padStart(6)}  ${time}  ${task}  ${r}  ${method}  ${path}  ${status}  ${dur}  ${bytes}`);
+  }
+  db.close();
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -755,6 +827,9 @@ switch (command) {
   case "close-task":
     await cmdCloseTask();
     break;
+  case "trace":
+    await cmdTrace();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -769,6 +844,9 @@ Usage:
   cmux-team kill-agent --surface <surface> [--conductor-id <id>]
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
   cmux-team update-task --task-id <id> --status <status>
-  cmux-team close-task --task-id <id> [--journal <text>]`);
+  cmux-team close-task --task-id <id> [--journal <text>]
+  cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
+  cmux-team trace --search <query>             FTS5 全文検索
+  cmux-team trace --show <id>                  トレース詳細表示`);
     break;
 }

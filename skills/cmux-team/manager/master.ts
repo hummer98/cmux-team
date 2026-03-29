@@ -4,6 +4,8 @@
 import * as cmux from "./cmux";
 import { generateMasterPrompt } from "./template";
 import { log } from "./logger";
+import { readFile } from "fs/promises";
+import { join } from "path";
 
 export interface MasterState {
   surface: string;
@@ -25,10 +27,19 @@ export async function spawnMaster(
       return null;
     }
 
+    // proxy-port 読み取り
+    let proxyPort: string | undefined;
+    try {
+      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
+    } catch {}
+
     // Claude Code 起動
+    const envExports = proxyPort
+      ? `export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort} && `
+      : "";
     await cmux.send(
       surface,
-      "claude --dangerously-skip-permissions --append-system-prompt-file .team/prompts/master.md 'ユーザーからのタスクを待ってください。'\n"
+      `${envExports}claude --dangerously-skip-permissions --append-system-prompt-file .team/prompts/master.md 'ユーザーからのタスクを待ってください。'\n`
     );
 
     // Trust 承認
