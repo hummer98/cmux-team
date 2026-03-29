@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.4.1] - 2026-03-29
+
+### Changed
+- トレーサビリティ基盤（trace CLI, SQLite FTS5, メタデータ伝播）のドキュメントを SKILL.md, CLAUDE.md, README に追加
+
 ## [3.4.0] - 2026-03-29
 
 ### Added
