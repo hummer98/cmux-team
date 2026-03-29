@@ -151,7 +151,7 @@ bun run "$MAIN_TS" spawn-agent \
 
 ### Agent の完了検出・kill
 
-- Conductor が `cmux read-screen` で `❯` + 非 `esc to interrupt` を検出（pull 型）
+- Conductor が `cmux list-status` で Idle を検出（pull 型、hooks ベース）
 - `main.ts kill-agent --surface <s>` で surface クローズ + AGENT_DONE 送信
 
 ## team.json の Conductors 構造

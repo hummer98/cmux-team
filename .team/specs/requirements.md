@@ -66,7 +66,7 @@ cmux 内で Claude Code を使う開発者。Claude Max 推奨（複数セッシ
 - [x] REQ-009: 結果回収 — Conductor 完了検出時に `task-state.json` から journal サマリーを読み取り、ログに記録。Conductor リセット（Agent タブ閉じ + worktree 削除 + タブ名リセット + 状態を idle に戻す）
 - [x] REQ-010: Conductor 同時実行制限 — `CMUX_TEAM_MAX_CONDUCTORS`（デフォルト 3）で固定スロット数を制御
 - [x] REQ-011: Agent spawn — `main.ts spawn-agent` CLI でタブ作成（paneId があれば `cmux new-surface --pane`）・プロキシ設定・Trust 承認・タブ名設定・AGENT_SPAWNED キュー送信を一括実行
-- [x] REQ-012: Agent 監視 — Conductor が `cmux read-screen` で `❯` + `esc to interrupt` の有無で完了検出（pull 型）
+- [x] REQ-012: Agent 監視 — Conductor が `cmux list-status` で Running/Idle/Needs input を検出（pull 型、hooks ベース）
 - [x] REQ-013: ファイルキュー — `.team/queue/*.json` に zod スキーマ検証済みメッセージを書き込み、daemon が定期ポーリングで処理。処理済みは `processed/` に移動
 - [x] REQ-014: TUI ダッシュボード — ink/React ベースのフルスクリーン表示（Header, Master, Conductors（Agent ツリー付き）, Tasks, Journal/Log タブ切り替え）。2秒間隔で自動更新
 - [x] REQ-015: ダッシュボードキーバインド — `1`=journal, `2`=log, `Tab`=切替, `r`=reload, `q`=quit
