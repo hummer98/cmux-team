@@ -1,9 +1,9 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, stat } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
 import {
   spawnConductor,
@@ -38,6 +38,8 @@ export interface DaemonState {
   pendingTasks: number;
   openTasks: number;
   taskList: TaskSummary[];
+  sourceMtimes: Map<string, number>;
+  restartRequested: boolean;
 }
 
 /** conductorId または taskRunId で Conductor を検索 */
@@ -63,7 +65,43 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     pendingTasks: 0,
     openTasks: 0,
     taskList: [],
+    sourceMtimes: new Map(),
+    restartRequested: false,
   };
+}
+
+/** manager/ ディレクトリ内の全 .ts ファイルの mtime を記録した Map を返す */
+export async function initSourceWatcher(): Promise<Map<string, number>> {
+  const managerDir = dirname(import.meta.path);
+  const mtimes = new Map<string, number>();
+  try {
+    const files = await readdir(managerDir);
+    for (const f of files) {
+      if (!f.endsWith(".ts")) continue;
+      const filePath = join(managerDir, f);
+      const s = await stat(filePath);
+      mtimes.set(filePath, s.mtimeMs);
+    }
+  } catch {}
+  return mtimes;
+}
+
+/** 現在の mtime と比較し、変更があれば変更ファイル名を返す（なければ null） */
+export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise<string | null> {
+  const managerDir = dirname(import.meta.path);
+  try {
+    const files = await readdir(managerDir);
+    for (const f of files) {
+      if (!f.endsWith(".ts")) continue;
+      const filePath = join(managerDir, f);
+      const s = await stat(filePath);
+      const prev = mtimeMap.get(filePath);
+      if (prev === undefined || s.mtimeMs !== prev) {
+        return f;
+      }
+    }
+  } catch {}
+  return null;
 }
 
 export async function initInfra(state: DaemonState): Promise<void> {
@@ -172,6 +210,16 @@ export async function tick(state: DaemonState): Promise<void> {
   await processQueue(state);
   await scanTasks(state);
   await monitorConductors(state);
+
+  // ソースファイルの mtime 変更を検出
+  if (state.sourceMtimes.size > 0) {
+    const changedFile = await checkSourceChanged(state.sourceMtimes);
+    if (changedFile) {
+      await log("source_changed", `file=${changedFile}`);
+      state.running = false;
+      state.restartRequested = true;
+    }
+  }
 }
 
 async function processQueue(state: DaemonState): Promise<void> {

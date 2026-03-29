@@ -21,7 +21,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -90,6 +90,9 @@ function requireArg(name: string): string {
 async function cmdStart(): Promise<void> {
   console.log("🚀 cmux-team 起動開始");
   const state = await createDaemon(PROJECT_ROOT);
+
+  // ソースファイル mtime 監視を初期化
+  state.sourceMtimes = await initSourceWatcher();
 
   // team.json から Conductor 状態を復元（リロード時の二重起動防止）
   try {
@@ -216,6 +219,15 @@ async function cmdStart(): Promise<void> {
       await log("error", `tick: ${e.message}`);
     }
     await sleep(state.pollInterval);
+  }
+
+  // ソース変更による再起動要求
+  if (state.restartRequested) {
+    proxyHandle?.stop();
+    unmountDashboard();
+    await log("daemon_auto_restart");
+    await updateTeamJson(state);
+    process.exit(42);
   }
 
   await shutdown();
