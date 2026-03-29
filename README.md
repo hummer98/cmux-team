@@ -121,7 +121,7 @@ depends_on: [10, 11, 12]  # waits for all to complete
 |-----------|-----------|
 | Master → daemon | CLI (`main.ts send`) → `.team/queue/*.json` |
 | daemon → Conductor | `cmux new-split` + Claude Code launch |
-| Conductor → daemon | SessionEnd hook + `cmux read-screen` polling |
+| Conductor → daemon | SessionEnd hook + `cmux list-status` polling |
 
 ## Troubleshooting
 

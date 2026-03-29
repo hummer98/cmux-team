@@ -8,7 +8,7 @@
 
 - `.team/tasks/` と `.team/task-state.json` を参照し、`status: ready` のタスクを検出する
 - daemon 経由で idle Conductor にタスクを割り当てる
-- Conductor を pull 型で監視する（done マーカーファイルで完了検出、フォールバックとして `cmux read-screen`）
+- Conductor を pull 型で監視する（done マーカーファイルで完了検出、フォールバックとして `cmux list-status`）
 - 完了した Conductor の Journal を読み取り、ログを記録する
 - Conductor をリセットする（`/clear` 送信 + done マーカー削除）
 - `.team/logs/manager.log` に状態変化を記録する
@@ -84,17 +84,23 @@ else
 fi
 ```
 
-**フォールバック:** done マーカーが確認できない場合は `cmux read-screen` で判定:
+**フォールバック:** done マーカーが確認できない場合は `cmux list-status` で判定:
 
 ```bash
-SCREEN=$(cmux read-screen --surface surface:N --lines 10 2>&1)
-# ❯ あり AND "esc to interrupt" なし → 完了（アイドル状態）
-# ❯ あり AND "esc to interrupt" あり → 実行中
+# フォールバック: cmux list-status で Conductor workspace の状態を確認
+CONDUCTOR_WS=$(cmux identify --surface surface:N 2>/dev/null | jq -r '.caller.workspace_ref // empty')
+if [ -n "$CONDUCTOR_WS" ]; then
+  STATE=$(cmux list-status --workspace "$CONDUCTOR_WS" 2>/dev/null | grep "^claude_code=" | sed 's/^[^=]*=//' | awk '{print $1}')
+  case "$STATE" in
+    Idle|○) echo "Conductor-N: 完了（list-status: Idle）" ;;
+    Running|⚙) echo "Conductor-N: 実行中" ;;
+  esac
+fi
 ```
 
 **完了判定の優先順位:**
 1. done マーカーファイルの存在 → **完了**（最も信頼性が高い）
-2. `cmux read-screen` で `❯` 検出 → **フォールバック**
+2. `cmux list-status` で `Idle` 検出 → **フォールバック**
 3. surface 消失 → **クラッシュ**（エラーリカバリへ）
 
 ### 4. 結果回収（Conductor 完了時）

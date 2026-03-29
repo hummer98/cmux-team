@@ -49,7 +49,7 @@ TaskCreate: "テンプレート修正" → task-3
 spawn-agent → Agent 起動成功 → TaskUpdate: task-1 → in_progress
 
 # 3. Agent 完了検出後に completed に
-cmux read-screen で ❯ 検出 → TaskUpdate: task-1 → completed
+cmux list-status で Idle 検出 → TaskUpdate: task-1 → completed
 
 # 4. 全タスク完了を確認してから結果統合へ
 ```
@@ -103,26 +103,50 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 Agent を起動したら、30秒間隔でポーリングして完了を待つ。**Agent が完了するまで次のステップに進まない。**
 
+spawn 時に前後の `cmux list-status` を比較して Agent の cN キーを特定する:
+
+```bash
+# spawn 前の list-status を取得
+MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
+STATUS_BEFORE=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
+
+# ... (Agent spawn) ...
+
+sleep 2
+STATUS_AFTER=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
+# 新しく出現した cN エントリを特定
+AGENT_KEY=$(diff <(echo "$STATUS_BEFORE") <(echo "$STATUS_AFTER") | grep "^>" | head -1 | awk -F= '{print $1}' | tr -d '> ')
+echo "Agent key: $AGENT_KEY"
+```
+
+監視ループ:
+
 ```bash
 # 全 Agent の完了を待つループ
+MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
 while true; do
   ALL_DONE=true
-  for AGENT_SURFACE in $AGENT_SURFACES; do
-    if cmux tree 2>&1 | grep -q "$AGENT_SURFACE"; then
-      SCREEN=$(cmux read-screen --surface "$AGENT_SURFACE" --lines 10 2>&1)
-      if echo "$SCREEN" | grep -q '❯' && ! echo "$SCREEN" | grep -q 'esc to interrupt'; then
-        # ❯ あり AND "esc to interrupt" なし → 完了
-        echo "Agent $AGENT_SURFACE: 完了"
-      else
-        # まだ実行中
+  STATUS=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
+  for AGENT_KEY in $AGENT_KEYS; do
+    AGENT_STATE=$(echo "$STATUS" | grep "^${AGENT_KEY}=" | sed 's/^[^=]*=//' | awk '{print $1}')
+    case "$AGENT_STATE" in
+      Running|⚙)
+        # 実行中
         ALL_DONE=false
-      fi
-    else
-      # surface 消失 → Agent クラッシュとして処理
-      echo "WARNING: Agent $AGENT_SURFACE が消失。クラッシュとして処理。"
-    fi
+        ;;
+      Idle|○)
+        echo "Agent $AGENT_KEY: 完了"
+        ;;
+      "Needs"|"⚠")
+        echo "WARNING: Agent $AGENT_KEY が入力待ち"
+        ALL_DONE=false
+        ;;
+      "")
+        # エントリ消失 → クラッシュ
+        echo "WARNING: Agent $AGENT_KEY が消失。クラッシュとして処理。"
+        ;;
+    esac
   done
-
   if $ALL_DONE; then
     break
   fi
@@ -131,9 +155,10 @@ done
 ```
 
 **完了判定:**
-- `❯` が表示されている AND `esc to interrupt` が含まれていない → **完了**
-- `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
-- surface が存在しない → **クラッシュ**
+- `cmux list-status` で cN が `Idle` / `○` → **完了**
+- `cmux list-status` で cN が `Running` / `⚙` → **まだ実行中**
+- `cmux list-status` で cN が `Needs input` / `⚠` → **入力待ち**（Trust 確認等を対処）
+- cN エントリが消失 → **クラッシュ**
 
 ## レビュー判断（ステップ 5）
 
