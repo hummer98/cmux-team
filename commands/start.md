@@ -10,39 +10,21 @@ cmux-team daemon を起動し、固定2x2レイアウトで Master + Conductor x
 ## 手順
 
 ```bash
-# daemon 実行ファイルを検索（優先順: npm グローバル → plugin cache → ローカル）
-
-# 1. npm グローバルインストール済みなら cmux-team コマンドを直接使う
-if command -v cmux-team >/dev/null 2>&1; then
-  cmux-team start
-  exit 0
-fi
-
-# 2. main.ts を探す（plugin cache → ローカル）
-MAIN_TS=""
-for candidate in \
-  $(ls -d ~/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager/main.ts 2>/dev/null | sort -V | tail -1) \
-  "./skills/cmux-team/manager/main.ts"; do
-  if [ -f "$candidate" ]; then
-    MAIN_TS="$candidate"
-    break
-  fi
-done
-
-if [ -z "$MAIN_TS" ]; then
-  echo "ERROR: cmux-team の manager/main.ts が見つかりません"
-  echo "npm install -g cmux-team でインストールするか、plugin cache を確認してください"
+# cmux-team コマンドで起動
+if ! command -v cmux-team >/dev/null 2>&1; then
+  echo "ERROR: cmux-team がインストールされていません"
+  echo "npm install -g cmux-team を実行してください"
   exit 1
 fi
 
-# node_modules がなければ bun install
-MANAGER_DIR=$(dirname "$MAIN_TS")
+# node_modules がなければ依存インストール
+MANAGER_DIR="$(npm prefix -g)/lib/node_modules/cmux-team/skills/cmux-team/manager"
 if [ ! -d "$MANAGER_DIR/node_modules" ]; then
   (cd "$MANAGER_DIR" && bun install)
 fi
 
-# daemon 起動（Master spawn + 固定2x2レイアウト作成を含む）
-bun run "$MAIN_TS" start
+# daemon 起動
+cmux-team start
 ```
 
 ## daemon が自動的に行うこと

@@ -114,7 +114,6 @@ cmux-team/
 │   ├── 04-templates.md
 │   ├── 05-install-and-infrastructure.md
 │   └── 06-implementation-tasks.md
-├── install.sh                        # インストーラ（レガシー・非推奨、npm 推奨）
 ├── LICENSE                           # MIT
 ├── README.md                         # ユーザー向けドキュメント（英語）
 └── README.ja.md                      # ユーザー向けドキュメント（日本語）
@@ -151,10 +150,6 @@ cmux-team/
 1. `skills/cmux-team/templates/<role-name>.md` を作成
 2. `{{VARIABLE}}` プレースホルダーを使用（下記参照）
 3. Conductor（または Manager）が spawn 時にテンプレート変数を置換し `.team/prompts/` に書き出す
-
-### install.sh への反映
-
-新しいスキル・コマンドを追加した場合、`install.sh` のコピー対象に含まれているか確認する。現在の実装では `commands/*.md` と `skills/` 配下を一括コピーするため、通常は変更不要。プラグインとしてインストールする場合は `plugin.json` の `skills` / `commands` パスが正しいか確認する。
 
 ## テンプレート変数仕様
 
@@ -195,47 +190,11 @@ cmux-team/
 
 ## インストール方法
 
-### npm（推奨）
-
 ```bash
 npm install -g cmux-team
 ```
 
-`postinstall` スクリプトにより manager/ の依存関係が自動解決される。Plugin としても使う場合は別途 `claude plugin add hummer98/cmux-team` を実行する。
-
-### Claude Code Plugin（代替）
-
-```
-/plugin marketplace add hummer98/cmux-team
-/plugin install cmux-team@hummer98-cmux-team
-```
-
-### install.sh（レガシー・非推奨）
-
-> **非推奨**: `npm install -g cmux-team` を推奨。install.sh は npm やプラグインが利用できない環境向けのフォールバック。
-
-#### インストール（引数なし）
-
-1. `~/.claude/` の存在を確認（なければエラー終了）
-2. ディレクトリを作成:
-   - `~/.claude/skills/cmux-team/templates/`
-   - `~/.claude/skills/cmux-agent-role/`
-   - `~/.claude/commands/`
-3. ファイルをコピー（`cp -f`、symlink ではない）:
-   - スキル SKILL.md × 2
-   - テンプレート × 10
-   - コマンド × 11
-4. cmux の存在を確認（警告のみ、インストール自体は続行）
-
-#### `--check`
-
-インストール状態を確認し、各項目の OK/warn を表示。ファイルの変更はしない。
-
-#### `--uninstall`
-
-- `~/.claude/skills/cmux-team/` と `~/.claude/skills/cmux-agent-role/` を削除
-- `~/.claude/commands/cmux-team:start-*.md` のみ削除（他のコマンドは残す）
-- プロジェクトの `.team/` は削除しない
+`postinstall` スクリプトにより manager/ の依存関係が自動解決される。
 
 ## テスト方法
 
@@ -248,8 +207,6 @@ npm install -g cmux-team
 
 ### インストールテスト
 
-#### npm パッケージ
-
 ```bash
 # グローバルインストール
 npm install -g cmux-team
@@ -258,19 +215,6 @@ npm install -g cmux-team
 
 # アンインストール
 npm uninstall -g cmux-team
-```
-
-#### install.sh（レガシー）
-
-```bash
-# クリーンインストール
-./install.sh
-./install.sh --check    # 全項目が [ok] であること
-
-# アンインストール → 再インストール
-./install.sh --uninstall
-./install.sh --check    # 全項目が [warn] であること
-./install.sh
 ```
 
 ### 機能テスト（cmux 内で実行）
