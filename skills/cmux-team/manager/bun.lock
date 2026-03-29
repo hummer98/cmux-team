@@ -5,6 +5,8 @@
     "": {
       "name": "manager",
       "dependencies": {
+        "@rezi-ui/core": "^0.1.0-alpha.60",
+        "@rezi-ui/node": "^0.1.0-alpha.60",
         "ink": "^6.8.0",
         "react": "^19.2.4",
         "zod": "^4.3.6",
@@ -21,6 +23,12 @@
   },
   "packages": {
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.2.5", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-3NX/MpTdroi0aKz134A6RC2Gb2iXVECN4QaAXnvCIxxIm3C3AVB1mkUe8NaaiyvOpDfsrqWhYtj+Q6a62RrTsw=="],
+
+    "@rezi-ui/core": ["@rezi-ui/core@0.1.0-alpha.60", "", {}, "sha512-UWiYQArvQle5tz3BhXGV612c+xvivTyNBkK+xsmcLfW2lMORY56JSL+SzprJ6cf+U/yKd4DDLpqVjkDaYJoyAA=="],
+
+    "@rezi-ui/native": ["@rezi-ui/native@0.1.0-alpha.60", "", {}, "sha512-JDMx9CtXSLJ8IwBGy0xUCAjZox7XkZC08FyuzdqFcb1ZkqgQWzuBMJfvpQB3jPG5ISDyPsUQ+QBMe+KbJVplwA=="],
+
+    "@rezi-ui/node": ["@rezi-ui/node@0.1.0-alpha.60", "", { "dependencies": { "@rezi-ui/core": "0.1.0-alpha.60", "@rezi-ui/native": "0.1.0-alpha.60" } }, "sha512-m6Tmsyp79NpqtldlNfr9Xof9SGXeKoFGdzmTQfZbwthozAyd/Di9xQOhrD5Gjs7tVqciZID4lkN3ZLQQhxNRKg=="],
 
     "@types/bun": ["@types/bun@1.3.11", "", { "dependencies": { "bun-types": "1.3.11" } }, "sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg=="],
 
