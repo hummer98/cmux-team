@@ -5,58 +5,36 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:364"
+    "surface": "surface:395"
   },
   "manager": {
-    "pid": 76610,
+    "pid": 49361,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
       "id": "conductor-slot-1",
-      "taskRunId": "run-1774725473",
-      "taskId": "1774711261",
-      "taskTitle": "タスク定義と状態の分離: tasks/ をフラット化し状態を daemon 管理に移行",
-      "surface": "surface:361",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/run-1774725473",
-      "outputDir": ".team/output/run-1774725473",
-      "startedAt": "2026-03-28T19:17:57.861Z",
-      "paneId": "pane:383",
-      "agents": [
-        {
-          "surface": "surface:367",
-          "role": "impl"
-        },
-        {
-          "surface": "surface:368",
-          "role": "impl"
-        },
-        {
-          "surface": "surface:369",
-          "role": "impl"
-        },
-        {
-          "surface": "surface:370",
-          "role": "impl"
-        }
-      ]
+      "surface": "surface:392",
+      "status": "idle",
+      "startedAt": "2026-03-29T06:10:53.051Z",
+      "paneId": "pane:405",
+      "agents": []
     },
     {
       "id": "conductor-slot-2",
-      "surface": "surface:362",
+      "surface": "surface:393",
       "status": "idle",
-      "startedAt": "2026-03-28T18:42:41.721Z",
-      "paneId": "pane:384",
+      "startedAt": "2026-03-29T06:13:41.634Z",
+      "paneId": "pane:406",
       "agents": []
     },
     {
       "id": "conductor-slot-3",
-      "surface": "surface:363",
+      "surface": "surface:394",
       "status": "idle",
-      "startedAt": "2026-03-28T18:42:46.469Z",
-      "paneId": "pane:385",
+      "startedAt": "2026-03-28T20:57:55.361Z",
+      "paneId": "pane:407",
       "agents": []
     }
   ],
