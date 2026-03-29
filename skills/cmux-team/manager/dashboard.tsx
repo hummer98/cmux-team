@@ -8,6 +8,7 @@
  */
 import React, { useState, useEffect } from "react";
 import { render, Text, Box, useStdout, useInput } from "ink";
+import stringWidth from "string-width";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState } from "./daemon";
@@ -139,9 +140,19 @@ function utcToLocal(isoTimestamp: string): string {
 
 function truncate(text: string, maxLen: number): string {
   if (maxLen <= 0) return "";
-  if (text.length <= maxLen) return text;
+  const w = stringWidth(text);
+  if (w <= maxLen) return text;
   if (maxLen <= 1) return "…";
-  return text.slice(0, maxLen - 1) + "…";
+  // 表示幅ベースで切り詰め
+  let width = 0;
+  let i = 0;
+  for (const char of text) {
+    const cw = stringWidth(char);
+    if (width + cw > maxLen - 1) break;
+    width += cw;
+    i += char.length;
+  }
+  return text.slice(0, i) + "…";
 }
 
 function formatElapsed(isoDate: string): string {
@@ -402,7 +413,7 @@ function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: numb
               {' '}
               <Text bold>#{entry.taskId.padStart(3, '0')}</Text>
               {' '}
-              <Text>{entry.message.slice(0, maxMsg)}</Text>
+              <Text>{truncate(entry.message, maxMsg)}</Text>
             </Text>
           </Box>
         );
