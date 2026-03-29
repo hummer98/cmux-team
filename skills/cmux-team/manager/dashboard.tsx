@@ -264,11 +264,12 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
                 <Text dimColor> idle</Text>
               ) : (
                 (() => {
+                  const icon = isIdle ? "○" : isDone ? "✓" : "●";
                   const surfaceText = `[${c.surface.replace("surface:", "")}]`;
                   const taskIdText = ` #${(c.taskId ?? "").padStart(3, '0')}`;
                   const elapsedText = ` ${elapsed}`;
-                  // paddingLeft(1) + icon(2) + surface + taskId + elapsed + space(1)
-                  const fixedWidth = 1 + 2 + surfaceText.length + taskIdText.length + elapsedText.length + 1;
+                  const fixedPart = `${icon} ${surfaceText}${taskIdText} ${elapsedText}`;
+                  const fixedWidth = 1 + stringWidth(fixedPart); // 1 = paddingLeft
                   const maxTitle = cols - fixedWidth;
                   return (
                     <>
@@ -332,8 +333,11 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
           ? ` ${utcToLocal(task.closedAt).slice(0, 5)}`
           : !isClosed && task.createdAt ? ` ${formatElapsed(task.createdAt)}` : "";
         const label = assigned ? "running" : task.status;
-        // paddingLeft(1) + icon(2) + taskId(3) + " [label] "(label.length+3) + timeInfo
-        const fixedWidth = 1 + 2 + 3 + label.length + 3 + timeInfo.length;
+        const icon = isClosed ? "○" : "●";
+        const taskId = task.id.padStart(3, '0');
+        // 固定部分の実際の表示幅を計測: " ● 016 [label] " + timeInfo
+        const fixedPart = `${icon} ${taskId} [${label}] `;
+        const fixedWidth = 1 + stringWidth(fixedPart) + stringWidth(timeInfo); // 1 = paddingLeft
         const maxTitle = cols - fixedWidth;
         return (
           <Box key={task.id} paddingLeft={1}>
@@ -360,7 +364,8 @@ function formatLogLine(line: string, cols: number): { time: string; event: strin
   const isError = event === "error";
   const isComplete = event.includes("completed");
   const color = isError ? "red" : isComplete ? "green" : "white";
-  return { time, event, detail: detail.slice(0, Math.max(0, cols - time.length - event.length - 5)), color };
+  const maxDetail = Math.max(0, cols - 1 - stringWidth(`${time} ${event} `)); // 1 = paddingLeft
+  return { time, event, detail: truncate(detail, maxDetail), color };
 }
 
 function LogSection({ lines, cols }: { lines: string[]; cols: number }) {
@@ -403,7 +408,8 @@ function JournalSection({ entries, cols }: { entries: JournalEntry[]; cols: numb
   return (
     <Box flexDirection="column">
       {entries.map((entry, i) => {
-        const maxMsg = Math.max(0, cols - entry.time.length - entry.icon.length - entry.taskId.length - 7);
+        const fixedPart = `${entry.time} ${entry.icon} #${entry.taskId.padStart(3, '0')} `;
+        const maxMsg = Math.max(0, cols - 1 - stringWidth(fixedPart)); // 1 = paddingLeft
         return (
           <Box key={i} paddingLeft={1}>
             <Text>
