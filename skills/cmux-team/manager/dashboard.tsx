@@ -245,8 +245,9 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
           <Box key={c.conductorId} flexDirection="column">
             <Box paddingLeft={1}>
               <Text color={isIdle ? "gray" : isDone ? "gray" : "yellow"}>
-                {isIdle ? "○ " : isDone ? "✓ " : "● "}
+                {isIdle ? "○" : isDone ? "✓" : "●"}
               </Text>
+              <Text>{" "}</Text>
               <Text color={isIdle || isDone ? "gray" : undefined}>[{c.surface.replace("surface:", "")}]</Text>
               {isIdle ? (
                 <Text dimColor> idle</Text>
@@ -325,7 +326,8 @@ function TasksSection({ state, cols }: { state: DaemonState; cols: number }) {
         const maxTitle = cols - fixedWidth;
         return (
           <Box key={task.id} paddingLeft={1}>
-            <Text color={color}>{isClosed ? "○" : "●"} </Text>
+            <Text color={color}>{isClosed ? "○" : "●"}</Text>
+            <Text>{" "}</Text>
             <Text color={color} bold={!isClosed}>{task.id.padStart(3, '0')}</Text>
             <Text color={color}> [{label}] {truncate(title, maxTitle)}</Text>
             {timeInfo && <Text color={color}>{timeInfo}</Text>}
