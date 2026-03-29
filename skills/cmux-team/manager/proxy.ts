@@ -7,12 +7,15 @@
  */
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
+import { initDB, insertTrace } from "./trace-store";
+import type { Database } from "bun:sqlite";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
 interface ProxyHandle {
   port: number;
   stop: () => void;
+  db: Database;
 }
 
 interface TraceEntry {
@@ -37,6 +40,11 @@ export async function start(
   await mkdir(tracesDir, { recursive: true });
 
   const traceFile = join(tracesDir, "api-trace.jsonl");
+
+  // SQLite トレースストア + bodies ディレクトリ
+  const bodiesDir = join(projectRoot, ".team/logs/traces/bodies");
+  await mkdir(bodiesDir, { recursive: true });
+  const db = initDB(projectRoot);
 
   // 前回ポートの読み取り（daemon リロード時に同じポートを再利用）
   let preferredPort = 0;
@@ -81,9 +89,23 @@ export async function start(
       const targetUrl = `${upstream}${url.pathname}${url.search}`;
       const startTime = Date.now();
 
+      // リクエストヘッダーからメタデータを動的抽出（opts はフォールバック）
+      const taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
+      const conductorId = req.headers.get("x-cmux-conductor-id") || opts?.conductorId;
+      const role = req.headers.get("x-cmux-role") || opts?.role;
+      const sessionId = req.headers.get("x-claude-code-session-id") || undefined;
+
       // リクエストボディを読み取り（転送用 + サイズ計測用）
       const reqBody = req.body ? await req.arrayBuffer() : null;
       const requestBytes = reqBody?.byteLength ?? 0;
+
+      // リクエスト本文を bodies/ に保存
+      const traceId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      let reqBodyPath: string | undefined;
+      if (reqBody && requestBytes > 0) {
+        reqBodyPath = join(bodiesDir, `${traceId}-req.json`);
+        Bun.write(reqBodyPath, reqBody).catch(() => {});
+      }
 
       // Host ヘッダーを除外して転送（そのまま渡すと Bun が
       // Host の値を接続先に使い、プロキシ自身に接続してしまう）
@@ -118,9 +140,14 @@ export async function start(
           status: upstreamRes.status,
           requestBytes,
           startTime,
-          conductorId: opts?.conductorId,
-          taskId: opts?.taskId,
-          role: opts?.role,
+          conductorId,
+          taskId,
+          role,
+          db,
+          bodiesDir,
+          traceId,
+          sessionId,
+          reqBodyPath,
         });
 
         return new Response(clientStream, {
@@ -136,9 +163,9 @@ export async function start(
 
       const entry: TraceEntry = {
         timestamp: new Date().toISOString(),
-        conductor_id: opts?.conductorId,
-        task_id: opts?.taskId,
-        role: opts?.role,
+        conductor_id: conductorId,
+        task_id: taskId,
+        role,
         method: req.method,
         path: url.pathname,
         status: upstreamRes.status,
@@ -147,8 +174,32 @@ export async function start(
         duration_ms: duration,
       };
 
-      // 非同期でログ書き込み
+      // 非同期でログ書き込み（JSONL）
       appendFile(traceFile, JSON.stringify(entry) + "\n").catch(() => {});
+
+      // レスポンス本文を bodies/ に保存 + SQLite 記録
+      let resBodyPath: string | undefined;
+      if (resBody.byteLength > 0) {
+        resBodyPath = join(bodiesDir, `${traceId}-res.json`);
+        Bun.write(resBodyPath, resBody).catch(() => {});
+      }
+      try {
+        insertTrace(db, {
+          timestamp: new Date().toISOString(),
+          task_id: taskId,
+          conductor_id: conductorId,
+          role,
+          session_id: sessionId,
+          method: req.method,
+          path: url.pathname,
+          status: upstreamRes.status,
+          request_bytes: requestBytes,
+          response_bytes: resBody.byteLength,
+          duration_ms: duration,
+          request_body_path: reqBodyPath,
+          response_body_path: resBodyPath,
+        });
+      } catch {}
 
       return new Response(resBody, {
         status: upstreamRes.status,
@@ -171,7 +222,8 @@ export async function start(
 
   return {
     port: server.port!,
-    stop: () => server.stop(),
+    stop: () => { server.stop(); db.close(); },
+    db,
   };
 }
 
@@ -188,19 +240,28 @@ async function drainAndLog(
     conductorId?: string;
     taskId?: string;
     role?: string;
+    db: Database;
+    bodiesDir: string;
+    traceId: string;
+    sessionId?: string;
+    reqBodyPath?: string;
   }
 ): Promise<void> {
   let responseBytes = 0;
+  const chunks: Uint8Array[] = [];
   try {
     const reader = stream.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       responseBytes += value.byteLength;
+      chunks.push(value);
     }
   } catch {
     // stream エラーは無視（クライアント切断等）
   }
+
+  const duration = Date.now() - ctx.startTime;
 
   const entry: TraceEntry = {
     timestamp: new Date().toISOString(),
@@ -212,8 +273,41 @@ async function drainAndLog(
     status: ctx.status,
     request_bytes: ctx.requestBytes,
     response_bytes: responseBytes,
-    duration_ms: Date.now() - ctx.startTime,
+    duration_ms: duration,
   };
 
+  // JSONL ログ（既存）
   appendFile(ctx.tracesDir, JSON.stringify(entry) + "\n").catch(() => {});
+
+  // レスポンス本文を bodies/ に保存
+  let resBodyPath: string | undefined;
+  if (responseBytes > 0) {
+    resBodyPath = join(ctx.bodiesDir, `${ctx.traceId}-res.json`);
+    const merged = new Uint8Array(responseBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    Bun.write(resBodyPath, merged).catch(() => {});
+  }
+
+  // SQLite 記録
+  try {
+    insertTrace(ctx.db, {
+      timestamp: new Date().toISOString(),
+      task_id: ctx.taskId,
+      conductor_id: ctx.conductorId,
+      role: ctx.role,
+      session_id: ctx.sessionId,
+      method: ctx.method,
+      path: ctx.path,
+      status: ctx.status,
+      request_bytes: ctx.requestBytes,
+      response_bytes: responseBytes,
+      duration_ms: duration,
+      request_body_path: ctx.reqBodyPath,
+      response_body_path: resBodyPath,
+    });
+  } catch {}
 }
