@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.2.0] - 2026-03-29
+
+### Added
+- 起動時の進捗を標準出力に表示（daemon 起動・Conductor 作成・Master spawn の各ステップ）
+
+### Changed
+- CLI 移行に伴い旧スラッシュコマンド 9 個を削除（start, team-research, team-design, team-impl, team-review, team-test, team-status, team-disband, team-sync-docs）。残存コマンドは master, team-spec, team-task, team-archive の 4 個
+- README, CLAUDE.md, CONTRIBUTING.md, SKILL.md の参照を CLI ベースに統一
+
+### Fixed
+- `cmux-team status` の Tasks カウントがアーカイブ済みタスクにより負値になるバグを修正
+- TUI ダッシュボードで日本語タイトルが折り返されて表示が崩れる問題を修正（string-width による表示幅ベースの切り詰めに変更）
+
 ## [3.1.0] - 2026-03-29
 
 ### Added
