@@ -27,7 +27,7 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 ## Installation
 
 ```bash
-npm install -g cmux-team
+npm install -g @hummer98/cmux-team
 ```
 
 ## Usage

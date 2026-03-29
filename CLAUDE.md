@@ -191,7 +191,7 @@ cmux-team/
 ## インストール方法
 
 ```bash
-npm install -g cmux-team
+npm install -g @hummer98/cmux-team
 ```
 
 `postinstall` スクリプトにより manager/ の依存関係が自動解決される。
@@ -209,12 +209,12 @@ npm install -g cmux-team
 
 ```bash
 # グローバルインストール
-npm install -g cmux-team
+npm install -g @hummer98/cmux-team
 # → ~/.claude/ にスキル・コマンド・テンプレートが配置されること
 # → cmux-team コマンドが利用可能になること
 
 # アンインストール
-npm uninstall -g cmux-team
+npm uninstall -g @hummer98/cmux-team
 ```
 
 ### 機能テスト（cmux 内で実行）

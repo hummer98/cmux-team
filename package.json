@@ -1,5 +1,5 @@
 {
-  "name": "cmux-team",
+  "name": "@hummer98/cmux-team",
   "version": "2.19.0",
   "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
   "type": "module",
@@ -7,11 +7,18 @@
     "cmux-team": "./bin/cmux-team.js"
   },
   "scripts": {
-    "postinstall": "node bin/postinstall.js"
+    "postinstall": "node bin/postinstall.js",
+    "prepublishOnly": "cd skills/cmux-team/manager && bun test"
   },
   "files": [
     "bin/",
-    "skills/",
+    "skills/cmux-team/SKILL.md",
+    "skills/cmux-team/templates/",
+    "skills/cmux-team/manager/**/*.ts",
+    "!skills/cmux-team/manager/**/*.test.ts",
+    "skills/cmux-team/manager/package.json",
+    "skills/cmux-team/manager/bun.lock",
+    "skills/cmux-agent-role/",
     "commands/",
     ".claude-plugin/",
     "README.md",
