@@ -21,6 +21,14 @@ try {
   console.warn(`  cd ${managerDir} && bun install`);
 }
 
-// インストール完了メッセージ
+// Claude Code plugin をインストール
+try {
+  execFileSync("which", ["claude"], { stdio: "ignore" });
+  console.log("cmux-team: Claude Code plugin をインストール中...");
+  execFileSync("claude", ["plugin", "add", "hummer98/cmux-team"], { stdio: "inherit" });
+} catch {
+  console.warn("cmux-team: claude が見つかりません。手動で実行してください:");
+  console.warn("  claude plugin add hummer98/cmux-team");
+}
+
 console.log("cmux-team: インストール完了");
-console.log("  Plugin としても使う場合: claude plugin add hummer98/cmux-team");

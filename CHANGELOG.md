@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.0.1] - 2026-03-29
+
+### Fixed
+- postinstall で Claude Code plugin を自動インストール（手動実行の案内を廃止）
+- `npm pkg fix` による bin パスと repository URL の正規化
+
 ## [3.0.0] - 2026-03-29
 
 ### Added
