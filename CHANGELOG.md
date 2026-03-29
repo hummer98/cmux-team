@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.0.0] - 2026-03-29
+
+### Added
+- npm パッケージとして配布開始 — `npm install -g @hummer98/cmux-team` でインストール可能に
+- `cmux-team` CLI コマンド — シェルから直接 `cmux-team start` で daemon を起動
+- `spawn-agent` に `--pane` オプション追加 — Conductor が自分の pane を直接指定し、Agent をタブとして確実に起動
+- TUI ダッシュボードの Agent 欄に taskTitle を表示 — role のみだった表示にタスク名を追加
+
+### Changed
+- パッケージ名を `@hummer98/cmux-team` にスコープ変更
+- `install.sh` と plugin cache フォールバックを削除（npm 配布に一本化）
+- `prepublishOnly` スクリプト追加（publish 前にテスト実行）
+- テストファイル (`*.test.ts`) を npm パッケージから除外
+
+### Fixed
+- 仕様書（docs/seeds/ + .team/specs/）を現状の実装に同期
+
 ## [2.19.0] - 2026-03-29
 
 ### Added
