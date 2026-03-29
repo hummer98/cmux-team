@@ -192,6 +192,7 @@ async function processQueue(state: DaemonState): Promise<void> {
           conductor.agents.push({
             surface: message.surface,
             role: message.role,
+            taskTitle: message.taskTitle,
             spawnedAt: message.timestamp,
           });
           await log(

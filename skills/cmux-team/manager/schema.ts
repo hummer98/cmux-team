@@ -26,6 +26,7 @@ export const AgentSpawnedMessage = z.object({
   conductorId: z.string(),
   surface: z.string(),
   role: z.string().optional(),
+  taskTitle: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -58,6 +59,7 @@ export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export interface AgentState {
   surface: string;
   role?: string;
+  taskTitle?: string;
   spawnedAt: string;
 }
 

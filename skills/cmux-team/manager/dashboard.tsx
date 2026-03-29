@@ -268,13 +268,25 @@ function ConductorsSection({ state, cols }: { state: DaemonState; cols: number }
                 })()
               )}
             </Box>
-            {agents.map((a, i) => (
-              <Box key={a.surface} paddingLeft={3}>
-                <Text dimColor>{i === agents.length - 1 ? "└─ " : "├─ "}</Text>
-                <Text color="cyan">[{a.surface.replace("surface:", "")}]</Text>
-                {a.role && <Text> {a.role}</Text>}
-              </Box>
-            ))}
+            {agents.map((a, i) => {
+              const roleIcons: Record<string, string> = {
+                impl: "⚙", implementer: "⚙",
+                docs: "📝", dockeeper: "📝",
+                reviewer: "🔍", review: "🔍",
+                researcher: "🔬", research: "🔬",
+                tester: "🧪", test: "🧪",
+                architect: "📐", design: "📐",
+              };
+              const icon = roleIcons[a.role ?? ""] ?? "🔧";
+              const label = a.taskTitle ?? a.role ?? "";
+              return (
+                <Box key={a.surface} paddingLeft={3}>
+                  <Text dimColor>{i === agents.length - 1 ? "└─ " : "├─ "}</Text>
+                  <Text color="cyan">[{a.surface.replace("surface:", "")}]</Text>
+                  <Text> {icon} {label}</Text>
+                </Box>
+              );
+            })}
           </Box>
         );
       })}

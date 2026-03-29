@@ -258,6 +258,7 @@ async function cmdSend(): Promise<void> {
         conductorId: requireArg("conductor-id"),
         surface: requireArg("surface"),
         role: getArg("role"),
+        taskTitle: getArg("task-title"),
         timestamp: now,
       };
       break;
@@ -469,6 +470,7 @@ async function cmdSpawnAgent(): Promise<void> {
     conductorId,
     surface,
     role,
+    taskTitle,
     timestamp: new Date().toISOString(),
   });
 
