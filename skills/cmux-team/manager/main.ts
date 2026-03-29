@@ -88,11 +88,13 @@ function requireArg(name: string): string {
 }
 
 async function cmdStart(): Promise<void> {
+  console.log("🚀 cmux-team 起動開始");
   const state = await createDaemon(PROJECT_ROOT);
 
   // team.json から Conductor 状態を復元（リロード時の二重起動防止）
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
+    let restoredCount = 0;
     for (const c of teamJson.conductors ?? []) {
       if (c.surface && await cmux.validateSurface(c.surface)) {
         state.conductors.set(c.id, {
@@ -113,27 +115,33 @@ async function cmdStart(): Promise<void> {
           status: c.status || "running",
           paneId: c.paneId,
         });
+        restoredCount++;
       }
     }
-    if (state.conductors.size > 0) {
+    if (restoredCount > 0) {
+      console.log(`✅ Conductor 状態復元: ${restoredCount}個`);
       await log("conductors_restored", `count=${state.conductors.size}`);
     }
   } catch {}
 
   // インフラ準備
   await initInfra(state);
+  console.log("✅ インフラ準備完了");
   await log(
     "daemon_started",
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
   );
 
   // ロギングプロキシ起動
+  console.log("⏳ ロギングプロキシ起動中...");
   let proxyHandle: { port: number; stop: () => void } | null = null;
   try {
     proxyHandle = await startProxy(PROJECT_ROOT, { getState: () => state });
     await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
+    console.log(`✅ ロギングプロキシ起動完了 (port ${proxyHandle.port})`);
     await log("proxy_started", `port=${proxyHandle.port}`);
   } catch (e: any) {
+    console.log("⚠️  ロギングプロキシ起動失敗 (続行)");
     await log("proxy_start_failed", e.message);
   }
 
@@ -153,6 +161,7 @@ async function cmdStart(): Promise<void> {
   await startMaster(state, daemonSurface);
 
   await updateTeamJson(state);
+  console.log("✅ 起動完了 — ダッシュボードに切り替えます\n");
 
   // シグナルハンドリング
   const shutdown = async () => {

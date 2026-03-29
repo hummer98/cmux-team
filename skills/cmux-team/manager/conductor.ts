@@ -46,6 +46,8 @@ export async function initializeConductorSlots(
   const slots: ConductorState[] = [];
 
   try {
+    console.log(`⏳ Conductor スロット作成中 (${count}個)...`);
+
     // 1. daemon を右に split → Conductor-1
     const surface1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
     await log("conductor_slot_created", `slot=1 surface=${surface1}`);
@@ -67,6 +69,8 @@ export async function initializeConductorSlots(
       const surface = surfaces[i]!;
       const slotId = `conductor-slot-${i + 1}`;
 
+      console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Claude 起動中 (${surface})...`);
+
       // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
       const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
       // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
@@ -77,6 +81,7 @@ export async function initializeConductorSlots(
       );
 
       // Trust 承認
+      console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Trust 承認待ち...`);
       await cmux.waitForTrust(surface);
 
       // タブ名設定
@@ -96,8 +101,11 @@ export async function initializeConductorSlots(
         paneId,
       };
       slots.push(state);
+
+      console.log(`  ✅ Conductor ${i + 1}/${surfaces.length}: 準備完了`);
     }
 
+    console.log(`✅ Conductor スロット ${slots.length}個 準備完了`);
     await log("conductor_slots_initialized", `count=${slots.length}`);
   } catch (e: any) {
     await log("error", `initializeConductorSlots failed: ${e.message}`);

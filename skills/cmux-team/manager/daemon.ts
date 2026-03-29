@@ -67,6 +67,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
 }
 
 export async function initInfra(state: DaemonState): Promise<void> {
+  console.log("⏳ インフラ準備中...");
   const root = state.projectRoot;
   await mkdir(join(root, ".team/tasks"), { recursive: true });
   await mkdir(join(root, ".team/output"), { recursive: true });
@@ -115,6 +116,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
       const alive = await isMasterAlive(surface);
       if (alive) {
         state.masterSurface = surface;
+        console.log("✅ Master: 既存セッション検出 (スキップ)");
         await log("master_alive", `surface=${surface}`);
         return;
       }
@@ -125,9 +127,13 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   }
 
   // Master spawn
+  console.log("⏳ Master 起動中...");
   const master = await spawnMaster(state.projectRoot, daemonSurface);
   if (master) {
     state.masterSurface = master.surface;
+    console.log(`✅ Master 起動完了 (${master.surface})`);
+  } else {
+    console.log("❌ Master 起動失敗");
   }
 }
 
@@ -141,7 +147,10 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
       const checks = await Promise.all(
         validConductors.map(c => cmux.validateSurface(c.surface))
       );
-      if (checks.some(alive => alive)) return;
+      if (checks.some(alive => alive)) {
+        console.log("✅ Conductor スロット: 既存セッション検出 (スキップ)");
+        return;
+      }
     }
     // daemon surface と一致する stale エントリを除去
     for (const [id, c] of state.conductors) {
