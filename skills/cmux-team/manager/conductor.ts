@@ -73,7 +73,7 @@ export async function initializeConductorSlots(
 
       // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
       const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-      // ANTHROPIC_BASE_URL は Claude Max 認証を無効化するため設定しない
+
 
       await cmux.send(
         surface,

@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.3.0] - 2026-03-29
+
+### Added
+- daemon の auto-restart 機能: ソースコードが更新されると Conductor を維持したまま daemon プロセスだけ自動再起動する。tick ループ内で mtime を監視し、変更検出時に exit code 42 で再起動
+
+### Changed
+- release コマンドの npm publish を別 surface で実行するよう変更（OTP ブラウザ認証対応）
+
 ## [3.2.0] - 2026-03-29
 
 ### Added
