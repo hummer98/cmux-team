@@ -1,0 +1,25 @@
+# ランタイム・作業ディレクトリ
+.team/
+.worktrees/
+.claude/
+
+# 設計ドキュメント（配布不要）
+docs/seeds/
+
+# Git・エディタ
+.git
+.DS_Store
+.vscode/
+.idea/
+
+# 画像
+banner.jpeg
+
+# テストファイル
+*.test.ts
+
+# 依存（manager/ の node_modules は postinstall で生成）
+node_modules/
+
+# ルートの bun.lock（manager/ のは含める）
+/bun.lock

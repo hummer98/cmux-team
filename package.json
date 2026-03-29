@@ -1,0 +1,45 @@
+{
+  "name": "cmux-team",
+  "version": "2.19.0",
+  "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
+  "type": "module",
+  "bin": {
+    "cmux-team": "./bin/cmux-team.js"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "commands/",
+    ".claude-plugin/",
+    "install.sh",
+    "README.md",
+    "README.ja.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hummer98/cmux-team"
+  },
+  "homepage": "https://github.com/hummer98/cmux-team",
+  "author": {
+    "name": "hummer98",
+    "url": "https://github.com/hummer98"
+  },
+  "license": "MIT",
+  "keywords": [
+    "cmux",
+    "multi-agent",
+    "orchestration",
+    "parallel",
+    "team",
+    "claude-code",
+    "cli"
+  ]
+}

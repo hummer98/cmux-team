@@ -135,6 +135,8 @@ do_uninstall() {
 
 # --- install ---
 do_install() {
+  warn "install.sh は非推奨です。npm install -g cmux-team を推奨します。"
+  echo ""
   info "cmux-team をインストール中..."
 
   # 前提チェック: ~/.claude/ が存在するか

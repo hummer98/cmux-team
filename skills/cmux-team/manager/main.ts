@@ -46,12 +46,21 @@ function findProjectRoot(): string {
   return process.cwd();
 }
 
-/** 最新の main.ts を検索（plugin キャッシュ → ローカル → 自分自身） */
+/** 最新の main.ts を検索（npm グローバル → plugin キャッシュ → ローカル → 自分自身） */
 function findLatestMainTs(): string {
   const home = require("os").homedir();
+  const { execFileSync } = require("child_process");
+
+  // npm グローバルインストール先
+  try {
+    const npmGlobalPrefix = execFileSync("npm", ["prefix", "-g"]).toString().trim();
+    const npmMainTs = join(npmGlobalPrefix, "lib/node_modules/cmux-team/skills/cmux-team/manager/main.ts");
+    if (existsSync(npmMainTs)) return npmMainTs;
+  } catch {}
+
+  // plugin キャッシュ
   const cacheBase = join(home, ".claude/plugins/cache/hummer98-cmux-team/cmux-team");
   try {
-    const { execFileSync } = require("child_process");
     const stdout = execFileSync("ls", ["-d", join(cacheBase, "*/skills/cmux-team/manager/main.ts")]);
     const paths = stdout.toString().trim().split("\n").filter(Boolean).sort();
     if (paths.length > 0) return paths[paths.length - 1];

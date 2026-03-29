@@ -26,7 +26,13 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 
 ## Installation
 
-### As a Plugin (Recommended)
+### npm (Recommended)
+
+```bash
+npm install -g cmux-team
+```
+
+### Claude Code Plugin (Alternative)
 
 ```
 # Add marketplace
@@ -47,6 +53,8 @@ npx skills add hummer98/cmux-team
 > **Note**: Installs skills only (no slash commands). Natural language instructions work, but `/team-*` commands won't be available.
 
 ### Manual Install (Legacy)
+
+> **Note**: `install.sh` is deprecated. Use `npm install -g cmux-team` instead.
 
 ```bash
 git clone https://github.com/hummer98/cmux-team.git

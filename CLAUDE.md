@@ -73,6 +73,11 @@ cmux-team/
 ├── .claude-plugin/
 │   ├── plugin.json                   # プラグインマニフェスト
 │   └── marketplace.json              # Marketplace カタログ
+├── package.json                      # npm パッケージ定義
+├── .npmignore                        # npm publish 除外設定
+├── bin/
+│   ├── cmux-team.js                  # CLI エントリポイント
+│   └── postinstall.js                # npm postinstall スクリプト
 ├── skills/
 │   ├── cmux-team/
 │   │   ├── SKILL.md                  # 4層アーキテクチャ定義スキル
@@ -109,7 +114,7 @@ cmux-team/
 │   ├── 04-templates.md
 │   ├── 05-install-and-infrastructure.md
 │   └── 06-implementation-tasks.md
-├── install.sh                        # インストーラ（レガシー、plugin 未対応環境向け）
+├── install.sh                        # インストーラ（レガシー・非推奨、npm 推奨）
 ├── LICENSE                           # MIT
 ├── README.md                         # ユーザー向けドキュメント（英語）
 └── README.ja.md                      # ユーザー向けドキュメント（日本語）
@@ -188,9 +193,28 @@ cmux-team/
 | `{{CONDUCTOR_INSTRUCTIONS}}` | conductor | Conductor へのタスク実行指示 |
 | `{{PHASE_NAME}}` | conductor | 実行フェーズ名（research, design, impl 等） |
 
-## install.sh の動作
+## インストール方法
 
-### インストール（引数なし）
+### npm（推奨）
+
+```bash
+npm install -g cmux-team
+```
+
+`postinstall` スクリプトにより manager/ の依存関係が自動解決される。Plugin としても使う場合は別途 `claude plugin add hummer98/cmux-team` を実行する。
+
+### Claude Code Plugin（代替）
+
+```
+/plugin marketplace add hummer98/cmux-team
+/plugin install cmux-team@hummer98-cmux-team
+```
+
+### install.sh（レガシー・非推奨）
+
+> **非推奨**: `npm install -g cmux-team` を推奨。install.sh は npm やプラグインが利用できない環境向けのフォールバック。
+
+#### インストール（引数なし）
 
 1. `~/.claude/` の存在を確認（なければエラー終了）
 2. ディレクトリを作成:
@@ -203,11 +227,11 @@ cmux-team/
    - コマンド × 11
 4. cmux の存在を確認（警告のみ、インストール自体は続行）
 
-### `--check`
+#### `--check`
 
 インストール状態を確認し、各項目の OK/warn を表示。ファイルの変更はしない。
 
-### `--uninstall`
+#### `--uninstall`
 
 - `~/.claude/skills/cmux-team/` と `~/.claude/skills/cmux-agent-role/` を削除
 - `~/.claude/commands/cmux-team:start-*.md` のみ削除（他のコマンドは残す）
@@ -223,6 +247,20 @@ cmux-team/
 - Claude Code が利用可能であること（Claude Max 推奨）
 
 ### インストールテスト
+
+#### npm パッケージ
+
+```bash
+# グローバルインストール
+npm install -g cmux-team
+# → ~/.claude/ にスキル・コマンド・テンプレートが配置されること
+# → cmux-team コマンドが利用可能になること
+
+# アンインストール
+npm uninstall -g cmux-team
+```
+
+#### install.sh（レガシー）
 
 ```bash
 # クリーンインストール

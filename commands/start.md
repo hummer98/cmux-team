@@ -10,7 +10,15 @@ cmux-team daemon を起動し、固定2x2レイアウトで Master + Conductor x
 ## 手順
 
 ```bash
-# daemon 実行ファイルを検索
+# daemon 実行ファイルを検索（優先順: npm グローバル → plugin cache → ローカル）
+
+# 1. npm グローバルインストール済みなら cmux-team コマンドを直接使う
+if command -v cmux-team >/dev/null 2>&1; then
+  cmux-team start
+  exit 0
+fi
+
+# 2. main.ts を探す（plugin cache → ローカル）
 MAIN_TS=""
 for candidate in \
   $(ls -d ~/.claude/plugins/cache/hummer98-cmux-team/cmux-team/*/skills/cmux-team/manager/main.ts 2>/dev/null | sort -V | tail -1) \
@@ -23,6 +31,7 @@ done
 
 if [ -z "$MAIN_TS" ]; then
   echo "ERROR: cmux-team の manager/main.ts が見つかりません"
+  echo "npm install -g cmux-team でインストールするか、plugin cache を確認してください"
   exit 1
 fi
 

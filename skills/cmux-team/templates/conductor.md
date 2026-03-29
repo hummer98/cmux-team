@@ -60,7 +60,17 @@ cmux read-screen で ❯ 検出 → TaskUpdate: task-1 → completed
 
 ```bash
 # main.ts のパスは環境変数 CONDUCTOR_MAIN_TS または自動検出
-MAIN_TS="${CONDUCTOR_MAIN_TS:-$(find {{PROJECT_ROOT}}/skills/cmux-team/manager -name main.ts 2>/dev/null | head -1)}"
+# 検索順: 環境変数 → npm グローバル → plugin cache → ローカル
+if [ -n "$CONDUCTOR_MAIN_TS" ]; then
+  MAIN_TS="$CONDUCTOR_MAIN_TS"
+elif command -v cmux-team >/dev/null 2>&1; then
+  # npm グローバルインストール済み — cmux-team コマンド経由で実行
+  # MAIN_TS にはダミー値を入れ、実行時は cmux-team コマンドを使う
+  # npm グローバルインストール先を npm prefix -g で解決
+  MAIN_TS="$(npm prefix -g)/lib/node_modules/cmux-team/skills/cmux-team/manager/main.ts"
+else
+  MAIN_TS="$(find {{PROJECT_ROOT}}/skills/cmux-team/manager -name main.ts 2>/dev/null | head -1)"
+fi
 
 # 1. プロンプトファイルを書き出す（CLI 引数の長さ制限・エスケープ問題を回避）
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
