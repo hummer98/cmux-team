@@ -77,7 +77,7 @@ export async function initSourceWatcher(): Promise<Map<string, number>> {
   try {
     const files = await readdir(managerDir);
     for (const f of files) {
-      if (!f.endsWith(".ts")) continue;
+      if (!f.endsWith(".ts") && !f.endsWith(".tsx")) continue;
       const filePath = join(managerDir, f);
       const s = await stat(filePath);
       mtimes.set(filePath, s.mtimeMs);
@@ -92,7 +92,7 @@ export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise
   try {
     const files = await readdir(managerDir);
     for (const f of files) {
-      if (!f.endsWith(".ts")) continue;
+      if (!f.endsWith(".ts") && !f.endsWith(".tsx")) continue;
       const filePath = join(managerDir, f);
       const s = await stat(filePath);
       const prev = mtimeMap.get(filePath);
