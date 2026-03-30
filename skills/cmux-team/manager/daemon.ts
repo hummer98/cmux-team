@@ -1,7 +1,7 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir, stat } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, stat, watch } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
@@ -40,6 +40,8 @@ export interface DaemonState {
   taskList: TaskSummary[];
   sourceMtimes: Map<string, number>;
   restartRequested: boolean;
+  /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
+  wakeup: (() => void) | null;
 }
 
 /** conductorId または taskRunId で Conductor を検索 */
@@ -67,6 +69,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     taskList: [],
     sourceMtimes: new Map(),
     restartRequested: false,
+    wakeup: null,
   };
 }
 
@@ -102,6 +105,43 @@ export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise
     }
   } catch {}
   return null;
+}
+
+/** .team/tasks/ と .team/queue/incoming/ を fs.watch で監視し、変更時に wakeup を呼ぶ */
+export function initFileWatcher(state: DaemonState): void {
+  const dirs = [
+    join(state.projectRoot, ".team/tasks"),
+    join(state.projectRoot, ".team/queue/incoming"),
+  ];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    (async () => {
+      try {
+        const watcher = watch(dir);
+        for await (const _event of watcher) {
+          if (!state.running) break;
+          state.wakeup?.();
+        }
+      } catch {
+        // ウォッチャーが壊れても daemon は停止しない（ポーリングで補完）
+      }
+    })();
+  }
+}
+
+/** pollInterval まで待つが、wakeup が呼ばれたら即座に返る */
+export function sleepUntilWakeup(state: DaemonState): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      state.wakeup = null;
+      resolve();
+    }, state.pollInterval);
+    state.wakeup = () => {
+      clearTimeout(timer);
+      state.wakeup = null;
+      resolve();
+    };
+  });
 }
 
 export async function initInfra(state: DaemonState): Promise<void> {
