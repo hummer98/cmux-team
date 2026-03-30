@@ -252,6 +252,7 @@ export function startDashboard(
   const daemonState = getState();
 
   const app = createNodeApp<AppState>({
+    config: { executionMode: "inline" },
     initialState: {
       daemon: daemonState,
       activeTab: "journal",
