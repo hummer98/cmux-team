@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.6.0] - 2026-03-30
+
+### Added
+- Rezi TUI ダッシュボードにカラー表示を追加。Conductor ステータス・タスク状態・ジャーナルアイコンを色分け表示（Ink 版と同等）
+
+### Fixed
+- Rezi TUI の `executionMode: "inline"` 未指定による TTY エラーを修正
+- Rezi TUI Journal/Log タブのコンテンツが表示されない問題を修正
+
 ## [3.5.0] - 2026-03-30
 
 ### Added

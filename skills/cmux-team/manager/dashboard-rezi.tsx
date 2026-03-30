@@ -7,13 +7,20 @@
  * 中部: Master / Conductors / Tasks パネル
  * 下部: journal / log タブ切り替え（残りスペースを全て使う）
  */
-import { ui } from "@rezi-ui/core";
+import { ui, rgb } from "@rezi-ui/core";
 import { createNodeApp, type NodeApp } from "@rezi-ui/node";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState, TaskSummary } from "./daemon";
 import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
+
+// --- 名前付きカラー定数（Ink 版と同等） ---
+const GREEN = rgb(0, 255, 0);
+const YELLOW = rgb(255, 255, 0);
+const RED = rgb(255, 0, 0);
+const CYAN = rgb(0, 255, 255);
+const GRAY = rgb(170, 170, 170);
 
 // --- ジャーナルエントリ ---
 
@@ -112,18 +119,28 @@ interface AppState {
   version: string;
 }
 
+// --- セクションタイトル（Ink 版と同じ "─ Title ──────" スタイル） ---
+
+function sectionTitle(label: string) {
+  return ui.row({ gap: 0 }, [
+    ui.text("─ ", { dim: true }),
+    ui.text(label, { bold: true }),
+    ui.text(` ${"─".repeat(50)}`, { dim: true }),
+  ]);
+}
+
 // --- ビュー構築 ---
 
 function buildMasterSection(state: DaemonState) {
   if (state.masterSurface) {
     return ui.row({ gap: 1 }, [
-      ui.status("online"),
+      ui.text("●", { style: { fg: GREEN } }),
       ui.text(`[${state.masterSurface.replace("surface:", "")}]`),
     ]);
   }
   return ui.row({ gap: 1 }, [
-    ui.status("offline"),
-    ui.text("not spawned"),
+    ui.text("○", { style: { fg: RED } }),
+    ui.text("not spawned", { style: { fg: RED } }),
   ]);
 }
 
@@ -136,22 +153,25 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   const children = [];
 
   // メイン行
+  const dimStyle = { style: { fg: GRAY } };
   if (isIdle) {
     children.push(
       ui.row({ gap: 1 }, [
-        ui.status("away"),
-        ui.text(`[${surface}]`),
+        ui.text("○", dimStyle),
+        ui.text(`[${surface}]`, dimStyle),
         ui.text("idle", { dim: true }),
       ])
     );
   } else {
     const taskId = `#${(c.taskId ?? "").padStart(3, "0")}`;
+    const iconColor = isDone ? GRAY : YELLOW;
+    const iconChar = isDone ? "✓" : "●";
     children.push(
       ui.row({ gap: 1 }, [
-        ui.status(isDone ? "offline" : "busy"),
-        ui.text(`[${surface}]`),
-        ui.text(taskId, { bold: !isDone }),
-        c.taskTitle ? ui.text(c.taskTitle) : null,
+        ui.text(iconChar, { style: { fg: iconColor } }),
+        ui.text(`[${surface}]`, isDone ? dimStyle : {}),
+        ui.text(taskId, { bold: !isDone, ...(isDone ? dimStyle : {}) }),
+        c.taskTitle ? ui.text(c.taskTitle, isDone ? dimStyle : {}) : null,
         ui.text(elapsed, { dim: true }),
       ])
     );
@@ -174,8 +194,8 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
     const label = a.taskTitle ?? a.role ?? "";
     children.push(
       ui.row({ gap: 1 }, [
-        ui.text(`   ${prefix}`),
-        ui.text(`[${a.surface.replace("surface:", "")}]`),
+        ui.text(`   ${prefix}`, { dim: true }),
+        ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
         ui.text(`${icon} ${label}`),
       ])
     );
@@ -201,29 +221,40 @@ function buildTaskRow(task: TaskSummary, assigned: boolean) {
     ? utcToLocal(task.closedAt).slice(0, 5)
     : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
 
+  // ステータス別の色（Ink版と同等）
+  const color = assigned ? GREEN : task.status === "ready" ? YELLOW : isClosed ? GRAY : undefined;
+  const colorStyle = color ? { style: { fg: color } } : {};
+
   return ui.row({ gap: 1 }, [
-    ui.text(icon, { dim: isClosed }),
-    ui.text(taskId, { bold: !isClosed, dim: isClosed }),
-    ui.text(`[${label}]`, { dim: isClosed }),
-    ui.text(task.title),
-    timeInfo ? ui.text(timeInfo, { dim: true }) : null,
+    ui.text(icon, colorStyle),
+    ui.text(taskId, { bold: !isClosed, ...colorStyle }),
+    ui.text(`[${label}]`, colorStyle),
+    ui.text(task.title, colorStyle),
+    timeInfo ? ui.text(timeInfo, colorStyle) : null,
   ]);
 }
 
 // --- Journal/Log テキスト行構築（ui.logsConsole の代替） ---
 
+const journalIconColors: Record<string, number> = {
+  "[+]": CYAN,
+  "[▶]": YELLOW,
+  "[✓]": GREEN,
+};
+
 function buildJournalRows(entries: JournalEntry[]) {
   if (entries.length === 0) {
     return [ui.text("no journal entries", { dim: true })];
   }
-  return entries.map((entry) =>
-    ui.row({ gap: 1 }, [
+  return entries.map((entry) => {
+    const iconColor = journalIconColors[entry.icon];
+    return ui.row({ gap: 1 }, [
       ui.text(entry.time, { dim: true }),
-      ui.text(entry.icon),
+      ui.text(entry.icon, iconColor ? { style: { fg: iconColor } } : {}),
       ui.text(`#${entry.taskId.padStart(3, "0")}`, { bold: true }),
       ui.text(entry.message),
-    ])
-  );
+    ]);
+  });
 }
 
 function buildLogRows(lines: string[]) {
@@ -232,9 +263,12 @@ function buildLogRows(lines: string[]) {
   }
   return lines.map((line) => {
     const parsed = parseLogLine(line);
+    const eventColor = parsed.level === "error" ? RED
+      : parsed.event.includes("completed") ? GREEN
+      : undefined;
     return ui.row({ gap: 1 }, [
       ui.text(parsed.time, { dim: true }),
-      ui.text(parsed.event),
+      ui.text(parsed.event, eventColor ? { style: { fg: eventColor } } : {}),
       ui.text(parsed.detail),
     ]);
   });
@@ -252,7 +286,6 @@ export function startDashboard(
   const daemonState = getState();
 
   const app = createNodeApp<AppState>({
-    config: { executionMode: "inline" },
     initialState: {
       daemon: daemonState,
       activeTab: "journal",
@@ -260,6 +293,7 @@ export function startDashboard(
       logLines: [],
       version: opts?.version ?? "",
     },
+    config: { executionMode: "inline" },
   });
 
   function buildViewWithApp(state: AppState) {
@@ -298,20 +332,31 @@ export function startDashboard(
       }),
       body: ui.column({ gap: 0 }, [
         // Master セクション
-        ui.panel("Master", [buildMasterSection(daemon)]),
-        // Conductors セクション（フルタイトル表示）
-        ui.panel(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`, [buildConductorsSection(daemon)]),
-        // Tasks セクション（可変高さ）
-        ui.panel(`Tasks ${daemon.openTasks} open`, taskRows),
-        // Journal / Log タブ（手動切り替え）
-        ui.separator(),
+        sectionTitle("Master"),
+        buildMasterSection(daemon),
+        // Conductors セクション
+        sectionTitle(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`),
+        buildConductorsSection(daemon),
+        // Tasks セクション
+        sectionTitle(`Tasks ${daemon.openTasks} open`),
+        ui.column({ gap: 0 }, taskRows),
+        // Journal / Log タブ（クリック + キーボードで切り替え）
         ui.row({ gap: 1 }, [
-          state.activeTab === "journal"
-            ? ui.text("[Journal]", { bold: true })
-            : ui.text(" Journal ", { dim: true }),
-          state.activeTab === "log"
-            ? ui.text("[Log]", { bold: true })
-            : ui.text(" Log ", { dim: true }),
+          ui.text("─", { dim: true }),
+          ui.button({
+            id: "tab-journal",
+            label: "Journal",
+            px: 0,
+            style: state.activeTab === "journal" ? { bold: true } : { dim: true },
+            onPress: () => app.update((s) => ({ ...s, activeTab: "journal" })),
+          }),
+          ui.button({
+            id: "tab-log",
+            label: "Log",
+            px: 0,
+            style: state.activeTab === "log" ? { bold: true } : { dim: true },
+            onPress: () => app.update((s) => ({ ...s, activeTab: "log" })),
+          }),
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
@@ -368,7 +413,13 @@ export function startDashboard(
   // 初回読み込み
   refresh();
 
-  app.start();
+  try {
+    app.start();
+  } catch (e: any) {
+    cleanup();
+    console.error(`❌ ダッシュボード起動失敗: ${e.message}`);
+    console.error("ヒント: TTY 環境で cmux-team start を実行してください");
+  }
 }
 
 function cleanup() {
