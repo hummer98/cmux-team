@@ -14,6 +14,7 @@ import { join } from "path";
 import type { DaemonState, TaskSummary } from "./daemon";
 import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
+import { log } from "./logger";
 
 // --- 名前付きカラー定数（Ink 版と同等） ---
 const GREEN = rgb(0, 255, 0);
@@ -121,12 +122,10 @@ interface AppState {
 
 // --- セクションタイトル（Ink 版と同じ "─ Title ──────" スタイル） ---
 
+const HR_FILL = "─".repeat(120);
+
 function sectionTitle(label: string) {
-  return ui.row({ gap: 0 }, [
-    ui.text("─ ", { dim: true }),
-    ui.text(label, { bold: true }),
-    ui.text(` ${"─".repeat(50)}`, { dim: true }),
-  ]);
+  return ui.text(`─ ${label} ${HR_FILL}`, { dim: true });
 }
 
 // --- ビュー構築 ---
@@ -279,7 +278,7 @@ function buildLogRows(lines: string[]) {
 let appInstance: NodeApp<AppState> | null = null;
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
-export function startDashboard(
+export async function startDashboard(
   getState: () => DaemonState,
   opts?: { version?: string; onReload?: () => void; onQuit?: () => void }
 ): void {
@@ -308,12 +307,9 @@ export function startDashboard(
     // cols >= 85: + N ready (pendingTasks > 0)
     const headerParts = [
       daemon.running ? "RUNNING" : "STOPPED",
-      `conductors ${runningCount}/${daemon.maxConductors}`,
+      `PID ${process.pid}`,
       `tasks ${daemon.openTasks} open`,
     ];
-    // ヘッダーは常に PID・poll・ready を含める
-    // （Rezi ではターミナル幅に応じた制御が難しいため全部表示）
-    headerParts.splice(1, 0, `PID ${process.pid}`);
     if (daemon.pendingTasks > 0) {
       headerParts.push(`${daemon.pendingTasks} ready`);
     }
@@ -325,37 +321,33 @@ export function startDashboard(
       : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id)));
 
     return ui.page({
-      header: ui.header({
-        title: "cmux-team",
-        subtitle: headerSubtitle,
-        actions: state.version ? [ui.text(`v${state.version}`, { dim: true })] : [],
-      }),
       body: ui.column({ gap: 0 }, [
+        // ヘッダー行（sectionTitle と同じスタイル）
+        ui.text(`─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""} ${HR_FILL}`, { dim: true }),
         // Master セクション
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`),
+        sectionTitle(`Conductors${runningCount > 0 ? ` ${runningCount} running` : ""}`),
         buildConductorsSection(daemon),
         // Tasks セクション
         sectionTitle(`Tasks ${daemon.openTasks} open`),
         ui.column({ gap: 0 }, taskRows),
-        // Journal / Log タブ（クリック + キーボードで切り替え）
+        // Journal / Log タブ（クリック + キーボード 1/2 で切り替え）
         ui.row({ gap: 1 }, [
-          ui.text("─", { dim: true }),
           ui.button({
             id: "tab-journal",
             label: "Journal",
-            px: 0,
+            px: 1,
             style: state.activeTab === "journal" ? { bold: true } : { dim: true },
-            onPress: () => app.update((s) => ({ ...s, activeTab: "journal" })),
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "journal" })); } catch {} },
           }),
           ui.button({
             id: "tab-log",
             label: "Log",
-            px: 0,
+            px: 1,
             style: state.activeTab === "log" ? { bold: true } : { dim: true },
-            onPress: () => app.update((s) => ({ ...s, activeTab: "log" })),
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "log" })); } catch {} },
           }),
         ]),
         ui.column({ gap: 0 },
@@ -401,25 +393,31 @@ export function startDashboard(
     const lines = await readLogLines(newDaemon.projectRoot);
     const journalEntries = parseJournalEntries(lines);
 
-    app.update((s) => ({
-      ...s,
-      daemon: newDaemon,
-      logLines: lines,
-      journalEntries,
-    }));
+    try {
+      app.update((s) => ({
+        ...s,
+        daemon: newDaemon,
+        logLines: lines,
+        journalEntries,
+      }));
+    } catch (e: any) {
+      // lifecycle operation already in flight — skip this tick
+      log("dashboard_update_error", e?.message ?? String(e)).catch(() => {});
+    }
   };
 
-  refreshInterval = setInterval(refresh, 2000);
-  // 初回読み込み
-  refresh();
-
   try {
-    app.start();
+    await app.start();
   } catch (e: any) {
     cleanup();
     console.error(`❌ ダッシュボード起動失敗: ${e.message}`);
     console.error("ヒント: TTY 環境で cmux-team start を実行してください");
+    return;
   }
+
+  // app.start() 完了後に refresh を開始（start 中に update すると lifecycle error）
+  refreshInterval = setInterval(refresh, 2000);
+  refresh();
 }
 
 function cleanup() {

@@ -21,7 +21,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -95,6 +95,9 @@ async function cmdStart(): Promise<void> {
   // ソースファイル mtime 監視を初期化
   state.sourceMtimes = await initSourceWatcher();
 
+  // ファイルシステム監視（tasks/, queue/ の変更で即時 tick）
+  initFileWatcher(state);
+
   // team.json から Conductor 状態を復元（リロード時の二重起動防止）
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
@@ -136,17 +139,23 @@ async function cmdStart(): Promise<void> {
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
   );
 
-  // ロギングプロキシ起動
-  console.log("⏳ ロギングプロキシ起動中...");
+  // ロギングプロキシ起動（既存 proxy が生きていればスキップ）
+  console.log("⏳ ロギングプロキシ確認中...");
   let proxyHandle: { port: number; stop: () => void } | null = null;
-  try {
-    proxyHandle = await startProxy(PROJECT_ROOT, { getState: () => state });
-    await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
-    console.log(`✅ ロギングプロキシ起動完了 (port ${proxyHandle.port})`);
-    await log("proxy_started", `port=${proxyHandle.port}`);
-  } catch (e: any) {
-    console.log("⚠️  ロギングプロキシ起動失敗 (続行)");
-    await log("proxy_start_failed", e.message);
+  const existingProxyPort = await resolveProxyPort();
+  if (existingProxyPort) {
+    console.log(`✅ ロギングプロキシ: 既存プロセスを再利用 (port ${existingProxyPort})`);
+    await log("proxy_reused", `port=${existingProxyPort}`);
+  } else {
+    try {
+      proxyHandle = await startProxy(PROJECT_ROOT, { getState: () => state });
+      await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
+      console.log(`✅ ロギングプロキシ起動完了 (port ${proxyHandle.port})`);
+      await log("proxy_started", `port=${proxyHandle.port}`);
+    } catch (e: any) {
+      console.log("⚠️  ロギングプロキシ起動失敗 (続行)");
+      await log("proxy_start_failed", e.message);
+    }
   }
 
   // daemon surface 取得
@@ -160,7 +169,8 @@ async function cmdStart(): Promise<void> {
 
   // daemon タブタイトル設定
   if (daemonSurface) {
-    await cmux.renameTab(daemonSurface, "Manager");
+    const num = daemonSurface.replace("surface:", "");
+    await cmux.renameTab(daemonSurface, `[${num}] Manager`);
   }
 
   // Conductor を先に作成（全インフラ準備完了後に Master を起動）
@@ -173,9 +183,9 @@ async function cmdStart(): Promise<void> {
   console.log("✅ 起動完了 — ダッシュボードに切り替えます\n");
 
   // シグナルハンドリング
+  // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
   const shutdown = async () => {
     state.running = false;
-    proxyHandle?.stop();
     await log("daemon_stopped");
     await updateTeamJson(state);
     process.exit(0);
@@ -193,7 +203,7 @@ async function cmdStart(): Promise<void> {
   } catch {}
 
   // ダッシュボード表示（キーボードショートカット付き）
-  startDashboard(() => state, {
+  await startDashboard(() => state, {
     version,
     onReload: async () => {
       // ink を解放し、exec でプロセスを置換（PID は変わらない、env は完全に引き継ぐ）
@@ -224,12 +234,11 @@ async function cmdStart(): Promise<void> {
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
     }
-    await sleep(state.pollInterval);
+    await sleepUntilWakeup(state);
   }
 
-  // ソース変更による再起動要求
+  // ソース変更による再起動要求（proxy は停止しない — 再起動後に再利用される）
   if (state.restartRequested) {
-    proxyHandle?.stop();
     unmountDashboard();
     await log("daemon_auto_restart");
     await updateTeamJson(state);
@@ -475,7 +484,7 @@ async function cmdSpawnAgent(): Promise<void> {
   const role = requireArg("role");
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
-  const taskTitle = getArg("task-title");
+  let taskTitle = getArg("task-title");
   const pane = getArg("pane");
 
   if (!prompt && !promptFile) {
@@ -494,6 +503,8 @@ async function cmdSpawnAgent(): Promise<void> {
     const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
     if (!paneId) paneId = conductor?.paneId;
     worktreePath = conductor?.worktreePath;
+    // --task-title 省略時は conductor のタスクタイトルをフォールバック
+    if (!taskTitle) taskTitle = conductor?.taskTitle;
   } catch {}
 
   let surface: string;
