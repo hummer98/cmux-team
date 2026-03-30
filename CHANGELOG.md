@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.7.1] - 2026-03-30
+
+### Fixed
+- Conductor のタスク完了検出を run ベースの done マーカーから task ベースの status.json に変更し、完了判定の信頼性を改善
+- ロギングプロキシの `Bun.serve()` を `development: false` に設定し、stdout へのログ出力が TUI ダッシュボードに重なる問題を修正
+
 ## [3.7.0] - 2026-03-30
 
 ### Added

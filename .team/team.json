@@ -8,18 +8,28 @@
     "surface": "surface:509"
   },
   "manager": {
-    "pid": 83758,
+    "pid": 4810,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
       "id": "conductor-slot-1",
+      "taskRunId": "run-1774877896",
+      "taskId": "031",
+      "taskTitle": "daemon 稼働中の npm auto-update",
       "surface": "surface:505",
-      "status": "idle",
-      "startedAt": "2026-03-30T09:01:17.653Z",
+      "status": "running",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/run-1774877896",
+      "outputDir": ".team/output/run-1774877896",
+      "startedAt": "2026-03-30T13:38:21.851Z",
       "paneId": "pane:508",
-      "agents": []
+      "agents": [
+        {
+          "surface": "surface:513",
+          "role": "impl"
+        }
+      ]
     },
     {
       "id": "conductor-slot-2",
