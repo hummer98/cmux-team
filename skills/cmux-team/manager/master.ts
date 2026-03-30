@@ -2,10 +2,7 @@
  * Master surface の作成・管理
  */
 import * as cmux from "./cmux";
-import { generateMasterPrompt } from "./template";
 import { log } from "./logger";
-import { readFile } from "fs/promises";
-import { join } from "path";
 
 export interface MasterState {
   surface: string;
@@ -16,9 +13,6 @@ export async function spawnMaster(
   daemonSurface?: string
 ): Promise<MasterState | null> {
   try {
-    // プロンプト生成
-    await generateMasterPrompt(projectRoot);
-
     // ペイン作成（daemon surface を右に split）
     const surface = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
 
@@ -27,19 +21,10 @@ export async function spawnMaster(
       return null;
     }
 
-    // proxy-port 読み取り
-    let proxyPort: string | undefined;
-    try {
-      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
-    } catch {}
-
-    // Claude Code 起動
-    const envExports = proxyPort
-      ? `export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort} && `
-      : "";
+    // cmux-team launch-master ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
       surface,
-      `${envExports}claude --dangerously-skip-permissions --append-system-prompt-file .team/prompts/master.md 'ユーザーからのタスクを待ってください。'\n`
+      `cmux-team launch-master\n`
     );
 
     // Trust 承認

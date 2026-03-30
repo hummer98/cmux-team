@@ -8,7 +8,7 @@ import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import { join, dirname } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
-import { generateConductorRolePrompt, generateConductorTaskPrompt } from "./template";
+import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
@@ -62,28 +62,16 @@ export async function initializeConductorSlots(
 
     const surfaces = [surface1, surface2, surface3].slice(0, count);
 
-    // ロールプロンプトファイル生成（全スロットで共有）
-    const rolePromptFile = await generateConductorRolePrompt(projectRoot);
-
     for (let i = 0; i < surfaces.length; i++) {
       const surface = surfaces[i]!;
       const slotId = `conductor-slot-${i + 1}`;
 
       console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Claude 起動中 (${surface})...`);
 
-      // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
-      let proxyPort: string | undefined;
-      try {
-        proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
-      } catch {}
-      const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-      if (proxyPort) {
-        exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
-      }
-
+      // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
       await cmux.send(
         surface,
-        `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。'\n`
+        `cmux-team conductor ${slotId}\n`
       );
 
       // Trust 承認
@@ -331,8 +319,9 @@ export async function spawnConductor(
     }
 
     const paneId = await getPaneIdForSurface(surface);
+    const conductorId = `conductor-fallback-${Math.floor(Date.now() / 1000)}`;
     const conductor: ConductorState = {
-      conductorId: `conductor-fallback-${Math.floor(Date.now() / 1000)}`,
+      conductorId,
       surface,
       startedAt: new Date().toISOString(),
       agents: [],
@@ -341,21 +330,10 @@ export async function spawnConductor(
       paneId,
     };
 
-    // ロールプロンプトファイル生成
-    const rolePromptFile = await generateConductorRolePrompt(projectRoot);
-
-    // 環境変数を export してから Claude を起動（子プロセスに自動継承させる）
-    let proxyPort: string | undefined;
-    try {
-      proxyPort = (await readFile(join(projectRoot, ".team/proxy-port"), "utf-8")).trim();
-    } catch {}
-    const exports: string[] = [`export PROJECT_ROOT=${projectRoot}`];
-    if (proxyPort) {
-      exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
-    }
+    // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
       surface,
-      `${exports.join(" && ")} && claude --dangerously-skip-permissions --append-system-prompt-file ${rolePromptFile} 'あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。'\n`
+      `cmux-team conductor ${conductorId}\n`
     );
     await cmux.waitForTrust(surface);
 
