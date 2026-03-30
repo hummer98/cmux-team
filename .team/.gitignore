@@ -5,3 +5,4 @@ status.json
 logs/
 queue/
 task-state.json
+tasks/*.status.json
