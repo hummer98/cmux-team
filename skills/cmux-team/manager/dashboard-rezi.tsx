@@ -1,8 +1,11 @@
 /**
- * TUI Dashboard — Rezi フルスクリーンダッシュボード (PoC)
+ * TUI Dashboard — Rezi フルスクリーンダッシュボード
  *
- * 既存の dashboard.tsx (Ink ベース) を Rezi TUI フレームワークで書き直した PoC。
- * ui.page + ui.tabs + ui.logsConsole を使い、マウス操作にも対応。
+ * 既存の dashboard.tsx (Ink ベース) を Rezi TUI フレームワークで書き直し。
+ * Ink版と同等の情報量・レイアウトを実現。
+ * 上部: ヘッダー（ステータス・PID・conductors・tasks）
+ * 中部: Master / Conductors / Tasks パネル
+ * 下部: journal / log タブ切り替え（残りスペースを全て使う）
  */
 import { ui } from "@rezi-ui/core";
 import { createNodeApp, type NodeApp } from "@rezi-ui/node";
@@ -57,8 +60,7 @@ function parseLogLine(line: string): { time: string; event: string; detail: stri
   const detail = match[3] ?? "";
   const time = utcToLocal(ts);
   const isError = event === "error";
-  const isComplete = event.includes("completed");
-  const level = isError ? "error" as const : isComplete ? "info" as const : "info" as const;
+  const level = isError ? "error" as const : "info" as const;
   return { time, event, detail, level };
 }
 
@@ -105,11 +107,8 @@ async function readLogLines(projectRoot: string): Promise<string[]> {
 interface AppState {
   daemon: DaemonState;
   activeTab: "journal" | "log";
-  logEntries: Array<{ id: string; timestamp: number; level: "info" | "warn" | "error"; source: string; message: string }>;
   journalEntries: JournalEntry[];
-  logScrollTop: number;
-  journalScrollTop: number;
-  tasksScrollTop: number;
+  logLines: string[];
   version: string;
 }
 
@@ -211,7 +210,35 @@ function buildTaskRow(task: TaskSummary, assigned: boolean) {
   ]);
 }
 
-// buildView は startDashboard 内のクロージャとして定義（app.update へのアクセスが必要なため）
+// --- Journal/Log テキスト行構築（ui.logsConsole の代替） ---
+
+function buildJournalRows(entries: JournalEntry[]) {
+  if (entries.length === 0) {
+    return [ui.text("no journal entries", { dim: true })];
+  }
+  return entries.map((entry) =>
+    ui.row({ gap: 1 }, [
+      ui.text(entry.time, { dim: true }),
+      ui.text(entry.icon),
+      ui.text(`#${entry.taskId.padStart(3, "0")}`, { bold: true }),
+      ui.text(entry.message),
+    ])
+  );
+}
+
+function buildLogRows(lines: string[]) {
+  if (lines.length === 0) {
+    return [ui.text("no log entries", { dim: true })];
+  }
+  return lines.map((line) => {
+    const parsed = parseLogLine(line);
+    return ui.row({ gap: 1 }, [
+      ui.text(parsed.time, { dim: true }),
+      ui.text(parsed.event),
+      ui.text(parsed.detail),
+    ]);
+  });
+}
 
 // --- アプリインスタンス管理 ---
 
@@ -228,85 +255,57 @@ export function startDashboard(
     initialState: {
       daemon: daemonState,
       activeTab: "journal",
-      logEntries: [],
       journalEntries: [],
-      logScrollTop: 0,
-      journalScrollTop: 0,
-      tasksScrollTop: 0,
+      logLines: [],
       version: opts?.version ?? "",
     },
   });
 
-  // buildView を app をキャプチャするクロージャとして定義
   function buildViewWithApp(state: AppState) {
     const { daemon } = state;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
-    // ヘッダー情報
-    const headerSubtitle = [
+    // レスポンシブヘッダー（Ink版と同等のロジック）
+    // 基本: cmux-team RUNNING conductors N/M tasks N open
+    // cols >= 65: + PID XXXX
+    // cols >= 75: + poll Ns
+    // cols >= 85: + N ready (pendingTasks > 0)
+    const headerParts = [
       daemon.running ? "RUNNING" : "STOPPED",
-      `PID ${process.pid}`,
       `conductors ${runningCount}/${daemon.maxConductors}`,
       `tasks ${daemon.openTasks} open`,
-      daemon.pendingTasks > 0 ? `${daemon.pendingTasks} ready` : null,
-    ].filter(Boolean).join("  ");
+    ];
+    // ヘッダーは常に PID・poll・ready を含める
+    // （Rezi ではターミナル幅に応じた制御が難しいため全部表示）
+    headerParts.splice(1, 0, `PID ${process.pid}`);
+    if (daemon.pendingTasks > 0) {
+      headerParts.push(`${daemon.pendingTasks} ready`);
+    }
+    const headerSubtitle = headerParts.join("  ");
 
-    // タスク一覧（スクロール対応）
-    const tasksWidget = daemon.taskList.length === 0
-      ? ui.text("no tasks", { dim: true })
-      : ui.virtualList({
-          id: "tasks-list",
-          items: daemon.taskList,
-          itemHeight: 1,
-          overscan: 3,
-          renderItem: (task: TaskSummary, _index: number, focused: boolean) => {
-            const assigned = assignedTaskIds.has(task.id);
-            return buildTaskRow(task, assigned);
-          },
-          onScroll: (top: number) => app.update((s) => ({ ...s, tasksScrollTop: top })),
-        });
+    // タスク一覧（ui.column + map で可変高さ — virtualList は固定高さで空白が出るため）
+    const taskRows = daemon.taskList.length === 0
+      ? [ui.text("no tasks", { dim: true })]
+      : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id)));
 
-    // ジャーナルタブの内容
-    const journalLogEntries = state.journalEntries.map((entry, i) => ({
-      id: `journal-${i}`,
-      timestamp: Date.now(),
-      level: entry.level,
-      source: entry.icon,
-      message: `#${entry.taskId.padStart(3, "0")} ${entry.message}`,
-    }));
+    // タブコンテンツ（ui.logsConsole の代わりに ui.column + ui.text で確実に表示）
+    const tabLabel = state.activeTab === "journal" ? "Journal" : "Log";
+    const tabContent = state.activeTab === "journal"
+      ? buildJournalRows(state.journalEntries)
+      : buildLogRows(state.logLines.slice(-200));
 
     // タブ
     const tabs = [
       {
         key: "journal",
         label: "Journal",
-        content: state.journalEntries.length === 0
-          ? ui.text("no journal entries", { dim: true })
-          : ui.logsConsole({
-              id: "journal-console",
-              entries: journalLogEntries,
-              autoScroll: true,
-              scrollTop: state.journalScrollTop,
-              showTimestamps: false,
-              showSource: true,
-              onScroll: (top: number) => app.update((s) => ({ ...s, journalScrollTop: top })),
-            }),
+        content: ui.column({ gap: 0 }, buildJournalRows(state.journalEntries)),
       },
       {
         key: "log",
         label: "Log",
-        content: state.logEntries.length === 0
-          ? ui.text("no log entries", { dim: true })
-          : ui.logsConsole({
-              id: "log-console",
-              entries: state.logEntries,
-              autoScroll: true,
-              scrollTop: state.logScrollTop,
-              showTimestamps: true,
-              showSource: false,
-              onScroll: (top: number) => app.update((s) => ({ ...s, logScrollTop: top })),
-            }),
+        content: ui.column({ gap: 0 }, buildLogRows(state.logLines.slice(-200))),
       },
     ];
 
@@ -319,10 +318,10 @@ export function startDashboard(
       body: ui.column({ gap: 0 }, [
         // Master セクション
         ui.panel("Master", [buildMasterSection(daemon)]),
-        // Conductors セクション
+        // Conductors セクション（フルタイトル表示）
         ui.panel(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`, [buildConductorsSection(daemon)]),
-        // Tasks セクション
-        ui.panel("Tasks", [tasksWidget]),
+        // Tasks セクション（可変高さ）
+        ui.panel(`Tasks ${daemon.openTasks} open`, taskRows),
         // タブ（Journal / Log）
         ui.tabs({
           id: "main-tabs",
@@ -367,21 +366,11 @@ export function startDashboard(
     const newDaemon = getState();
     const lines = await readLogLines(newDaemon.projectRoot);
     const journalEntries = parseJournalEntries(lines);
-    const logEntries = lines.slice(-200).map((line, i) => {
-      const parsed = parseLogLine(line);
-      return {
-        id: `log-${i}`,
-        timestamp: new Date(line.match(/^\[([^\]]+)\]/)?.[1] ?? "").getTime() || Date.now(),
-        level: parsed.level,
-        source: parsed.event,
-        message: `${parsed.event} ${parsed.detail}`,
-      };
-    });
 
     app.update((s) => ({
       ...s,
       daemon: newDaemon,
-      logEntries,
+      logLines: lines,
       journalEntries,
     }));
   };
