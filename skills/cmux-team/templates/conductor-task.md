@@ -33,5 +33,5 @@ worktree は tracked files のみ含む。作業開始前に以下を確認す�
 
 全ての処理が完了したら、最後に:
 ```bash
-touch {{OUTPUT_DIR}}/done
+echo '{"status":"done","runId":"{{CONDUCTOR_ID}}","completedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > {{TASK_STATUS_FILE}}
 ```

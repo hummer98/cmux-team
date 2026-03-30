@@ -64,7 +64,8 @@ export async function generateConductorTaskPrompt(
   taskId: string,
   taskContent: string,
   worktreePath: string,
-  outputDir: string
+  outputDir: string,
+  taskStatusFile?: string
 ): Promise<string> {
   const templateDir = findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
@@ -85,7 +86,8 @@ export async function generateConductorTaskPrompt(
     .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
     .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
-    .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId);
+    .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId)
+    .replace(/\{\{TASK_STATUS_FILE\}\}/g, taskStatusFile ?? "");
 
   await writeFile(promptFile, content);
   return promptFile;

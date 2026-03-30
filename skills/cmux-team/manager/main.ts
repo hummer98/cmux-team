@@ -112,6 +112,7 @@ async function cmdStart(): Promise<void> {
           surface: c.surface,
           worktreePath: c.worktreePath,
           outputDir: c.outputDir,
+          taskStatusFile: c.taskStatusFile,
           startedAt: c.startedAt ?? new Date().toISOString(),
           agents: (c.agents ?? []).map((a: any) => ({
             surface: a.surface,
