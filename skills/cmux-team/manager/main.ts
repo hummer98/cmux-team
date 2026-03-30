@@ -368,6 +368,99 @@ async function cmdStatus(): Promise<void> {
   }
 }
 
+/** proxy ポートを読み取り、生存確認して返す */
+async function resolveProxyPort(): Promise<string | undefined> {
+  const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
+  try {
+    const port = (await readFile(proxyPortFile, "utf-8")).trim();
+    const alive = await new Promise<boolean>((resolve) => {
+      const net = require("net");
+      const sock = net.connect({ port: Number(port), host: "127.0.0.1", timeout: 1000 }, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on("error", () => resolve(false));
+      sock.on("timeout", () => { sock.destroy(); resolve(false); });
+    });
+    return alive ? port : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * cmux-team conductor <slot-id>
+ * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ */
+async function cmdConductor(): Promise<void> {
+  const slotId = args[1];
+  if (!slotId) {
+    console.error("Usage: cmux-team conductor <slot-id>");
+    process.exit(1);
+  }
+
+  // ロールプロンプトファイル生成
+  const { generateConductorRolePrompt } = await import("./template");
+  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT);
+
+  // 環境変数を設定
+  process.env.PROJECT_ROOT = PROJECT_ROOT;
+  const proxyPort = await resolveProxyPort();
+  if (proxyPort) {
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
+  }
+
+  // claude を exec（プロセスを置換）
+  const { execFileSync } = require("child_process");
+  try {
+    execFileSync("claude", [
+      "--dangerously-skip-permissions",
+      "--append-system-prompt-file", rolePromptFile,
+      "あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。",
+    ], {
+      stdio: "inherit",
+      env: process.env,
+      cwd: PROJECT_ROOT,
+    });
+  } catch (e: any) {
+    // claude の終了コードをそのまま返す
+    process.exit(e.status ?? 1);
+  }
+}
+
+/**
+ * cmux-team launch-master
+ * Master 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ */
+async function cmdLaunchMaster(): Promise<void> {
+  // プロンプト生成
+  const { generateMasterPrompt } = await import("./template");
+  await generateMasterPrompt(PROJECT_ROOT);
+
+  // 環境変数を設定
+  process.env.PROJECT_ROOT = PROJECT_ROOT;
+  const proxyPort = await resolveProxyPort();
+  if (proxyPort) {
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
+  }
+
+  // claude を exec
+  const { execFileSync } = require("child_process");
+  try {
+    execFileSync("claude", [
+      "--dangerously-skip-permissions",
+      "--append-system-prompt-file", join(PROJECT_ROOT, ".team/prompts/master.md"),
+      "ユーザーからのタスクを待ってください。",
+    ], {
+      stdio: "inherit",
+      env: process.env,
+      cwd: PROJECT_ROOT,
+    });
+  } catch (e: any) {
+    process.exit(e.status ?? 1);
+  }
+}
+
 async function cmdStop(): Promise<void> {
   await ensureQueueDirs();
   const path = await sendMessage({
@@ -391,26 +484,7 @@ async function cmdSpawnAgent(): Promise<void> {
   }
 
   // --- 1. プロキシポート読み取り + 生存確認 ---
-  const proxyPortFile = join(PROJECT_ROOT, ".team/proxy-port");
-  let proxyPort: string | undefined;
-  try {
-    const port = (await readFile(proxyPortFile, "utf-8")).trim();
-    // 実際に接続できるか確認してから採用
-    const alive = await new Promise<boolean>((resolve) => {
-      const net = require("net");
-      const sock = net.connect({ port: Number(port), host: "127.0.0.1", timeout: 1000 }, () => {
-        sock.destroy();
-        resolve(true);
-      });
-      sock.on("error", () => resolve(false));
-      sock.on("timeout", () => { sock.destroy(); resolve(false); });
-    });
-    if (alive) {
-      proxyPort = port;
-    }
-  } catch {
-    // プロキシ未起動の場合はなしで続行
-  }
+  const proxyPort = await resolveProxyPort();
 
   // --- 2. タブ作成（--pane 直接指定 → team.json lookup → split フォールバック） ---
   let paneId: string | undefined = pane;  // --pane が最優先
@@ -835,6 +909,12 @@ switch (command) {
   case "trace":
     await cmdTrace();
     break;
+  case "conductor":
+    await cmdConductor();
+    break;
+  case "launch-master":
+    await cmdLaunchMaster();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -852,6 +932,8 @@ Usage:
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
   cmux-team trace --search <query>             FTS5 全文検索
-  cmux-team trace --show <id>                  トレース詳細表示`);
+  cmux-team trace --show <id>                  トレース詳細表示
+  cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
+  cmux-team launch-master                      Master 起動（proxy 自動解決）`);
     break;
 }
