@@ -289,26 +289,6 @@ export function startDashboard(
       ? [ui.text("no tasks", { dim: true })]
       : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id)));
 
-    // タブコンテンツ（ui.logsConsole の代わりに ui.column + ui.text で確実に表示）
-    const tabLabel = state.activeTab === "journal" ? "Journal" : "Log";
-    const tabContent = state.activeTab === "journal"
-      ? buildJournalRows(state.journalEntries)
-      : buildLogRows(state.logLines.slice(-200));
-
-    // タブ
-    const tabs = [
-      {
-        key: "journal",
-        label: "Journal",
-        content: ui.column({ gap: 0 }, buildJournalRows(state.journalEntries)),
-      },
-      {
-        key: "log",
-        label: "Log",
-        content: ui.column({ gap: 0 }, buildLogRows(state.logLines.slice(-200))),
-      },
-    ];
-
     return ui.page({
       header: ui.header({
         title: "cmux-team",
@@ -322,13 +302,21 @@ export function startDashboard(
         ui.panel(`Conductors ${daemon.conductors.size}/${daemon.maxConductors}`, [buildConductorsSection(daemon)]),
         // Tasks セクション（可変高さ）
         ui.panel(`Tasks ${daemon.openTasks} open`, taskRows),
-        // タブ（Journal / Log）
-        ui.tabs({
-          id: "main-tabs",
-          tabs,
-          activeTab: state.activeTab,
-          onChange: () => {},
-        }),
+        // Journal / Log タブ（手動切り替え）
+        ui.separator(),
+        ui.row({ gap: 1 }, [
+          state.activeTab === "journal"
+            ? ui.text("[Journal]", { bold: true })
+            : ui.text(" Journal ", { dim: true }),
+          state.activeTab === "log"
+            ? ui.text("[Log]", { bold: true })
+            : ui.text(" Log ", { dim: true }),
+        ]),
+        ui.column({ gap: 0 },
+          state.activeTab === "journal"
+            ? buildJournalRows(state.journalEntries)
+            : buildLogRows(state.logLines.slice(-200))
+        ),
       ]),
       footer: ui.statusBar({
         left: [
