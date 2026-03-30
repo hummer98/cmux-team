@@ -421,6 +421,7 @@ async function cmdConductor(): Promise<void> {
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
+  process.env.CONDUCTOR_ID = slotId;
   const proxyPort = await resolveProxyPort();
   if (proxyPort) {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
