@@ -21,7 +21,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { sendMessage, ensureQueueDirs } from "./queue";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -227,12 +227,18 @@ async function cmdStart(): Promise<void> {
   });
 
   // メインループ
+  const NPM_CHECK_INTERVAL = 300_000; // 5分
   while (state.running) {
     try {
       await tick(state);
       await updateTeamJson(state);
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
+    }
+    // npm 更新チェック（5分間隔）
+    if (Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
+      state.lastNpmCheckAt = Date.now();
+      await checkNpmUpdate(state);
     }
     await sleepUntilWakeup(state);
   }

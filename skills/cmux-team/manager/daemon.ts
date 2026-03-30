@@ -4,6 +4,7 @@
 import { readdir, readFile, writeFile, mkdir, stat, watch } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
+import { execFile } from "child_process";
 import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
 import {
   spawnConductor,
@@ -40,6 +41,8 @@ export interface DaemonState {
   taskList: TaskSummary[];
   sourceMtimes: Map<string, number>;
   restartRequested: boolean;
+  /** 最後に npm 更新チェックした時刻（Date.now()） */
+  lastNpmCheckAt: number;
   /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
   wakeup: (() => void) | null;
 }
@@ -69,6 +72,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     taskList: [],
     sourceMtimes: new Map(),
     restartRequested: false,
+    lastNpmCheckAt: 0,
     wakeup: null,
   };
 }
@@ -442,6 +446,53 @@ async function handleConductorDone(
 
   // Conductor をリセットして idle に戻す
   await resetConductor(conductor, state.projectRoot);
+}
+
+/** semver 大小比較: a > b なら true */
+function isNewerVersion(latest: string, current: string): boolean {
+  const l = latest.split(".").map(Number);
+  const c = current.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((l[i] ?? 0) > (c[i] ?? 0)) return true;
+    if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
+  }
+  return false;
+}
+
+/** npm registry から最新バージョンを確認し、新バージョンがあれば自動インストール + 再起動フラグをセット */
+export async function checkNpmUpdate(state: DaemonState): Promise<void> {
+  try {
+    // 現在バージョンを package.json から取得
+    const pkgPath = join(dirname(import.meta.path), "../../../package.json");
+    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+    const currentVersion: string = pkg.version;
+
+    // npm registry の最新バージョンを確認
+    const latestVersion = await new Promise<string>((resolve, reject) => {
+      execFile("npm", ["view", "@hummer98/cmux-team", "version"], { timeout: 30_000 }, (err, stdout) => {
+        if (err) return reject(err);
+        resolve(stdout.trim());
+      });
+    });
+
+    // バージョンが異なれば更新
+    if (isNewerVersion(latestVersion, currentVersion)) {
+      await log("npm_auto_update", `current=${currentVersion} latest=${latestVersion} installing...`);
+
+      await new Promise<void>((resolve, reject) => {
+        execFile("npm", ["install", "-g", "@hummer98/cmux-team@latest"], { timeout: 120_000 }, (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+
+      await log("npm_auto_update", `updated ${currentVersion} → ${latestVersion}`);
+      state.running = false;
+      state.restartRequested = true;
+    }
+  } catch (e: any) {
+    await log("npm_update_check_failed", e.message);
+  }
 }
 
 export async function updateTeamJson(state: DaemonState): Promise<void> {
