@@ -158,6 +158,11 @@ async function cmdStart(): Promise<void> {
     await log("daemon_surface_fallback", e.message);
   }
 
+  // daemon タブタイトル設定
+  if (daemonSurface) {
+    await cmux.renameTab(daemonSurface, "Manager");
+  }
+
   // Conductor を先に作成（全インフラ準備完了後に Master を起動）
   await initializeLayout(state, daemonSurface);
 
