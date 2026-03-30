@@ -158,8 +158,14 @@ export async function initInfra(state: DaemonState): Promise<void> {
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
-      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\ntask-state.json\n"
+      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\ntask-state.json\ntasks/*.status.json\n"
     );
+  } else {
+    // 既存 .gitignore に tasks/*.status.json がなければ追記
+    const content = await readFile(gitignore, "utf-8");
+    if (!content.includes("tasks/*.status.json")) {
+      await writeFile(gitignore, content.trimEnd() + "\ntasks/*.status.json\n");
+    }
   }
 
   // team.json
@@ -467,6 +473,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       status: c.status,
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
+      taskStatusFile: c.taskStatusFile,
       startedAt: c.startedAt,
       paneId: c.paneId,
       agents: c.agents.map((a) => ({

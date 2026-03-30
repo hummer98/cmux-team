@@ -73,6 +73,7 @@ export const ConductorState = z.object({
   surface: z.string(),
   worktreePath: z.string().optional(),
   outputDir: z.string().optional(),
+  taskStatusFile: z.string().optional(),
   startedAt: z.string().datetime(),
 });
 

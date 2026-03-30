@@ -300,14 +300,125 @@ describe("テンプレート生成", () => {
       "42",
       "テストタスクの内容",
       "/tmp/worktree",
-      ".team/output/conductor-test"
+      ".team/output/conductor-test",
+      ".team/tasks/042-test.status.json"
     );
 
     const content = await readFile(promptFile, "utf-8");
     expect(content).toContain("タスク割り当て");
     expect(content).toContain("テストタスクの内容");
     expect(content).toContain("/tmp/worktree");
-    expect(content).toContain("done");
+    expect(content).toContain("042-test.status.json");
+  });
+});
+
+// --- status.json ベースの完了検出テスト ---
+
+import { checkConductorStatus } from "./conductor";
+import type { ConductorState } from "./schema";
+
+describe("status.json ベースの完了検出", () => {
+  function makeConductor(overrides: Partial<ConductorState> = {}): ConductorState {
+    return {
+      conductorId: "conductor-slot-1",
+      surface: "surface:100",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      doneCandidate: false,
+      status: "running",
+      ...overrides,
+    };
+  }
+
+  test("taskStatusFile に status:done が書かれたら done を返す", async () => {
+    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
+    await writeFile(statusFile, JSON.stringify({ status: "done", runId: "run-123" }));
+
+    const conductor = makeConductor({
+      taskStatusFile: statusFile,
+      taskId: "1",
+      outputDir: join(testDir, ".team/output/run-nonexistent"),
+    });
+
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("done");
+  });
+
+  test("taskStatusFile が存在しない場合は done を返さない", async () => {
+    // cmux.validateSurface をモックして surface 消失をシミュレート
+    const cmuxModule = await import("./cmux");
+    const spy = spyOn(cmuxModule, "validateSurface").mockResolvedValue(false);
+
+    const conductor = makeConductor({
+      taskStatusFile: join(testDir, ".team/tasks/999-missing.status.json"),
+      taskId: "999",
+    });
+
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("crashed"); // surface 消失として検出
+
+    spy.mockRestore();
+  });
+
+  test("後方互換: outputDir/done でも done を検出する", async () => {
+    const outputDir = join(testDir, ".team/output/run-legacy");
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(join(outputDir, "done"), "");
+
+    const conductor = makeConductor({
+      taskStatusFile: undefined, // 旧バージョン: taskStatusFile なし
+      outputDir,
+      taskId: "1",
+    });
+
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("done");
+  });
+
+  test("run が変わっても task ベースの status.json で検出できる", async () => {
+    // 旧 run の outputDir には done がない
+    const oldOutputDir = join(testDir, ".team/output/run-old");
+    await mkdir(oldOutputDir, { recursive: true });
+    // 新 run の outputDir にも done がない
+    const newOutputDir = join(testDir, ".team/output/run-new");
+    await mkdir(newOutputDir, { recursive: true });
+
+    // だが task ベースの status.json に done がある
+    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
+    await writeFile(statusFile, JSON.stringify({ status: "done", runId: "run-old" }));
+
+    const conductor = makeConductor({
+      taskStatusFile: statusFile,
+      outputDir: newOutputDir, // 新しい run の outputDir
+      taskId: "1",
+    });
+
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("done");
+  });
+
+  test("status.json の status が done 以外なら done を返さない", async () => {
+    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
+    await writeFile(statusFile, JSON.stringify({ status: "running" }));
+
+    const cmuxModule = await import("./cmux");
+    const spy = spyOn(cmuxModule, "validateSurface").mockResolvedValue(true);
+
+    const conductor = makeConductor({
+      taskStatusFile: statusFile,
+      taskId: "1",
+    });
+
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("running");
+
+    spy.mockRestore();
+  });
+
+  test("idle Conductor は idle を返す", async () => {
+    const conductor = makeConductor({ status: "idle" });
+    const status = await checkConductorStatus(conductor);
+    expect(status).toBe("idle");
   });
 });
 
