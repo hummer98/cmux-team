@@ -211,10 +211,10 @@ export async function start(
   // 前回ポートで起動を試み、失敗時はランダムポートにフォールバック
   let server: ReturnType<typeof Bun.serve>;
   try {
-    server = Bun.serve({ port: preferredPort, fetch: fetchHandler });
+    server = Bun.serve({ port: preferredPort, fetch: fetchHandler, development: false });
   } catch {
     if (preferredPort !== 0) {
-      server = Bun.serve({ port: 0, fetch: fetchHandler });
+      server = Bun.serve({ port: 0, fetch: fetchHandler, development: false });
     } else {
       throw new Error("Failed to start proxy");
     }
