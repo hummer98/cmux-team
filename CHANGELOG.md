@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.8.1] - 2026-03-31
+
+### Fixed
+- Conductor 起動時に `CONDUCTOR_ID` 環境変数が未設定だった問題を修正。Agent spawn 時に team.json から paneId を取得できず、タブではなく split で作成されていた
+
 ## [3.8.0] - 2026-03-31
 
 ### Added
