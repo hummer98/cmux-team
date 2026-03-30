@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.6.1] - 2026-03-30
+
+### Changed
+- Master/Conductor の起動を `cmux-team conductor <id>` / `cmux-team launch-master` CLI ラッパー経由に変更。起動時に `.team/proxy-port` から proxy ポートを動的に解決するため、Manager 再起動時に既存セッションの API 接続が切れる問題を解消
+- Ink 版ダッシュボードを廃止し Rezi 版に一本化
+
 ## [3.6.0] - 2026-03-30
 
 ### Added
