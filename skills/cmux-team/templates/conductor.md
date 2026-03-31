@@ -20,9 +20,24 @@ main ブランチに直接変更を加えてはならない。
 
 ## 作業開始前の確認（ブートストラップ）
 
-worktree は tracked files のみ含む。作業開始前に以下を確認すること（SKILL.md §8 参照）:
-- `package.json` があれば `npm install` を実行
-- `.gitignore` に記載されたランタイムディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）の有無を確認し、必要なら再構築
+git worktree は tracked files のみチェックアウトする。`.gitignore` されたディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）は手動で再構築する必要がある。
+
+```bash
+cd {{WORKTREE_PATH}}
+
+# 依存関係のインストール
+npm install  # or yarn install, pnpm install
+
+# プロジェクト固有の初期化
+# 各プロジェクトの README や CLAUDE.md を参照して必要な手順を確認
+
+# 環境変数
+direnv allow  # .envrc がある場合
+```
+
+**重要**: 必要な初期化手順はプロジェクトごとに異なる。worktree 作成後、作業開始前に以下を確認すること:
+- `package.json` があれば `npm install`
+- `.gitignore` に記載されたビルド成果物やランタイムディレクトリの有無
 - `.envrc` や環境変数の設定
 
 ## フェーズ実行
@@ -98,6 +113,12 @@ echo "Agent spawned: $AGENT_SURFACE"
 ```
 
 **重要:** `--prompt` でインライン渡しも後方互換として残っているが、プロンプトが長い場合やエスケープが複雑な場合は必ず `--prompt-file` を使うこと。
+
+**1体ずつ確実に起動すること。** 起動確認（`cmux list-status` で Running 検出）してから次を起動する。
+
+**禁止事項:**
+- `cmux new-surface` で直接タブを作成してはならない — 必ず `cmux-team spawn-agent` を使う
+- `cmux send` で直接 `claude` コマンドを送信してはならない
 
 ## Agent 監視ループ
 
