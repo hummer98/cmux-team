@@ -13,8 +13,8 @@
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
- *   ./main.ts update-task --task-id <id> --status <status>
- *   ./main.ts close-task --task-id <id> [--journal <text>]
+ *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
+ *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
  */
 
 import { join, dirname } from "path";
@@ -86,6 +86,32 @@ function requireArg(name: string): string {
     process.exit(1);
   }
   return val;
+}
+
+/** tasks/ からタスクファイルを検索（ID プレフィックス or frontmatter id） */
+async function findTaskFile(taskId: string): Promise<string | undefined> {
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      if (f.endsWith(".md") && f.startsWith(taskId)) {
+        return join(tasksDir, f);
+      }
+    }
+  } catch {}
+  // ファイル名が数値IDで始まらない場合、frontmatter の id でも検索
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      if (!f.endsWith(".md")) continue;
+      const content = await readFile(join(tasksDir, f), "utf-8");
+      const idMatch = content.match(/^id:\s*(.+)$/m);
+      if (idMatch && idMatch[1]?.trim() === taskId) {
+        return join(tasksDir, f);
+      }
+    }
+  } catch {}
+  return undefined;
 }
 
 async function cmdStart(): Promise<void> {
@@ -704,101 +730,93 @@ ${body}
 
 async function cmdUpdateTask(): Promise<void> {
   const taskId = requireArg("task-id");
-  const newStatus = requireArg("status");
+  const newStatus = getArg("status");
+  const body = getArg("body");
+  const title = getArg("title");
 
-  // tasks/ からタスクファイルを検索（存在確認のみ）
-  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
-  let taskFile: string | undefined;
-  try {
-    const files = await readdir(tasksDir);
-    for (const f of files) {
-      if (f.endsWith(".md") && f.startsWith(taskId)) {
-        taskFile = join(tasksDir, f);
-        break;
-      }
-    }
-  } catch {}
-
-  if (!taskFile) {
-    // ファイル名が数値IDで始まらない場合、frontmatter の id でも検索
-    try {
-      const files = await readdir(tasksDir);
-      for (const f of files) {
-        if (!f.endsWith(".md")) continue;
-        const content = await readFile(join(tasksDir, f), "utf-8");
-        const idMatch = content.match(/^id:\s*(.+)$/m);
-        if (idMatch && idMatch[1]?.trim() === taskId) {
-          taskFile = join(tasksDir, f);
-          break;
-        }
-      }
-    } catch {}
+  if (newStatus === undefined && body === undefined && title === undefined) {
+    console.error("Error: at least one of --status, --body, or --title is required");
+    process.exit(1);
   }
 
+  const taskFile = await findTaskFile(taskId);
   if (!taskFile) {
     console.error(`Error: task ${taskId} not found in .team/tasks/`);
     process.exit(1);
   }
 
-  // task-state.json の status を更新（ファイル自体は変更しない）
+  // ステータス遷移ガード
   const taskState = await loadTaskState(PROJECT_ROOT);
-  taskState[taskId] = { ...taskState[taskId], status: newStatus };
-  await saveTaskState(PROJECT_ROOT, taskState);
+  const currentStatus = taskState[taskId]?.status;
 
-  // ready に変更された場合は TASK_CREATED を送信
-  if (newStatus === "ready") {
-    await ensureQueueDirs();
-    await sendMessage({
-      type: "TASK_CREATED",
-      taskId,
-      taskFile,
-      timestamp: new Date().toISOString(),
-    });
+  if (currentStatus === "assigned") {
+    console.error(`Error: task ${taskId} is assigned (running). Cannot update a running task. Create a new task instead.`);
+    process.exit(1);
+  }
+  if (currentStatus === "closed") {
+    console.error(`Error: task ${taskId} is closed. Cannot reopen a closed task. Use create-task to create a new one.`);
+    process.exit(1);
   }
 
-  console.log(`OK updated ${taskId} status=${newStatus}`);
+  // --title: frontmatter 内の title 行を更新
+  if (title !== undefined) {
+    const content = await readFile(taskFile, "utf-8");
+    const updated = content.replace(/^title:\s*.+$/m, `title: ${title}`);
+    await writeFile(taskFile, updated);
+  }
+
+  // --body: frontmatter 以降の本文を差し替え
+  if (body !== undefined) {
+    const content = await readFile(taskFile, "utf-8");
+    const fmEnd = content.indexOf("---", content.indexOf("---") + 3);
+    const frontmatter = content.slice(0, fmEnd + 3);
+    await writeFile(taskFile, frontmatter + "\n\n" + body + "\n");
+  }
+
+  // --status: task-state.json を更新
+  if (newStatus !== undefined) {
+    taskState[taskId] = { ...taskState[taskId], status: newStatus };
+    await saveTaskState(PROJECT_ROOT, taskState);
+
+    // ready に変更された場合は TASK_CREATED を送信
+    if (newStatus === "ready") {
+      await ensureQueueDirs();
+      await sendMessage({
+        type: "TASK_CREATED",
+        taskId,
+        taskFile,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  const parts: string[] = [];
+  if (newStatus !== undefined) parts.push(`status=${newStatus}`);
+  if (title !== undefined) parts.push("title updated");
+  if (body !== undefined) parts.push("body updated");
+  console.log(`OK updated ${taskId} ${parts.join(", ")}`);
 }
 
 async function cmdCloseTask(): Promise<void> {
   const taskId = requireArg("task-id");
   const journal = getArg("journal");
+  const force = args.includes("--force");
 
-  // tasks/ からタスクファイルを検索（存在確認のみ）
-  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
-  let taskFile: string | undefined;
-  try {
-    const files = await readdir(tasksDir);
-    for (const f of files) {
-      if (f.endsWith(".md") && f.startsWith(taskId)) {
-        taskFile = join(tasksDir, f);
-        break;
-      }
-    }
-  } catch {}
-
-  if (!taskFile) {
-    // frontmatter の id でも検索
-    try {
-      const files = await readdir(tasksDir);
-      for (const f of files) {
-        if (!f.endsWith(".md")) continue;
-        const content = await readFile(join(tasksDir, f), "utf-8");
-        const idMatch = content.match(/^id:\s*(.+)$/m);
-        if (idMatch && idMatch[1]?.trim() === taskId) {
-          taskFile = join(tasksDir, f);
-          break;
-        }
-      }
-    } catch {}
-  }
-
+  const taskFile = await findTaskFile(taskId);
   if (!taskFile) {
     console.error(`Error: task ${taskId} not found in .team/tasks/`);
     process.exit(1);
   }
 
-  // task-state.json で closed + closedAt + journal を設定（ファイルは移動しない）
+  // assigned ガード: --journal あり（正常完了フロー）または --force で許可
   const taskState = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskState[taskId]?.status;
+  if (currentStatus === "assigned" && !journal && !force) {
+    console.error(`Error: task ${taskId} is assigned (running). Use --force to close a running task.`);
+    process.exit(1);
+  }
+
+  // task-state.json で closed + closedAt + journal を設定（ファイルは移動しない）
   taskState[taskId] = {
     status: "closed",
     closedAt: new Date().toISOString(),
