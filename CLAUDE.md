@@ -274,27 +274,135 @@ cmux-team stop
 3. 他プロジェクト（Dear 等）のランタイムプロンプトも更新
 4. コミット・リリース
 
-## 既知の注意点
+## Manager プロトコル（内部実装）
 
-### Manager（daemon）の動作仕様
+TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行。キューベースのイベント駆動でタスク管理を行う。
 
-- **実装**: TypeScript daemon（`skills/cmux-team/manager/main.ts`）を Bun で実行
-- **イベント駆動**: `cmux-team send TASK_CREATED` 通知でタスクを検出し Conductor に割り当て
-- **Conductor 管理**: 起動時に固定3ペインを作成。idle Conductor を検出してタスクを割り当て
 - **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
 - **状態確認**: `cmux-team status` で daemon 状態・Conductor 一覧・タスク数・ログ末尾を表示
 
-### `cmux send` の改行問題
+### タスク検出
 
-単一行テキスト（シェルコマンドなど）は末尾 `\n` で送信可能だが、**複数行テキストでは `\n` が改行として入力欄に追加されるだけで送信されない**。複数行プロンプトを送る場合:
+`task-state.json` で `status: ready` のタスクを検出し Conductor に割り当てる。なければ待機して再チェック。
 
-```bash
-# 1. テキストを送信（\n を付けない）
-cmux send --surface surface:M --workspace workspace:N "${PROMPT}"
-# 2. 明示的に Enter を送信
-sleep 0.5
-cmux send-key --surface surface:M --workspace workspace:N "return"
+### Conductor へのタスク割り当て
+
+1. idle Conductor を検出（done マーカーなし + surface 生存 + `❯` 表示中）
+2. worktree 作成・プロンプト生成
+3. Conductor surface に `/clear` + 新プロンプト送信
+
+**Conductor は spawn しない。** 起動時に作成された固定ペインに対してタスクを送信するだけ。
+
+### Conductor 監視（pull 型）
+
+- **主要判定**: done マーカーファイル（`.team/output/conductor-N/done`）の存在で完了判定
+- **フォールバック**: `cmux list-status` で Idle 検出
+- **重要**: push ではなく pull 型。Conductor は done マーカーを作成して idle に戻り、Manager が見に来る
+
+### 結果回収
+
+完了検出後: ログ記録 → Conductor リセット（`/clear`）→ done マーカー削除。
+
+Manager がやらないこと:
+- タスクの close（Conductor が `cmux-team close-task` を実行）
+- Conductor ペインの close（persistent — 閉じない）
+- worktree の削除（Conductor の責務）
+- マージ処理（Conductor が納品方法を判断する）
+
+### ループ継続・アイドル化
+
+- **Conductor 稼働中**: 30秒間隔で pull 型監視を実行
+- **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
+- **起床トリガー**: `[TASK_CREATED]` 通知で再起動
+
+## 通信プロトコル
+
+### ファイルベース通信
+
+`.team/` ディレクトリ構造:
+
 ```
+.team/
+├── tasks/             # タスクファイル（フラット構造）
+├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
+├── output/conductor-N/ # Conductor が書く、Manager が読む
+├── prompts/           # プロンプト（監査証跡）
+├── specs/             # 要件・設計ドキュメント
+├── traces/            # SQLite トレースDB
+└── team.json          # チーム構成（Master が初期化）
+```
+
+### cmux コマンド通信
+
+| コマンド | 用途 |
+|---------|------|
+| `cmux send` | 上位→下位のプロンプト送信 |
+| `cmux send-key return` | 複数行プロンプトの送信確定 |
+| `cmux list-status` | 上位が下位の状態を取得（pull 型監視） |
+| `cmux read-screen` | Trust 確認・エラー確認 |
+| `cmux close-surface` | 完了した Agent タブの終了 |
+| `cmux-team spawn-agent` | Agent 起動（タブ作成・プロキシ設定・Trust 承認を一括実行） |
+
+### 複数行テキスト送信
+
+単一行は末尾 `\n` で送信可能。複数行プロンプトは `cmux send` の後に `sleep 0.5` + `cmux send-key return` で送信確定。
+
+## チーム状態管理
+
+### team.json
+
+daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
+
+### 進捗情報の取得方法（Master 向け）
+
+status.json は廃止。Master は以下の真のソースから直接情報を取得する:
+
+| 情報 | 真のソース | 取得方法 |
+|------|-----------|---------|
+| Manager の状態 | Manager workspace | `cmux list-status --workspace MANAGER_WS` |
+| 稼働中 Conductor | cmux ペイン構成 | `cmux tree` |
+| open task 数 | task-state.json | `cat .team/task-state.json`（status で絞り込み） |
+| 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
+
+## レイアウト戦略
+
+### 固定2x2レイアウト
+
+起動時に固定の2x2レイアウト（4ペイン、5 surface）を作成し、セッション終了まで変更しない。
+
+```
+[Manager|Master] | [Conductor-1]
+[Conductor-2   ] | [Conductor-3]
+```
+
+- **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
+- **右上〜右下**: Conductor-1〜3（常駐 Claude セッション）
+- **4ペインは不動** — close しない
+- **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
+- **最大3タスク並列**、4つ目以降はキューイング
+
+## git worktree（概要）
+
+すべての作業は `.worktrees/conductor-N/` 内で行う。main ブランチは常に無傷。
+
+- **作成**: `git worktree add .worktrees/conductor-N -b conductor-N/task`
+- **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
+- **成功時**: worktree 内でコミット → main にマージ → worktree 削除
+- **失敗時**: `git worktree remove --force` + ブランチ削除
+- **クリーンアップ**: `git worktree list` で確認、`git worktree remove <path> --force` で削除、`git worktree prune` で壊れた参照を修復。`.team/worktrees/` 配下の記録も確認すること
+
+## エラーリカバリ
+
+| 障害 | 検出者 | 対応 |
+|------|--------|------|
+| Agent クラッシュ | Conductor | `cmux list-status` で消失検出 → 再 spawn |
+| Conductor クラッシュ | Manager | Idle のまま done マーカーなし → 再 spawn or abort してタスク reopen |
+| Manager クラッシュ | Master | Manager が応答なし → 再 spawn |
+| API レート制限 | 各層 | 待機して再試行、同時 Agent 数を削減 |
+
+**異常検出**: `cmux list-status` で Running/Idle を判定。検出できない場合は `cmux read-screen` にフォールバック（シェルプロンプト表示 → Claude 終了、エラーメッセージ → クラッシュ、画面空 → ペイン消失）。
+
+## 既知の注意点
 
 ### Trust 確認（初回起動時）
 
@@ -307,21 +415,6 @@ cmux send-key --surface surface:M --workspace workspace:N "return"
 ### パーミッション確認
 
 `--dangerously-skip-permissions` で起動しても `.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが出る場合がある。最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること。
-
-### git worktree のクリーンアップ
-
-Agent は git worktree 上で作業する。`cmux-team stop` 実行時に worktree は自動削除されるが、異常終了した場合は手動でクリーンアップが必要。
-
-```bash
-# 残存 worktree の確認
-git worktree list
-# 不要な worktree の削除
-git worktree remove <path> --force
-# worktree の参照が壊れている場合
-git worktree prune
-```
-
-`.team/worktrees/` 配下にも worktree パスが記録されているため、合わせて確認すること。
 
 ### トレーサビリティ（v3.4.0）
 

@@ -70,28 +70,6 @@ Output: .team/output/<role-id>.md
 cmux-team create-task --title "タイトル" --body "詳細"
 ```
 
-タスク形式:
-
-```markdown
----
-id: NNN
-title: <簡潔なタイトル>
-type: decision|blocker|finding|question
-raised_by: <role-id>
-created_at: <ISO タイムスタンプ>
----
-
-## Context
-<このタスクに至った経緯>
-
-## Options
-1. <選択肢 A> — 長所/短所
-2. <選択肢 B> — 長所/短所
-
-## Recommendation
-<エージェントの推奨案（あれば）>
-```
-
 ## 5. 他エージェントとの連携
 
 サブエージェント同士は**直接通信しない**。
