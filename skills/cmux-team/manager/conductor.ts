@@ -71,7 +71,7 @@ export async function initializeConductorSlots(
       // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
       await cmux.send(
         surface,
-        `cmux-team conductor ${slotId}\n`
+        `export CMUX_SURFACE=${surface} && cmux-team conductor ${slotId}\n`
       );
 
       // Trust 承認
@@ -277,8 +277,11 @@ export async function resetConductor(
 
 export async function checkConductorStatus(
   conductor: ConductorState
-): Promise<"idle" | "running" | "done" | "crashed"> {
+): Promise<"idle" | "running" | "done" | "crashed" | "disconnected"> {
   if (conductor.status === "idle") return "idle";
+
+  // disconnected: Claude Code セッションが終了しているが surface は存在
+  if (conductor.disconnectedAt) return "disconnected";
 
   // task ベースの status.json で完了判定
   if (conductor.taskStatusFile && existsSync(conductor.taskStatusFile)) {
@@ -352,7 +355,7 @@ export async function spawnConductor(
     // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
       surface,
-      `cmux-team conductor ${conductorId}\n`
+      `export CMUX_SURFACE=${surface} && cmux-team conductor ${conductorId}\n`
     );
     await cmux.waitForTrust(surface);
 

@@ -332,12 +332,44 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "SESSION_STARTED":
+      message = {
+        type: "SESSION_STARTED",
+        conductorId: requireArg("conductor-id"),
+        surface: getArg("surface") || "unknown",
+        pid: Number(requireArg("pid")),
+        sessionId: getArg("session-id"),
+        timestamp: now,
+      };
+      break;
+
+    case "SESSION_ENDED":
+      message = {
+        type: "SESSION_ENDED",
+        conductorId: requireArg("conductor-id"),
+        surface: getArg("surface") || "unknown",
+        pid: getArg("pid") ? Number(getArg("pid")) : undefined,
+        reason: getArg("reason"),
+        timestamp: now,
+      };
+      break;
+
+    case "SESSION_ACTIVE":
+      message = {
+        type: "SESSION_ACTIVE",
+        conductorId: requireArg("conductor-id"),
+        surface: getArg("surface") || "unknown",
+        pid: getArg("pid") ? Number(getArg("pid")) : undefined,
+        timestamp: now,
+      };
+      break;
+
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -559,6 +591,7 @@ async function cmdSpawnAgent(): Promise<void> {
     `export CONDUCTOR_ID=${conductorId}`,
     `export ROLE=${role}`,
     `export PROJECT_ROOT=${PROJECT_ROOT}`,
+    `export CMUX_SURFACE=${surface}`,
   ];
   if (proxyPort) {
     exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
@@ -898,6 +931,33 @@ async function cmdTrace(): Promise<void> {
   db.close();
 }
 
+async function cmdRestartConductor(): Promise<void> {
+  const conductorId = requireArg("conductor-id");
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
+  if (!conductor) {
+    console.error(`Conductor ${conductorId} not found`);
+    process.exit(1);
+  }
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} && cmux-team conductor ${conductorId}\n`);
+  console.log(`Conductor ${conductorId} restarting on ${conductor.surface}`);
+}
+
+async function cmdResetConductor(): Promise<void> {
+  const conductorId = requireArg("conductor-id");
+  await ensureQueueDirs();
+  const path = await sendMessage({
+    type: "CONDUCTOR_DONE",
+    conductorId,
+    surface: getArg("surface") || "unknown",
+    success: false,
+    reason: "manual_reset",
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`Reset signal sent for conductor ${conductorId}: ${path}`);
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -952,6 +1012,12 @@ switch (command) {
   case "launch-master":
     await cmdLaunchMaster();
     break;
+  case "restart-conductor":
+    await cmdRestartConductor();
+    break;
+  case "reset-conductor":
+    await cmdResetConductor();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -971,6 +1037,8 @@ Usage:
   cmux-team trace --search <query>             FTS5 全文検索
   cmux-team trace --show <id>                  トレース詳細表示
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
-  cmux-team launch-master                      Master 起動（proxy 自動解決）`);
+  cmux-team launch-master                      Master 起動（proxy 自動解決）
+  cmux-team restart-conductor --conductor-id <id>  Conductor を再起動
+  cmux-team reset-conductor --conductor-id <id>    Conductor をリセット（idle に戻す）`);
     break;
 }

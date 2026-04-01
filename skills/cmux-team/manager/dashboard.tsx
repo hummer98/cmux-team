@@ -146,6 +146,7 @@ function buildMasterSection(state: DaemonState) {
 function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }) {
   const isIdle = c.status === "idle";
   const isDone = c.status === "done";
+  const isDisconnected = c.status === "disconnected";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
 
@@ -159,6 +160,18 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
         ui.text("○", dimStyle),
         ui.text(`[${surface}]`, dimStyle),
         ui.text("idle", { dim: true }),
+      ])
+    );
+  } else if (isDisconnected) {
+    const taskId = `#${(c.taskId ?? "").padStart(3, "0")}`;
+    const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text("⚠", { style: { fg: YELLOW } }),
+        ui.text(`[${surface}]`),
+        ui.text(taskId, { bold: true }),
+        c.taskTitle ? ui.text(c.taskTitle) : null,
+        ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
       ])
     );
   } else {
@@ -281,7 +294,7 @@ let refreshInterval: ReturnType<typeof setInterval> | null = null;
 export async function startDashboard(
   getState: () => DaemonState,
   opts?: { version?: string; onReload?: () => void; onQuit?: () => void }
-): void {
+): Promise<void> {
   const daemonState = getState();
 
   const app = createNodeApp<AppState>({

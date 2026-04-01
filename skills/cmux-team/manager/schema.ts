@@ -37,6 +37,32 @@ export const AgentDoneMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const SessionStartedMessage = z.object({
+  type: z.literal("SESSION_STARTED"),
+  conductorId: z.string(),
+  surface: z.string(),
+  pid: z.number(),
+  sessionId: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const SessionEndedMessage = z.object({
+  type: z.literal("SESSION_ENDED"),
+  conductorId: z.string(),
+  surface: z.string(),
+  pid: z.number().optional(),
+  reason: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const SessionActiveMessage = z.object({
+  type: z.literal("SESSION_ACTIVE"),
+  conductorId: z.string(),
+  surface: z.string(),
+  pid: z.number().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const ShutdownMessage = z.object({
   type: z.literal("SHUTDOWN"),
   timestamp: z.string().datetime(),
@@ -47,6 +73,9 @@ export const QueueMessage = z.discriminatedUnion("type", [
   ConductorDoneMessage,
   AgentSpawnedMessage,
   AgentDoneMessage,
+  SessionStartedMessage,
+  SessionEndedMessage,
+  SessionActiveMessage,
   ShutdownMessage,
 ]);
 
@@ -75,11 +104,14 @@ export const ConductorState = z.object({
   outputDir: z.string().optional(),
   taskStatusFile: z.string().optional(),
   startedAt: z.string().datetime(),
+  pid: z.number().optional(),
+  sessionId: z.string().optional(),
+  disconnectedAt: z.string().datetime().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
   doneCandidate: boolean;
-  status: "idle" | "running" | "done";
+  status: "idle" | "running" | "done" | "disconnected";
   paneId?: string;
 };
