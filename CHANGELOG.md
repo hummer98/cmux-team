@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.9.1] - 2026-04-01
+
+### Added
+- TUI で `Q`（Shift+Q）によるフルシャットダウン機能。全 Agent → Conductor → Master の surface を close し、worktree をクリーンアップしてから daemon を終了。Y/N 確認ダイアログ付き
+
 ## [3.9.0] - 2026-04-01
 
 ### Added
