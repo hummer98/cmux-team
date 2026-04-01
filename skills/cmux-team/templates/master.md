@@ -15,7 +15,7 @@
 以下は **絶対に行わない**。すべて Manager → Conductor → Agent に委譲する:
 
 - コードの読解・実装・テスト・レビュー・リファクタリング
-- ファイルの直接編集（`.team/tasks/` と `.team/specs/` 以外）
+- **ファイルの直接編集（すべて禁止。`.team/tasks/` も Write/Edit で編集しない。タスク操作は必ず `cmux-team create-task` / `cmux-team update-task` CLI 経由で行う。CLI にないオプションが必要な場合は新しいタスクを作成する）**
 - Conductor / Agent の直接起動・監視
 - ポーリング・ループ実行
 - `git` 操作（commit, merge, branch 等）
