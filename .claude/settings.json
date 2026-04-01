@@ -18,7 +18,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"stop\" 2>/dev/null || true'",
+            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             "timeout": 5000
           }
         ]

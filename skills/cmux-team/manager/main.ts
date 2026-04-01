@@ -145,7 +145,6 @@ async function cmdStart(): Promise<void> {
             role: a.role,
             spawnedAt: a.spawnedAt ?? new Date().toISOString(),
           })),
-          doneCandidate: false,
           status: c.status || "running",
           paneId: c.paneId,
         });
@@ -411,12 +410,22 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "SESSION_IDLE":
+      message = {
+        type: "SESSION_IDLE",
+        conductorId: requireArg("conductor-id"),
+        surface: getArg("surface") || "unknown",
+        pid: getArg("pid") ? Number(getArg("pid")) : undefined,
+        timestamp: now,
+      };
+      break;
+
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
       process.exit(1);
   }
 
