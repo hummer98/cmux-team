@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.9.2] - 2026-03-31
+
+### Fixed
+- Stop hook が毎ターンの応答完了で `SESSION_ENDED` を送信し、Conductor が応答するたびに disconnected 扱いになるバグを修正。`SESSION_IDLE`（応答完了）と `SESSION_ENDED`（セッション終了）を分離
+- タスク完了検出の `doneCandidate` 二重確認ロジックを廃止。最大20秒の完了検出遅延を解消
+
 ## [3.9.1] - 2026-04-01
 
 ### Added
