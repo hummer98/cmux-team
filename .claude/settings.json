@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --session-id \"${SESSION_ID:-}\" 2>/dev/null || true'",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"stop\" 2>/dev/null || true'",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Write|Edit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json; d=json.load(sys.stdin); p=d.get('tool_input',{}).get('file_path',''); (print('.team/tasks/ への直接書き込みは禁止です。cmux-team create-task / cmux-team update-task CLI を使用してください。', file=sys.stderr) or sys.exit(2)) if '.team/tasks/' in p else sys.exit(0)\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}

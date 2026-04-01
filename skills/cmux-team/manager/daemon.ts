@@ -333,6 +333,44 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
       }
 
+      case "SESSION_STARTED": {
+        const conductor = findConductor(state, message.conductorId);
+        if (conductor) {
+          conductor.pid = message.pid;
+          if (message.sessionId) conductor.sessionId = message.sessionId;
+          conductor.disconnectedAt = undefined;
+          spawnPidWatcher(state, conductor, message.pid);
+          await log(
+            "session_started",
+            `conductor=${message.conductorId} surface=${message.surface} pid=${message.pid}`
+          );
+        }
+        break;
+      }
+
+      case "SESSION_ENDED": {
+        const conductor = findConductor(state, message.conductorId);
+        if (conductor) {
+          conductor.disconnectedAt = message.timestamp;
+          conductor.pid = undefined;
+          conductor.sessionId = undefined;
+          await log(
+            "session_ended",
+            `conductor=${message.conductorId} surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`
+          );
+        }
+        break;
+      }
+
+      case "SESSION_ACTIVE": {
+        const conductor = findConductor(state, message.conductorId);
+        if (conductor) {
+          conductor.disconnectedAt = undefined;
+          if (message.pid) conductor.pid = message.pid;
+        }
+        break;
+      }
+
       case "SHUTDOWN":
         await log("shutdown_requested");
         state.running = false;
@@ -399,6 +437,34 @@ async function scanTasks(state: DaemonState): Promise<void> {
   }
 }
 
+/** PID ウォッチャー: 指定 PID の終了を検出して disconnected にする */
+function spawnPidWatcher(
+  state: DaemonState,
+  conductor: ConductorState,
+  pid: number
+): void {
+  const checkInterval = setInterval(async () => {
+    if (!state.running) {
+      clearInterval(checkInterval);
+      return;
+    }
+    try {
+      process.kill(pid, 0);
+    } catch {
+      clearInterval(checkInterval);
+      if (conductor.pid === pid) {
+        conductor.disconnectedAt = new Date().toISOString();
+        conductor.pid = undefined;
+        conductor.sessionId = undefined;
+        await log(
+          "session_ended",
+          `conductor=${conductor.conductorId} pid=${pid} reason=pid_watcher`
+        );
+      }
+    }
+  }, 1000);
+}
+
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [id, conductor] of state.conductors) {
     if (conductor.status === "idle") continue;
@@ -432,6 +498,10 @@ async function monitorConductors(state: DaemonState): Promise<void> {
         // persistent Conductor がクラッシュ → idle に戻す
         conductor.status = "idle";
         conductor.taskId = undefined;
+        break;
+      case "disconnected":
+        conductor.status = "disconnected";
+        conductor.doneCandidate = false;
         break;
     }
   }
