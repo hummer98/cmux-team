@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.9.0] - 2026-04-01
+
+### Added
+- Conductor ライフサイクル監視: Claude Code の SessionStart/Stop hooks と PID ウォッチャーにより、Conductor の起動・停止・切断を約1秒以内に検知
+- `disconnected` 状態: Claude Code が終了した Conductor をダッシュボードで可視化（⚠ アイコン）
+- `restart-conductor` / `reset-conductor` コマンド: 切断した Conductor の手動復旧が可能に
+- `update-task --body` / `--title`: draft/ready 状態のタスク内容を CLI から更新可能に
+
+### Changed
+- 配布版 SKILL.md を 593行から 147行に最小化。Manager/Conductor/Agent の内部プロトコルを CLAUDE.md に移動し、Master が不要な情報を持たない設計に
+- Conductor テンプレートにブートストラップ手順と Agent 起動ルールを追加
+- cmux-agent-role SKILL.md からタスクファイルフォーマット例を削除し CLI 使用のみに
+
+### Fixed
+- `update-task` にステータス遷移ガードを追加。assigned/closed 状態のタスク変更を拒否し、実行中タスクの意図しない上書きを防止
+- `close-task` に assigned ガードを追加（`--force` で強制可能）
+- Master テンプレートで `.team/tasks/` への直接書き込みを明示的に禁止
+
 ## [3.8.1] - 2026-03-31
 
 ### Fixed
