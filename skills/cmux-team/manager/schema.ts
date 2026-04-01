@@ -63,6 +63,14 @@ export const SessionActiveMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const SessionIdleMessage = z.object({
+  type: z.literal("SESSION_IDLE"),
+  conductorId: z.string(),
+  surface: z.string(),
+  pid: z.number().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const ShutdownMessage = z.object({
   type: z.literal("SHUTDOWN"),
   timestamp: z.string().datetime(),
@@ -76,6 +84,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionStartedMessage,
   SessionEndedMessage,
   SessionActiveMessage,
+  SessionIdleMessage,
   ShutdownMessage,
 ]);
 
@@ -111,7 +120,6 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  doneCandidate: boolean;
   status: "idle" | "running" | "done" | "disconnected";
   paneId?: string;
 };

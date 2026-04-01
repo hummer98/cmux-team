@@ -371,6 +371,19 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
       }
 
+      case "SESSION_IDLE": {
+        const conductor = findConductor(state, message.conductorId);
+        if (conductor) {
+          conductor.disconnectedAt = undefined;  // alive の証拠
+          if (message.pid) conductor.pid = message.pid;
+          await log(
+            "session_idle",
+            `conductor=${message.conductorId} surface=${message.surface}`
+          );
+        }
+        break;
+      }
+
       case "SHUTDOWN":
         await log("shutdown_requested");
         state.running = false;
@@ -481,14 +494,9 @@ async function monitorConductors(state: DaemonState): Promise<void> {
 
     switch (status) {
       case "done":
-        if (conductor.doneCandidate) {
-          await handleConductorDone(state, conductor);
-        } else {
-          conductor.doneCandidate = true;
-        }
+        await handleConductorDone(state, conductor);
         break;
       case "running":
-        conductor.doneCandidate = false;
         break;
       case "crashed":
         await log(
@@ -501,7 +509,6 @@ async function monitorConductors(state: DaemonState): Promise<void> {
         break;
       case "disconnected":
         conductor.status = "disconnected";
-        conductor.doneCandidate = false;
         break;
     }
   }

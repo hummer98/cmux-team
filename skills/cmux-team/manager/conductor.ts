@@ -90,7 +90,7 @@ export async function initializeConductorSlots(
         surface,
         startedAt: new Date().toISOString(),
         agents: [],
-        doneCandidate: false,
+
         status: "idle",
         paneId,
       };
@@ -197,7 +197,6 @@ export async function assignTask(
     conductor.taskStatusFile = taskStatusFile;
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
-    conductor.doneCandidate = false;
     conductor.status = "running";
 
     await log(
@@ -265,7 +264,6 @@ export async function resetConductor(
     conductor.outputDir = undefined;
     conductor.taskStatusFile = undefined;
     conductor.agents = [];
-    conductor.doneCandidate = false;
 
     await log("conductor_reset", `conductor_id=${conductor.conductorId} surface=${conductor.surface}`);
   } catch (e: any) {
@@ -347,7 +345,6 @@ export async function spawnConductor(
       surface,
       startedAt: new Date().toISOString(),
       agents: [],
-      doneCandidate: false,
       status: "idle",
       paneId,
     };

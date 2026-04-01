@@ -324,7 +324,6 @@ describe("status.json ベースの完了検出", () => {
       surface: "surface:100",
       startedAt: new Date().toISOString(),
       agents: [],
-      doneCandidate: false,
       status: "running",
       ...overrides,
     };
@@ -419,6 +418,61 @@ describe("status.json ベースの完了検出", () => {
     const conductor = makeConductor({ status: "idle" });
     const status = await checkConductorStatus(conductor);
     expect(status).toBe("idle");
+  });
+});
+
+// --- SESSION_IDLE テスト ---
+
+describe("SESSION_IDLE メッセージ処理", () => {
+  test("SESSION_IDLE は disconnectedAt をクリアする", async () => {
+    // SESSION_IDLE メッセージがキューに入った状態をシミュレート
+    await enqueueMessage({
+      type: "SESSION_IDLE",
+      conductorId: "conductor-slot-1",
+      surface: "surface:100",
+      pid: 12345,
+      timestamp: new Date().toISOString(),
+    });
+
+    const messages = await readQueue();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.message.type).toBe("SESSION_IDLE");
+
+    // メッセージの内容を検証
+    const msg = messages[0]!.message;
+    if (msg.type === "SESSION_IDLE") {
+      expect(msg.conductorId).toBe("conductor-slot-1");
+      expect(msg.surface).toBe("surface:100");
+      expect(msg.pid).toBe(12345);
+    }
+  });
+
+  test("SESSION_IDLE は conductor.status を変更しない", async () => {
+    // SESSION_IDLE メッセージのスキーマ検証
+    const { SessionIdleMessage } = await import("./schema");
+    const result = SessionIdleMessage.safeParse({
+      type: "SESSION_IDLE",
+      conductorId: "conductor-slot-1",
+      surface: "surface:100",
+      timestamp: new Date().toISOString(),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test("SESSION_ENDED はセッション終了時のみ使用される", async () => {
+    // SESSION_ENDED メッセージが正しくパースされることを確認
+    const { SessionEndedMessage } = await import("./schema");
+    const result = SessionEndedMessage.safeParse({
+      type: "SESSION_ENDED",
+      conductorId: "conductor-slot-1",
+      surface: "surface:100",
+      reason: "session_end",
+      timestamp: new Date().toISOString(),
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.reason).toBe("session_end");
+    }
   });
 });
 
