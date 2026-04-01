@@ -251,6 +251,53 @@ async function cmdStart(): Promise<void> {
       process.exit(0);
     },
     onQuit: () => { shutdown(); },
+    onFullQuit: async () => {
+      await log("full_quit_requested");
+
+      // 1. 全 Agent を close
+      for (const [, conductor] of state.conductors) {
+        for (const agent of conductor.agents) {
+          await cmux.closeSurface(agent.surface).catch(() => {});
+        }
+      }
+
+      // 2. 全 Conductor surface を close（Agent タブも含む）
+      for (const [, conductor] of state.conductors) {
+        // ペイン内の全サブ surface を close
+        if (conductor.paneId) {
+          const surfaces = await cmux.listPaneSurfaces(conductor.paneId).catch(() => [] as string[]);
+          for (const s of surfaces) {
+            await cmux.closeSurface(s).catch(() => {});
+          }
+        }
+        await cmux.closeSurface(conductor.surface).catch(() => {});
+      }
+
+      // 3. Master surface を close
+      if (state.masterSurface) {
+        await cmux.closeSurface(state.masterSurface).catch(() => {});
+      }
+
+      // 4. worktree をクリーンアップ
+      for (const [, conductor] of state.conductors) {
+        if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
+          try {
+            const { execFile: execFileCb } = require("child_process");
+            const { promisify } = require("util");
+            const execFileAsync = promisify(execFileCb);
+            await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], { cwd: state.projectRoot });
+            if (conductor.taskRunId) {
+              await execFileAsync("git", ["branch", "-d", `${conductor.taskRunId}/task`], { cwd: state.projectRoot }).catch(() => {});
+            }
+          } catch {}
+        }
+      }
+
+      await log("full_quit_completed");
+      state.running = false;
+      await updateTeamJson(state);
+      process.exit(0);
+    },
   });
 
   // メインループ

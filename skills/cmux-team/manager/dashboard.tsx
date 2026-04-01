@@ -118,6 +118,7 @@ interface AppState {
   journalEntries: JournalEntry[];
   logLines: string[];
   version: string;
+  confirmingFullQuit?: boolean;
 }
 
 // --- セクションタイトル（Ink 版と同じ "─ Title ──────" スタイル） ---
@@ -293,9 +294,10 @@ let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 export async function startDashboard(
   getState: () => DaemonState,
-  opts?: { version?: string; onReload?: () => void; onQuit?: () => void }
+  opts?: { version?: string; onReload?: () => void; onQuit?: () => void; onFullQuit?: () => void }
 ): Promise<void> {
   const daemonState = getState();
+  let confirmingFullQuit = false;
 
   const app = createNodeApp<AppState>({
     initialState: {
@@ -370,16 +372,26 @@ export async function startDashboard(
         ),
       ]),
       footer: ui.statusBar({
-        left: [
-          ui.kbd("1"),
-          ui.text("journal"),
-          ui.kbd("2"),
-          ui.text("log"),
-          ui.kbd("r"),
-          ui.text("reload"),
-          ui.kbd("q"),
-          ui.text("quit"),
-        ],
+        left: state.confirmingFullQuit
+          ? [
+              ui.text("Full quit: close all surfaces and shut down?", { bold: true }),
+              ui.kbd("Y"),
+              ui.text("yes"),
+              ui.kbd("n"),
+              ui.text("cancel"),
+            ]
+          : [
+              ui.kbd("1"),
+              ui.text("journal"),
+              ui.kbd("2"),
+              ui.text("log"),
+              ui.kbd("r"),
+              ui.text("reload"),
+              ui.kbd("q"),
+              ui.text("quit"),
+              ui.kbd("Q"),
+              ui.text("full quit"),
+            ],
       }),
     });
   }
@@ -395,6 +407,24 @@ export async function startDashboard(
     q: () => {
       cleanup();
       opts?.onQuit?.();
+    },
+    Q: () => {
+      confirmingFullQuit = true;
+      app.update((s) => ({ ...s, confirmingFullQuit: true }));
+    },
+    Y: () => {
+      if (confirmingFullQuit) {
+        cleanup();
+        opts?.onFullQuit?.();
+      }
+    },
+    n: () => {
+      confirmingFullQuit = false;
+      app.update((s) => ({ ...s, confirmingFullQuit: false }));
+    },
+    Escape: () => {
+      confirmingFullQuit = false;
+      app.update((s) => ({ ...s, confirmingFullQuit: false }));
     },
   });
 
