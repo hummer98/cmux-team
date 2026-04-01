@@ -97,28 +97,6 @@ export async function validateSurface(surface: string): Promise<boolean> {
   }
 }
 
-export async function waitForTrust(
-  surface: string,
-  maxAttempts: number = 10
-): Promise<void> {
-  for (let i = 0; i < maxAttempts; i++) {
-    await sleep(3000);
-    try {
-      const screen = await readScreen(surface, 10);
-      if (screen.includes("Yes, I trust")) {
-        await sendKey(surface, "return");
-        await sleep(3000);
-        return;
-      }
-      if (/Thinking|Reading|❯/.test(screen)) {
-        return;
-      }
-    } catch {
-      // surface がまだ準備できていない
-    }
-  }
-}
-
 export async function getCallerSurface(): Promise<string> {
   const { stdout } = await execFile("cmux", ["identify"]);
   const data = JSON.parse(stdout);
@@ -127,8 +105,4 @@ export async function getCallerSurface(): Promise<string> {
     throw new Error(`Failed to get caller surface: ${stdout}`);
   }
   return surface;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

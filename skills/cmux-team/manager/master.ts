@@ -27,9 +27,6 @@ export async function spawnMaster(
       `cmux-team launch-master\n`
     );
 
-    // Trust 承認
-    await cmux.waitForTrust(surface);
-
     // タブ名設定
     const num = surface.replace("surface:", "");
     await cmux.renameTab(surface, `[${num}] Master`);

@@ -62,21 +62,14 @@ export async function initializeConductorSlots(
 
     const surfaces = [surface1, surface2, surface3].slice(0, count);
 
-    for (let i = 0; i < surfaces.length; i++) {
-      const surface = surfaces[i]!;
-      const slotId = `conductor-slot-${i + 1}`;
-
+    const results = await Promise.all(surfaces.map(async (surface, i) => {
       console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Claude 起動中 (${surface})...`);
 
       // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
       await cmux.send(
         surface,
-        `export CMUX_SURFACE=${surface} && cmux-team conductor ${slotId}\n`
+        `export CMUX_SURFACE=${surface} && cmux-team conductor conductor-slot-${i + 1}\n`
       );
-
-      // Trust 承認
-      console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Trust 承認待ち...`);
-      await cmux.waitForTrust(surface);
 
       // タブ名設定
       const num = surface.replace("surface:", "");
@@ -86,18 +79,18 @@ export async function initializeConductorSlots(
       const paneId = await getPaneIdForSurface(surface);
 
       const state: ConductorState = {
-        conductorId: slotId,
+        conductorId: `conductor-slot-${i + 1}`,
         surface,
         startedAt: new Date().toISOString(),
         agents: [],
-
         status: "idle",
         paneId,
       };
-      slots.push(state);
 
       console.log(`  ✅ Conductor ${i + 1}/${surfaces.length}: 準備完了`);
-    }
+      return state;
+    }));
+    slots.push(...results);
 
     console.log(`✅ Conductor スロット ${slots.length}個 準備完了`);
     await log("conductor_slots_initialized", `count=${slots.length}`);
@@ -354,7 +347,6 @@ export async function spawnConductor(
       surface,
       `export CMUX_SURFACE=${surface} && cmux-team conductor ${conductorId}\n`
     );
-    await cmux.waitForTrust(surface);
 
     return await assignTask(conductor, taskId, projectRoot);
   } catch (e: any) {

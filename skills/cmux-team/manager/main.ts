@@ -665,10 +665,7 @@ async function cmdSpawnAgent(): Promise<void> {
   }
   await cmux.send(surface, claudeCmd + "\n");
 
-  // --- 4. Trust 承認 ---
-  await cmux.waitForTrust(surface);
-
-  // --- 5. タブ名設定 ---
+  // --- 4. タブ名設定 ---
   const roleIcons: Record<string, string> = {
     researcher: "🔍", research: "🔍",
     architect: "📐", design: "📐",
