@@ -8,7 +8,7 @@
     "surface": "surface:83"
   },
   "manager": {
-    "pid": 74826,
+    "pid": 68028,
     "type": "typescript",
     "status": "running"
   },
@@ -17,7 +17,7 @@
       "id": "conductor-slot-1",
       "surface": "surface:80",
       "status": "idle",
-      "startedAt": "2026-04-01T08:47:27.883Z",
+      "startedAt": "2026-04-02T05:52:27.841Z",
       "paneId": "pane:74",
       "agents": []
     },
