@@ -268,11 +268,8 @@ export async function resetConductor(
 
 export async function checkConductorStatus(
   conductor: ConductorState
-): Promise<"idle" | "running" | "done" | "crashed" | "disconnected"> {
+): Promise<"idle" | "running" | "done" | "crashed"> {
   if (conductor.status === "idle") return "idle";
-
-  // disconnected: Claude Code セッションが終了しているが surface は存在
-  if (conductor.disconnectedAt) return "disconnected";
 
   // task ベースの status.json で完了判定
   if (conductor.taskStatusFile && existsSync(conductor.taskStatusFile)) {
