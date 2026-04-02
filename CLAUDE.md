@@ -98,7 +98,8 @@ cmux-team/
 │   ├── master.md                     #   Master ロール再読み込み（/clear 復帰用）
 │   ├── team-spec.md                  #   要件ブレスト（対話型）
 │   ├── team-task.md                  #   タスク管理
-│   └── team-archive.md              #   完了タスクのアーカイブ
+│   ├── team-archive.md              #   完了タスクのアーカイブ
+│   └── artifact.md                  #   知見のアーティファクト化
 ├── docs/seeds/                       # 設計シードドキュメント（実装時の入力仕様）
 │   ├── 00-project-overview.md
 │   ├── 01-skill-cmux-team.md
@@ -325,6 +326,7 @@ Manager がやらないこと:
 .team/
 ├── tasks/             # タスクファイル（フラット構造）
 ├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
+├── artifacts/         # Axxx — 知見の記録（調査・設計判断・セッション要約）
 ├── output/conductor-N/ # Conductor が書く、Manager が読む
 ├── prompts/           # プロンプト（監査証跡）
 ├── specs/             # 要件・設計ドキュメント
@@ -429,3 +431,52 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 ### API レート制限
 
 複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
+
+## Artifacts（知見の記録）
+
+会話中の調査結果・設計判断・セッション要約は `.team/artifacts/` に Axxx 番号付きで保存する。
+
+### Txxx と Axxx の違い
+
+| | Txxx（タスク） | Axxx（アーティファクト） |
+|---|---|---|
+| 本質 | 「やること」の管理 | 「わかったこと」の記録 |
+| ライフサイクル | draft → ready → assigned → closed | 作成 → 参照（→ アーカイブ） |
+| 誰が作る | Master / ユーザー | 誰でも（Master, Conductor, Agent） |
+
+### いつ Artifact を作るか
+
+- 調査・リサーチを行ったとき（type: research）
+- 設計上の判断を下したとき（type: decision）
+- セッション終了時に重要な発見があったとき（type: session）
+- 要件・仕様を整理したとき（type: spec）
+- 分析レポートを作成したとき（type: report）
+
+### フォーマット
+
+ファイル名: `.team/artifacts/Axxx-<slug>.md`
+
+```yaml
+---
+id: A001
+type: research          # research | decision | session | spec | report
+title: "タイトル"
+created: <ISO 8601>
+updated: <ISO 8601>     # 任意 — 更新時に付与
+author: master          # master | conductor-N | agent-xxx
+task: T038              # 任意 — 関連タスク
+tags: [tag1, tag2]      # 任意
+---
+```
+
+### 参照方法
+
+- 会話中: 「A001で調査した通り」「A003の設計判断に基づき」
+- タスクとの紐付け: フロントマターの `task: T038` で関連付け
+- 新セッション開始時: 直近の artifacts を確認してコンテキストを復元
+
+### コマンド
+
+- `/artifact [type] "タイトル"` — 会話コンテキストから要約生成・保存
+- `/artifact list` — 一覧表示
+- `/artifact show Axxx` — 内容表示
