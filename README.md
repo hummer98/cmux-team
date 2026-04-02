@@ -68,6 +68,7 @@ Claude: → Sends TODO to queue via CLI
 | `cmux-team stop` | Graceful shutdown | When done |
 | `cmux-team create-task` | Create a task | Task creation |
 | `cmux-team trace` | Search API traces | Debugging, analysis |
+| `cmux-team artifacts` | List / show / search artifacts | Knowledge management |
 
 #### Slash Commands (run within Claude)
 
@@ -77,6 +78,7 @@ Claude: → Sends TODO to queue via CLI
 | `/team-spec [summary]` | Brainstorm requirements | Deciding what to build |
 | `/team-task [action]` | Task management | Record decisions |
 | `/team-archive [range]` | Archive closed tasks | Task cleanup |
+| `/artifact [type] [title]` | Save findings as artifact | Knowledge capture |
 
 ## Architecture
 

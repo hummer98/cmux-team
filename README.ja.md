@@ -68,6 +68,7 @@ Claude: → CLI でキューに TODO を追加
 | `cmux-team stop` | graceful shutdown | 作業完了時 |
 | `cmux-team create-task` | タスク作成 | タスク追加時 |
 | `cmux-team trace` | API トレース検索 | デバッグ・分析時 |
+| `cmux-team artifacts` | アーティファクト一覧・表示・検索 | 知見の管理 |
 
 #### スラッシュコマンド（Claude 内で実行）
 
@@ -77,6 +78,7 @@ Claude: → CLI でキューに TODO を追加
 | `/team-spec [概要]` | 要件をブレスト | 何を作るか決める時 |
 | `/team-task [操作]` | タスク管理 | 設計判断・課題の記録 |
 | `/team-archive [範囲]` | 完了タスクのアーカイブ | タスク整理時 |
+| `/artifact [type] "タイトル"` | 知見をアーティファクトとして保存 | 調査・判断の記録 |
 
 ## アーキテクチャ
 
@@ -167,6 +169,7 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 │   ├── open/          # 未完了タスク
 │   ├── closed/        # 完了タスク
 │   └── archived/      # アーカイブ済み
+├── artifacts/         # 知見の記録（Axxx 番号付き）
 ├── specs/             # 仕様書（git tracked）
 ├── output/            # エージェント出力（gitignore）
 ├── prompts/           # 生成プロンプト（gitignore）
