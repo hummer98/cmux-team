@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.13.1] - 2026-04-03
+
+### Fixed
+- auto-restart 時の Conductor 発見をマーカーファイル方式に変更。タブ名ベースの検出は using-cmux の hook によるタブ名上書きで機能しなかった問題を修正
+
 ## [3.13.0] - 2026-04-03
 
 ### Changed
