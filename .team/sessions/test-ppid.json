@@ -1,0 +1,10 @@
+{
+  "ppid": 92628,
+  "pid": 92709,
+  "session_id": "6695f5c4-0169-4434-ad0a-a2a6b636c30b",
+  "source": "startup",
+  "surface": "not_set",
+  "cmux_current_surface": "not_set",
+  "timestamp": "2026-04-01T01:35:17Z",
+  "ps_tree": "92628 92355 /Users/yamamoto/.local/bin/claude"
+}
