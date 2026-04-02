@@ -99,14 +99,12 @@ AGENT_PROMPT
 
 # 2. Agent spawn（--prompt-file でファイルパスだけを渡す）
 # 注意: --bare は OAuth 認証（Claude Max）をスキップするため使用禁止
-# pane の取得（cmux identify で自分の pane を取得）
-MY_PANE=$(cmux identify | jq -r '.caller.pane_id // empty')
+# pane は spawn-agent が CMUX_SURFACE 環境変数から自動解決するため指定不要
 
 RESULT=$(cmux-team spawn-agent \
   --conductor-id $CONDUCTOR_ID \
   --role impl \
   --task-title "<サブタスクの簡潔な説明>" \
-  --pane "$MY_PANE" \
   --prompt-file "$PROMPT_FILE")
 AGENT_SURFACE=$(echo "$RESULT" | grep -o 'SURFACE=surface:[0-9]*' | cut -d= -f2)
 echo "Agent spawned: $AGENT_SURFACE"
@@ -227,7 +225,6 @@ RESULT=$(cmux-team spawn-agent \
   --conductor-id $CONDUCTOR_ID \
   --role reviewer \
   --task-title "Code Review" \
-  --pane "$MY_PANE" \
   --prompt-file "$REVIEWER_PROMPT")
 REVIEWER_SURFACE=$(echo "$RESULT" | grep -o 'SURFACE=surface:[0-9]*' | cut -d= -f2)
 
