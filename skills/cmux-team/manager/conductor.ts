@@ -68,7 +68,7 @@ export async function initializeConductorSlots(
       // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
       await cmux.send(
         surface,
-        `export CMUX_SURFACE=${surface} && cmux-team conductor conductor-slot-${i + 1}\n`
+        `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
       );
 
       // タブ名設定
@@ -79,7 +79,6 @@ export async function initializeConductorSlots(
       const paneId = await getPaneIdForSurface(surface);
 
       const state: ConductorState = {
-        conductorId: `conductor-slot-${i + 1}`,
         surface,
         startedAt: new Date().toISOString(),
         agents: [],
@@ -194,7 +193,7 @@ export async function assignTask(
 
     await log(
       "conductor_started",
-      `task_id=${taskId} conductor_id=${conductor.conductorId} task_run_id=${taskRunId} surface=${conductor.surface} title=${taskTitle}`
+      `task_id=${taskId} task_run_id=${taskRunId} surface=${conductor.surface} title=${taskTitle}`
     );
 
     return conductor;
@@ -258,7 +257,7 @@ export async function resetConductor(
     conductor.taskStatusFile = undefined;
     conductor.agents = [];
 
-    await log("conductor_reset", `conductor_id=${conductor.conductorId} surface=${conductor.surface}`);
+    await log("conductor_reset", `surface=${conductor.surface}`);
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);
   }
@@ -329,9 +328,7 @@ export async function spawnConductor(
     }
 
     const paneId = await getPaneIdForSurface(surface);
-    const conductorId = `conductor-fallback-${Math.floor(Date.now() / 1000)}`;
     const conductor: ConductorState = {
-      conductorId,
       surface,
       startedAt: new Date().toISOString(),
       agents: [],
@@ -342,7 +339,7 @@ export async function spawnConductor(
     // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
       surface,
-      `export CMUX_SURFACE=${surface} && cmux-team conductor ${conductorId}\n`
+      `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
     );
 
     return await assignTask(conductor, taskId, projectRoot);

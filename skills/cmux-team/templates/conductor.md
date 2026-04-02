@@ -102,7 +102,7 @@ AGENT_PROMPT
 # pane は spawn-agent が CMUX_SURFACE 環境変数から自動解決するため指定不要
 
 RESULT=$(cmux-team spawn-agent \
-  --conductor-id $CONDUCTOR_ID \
+  --conductor-surface $CMUX_SURFACE \
   --role impl \
   --task-title "<サブタスクの簡潔な説明>" \
   --prompt-file "$PROMPT_FILE")
@@ -222,7 +222,7 @@ REVIEW_PROMPT
 
 # Reviewer Agent spawn（--prompt-file でファイルパスだけを渡す）
 RESULT=$(cmux-team spawn-agent \
-  --conductor-id $CONDUCTOR_ID \
+  --conductor-surface $CMUX_SURFACE \
   --role reviewer \
   --task-title "Code Review" \
   --prompt-file "$REVIEWER_PROMPT")

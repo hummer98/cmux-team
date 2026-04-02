@@ -33,7 +33,7 @@ interface TraceEntry {
 
 export async function start(
   projectRoot: string,
-  opts?: { conductorId?: string; taskId?: string; role?: string; getState?: () => any }
+  opts?: { conductorSurface?: string; taskId?: string; role?: string; getState?: () => any }
 ): Promise<ProxyHandle> {
   const upstream = process.env.ANTHROPIC_API_URL || DEFAULT_UPSTREAM;
   const tracesDir = join(projectRoot, ".team/logs/traces");
@@ -91,20 +91,20 @@ export async function start(
 
       // リクエストヘッダーからメタデータを動的抽出（opts はフォールバック）
       const taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
-      const conductorId = req.headers.get("x-cmux-conductor-id") || opts?.conductorId;
+      const conductorSurface = req.headers.get("x-cmux-conductor-id") || opts?.conductorSurface;
       const role = req.headers.get("x-cmux-role") || opts?.role;
       const sessionId = req.headers.get("x-claude-code-session-id") || undefined;
 
       // Agent の sessionId を daemon state に反映
-      if (sessionId && conductorId && opts?.getState) {
+      if (sessionId && conductorSurface && opts?.getState) {
         const st = opts.getState();
         const conductors: Map<string, any> | undefined = st.conductors;
         if (conductors) {
-          // conductorId または taskRunId で Conductor を検索（daemon.ts の findConductor と同じロジック）
-          let conductor = conductors.get(conductorId);
+          // conductorSurface または taskRunId で Conductor を検索（daemon.ts の findConductor と同じロジック）
+          let conductor = conductors.get(conductorSurface);
           if (!conductor) {
             for (const c of conductors.values()) {
-              if (c.taskRunId === conductorId) { conductor = c; break; }
+              if (c.taskRunId === conductorSurface) { conductor = c; break; }
             }
           }
           if (conductor?.agents) {
@@ -163,7 +163,7 @@ export async function start(
           status: upstreamRes.status,
           requestBytes,
           startTime,
-          conductorId,
+          conductorSurface,
           taskId,
           role,
           db,
@@ -186,7 +186,7 @@ export async function start(
 
       const entry: TraceEntry = {
         timestamp: new Date().toISOString(),
-        conductor_id: conductorId,
+        conductor_id: conductorSurface,
         task_id: taskId,
         role,
         method: req.method,
@@ -210,7 +210,7 @@ export async function start(
         insertTrace(db, {
           timestamp: new Date().toISOString(),
           task_id: taskId,
-          conductor_id: conductorId,
+          conductor_id: conductorSurface,
           role,
           session_id: sessionId,
           method: req.method,
@@ -260,7 +260,7 @@ async function drainAndLog(
     status: number;
     requestBytes: number;
     startTime: number;
-    conductorId?: string;
+    conductorSurface?: string;
     taskId?: string;
     role?: string;
     db: Database;
@@ -288,7 +288,7 @@ async function drainAndLog(
 
   const entry: TraceEntry = {
     timestamp: new Date().toISOString(),
-    conductor_id: ctx.conductorId,
+    conductor_id: ctx.conductorSurface,
     task_id: ctx.taskId,
     role: ctx.role,
     method: ctx.method,
@@ -320,7 +320,7 @@ async function drainAndLog(
     insertTrace(ctx.db, {
       timestamp: new Date().toISOString(),
       task_id: ctx.taskId,
-      conductor_id: ctx.conductorId,
+      conductor_id: ctx.conductorSurface,
       role: ctx.role,
       session_id: ctx.sessionId,
       method: ctx.method,

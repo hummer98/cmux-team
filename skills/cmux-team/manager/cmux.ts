@@ -97,6 +97,52 @@ export async function validateSurface(surface: string): Promise<boolean> {
   }
 }
 
+/**
+ * daemon と同一 workspace 内の Conductor surface を発見する。
+ * タブ名に "♦" を含む surface を Conductor とみなす。
+ */
+export async function findWorkspaceConductors(
+  daemonSurface: string
+): Promise<Array<{ surface: string; paneId: string }>> {
+  const output = await tree();
+  const lines = output.split("\n");
+
+  // 1. daemon surface が属する workspace を特定
+  let currentWorkspace: string | null = null;
+  let daemonWorkspace: string | null = null;
+  for (const line of lines) {
+    const wsMatch = line.match(/workspace (workspace:\d+)/);
+    if (wsMatch) currentWorkspace = wsMatch[1];
+    if (line.includes(daemonSurface)) {
+      daemonWorkspace = currentWorkspace;
+      break;
+    }
+  }
+  if (!daemonWorkspace) return [];
+
+  // 2. その workspace 内で "♦" タブ名を持つ surface を収集
+  const conductors: Array<{ surface: string; paneId: string }> = [];
+  let inWorkspace = false;
+  let currentPane: string | null = null;
+  for (const line of lines) {
+    const wsMatch = line.match(/workspace (workspace:\d+)/);
+    if (wsMatch) {
+      inWorkspace = wsMatch[1] === daemonWorkspace;
+      continue;
+    }
+    if (!inWorkspace) continue;
+    const paneMatch = line.match(/(pane:\d+)/);
+    if (paneMatch) currentPane = paneMatch[1];
+    if (currentPane && /surface:\d+/.test(line) && line.includes("♦")) {
+      const surfaceMatch = line.match(/(surface:\d+)/);
+      if (surfaceMatch) {
+        conductors.push({ surface: surfaceMatch[1], paneId: currentPane });
+      }
+    }
+  }
+  return conductors;
+}
+
 export async function getCallerSurface(): Promise<string> {
   const { stdout } = await execFile("cmux", ["identify"]);
   const data = JSON.parse(stdout);

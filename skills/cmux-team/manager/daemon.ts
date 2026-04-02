@@ -1,7 +1,7 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir, stat, watch } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { execFile } from "child_process";
@@ -47,13 +47,13 @@ export interface DaemonState {
   wakeup: (() => void) | null;
 }
 
-/** conductorId または taskRunId で Conductor を検索 */
-function findConductor(state: DaemonState, id: string): ConductorState | undefined {
-  const direct = state.conductors.get(id);
+/** surface または taskRunId で Conductor を検索 */
+function findConductor(state: DaemonState, surface: string): ConductorState | undefined {
+  const direct = state.conductors.get(surface);
   if (direct) return direct;
-  // taskRunId で検索（Conductor セッションが taskRunId を conductorId として送信する場合）
+  // taskRunId で検索（フォールバック）
   for (const c of state.conductors.values()) {
-    if (c.taskRunId === id) return c;
+    if (c.taskRunId === surface) return c;
   }
   return undefined;
 }
@@ -226,32 +226,32 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
 }
 
 export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // team.json に既存 Conductor があり surface が生きていればスキップ
-  // ただし daemon 自身の surface は除外（再起動時の誤認防止）
-  if (state.conductors.size > 0) {
-    const validConductors = [...state.conductors.values()]
-      .filter(c => c.surface !== daemonSurface);
-    if (validConductors.length > 0) {
-      const checks = await Promise.all(
-        validConductors.map(c => cmux.validateSurface(c.surface))
-      );
-      if (checks.some(alive => alive)) {
-        console.log("✅ Conductor スロット: 既存セッション検出 (スキップ)");
-        return;
+  // cmux tree から同一 workspace 内の既存 Conductor を発見して再利用
+  if (daemonSurface) {
+    const existing = await cmux.findWorkspaceConductors(daemonSurface);
+    if (existing.length > 0) {
+      state.conductors.clear();
+      for (let i = 0; i < existing.length; i++) {
+        const { surface, paneId } = existing[i]!;
+        state.conductors.set(surface, {
+          surface,
+          startedAt: new Date().toISOString(),
+          agents: [],
+          status: "idle",
+          paneId,
+        });
       }
-    }
-    // daemon surface と一致する stale エントリを除去
-    for (const [id, c] of state.conductors) {
-      if (c.surface === daemonSurface) {
-        state.conductors.delete(id);
-        await log("conductor_stale_removed", `id=${id} surface=${c.surface} reason=daemon_surface`);
-      }
+      console.log(`✅ Conductor スロット: 既存 ${existing.length}個 を再利用`);
+      await log("conductors_discovered", `count=${existing.length} surfaces=${existing.map(e => e.surface).join(",")}`);
+      return;
     }
   }
 
+  // 既存なし → 新規作成
+  await log("layout_creating_new_slots", `count=${state.maxConductors}`);
   const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors, daemonSurface);
   for (const slot of slots) {
-    state.conductors.set(slot.conductorId, slot);
+    state.conductors.set(slot.surface, slot);
   }
 }
 
@@ -293,9 +293,9 @@ async function processQueue(state: DaemonState): Promise<void> {
         const isSuccess = message.success !== false;
         await log(
           isSuccess ? "conductor_done_signal" : "conductor_error",
-          `conductor_id=${message.conductorId}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
+          `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
         );
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.surface);
         if (conductor) {
           await handleConductorDone(state, conductor);
         }
@@ -303,7 +303,7 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "AGENT_SPAWNED": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.conductorSurface);
         if (conductor) {
           conductor.agents.push({
             surface: message.surface,
@@ -313,35 +313,35 @@ async function processQueue(state: DaemonState): Promise<void> {
           });
           await log(
             "agent_spawned",
-            `conductor=${message.conductorId} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
+            `conductor_surface=${message.conductorSurface} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
           );
         }
         break;
       }
 
       case "AGENT_DONE": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.conductorSurface);
         if (conductor) {
           conductor.agents = conductor.agents.filter(
             (a) => a.surface !== message.surface
           );
           await log(
             "agent_done",
-            `conductor=${message.conductorId} surface=${message.surface}`
+            `conductor_surface=${message.conductorSurface} surface=${message.surface}`
           );
         }
         break;
       }
 
       case "SESSION_STARTED": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.surface);
         if (conductor) {
           // disconnected → idle に復帰
           if (conductor.status === "disconnected") {
             conductor.status = "idle";
             await log(
               "conductor_recovered",
-              `conductor=${message.conductorId} surface=${message.surface}`
+              `surface=${message.surface}`
             );
           }
           conductor.pid = message.pid;
@@ -350,29 +350,37 @@ async function processQueue(state: DaemonState): Promise<void> {
           spawnPidWatcher(state, conductor, message.pid);
           await log(
             "session_started",
-            `conductor=${message.conductorId} surface=${message.surface} pid=${message.pid}`
+            `surface=${message.surface} pid=${message.pid}`
           );
         }
         break;
       }
 
       case "SESSION_ENDED": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.surface);
         if (conductor) {
+          // surface が一致しない場合は旧セッションからの stale イベント → 無視
+          if (message.surface !== conductor.surface) {
+            await log(
+              "session_ended_ignored",
+              `event_surface=${message.surface} current_surface=${conductor.surface}`
+            );
+            break;
+          }
           conductor.status = "disconnected";
           conductor.disconnectedAt = message.timestamp;
           conductor.pid = undefined;
           conductor.sessionId = undefined;
           await log(
             "session_ended",
-            `conductor=${message.conductorId} surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
+            `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
           );
         }
         break;
       }
 
       case "SESSION_ACTIVE": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.surface);
         if (conductor) {
           conductor.disconnectedAt = undefined;
           if (message.pid) conductor.pid = message.pid;
@@ -381,13 +389,13 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "SESSION_IDLE": {
-        const conductor = findConductor(state, message.conductorId);
+        const conductor = findConductor(state, message.surface);
         if (conductor) {
           conductor.disconnectedAt = undefined;  // alive の証拠
           if (message.pid) conductor.pid = message.pid;
           await log(
             "session_idle",
-            `conductor=${message.conductorId} surface=${message.surface}`
+            `surface=${message.surface}`
           );
         }
         break;
@@ -454,14 +462,14 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
     const updated = await assignTask(idleConductor, task.id, state.projectRoot);
     if (updated) {
-      state.conductors.set(updated.conductorId, updated);
+      state.conductors.set(updated.surface, updated);
     } else {
       // assignTask 失敗 → conductor を disconnected にして再選択を防ぐ
       idleConductor.status = "disconnected";
       idleConductor.disconnectedAt = new Date().toISOString();
       await log(
         "conductor_disconnected",
-        `conductor=${idleConductor.conductorId} surface=${idleConductor.surface} reason=assign_failed task_id=${task.id}`
+        `surface=${idleConductor.surface} reason=assign_failed task_id=${task.id}`
       );
     }
   }
@@ -489,7 +497,7 @@ function spawnPidWatcher(
         conductor.sessionId = undefined;
         await log(
           "session_ended",
-          `conductor=${conductor.conductorId} pid=${pid} status=disconnected reason=pid_watcher`
+          `surface=${conductor.surface} pid=${pid} status=disconnected reason=pid_watcher`
         );
       }
     }
@@ -497,13 +505,13 @@ function spawnPidWatcher(
 }
 
 async function monitorConductors(state: DaemonState): Promise<void> {
-  for (const [id, conductor] of state.conductors) {
+  for (const [surface, conductor] of state.conductors) {
     if (conductor.status === "idle" || conductor.status === "disconnected") continue;
 
     if (conductor.status === "done") {
       // 既に done 処理済み、surface 消失チェックのみ
       if (!(await cmux.validateSurface(conductor.surface))) {
-        await log("conductor_surface_lost", `conductor_id=${id}`);
+        await log("conductor_surface_lost", `surface=${surface}`);
       }
       continue;
     }
@@ -519,7 +527,7 @@ async function monitorConductors(state: DaemonState): Promise<void> {
       case "crashed":
         await log(
           "conductor_crashed",
-          `conductor_id=${id} surface=${conductor.surface}`
+          `surface=${surface}`
         );
         // persistent Conductor がクラッシュ → idle に戻す
         conductor.status = "idle";
@@ -537,7 +545,7 @@ async function handleConductorDone(
 
   await log(
     "task_completed",
-    `task_id=${conductor.taskId} conductor_id=${conductor.conductorId}${
+    `task_id=${conductor.taskId} surface=${conductor.surface}${
       conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
     }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
   );
@@ -608,11 +616,10 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     };
     teamJson.phase = "running";
     teamJson.conductors = [...state.conductors.values()].map((c) => ({
-      id: c.conductorId,
+      surface: c.surface,
       taskRunId: c.taskRunId,
       taskId: c.taskId,
       taskTitle: c.taskTitle,
-      surface: c.surface,
       status: c.status,
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
@@ -625,6 +632,9 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
         sessionId: a.sessionId,
       })),
     }));
-    await writeFile(teamJsonPath, JSON.stringify(teamJson, null, 2) + "\n");
+    // アトミック書き込み: tmp → rename で中途半端な書き込みを防止
+    const tmpPath = teamJsonPath + ".tmp";
+    await writeFile(tmpPath, JSON.stringify(teamJson, null, 2) + "\n");
+    await rename(tmpPath, teamJsonPath);
   } catch {}
 }

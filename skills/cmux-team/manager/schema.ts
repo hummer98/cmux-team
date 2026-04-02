@@ -11,7 +11,6 @@ export const TaskCreatedMessage = z.object({
 
 export const ConductorDoneMessage = z.object({
   type: z.literal("CONDUCTOR_DONE"),
-  conductorId: z.string(),
   sessionId: z.string().optional(),
   transcriptPath: z.string().optional(),
   surface: z.string(),
@@ -23,7 +22,7 @@ export const ConductorDoneMessage = z.object({
 
 export const AgentSpawnedMessage = z.object({
   type: z.literal("AGENT_SPAWNED"),
-  conductorId: z.string(),
+  conductorSurface: z.string(),
   surface: z.string(),
   role: z.string().optional(),
   taskTitle: z.string().optional(),
@@ -32,14 +31,13 @@ export const AgentSpawnedMessage = z.object({
 
 export const AgentDoneMessage = z.object({
   type: z.literal("AGENT_DONE"),
-  conductorId: z.string(),
+  conductorSurface: z.string(),
   surface: z.string(),
   timestamp: z.string().datetime(),
 });
 
 export const SessionStartedMessage = z.object({
   type: z.literal("SESSION_STARTED"),
-  conductorId: z.string(),
   surface: z.string(),
   pid: z.number(),
   sessionId: z.string().optional(),
@@ -48,7 +46,6 @@ export const SessionStartedMessage = z.object({
 
 export const SessionEndedMessage = z.object({
   type: z.literal("SESSION_ENDED"),
-  conductorId: z.string(),
   surface: z.string(),
   pid: z.number().optional(),
   reason: z.string().optional(),
@@ -57,7 +54,6 @@ export const SessionEndedMessage = z.object({
 
 export const SessionActiveMessage = z.object({
   type: z.literal("SESSION_ACTIVE"),
-  conductorId: z.string(),
   surface: z.string(),
   pid: z.number().optional(),
   timestamp: z.string().datetime(),
@@ -65,7 +61,6 @@ export const SessionActiveMessage = z.object({
 
 export const SessionIdleMessage = z.object({
   type: z.literal("SESSION_IDLE"),
-  conductorId: z.string(),
   surface: z.string(),
   pid: z.number().optional(),
   timestamp: z.string().datetime(),
@@ -105,7 +100,6 @@ export interface AgentState {
 // --- Conductor 状態 ---
 
 export const ConductorState = z.object({
-  conductorId: z.string(),
   taskRunId: z.string().optional(),
   taskId: z.string().optional(),
   taskTitle: z.string().optional(),

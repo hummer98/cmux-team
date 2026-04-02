@@ -131,7 +131,6 @@ describe("Queue", () => {
     const q = await getQueue();
     await q.send({
       type: "CONDUCTOR_DONE",
-      conductorId: "conductor-123",
       surface: "surface:42",
       success: true,
       sessionId: "abc-def",
@@ -140,7 +139,7 @@ describe("Queue", () => {
 
     const messages = await q.read();
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.conductorId).toBe("conductor-123");
+    expect(messages[0]!.message.surface).toBe("surface:42");
     expect(messages[0]!.message.sessionId).toBe("abc-def");
   });
 });

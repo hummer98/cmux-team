@@ -66,7 +66,7 @@ AGENT_PROMPT
 # 2. Agent spawn（--prompt-file でファイルパスだけを渡す）
 # 注意: --bare は OAuth 認証（Claude Max）をスキップするため使用禁止
 RESULT=$(cmux-team spawn-agent \
-  --conductor-id $CONDUCTOR_ID \
+  --conductor-surface $CMUX_SURFACE \
   --role impl \
   --task-title "<サブタスクの簡潔な説明>" \
   --prompt-file "$PROMPT_FILE")
@@ -155,7 +155,7 @@ REVIEW_PROMPT
 
 # Reviewer Agent spawn（--prompt-file でファイルパスだけを渡す）
 RESULT=$(cmux-team spawn-agent \
-  --conductor-id $CONDUCTOR_ID \
+  --conductor-surface $CMUX_SURFACE \
   --role reviewer \
   --task-title "Code Review" \
   --prompt-file "$REVIEWER_PROMPT")
