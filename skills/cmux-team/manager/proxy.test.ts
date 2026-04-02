@@ -45,7 +45,7 @@ describe("proxy", () => {
     process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
 
     const handle = await start(testDir, {
-      conductorId: "cond-1",
+      conductorSurface: "cond-1",
       taskId: "42",
       role: "researcher",
     });
@@ -147,7 +147,7 @@ describe("proxy", () => {
       running: true,
       masterSurface: "surface:1",
       conductors: new Map([
-        ["cond-1", { conductorId: "cond-1", taskId: "001", surface: "surface:2", agents: [] }],
+        ["surface:2", { taskId: "001", surface: "surface:2", agents: [] }],
       ]),
       projectRoot: testDir,
       pollInterval: 10000,
@@ -167,7 +167,7 @@ describe("proxy", () => {
     expect(body.running).toBe(true);
     expect(body.masterSurface).toBe("surface:1");
     expect(body.lastUpdate).toBe("2026-03-29T00:00:00.000Z");
-    expect((body.conductors as Record<string, any>)["cond-1"].conductorId).toBe("cond-1");
+    expect((body.conductors as Record<string, any>)["surface:2"].surface).toBe("surface:2");
     handle.stop();
   });
 
@@ -195,8 +195,8 @@ describe("proxy", () => {
   test("GET /conductors が Map をオブジェクトとして返す", async () => {
     const mockState = {
       conductors: new Map([
-        ["c1", { conductorId: "c1", taskId: "010", surface: "surface:3", agents: [] }],
-        ["c2", { conductorId: "c2", taskId: "011", surface: "surface:4", agents: [] }],
+        ["surface:3", { taskId: "010", surface: "surface:3", agents: [] }],
+        ["surface:4", { taskId: "011", surface: "surface:4", agents: [] }],
       ]),
       lastUpdate: new Date(),
       taskList: [],
@@ -207,8 +207,8 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as Record<string, any>;
-    expect(body.c1.conductorId).toBe("c1");
-    expect(body.c2.taskId).toBe("011");
+    expect(body["surface:3"].surface).toBe("surface:3");
+    expect(body["surface:4"].taskId).toBe("011");
     handle.stop();
   });
 

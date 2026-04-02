@@ -9,9 +9,9 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
- *   ./main.ts spawn-agent --conductor-id <id> --role <role> --prompt <prompt> [--pane <paneId>]
+ *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt> [--pane <paneId>]
  *   ./main.ts agents                           # 稼働中エージェント一覧
- *   ./main.ts kill-agent --surface <s> [--conductor-id <id>]
+ *   ./main.ts kill-agent --surface <s> [--conductor-surface <surface>]
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
@@ -124,39 +124,6 @@ async function cmdStart(): Promise<void> {
 
   // ファイルシステム監視（tasks/, queue/ の変更で即時 tick）
   initFileWatcher(state);
-
-  // team.json から Conductor 状態を復元（リロード時の二重起動防止）
-  try {
-    const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
-    let restoredCount = 0;
-    for (const c of teamJson.conductors ?? []) {
-      if (c.surface && await cmux.validateSurface(c.surface)) {
-        state.conductors.set(c.id, {
-          conductorId: c.id,
-          taskRunId: c.taskRunId,
-          taskId: c.taskId,
-          taskTitle: c.taskTitle,
-          surface: c.surface,
-          worktreePath: c.worktreePath,
-          outputDir: c.outputDir,
-          taskStatusFile: c.taskStatusFile,
-          startedAt: c.startedAt ?? new Date().toISOString(),
-          agents: (c.agents ?? []).map((a: any) => ({
-            surface: a.surface,
-            role: a.role,
-            spawnedAt: a.spawnedAt ?? new Date().toISOString(),
-          })),
-          status: c.status || "running",
-          paneId: c.paneId,
-        });
-        restoredCount++;
-      }
-    }
-    if (restoredCount > 0) {
-      console.log(`✅ Conductor 状態復元: ${restoredCount}個`);
-      await log("conductors_restored", `count=${state.conductors.size}`);
-    }
-  } catch {}
 
   // インフラ準備
   await initInfra(state);
@@ -352,8 +319,7 @@ async function cmdSend(): Promise<void> {
     case "CONDUCTOR_DONE":
       message = {
         type: "CONDUCTOR_DONE",
-        conductorId: requireArg("conductor-id"),
-        surface: getArg("surface") || "unknown",
+        surface: requireArg("surface"),
         success: getArg("success") !== "false",  // デフォルト true（後方互換）
         reason: getArg("reason"),
         exitCode: getArg("exit-code") ? Number(getArg("exit-code")) : undefined,
@@ -366,7 +332,7 @@ async function cmdSend(): Promise<void> {
     case "AGENT_SPAWNED":
       message = {
         type: "AGENT_SPAWNED",
-        conductorId: requireArg("conductor-id"),
+        conductorSurface: requireArg("conductor-surface"),
         surface: requireArg("surface"),
         role: getArg("role"),
         taskTitle: getArg("task-title"),
@@ -377,7 +343,7 @@ async function cmdSend(): Promise<void> {
     case "AGENT_DONE":
       message = {
         type: "AGENT_DONE",
-        conductorId: requireArg("conductor-id"),
+        conductorSurface: requireArg("conductor-surface"),
         surface: requireArg("surface"),
         timestamp: now,
       };
@@ -386,8 +352,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_STARTED":
       message = {
         type: "SESSION_STARTED",
-        conductorId: requireArg("conductor-id"),
-        surface: getArg("surface") || "unknown",
+        surface: requireArg("surface"),
         pid: Number(requireArg("pid")),
         sessionId: getArg("session-id"),
         timestamp: now,
@@ -397,8 +362,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_ENDED":
       message = {
         type: "SESSION_ENDED",
-        conductorId: requireArg("conductor-id"),
-        surface: getArg("surface") || "unknown",
+        surface: requireArg("surface"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         reason: getArg("reason"),
         timestamp: now,
@@ -408,8 +372,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_ACTIVE":
       message = {
         type: "SESSION_ACTIVE",
-        conductorId: requireArg("conductor-id"),
-        surface: getArg("surface") || "unknown",
+        surface: requireArg("surface"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -418,8 +381,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_IDLE":
       message = {
         type: "SESSION_IDLE",
-        conductorId: requireArg("conductor-id"),
-        surface: getArg("surface") || "unknown",
+        surface: requireArg("surface"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -449,7 +411,7 @@ async function cmdStatus(): Promise<void> {
   const pid = teamJson.manager?.pid;
   const alive = pid && isProcessAlive(pid);
   const masterSurface = teamJson.master?.surface;
-  const conductors: Array<{ id: string; taskId: string; taskTitle?: string; surface: string }> = teamJson.conductors || [];
+  const conductors: Array<{ taskId: string; taskTitle?: string; surface: string }> = teamJson.conductors || [];
   const logLines = getArg("log") || "10";
 
   // --- ヘッダー ---
@@ -471,7 +433,7 @@ async function cmdStatus(): Promise<void> {
   } else {
     for (const c of conductors) {
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  T${c.taskId}${title}  ${c.id}`);
+      console.log(`  ● [${c.surface.replace("surface:", "")}]  T${c.taskId}${title}`);
     }
   }
 
@@ -607,7 +569,7 @@ async function cmdStop(): Promise<void> {
 }
 
 async function cmdSpawnAgent(): Promise<void> {
-  const conductorId = requireArg("conductor-id");
+  const conductorSurface = requireArg("conductor-surface");
   const role = requireArg("role");
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
@@ -628,8 +590,8 @@ async function cmdSpawnAgent(): Promise<void> {
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductors: any[] = teamJson.conductors ?? [];
-    // conductor-id で検索
-    const conductor = conductors.find((c: any) => c.id === conductorId);
+    // conductor-surface で検索
+    const conductor = conductors.find((c: any) => c.surface === conductorSurface);
     if (!paneId) paneId = conductor?.paneId;
     worktreePath = conductor?.worktreePath;
     // --task-title 省略時は conductor のタスクタイトルをフォールバック
@@ -656,7 +618,6 @@ async function cmdSpawnAgent(): Promise<void> {
   // --- 3. Claude Code 起動 ---
   // 環境変数を export（Conductor のシェルセッションに永続化し子プロセスに自動継承）
   const exports: string[] = [
-    `export CONDUCTOR_ID=${conductorId}`,
     `export ROLE=${role}`,
     `export PROJECT_ROOT=${PROJECT_ROOT}`,
     `export CMUX_SURFACE=${surface}`,
@@ -699,7 +660,7 @@ async function cmdSpawnAgent(): Promise<void> {
   await ensureQueueDirs();
   await sendMessage({
     type: "AGENT_SPAWNED",
-    conductorId,
+    conductorSurface,
     surface,
     role,
     taskTitle,
@@ -719,7 +680,6 @@ async function cmdAgents(): Promise<void> {
 
   const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
   const conductors: Array<{
-    id: string;
     taskId: string;
     taskTitle?: string;
     surface: string;
@@ -733,7 +693,7 @@ async function cmdAgents(): Promise<void> {
       agentCount++;
       const rolePart = a.role ? `role=${a.role}` : "role=unknown";
       const sessionPart = a.sessionId ? `  session=${a.sessionId}` : "";
-      console.log(`${a.surface}  ${rolePart}  conductor=${c.id}  task=${c.taskId}${sessionPart}`);
+      console.log(`${a.surface}  ${rolePart}  conductor=${c.surface}  task=${c.taskId}${sessionPart}`);
     }
   }
 
@@ -744,17 +704,17 @@ async function cmdAgents(): Promise<void> {
 
 async function cmdKillAgent(): Promise<void> {
   const surface = requireArg("surface");
-  const conductorId = getArg("conductor-id");
+  const conductorSurface = getArg("conductor-surface");
 
   // --- 1. surface を閉じる ---
   await cmux.closeSurface(surface);
 
   // --- 2. AGENT_DONE をキューに送信 ---
-  if (conductorId) {
+  if (conductorSurface) {
     await ensureQueueDirs();
     await sendMessage({
       type: "AGENT_DONE",
-      conductorId,
+      conductorSurface,
       surface,
       timestamp: new Date().toISOString(),
     });
@@ -929,7 +889,7 @@ async function cmdCloseTask(): Promise<void> {
 async function cmdTrace(): Promise<void> {
   const db = initDB(PROJECT_ROOT);
   const taskId = getArg("task");
-  const conductorId = getArg("conductor");
+  const conductorSurface = getArg("conductor");
   const role = getArg("role");
   const search = getArg("search");
   const showId = getArg("show");
@@ -968,7 +928,7 @@ async function cmdTrace(): Promise<void> {
 
   const traces = searchTraces(db, {
     taskId,
-    conductorId,
+    conductorId: conductorSurface,
     role,
     search,
     limit: limit ? Number(limit) : 20,
@@ -998,30 +958,31 @@ async function cmdTrace(): Promise<void> {
 }
 
 async function cmdRestartConductor(): Promise<void> {
-  const conductorId = requireArg("conductor-id");
+  const surface = requireArg("surface");
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
   const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-  const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
+  const conductor = teamJson.conductors?.find((c: any) => c.surface === surface);
   if (!conductor) {
-    console.error(`Conductor ${conductorId} not found`);
+    console.error(`Conductor with surface ${surface} not found`);
     process.exit(1);
   }
-  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} && cmux-team conductor ${conductorId}\n`);
-  console.log(`Conductor ${conductorId} restarting on ${conductor.surface}`);
+  // surface から slot ID を導出（conductor-slot-N 形式は使わず、surface をそのまま識別子とする）
+  const slotId = surface.replace("surface:", "");
+  await cmux.send(surface, `export CMUX_SURFACE=${surface} && cmux-team conductor ${slotId}\n`);
+  console.log(`Conductor restarting on ${surface}`);
 }
 
 async function cmdResetConductor(): Promise<void> {
-  const conductorId = requireArg("conductor-id");
+  const surface = requireArg("surface");
   await ensureQueueDirs();
   const path = await sendMessage({
     type: "CONDUCTOR_DONE",
-    conductorId,
-    surface: getArg("surface") || "unknown",
+    surface,
     success: false,
     reason: "manual_reset",
     timestamp: new Date().toISOString(),
   });
-  console.log(`Reset signal sent for conductor ${conductorId}: ${path}`);
+  console.log(`Reset signal sent for conductor on ${surface}: ${path}`);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1207,9 +1168,9 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-agent --conductor-id <id> --role <role> --prompt <prompt> [--pane <paneId>]
+  cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt> [--pane <paneId>]
   cmux-team agents                             稼働中エージェント一覧
-  cmux-team kill-agent --surface <surface> [--conductor-id <id>]
+  cmux-team kill-agent --surface <surface> [--conductor-surface <surface>]
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
@@ -1218,8 +1179,8 @@ Usage:
   cmux-team trace --show <id>                  トレース詳細表示
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
   cmux-team launch-master                      Master 起動（proxy 自動解決）
-  cmux-team restart-conductor --conductor-id <id>  Conductor を再起動
-  cmux-team reset-conductor --conductor-id <id>    Conductor をリセット（idle に戻す）
+  cmux-team restart-conductor --surface <surface>  Conductor を再起動
+  cmux-team reset-conductor --surface <surface>    Conductor をリセット（idle に戻す）
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts show <id>                    アーティファクト表示
   cmux-team artifacts search <query>               全文検索

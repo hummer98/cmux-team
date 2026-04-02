@@ -425,7 +425,7 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 - **DB パス**: `.team/traces/traces.db`
 - **本文保存**: `.team/logs/traces/bodies/`
 - **検索**: `cmux-team trace --task <id>`, `--search <query>`, `--show <id>`
-- **メタデータ**: `x-cmux-task-id`, `x-cmux-conductor-id`, `x-cmux-role` ヘッダーで伝播
+- **メタデータ**: `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role` ヘッダーで伝播
 - **自動設定**: Master/Conductor に `ANTHROPIC_BASE_URL` を設定し、全リクエストを Proxy 経由にする
 
 ### API レート制限

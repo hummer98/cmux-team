@@ -60,7 +60,7 @@ export async function generateConductorRolePrompt(
 
 export async function generateConductorTaskPrompt(
   projectRoot: string,
-  conductorId: string,
+  taskRunId: string,
   taskId: string,
   taskContent: string,
   worktreePath: string,
@@ -77,7 +77,7 @@ export async function generateConductorTaskPrompt(
   const promptsDir = join(projectRoot, ".team/prompts");
   await mkdir(promptsDir, { recursive: true });
 
-  const promptFile = join(promptsDir, `${conductorId}.md`);
+  const promptFile = join(promptsDir, `${taskRunId}.md`);
 
   let content = await readFile(join(templateDir, "conductor-task.md"), "utf-8");
 
@@ -86,7 +86,7 @@ export async function generateConductorTaskPrompt(
     .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
     .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
-    .replace(/\{\{CONDUCTOR_ID\}\}/g, conductorId)
+    .replace(/\{\{CONDUCTOR_ID\}\}/g, taskRunId)
     .replace(/\{\{TASK_STATUS_FILE\}\}/g, taskStatusFile ?? "");
 
   await writeFile(promptFile, content);

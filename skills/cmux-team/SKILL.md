@@ -83,9 +83,9 @@ description: >
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send TODO` | TODO 通知（`--content` 必須） |
 | `cmux-team send SHUTDOWN` | シャットダウン通知 |
-| `cmux-team spawn-agent` | Agent spawn（`--conductor-id`, `--role`, `--prompt` or `--prompt-file`） |
+| `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
-| `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-id` 任意） |
+| `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
@@ -106,7 +106,7 @@ daemon が起動すると Proxy が自動で立ち上がり、Master および C
 | ヘッダー | 内容 |
 |---------|------|
 | `x-cmux-task-id` | タスクID |
-| `x-cmux-conductor-id` | Conductor ID |
+| `x-cmux-conductor-surface` | Conductor surface |
 | `x-cmux-role` | エージェントロール |
 | `x-claude-code-session-id` | Claude Code セッションID |
 
