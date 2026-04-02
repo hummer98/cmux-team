@@ -153,7 +153,36 @@ cmux-team trace --search "keyword"
 cmux-team trace --show <trace-id>
 ```
 
-## 9. 言語ルール
+## 9. Artifact 出力
+
+作業中に以下に該当する知見が生まれた場合、Artifact として `.team/artifacts/` に保存する:
+
+- 調査結果（複数の選択肢の比較、技術的な発見）→ type: research
+- 設計判断（なぜその方法を選んだか）→ type: decision
+- セッション要約（重要な発見・学び）→ type: session
+
+### 手順
+
+1. 採番: `ls .team/artifacts/ 2>/dev/null | grep -oE '^A[0-9]+' | sort | tail -1` で最大番号 + 1
+2. ファイル作成: `.team/artifacts/Axxx-<slug>.md`
+3. フロントマター必須: id, type, title, created, author
+4. フロントマター任意: updated, task, tags
+
+```yaml
+---
+id: A001
+type: research
+title: "タイトル"
+created: <ISO 8601>
+author: <自分のロール ID>
+task: <関連タスク ID>
+tags: [tag1]
+---
+```
+
+**判断基準**: output ファイル（`.team/output/`）に書く成果物とは別に、後のセッションで参照される価値のある知見があれば Artifact にする。すべての作業に Artifact が必要なわけではない。
+
+## 10. 言語ルール
 
 - ドキュメント・コメント: 日本語
 - コード: 英語
