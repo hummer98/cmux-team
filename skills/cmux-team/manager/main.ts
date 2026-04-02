@@ -466,7 +466,7 @@ async function cmdStatus(): Promise<void> {
   } else {
     for (const c of conductors) {
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  #${c.taskId}${title}  ${c.id}`);
+      console.log(`  ● [${c.surface.replace("surface:", "")}]  T${c.taskId}${title}  ${c.id}`);
     }
   }
 

@@ -179,7 +179,7 @@ export async function assignTask(
     // --- 5. タブ名更新 ---
     const num = conductor.surface.replace("surface:", "");
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
-    await cmux.renameTab(conductor.surface, `[${num}] ♦ #${taskId} ${shortTitle}`);
+    await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
 
     // --- 6. ConductorState 更新 ---
     conductor.taskRunId = taskRunId;

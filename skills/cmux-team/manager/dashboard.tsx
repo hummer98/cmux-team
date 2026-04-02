@@ -16,6 +16,89 @@ import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
 import { log } from "./logger";
 
+// --- GitHub リポジトリ URL 解決 ---
+
+let cachedRepoUrl: string | null = null;
+
+async function resolveGitHubRepoUrl(projectRoot: string): Promise<string | null> {
+  if (cachedRepoUrl !== null) return cachedRepoUrl || null;
+
+  try {
+    // team.json の github_repo を確認
+    const teamJsonPath = join(projectRoot, ".team", "team.json");
+    try {
+      const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+      if (teamJson.github_repo) {
+        cachedRepoUrl = teamJson.github_repo;
+        return cachedRepoUrl;
+      }
+    } catch {}
+
+    // git remote get-url origin からパース
+    const proc = Bun.spawn(["git", "remote", "get-url", "origin"], {
+      cwd: projectRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const url = output.trim();
+    // SSH: git@github.com:owner/repo.git
+    const sshMatch = url.match(/git@github\.com:(.+?)(?:\.git)?$/);
+    if (sshMatch) {
+      cachedRepoUrl = `https://github.com/${sshMatch[1]}`;
+      return cachedRepoUrl;
+    }
+    // HTTPS: https://github.com/owner/repo.git
+    const httpsMatch = url.match(/https:\/\/github\.com\/(.+?)(?:\.git)?$/);
+    if (httpsMatch) {
+      cachedRepoUrl = `https://github.com/${httpsMatch[1]}`;
+      return cachedRepoUrl;
+    }
+  } catch {}
+
+  cachedRepoUrl = "";
+  return null;
+}
+
+function buildTitleWithLinks(
+  text: string,
+  repoUrl: string | null,
+  baseStyle?: Record<string, any>,
+): any {
+  if (!repoUrl) return ui.text(text, baseStyle ?? {});
+
+  const parts: any[] = [];
+  let lastIndex = 0;
+  const regex = /#(\d+)/g;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    // マッチ前のテキスト
+    if (match.index > lastIndex) {
+      parts.push(ui.text(text.slice(lastIndex, match.index), baseStyle ?? {}));
+    }
+    // GitHub issue リンク
+    const issueNum = match[1];
+    parts.push(ui.link({
+      url: `${repoUrl}/issues/${issueNum}`,
+      label: `#${issueNum}`,
+      style: { fg: rgb(100, 149, 237) },  // cornflower blue
+    }));
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (parts.length === 0) return ui.text(text, baseStyle ?? {});
+
+  // 残りテキスト
+  if (lastIndex < text.length) {
+    parts.push(ui.text(text.slice(lastIndex), baseStyle ?? {}));
+  }
+
+  return parts.length === 1 ? parts[0] : ui.row({ gap: 0 }, parts);
+}
+
 // --- 名前付きカラー定数（Ink 版と同等） ---
 const GREEN = rgb(0, 255, 0);
 const YELLOW = rgb(255, 255, 0);
@@ -118,6 +201,7 @@ interface AppState {
   journalEntries: JournalEntry[];
   logLines: string[];
   version: string;
+  repoUrl: string | null;
   confirmingFullQuit?: boolean;
 }
 
@@ -144,7 +228,7 @@ function buildMasterSection(state: DaemonState) {
   ]);
 }
 
-function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }) {
+function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null) {
   const isIdle = c.status === "idle";
   const isDone = c.status === "done";
   const isDisconnected = c.status === "disconnected";
@@ -164,19 +248,19 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
       ])
     );
   } else if (isDisconnected) {
-    const taskId = `#${(c.taskId ?? "").padStart(3, "0")}`;
+    const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
     const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
     children.push(
       ui.row({ gap: 1 }, [
         ui.text("⚠", { style: { fg: YELLOW } }),
         ui.text(`[${surface}]`),
         ui.text(taskId, { bold: true }),
-        c.taskTitle ? ui.text(c.taskTitle) : null,
+        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
         ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
       ])
     );
   } else {
-    const taskId = `#${(c.taskId ?? "").padStart(3, "0")}`;
+    const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
     const iconColor = isDone ? GRAY : YELLOW;
     const iconChar = isDone ? "✓" : "●";
     children.push(
@@ -184,7 +268,7 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
         ui.text(iconChar, { style: { fg: iconColor } }),
         ui.text(`[${surface}]`, isDone ? dimStyle : {}),
         ui.text(taskId, { bold: !isDone, ...(isDone ? dimStyle : {}) }),
-        c.taskTitle ? ui.text(c.taskTitle, isDone ? dimStyle : {}) : null,
+        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl, isDone ? dimStyle : {}) : null,
         ui.text(elapsed, { dim: true }),
       ])
     );
@@ -217,19 +301,19 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   return ui.column({ gap: 0 }, children);
 }
 
-function buildConductorsSection(state: DaemonState) {
+function buildConductorsSection(state: DaemonState, repoUrl: string | null) {
   const conductors = [...state.conductors.values()];
   if (conductors.length === 0) {
     return ui.text("idle — waiting for tasks", { dim: true });
   }
-  return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any)));
+  return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl)));
 }
 
-function buildTaskRow(task: TaskSummary, assigned: boolean) {
+function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null) {
   const isClosed = task.status === "closed";
   const icon = isClosed ? "○" : "●";
   const label = assigned ? "running" : task.status;
-  const taskId = task.id.padStart(3, "0");
+  const taskId = `T${task.id.padStart(3, "0")}`;
   const timeInfo = isClosed && task.closedAt
     ? utcToLocal(task.closedAt).slice(0, 5)
     : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
@@ -242,7 +326,7 @@ function buildTaskRow(task: TaskSummary, assigned: boolean) {
     ui.text(icon, colorStyle),
     ui.text(taskId, { bold: !isClosed, ...colorStyle }),
     ui.text(`[${label}]`, colorStyle),
-    ui.text(task.title, colorStyle),
+    buildTitleWithLinks(task.title, repoUrl, colorStyle),
     timeInfo ? ui.text(timeInfo, colorStyle) : null,
   ]);
 }
@@ -255,7 +339,7 @@ const journalIconColors: Record<string, number> = {
   "[✓]": GREEN,
 };
 
-function buildJournalRows(entries: JournalEntry[]) {
+function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
   if (entries.length === 0) {
     return [ui.text("no journal entries", { dim: true })];
   }
@@ -264,8 +348,8 @@ function buildJournalRows(entries: JournalEntry[]) {
     return ui.row({ gap: 1 }, [
       ui.text(entry.time, { dim: true }),
       ui.text(entry.icon, iconColor ? { style: { fg: iconColor } } : {}),
-      ui.text(`#${entry.taskId.padStart(3, "0")}`, { bold: true }),
-      ui.text(entry.message),
+      ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
+      buildTitleWithLinks(entry.message, repoUrl),
     ]);
   });
 }
@@ -306,12 +390,13 @@ export async function startDashboard(
       journalEntries: [],
       logLines: [],
       version: opts?.version ?? "",
+      repoUrl: null,
     },
     config: { executionMode: "inline" },
   });
 
   function buildViewWithApp(state: AppState) {
-    const { daemon } = state;
+    const { daemon, repoUrl } = state;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
@@ -333,7 +418,7 @@ export async function startDashboard(
     // タスク一覧（ui.column + map で可変高さ — virtualList は固定高さで空白が出るため）
     const taskRows = daemon.taskList.length === 0
       ? [ui.text("no tasks", { dim: true })]
-      : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id)));
+      : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl));
 
     return ui.page({
       body: ui.column({ gap: 0 }, [
@@ -344,7 +429,7 @@ export async function startDashboard(
         buildMasterSection(daemon),
         // Conductors セクション
         sectionTitle(`Conductors${runningCount > 0 ? ` ${runningCount} running` : ""}`),
-        buildConductorsSection(daemon),
+        buildConductorsSection(daemon, repoUrl),
         // Tasks セクション
         sectionTitle(`Tasks ${daemon.openTasks} open`),
         ui.column({ gap: 0 }, taskRows),
@@ -367,7 +452,7 @@ export async function startDashboard(
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
-            ? buildJournalRows(state.journalEntries)
+            ? buildJournalRows(state.journalEntries, repoUrl)
             : buildLogRows(state.logLines.slice(-200))
         ),
       ]),
@@ -435,6 +520,7 @@ export async function startDashboard(
     const newDaemon = getState();
     const lines = await readLogLines(newDaemon.projectRoot);
     const journalEntries = parseJournalEntries(lines);
+    const repoUrl = await resolveGitHubRepoUrl(newDaemon.projectRoot);
 
     try {
       app.update((s) => ({
@@ -442,6 +528,7 @@ export async function startDashboard(
         daemon: newDaemon,
         logLines: lines,
         journalEntries,
+        repoUrl,
       }));
     } catch (e: any) {
       // lifecycle operation already in flight — skip this tick
