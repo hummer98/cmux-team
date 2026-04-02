@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.11.0] - 2026-04-02
+
+### Added
+- TUI のタスクタイトル内の GitHub issue 番号（`#xxx`）を OSC 8 ハイパーリンクとして表示。クリックでブラウザが開く
+- Agent の `session_id` を `AgentState` に記録し、`team.json` や `agents` サブコマンドで参照可能に (#16)
+
+### Changed
+- タスク番号の表記を `#xxx` から `Txxx` に変更。`#xxx` は GitHub issue 専用に
+
 ## [3.10.0] - 2026-04-02
 
 ### Changed
