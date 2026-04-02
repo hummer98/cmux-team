@@ -15,6 +15,8 @@ import type { DaemonState, TaskSummary } from "./daemon";
 import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
 import { log } from "./logger";
+import { loadArtifacts } from "./artifact";
+import type { ArtifactMeta } from "./artifact";
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -197,9 +199,14 @@ async function readLogLines(projectRoot: string): Promise<string[]> {
 
 interface AppState {
   daemon: DaemonState;
-  activeTab: "journal" | "log";
+  activeTab: "journal" | "artifacts" | "log";
   journalEntries: JournalEntry[];
   logLines: string[];
+  artifacts: ArtifactMeta[];
+  artifactCursor: number;
+  artifactSort: "id" | "created" | "updated";
+  artifactTypeFilter: string | null;
+  artifactSearch: string | null;
   version: string;
   repoUrl: string | null;
   confirmingFullQuit?: boolean;
@@ -354,6 +361,102 @@ function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
   });
 }
 
+// --- Artifacts タブ ---
+
+const artifactTypeColors: Record<string, number> = {
+  research: CYAN,
+  decision: YELLOW,
+  session: GREEN,
+  spec: rgb(180, 130, 255),
+  report: rgb(255, 165, 0),
+};
+
+function getFilteredArtifacts(state: AppState): ArtifactMeta[] {
+  let list = [...state.artifacts];
+
+  // タイプ絞り込み
+  if (state.artifactTypeFilter) {
+    list = list.filter(a => a.type === state.artifactTypeFilter);
+  }
+
+  // 検索
+  if (state.artifactSearch) {
+    const q = state.artifactSearch.toLowerCase();
+    list = list.filter(a =>
+      a.id.toLowerCase().includes(q) ||
+      a.title.toLowerCase().includes(q) ||
+      a.type.toLowerCase().includes(q) ||
+      (a.task?.toLowerCase().includes(q) ?? false) ||
+      (a.tags?.some(t => t.toLowerCase().includes(q)) ?? false)
+    );
+  }
+
+  // ソート
+  if (state.artifactSort === "created") {
+    list.sort((a, b) => b.created.localeCompare(a.created));
+  } else if (state.artifactSort === "updated") {
+    list.sort((a, b) => (b.updated ?? b.created).localeCompare(a.updated ?? a.created));
+  } else {
+    // id 順（デフォルト）
+    list.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  return list;
+}
+
+function buildArtifactRows(state: AppState): any[] {
+  const filtered = getFilteredArtifacts(state);
+
+  if (filtered.length === 0) {
+    return [ui.text("no artifacts", { dim: true })];
+  }
+
+  const rows: any[] = [];
+
+  // フィルタ/検索インジケータ
+  const indicators: string[] = [];
+  if (state.artifactTypeFilter) indicators.push(`type:${state.artifactTypeFilter}`);
+  if (state.artifactSearch) indicators.push(`search:"${state.artifactSearch}"`);
+  if (state.artifactSort !== "id") indicators.push(`sort:${state.artifactSort}`);
+  if (indicators.length > 0) {
+    rows.push(ui.text(`  ${indicators.join("  ")}`, { dim: true }));
+  }
+
+  for (let i = 0; i < filtered.length; i++) {
+    const a = filtered[i]!;
+    const isSelected = i === state.artifactCursor;
+    const typeColor = artifactTypeColors[a.type] ?? GRAY;
+    const date = a.created ? utcToLocal(a.created).slice(0, 5) : "";
+
+    const parts = [
+      ui.text(isSelected ? ">" : " ", isSelected ? { bold: true } : {}),
+      ui.text(a.id, { bold: isSelected, style: { fg: typeColor } }),
+      ui.text(`[${a.type}]`, { style: { fg: typeColor } }),
+      ui.text(a.title, isSelected ? { bold: true } : {}),
+      date ? ui.text(date, { dim: true }) : null,
+      a.task ? ui.text(a.task, { dim: true }) : null,
+    ];
+
+    rows.push(ui.row({ gap: 1 }, parts));
+  }
+
+  // プレビュー（選択中 artifact の body 冒頭5行）
+  if (filtered.length > 0 && state.artifactCursor < filtered.length) {
+    const selected = filtered[state.artifactCursor]!;
+    const previewLines = selected.body.split("\n").slice(0, 5);
+    rows.push(ui.text(""));
+    rows.push(ui.text(`── ${selected.id}: ${selected.title} ──`, { dim: true }));
+    for (const line of previewLines) {
+      rows.push(ui.text(line, { dim: true }));
+    }
+    if (selected.body.split("\n").length > 5) {
+      rows.push(ui.text("  ...", { dim: true }));
+    }
+  }
+
+  return rows;
+}
+
 function buildLogRows(lines: string[]) {
   if (lines.length === 0) {
     return [ui.text("no log entries", { dim: true })];
@@ -389,6 +492,11 @@ export async function startDashboard(
       activeTab: "journal",
       journalEntries: [],
       logLines: [],
+      artifacts: [],
+      artifactCursor: 0,
+      artifactSort: "id",
+      artifactTypeFilter: null,
+      artifactSearch: null,
       version: opts?.version ?? "",
       repoUrl: null,
     },
@@ -433,7 +541,7 @@ export async function startDashboard(
         // Tasks セクション
         sectionTitle(`Tasks ${daemon.openTasks} open`),
         ui.column({ gap: 0 }, taskRows),
-        // Journal / Log タブ（クリック + キーボード 1/2 で切り替え）
+        // Journal / Artifacts / Log タブ（クリック + キーボード 1/2/3 で切り替え）
         ui.row({ gap: 1 }, [
           ui.button({
             id: "tab-journal",
@@ -441,6 +549,13 @@ export async function startDashboard(
             px: 1,
             style: state.activeTab === "journal" ? { bold: true } : { dim: true },
             onPress: () => { try { app.update((s) => ({ ...s, activeTab: "journal" })); } catch {} },
+          }),
+          ui.button({
+            id: "tab-artifacts",
+            label: "Artifacts",
+            px: 1,
+            style: state.activeTab === "artifacts" ? { bold: true } : { dim: true },
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "artifacts" })); } catch {} },
           }),
           ui.button({
             id: "tab-log",
@@ -453,6 +568,8 @@ export async function startDashboard(
         ui.column({ gap: 0 },
           state.activeTab === "journal"
             ? buildJournalRows(state.journalEntries, repoUrl)
+            : state.activeTab === "artifacts"
+            ? buildArtifactRows(state)
             : buildLogRows(state.logLines.slice(-200))
         ),
       ]),
@@ -465,10 +582,25 @@ export async function startDashboard(
               ui.kbd("n"),
               ui.text("cancel"),
             ]
+          : state.activeTab === "artifacts"
+          ? [
+              ui.kbd("j/k"),
+              ui.text("select"),
+              ui.kbd("s"),
+              ui.text(`sort:${state.artifactSort}`),
+              ui.kbd("f"),
+              ui.text(state.artifactTypeFilter ? `type:${state.artifactTypeFilter}` : "filter"),
+              ui.kbd("1-3"),
+              ui.text("tabs"),
+              ui.kbd("q"),
+              ui.text("quit"),
+            ]
           : [
               ui.kbd("1"),
               ui.text("journal"),
               ui.kbd("2"),
+              ui.text("artifacts"),
+              ui.kbd("3"),
               ui.text("log"),
               ui.kbd("r"),
               ui.text("reload"),
@@ -486,8 +618,35 @@ export async function startDashboard(
   // キーバインド
   app.keys({
     "1": () => app.update((s) => ({ ...s, activeTab: "journal" })),
-    "2": () => app.update((s) => ({ ...s, activeTab: "log" })),
-    Tab: () => app.update((s) => ({ ...s, activeTab: s.activeTab === "journal" ? "log" : "journal" })),
+    "2": () => app.update((s) => ({ ...s, activeTab: "artifacts" })),
+    "3": () => app.update((s) => ({ ...s, activeTab: "log" })),
+    Tab: () => app.update((s) => {
+      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log"];
+      const idx = tabs.indexOf(s.activeTab);
+      return { ...s, activeTab: tabs[(idx + 1) % tabs.length]! };
+    }),
+    // Artifacts タブ専用キー
+    j: () => app.update((s) => {
+      if (s.activeTab !== "artifacts") return s;
+      const filtered = getFilteredArtifacts(s);
+      return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
+    }),
+    k: () => app.update((s) => {
+      if (s.activeTab !== "artifacts") return s;
+      return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+    }),
+    s: () => app.update((s) => {
+      if (s.activeTab !== "artifacts") return s;
+      const sorts: AppState["artifactSort"][] = ["id", "created", "updated"];
+      const idx = sorts.indexOf(s.artifactSort);
+      return { ...s, artifactSort: sorts[(idx + 1) % sorts.length]!, artifactCursor: 0 };
+    }),
+    f: () => app.update((s) => {
+      if (s.activeTab !== "artifacts") return s;
+      const types = [null, "research", "decision", "session", "spec", "report"];
+      const idx = types.indexOf(s.artifactTypeFilter);
+      return { ...s, artifactTypeFilter: types[(idx + 1) % types.length]!, artifactCursor: 0 };
+    }),
     r: () => opts?.onReload?.(),
     q: () => {
       cleanup();
@@ -521,6 +680,7 @@ export async function startDashboard(
     const lines = await readLogLines(newDaemon.projectRoot);
     const journalEntries = parseJournalEntries(lines);
     const repoUrl = await resolveGitHubRepoUrl(newDaemon.projectRoot);
+    const artifacts = await loadArtifacts(newDaemon.projectRoot);
 
     try {
       app.update((s) => ({
@@ -529,6 +689,7 @@ export async function startDashboard(
         logLines: lines,
         journalEntries,
         repoUrl,
+        artifacts,
       }));
     } catch (e: any) {
       // lifecycle operation already in flight — skip this tick
