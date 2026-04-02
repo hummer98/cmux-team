@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.12.1] - 2026-04-03
+
+### Fixed
+- SESSION_ENDED 受信時に Conductor を即座に disconnected 状態にし、再接続の無限リトライを防止
+
 ## [3.12.0] - 2026-04-02
 
 ### Added
