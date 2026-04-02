@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.12.0] - 2026-04-02
+
+### Added
+- Artifacts 機能: 調査結果・設計判断・セッション要約を `.team/artifacts/` に記録・管理する仕組みを追加
+- `/artifact` コマンドで会話コンテキストからアーティファクトを生成・一覧・表示
+- `cmux-team artifacts` CLI サブコマンド（list / show / create）
+- Manager TUI に Artifacts タブを追加。一覧表示・詳細プレビュー・キーボードナビゲーション対応
+
+### Fixed
+- `spawn-agent` が `CMUX_SURFACE` 環境変数から pane を自動解決するように修正
+
 ## [3.11.0] - 2026-04-02
 
 ### Added
