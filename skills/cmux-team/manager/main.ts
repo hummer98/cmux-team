@@ -711,7 +711,7 @@ async function cmdAgents(): Promise<void> {
     taskId: string;
     taskTitle?: string;
     surface: string;
-    agents?: Array<{ surface: string; role?: string }>;
+    agents?: Array<{ surface: string; role?: string; sessionId?: string }>;
   }> = teamJson.conductors || [];
 
   let agentCount = 0;
@@ -720,7 +720,8 @@ async function cmdAgents(): Promise<void> {
     for (const a of agents) {
       agentCount++;
       const rolePart = a.role ? `role=${a.role}` : "role=unknown";
-      console.log(`${a.surface}  ${rolePart}  conductor=${c.id}  task=${c.taskId}`);
+      const sessionPart = a.sessionId ? `  session=${a.sessionId}` : "";
+      console.log(`${a.surface}  ${rolePart}  conductor=${c.id}  task=${c.taskId}${sessionPart}`);
     }
   }
 

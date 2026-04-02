@@ -95,6 +95,29 @@ export async function start(
       const role = req.headers.get("x-cmux-role") || opts?.role;
       const sessionId = req.headers.get("x-claude-code-session-id") || undefined;
 
+      // Agent の sessionId を daemon state に反映
+      if (sessionId && conductorId && opts?.getState) {
+        const st = opts.getState();
+        const conductors: Map<string, any> | undefined = st.conductors;
+        if (conductors) {
+          // conductorId または taskRunId で Conductor を検索（daemon.ts の findConductor と同じロジック）
+          let conductor = conductors.get(conductorId);
+          if (!conductor) {
+            for (const c of conductors.values()) {
+              if (c.taskRunId === conductorId) { conductor = c; break; }
+            }
+          }
+          if (conductor?.agents) {
+            const agent = role
+              ? conductor.agents.find((a: any) => a.role === role)
+              : conductor.agents[0];
+            if (agent && !agent.sessionId) {
+              agent.sessionId = sessionId;
+            }
+          }
+        }
+      }
+
       // リクエストボディを読み取り（転送用 + サイズ計測用）
       const reqBody = req.body ? await req.arrayBuffer() : null;
       const requestBytes = reqBody?.byteLength ?? 0;

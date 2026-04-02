@@ -607,6 +607,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,
+        sessionId: a.sessionId,
       })),
     }));
     await writeFile(teamJsonPath, JSON.stringify(teamJson, null, 2) + "\n");
