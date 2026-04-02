@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.13.0] - 2026-04-03
+
+### Changed
+- Conductor の識別子を固定名 (conductor-slot-N) から surface ID に変更。auto-restart 時に旧セッションのイベントが新 Conductor に誤適用される問題を根本解決
+- auto-restart 時の Conductor 発見を team.json ベースから cmux tree ベースに変更。同一 workspace 内の既存 Conductor を自動再利用し、surface の無限増殖を防止
+- team.json のアトミック書き込み (tmp → rename) で、restart 時のファイル破損を防止
+- CLI の `--conductor-id` オプションを `--conductor-surface` に変更
+
+### Fixed
+- Journal タブのエントリを新しい順（逆順）で表示するように修正
+
 ## [3.12.1] - 2026-04-03
 
 ### Fixed
