@@ -99,7 +99,7 @@ AGENT_PROMPT
 
 # 2. Agent spawn（--prompt-file でファイルパスだけを渡す）
 # 注意: --bare は OAuth 認証（Claude Max）をスキップするため使用禁止
-# pane は spawn-agent が CMUX_SURFACE 環境変数から自動解決するため指定不要
+# spawn-agent が cmux new-surface で同じ pane 内にタブを作成する
 
 RESULT=$(cmux-team spawn-agent \
   --conductor-surface $CMUX_SURFACE \

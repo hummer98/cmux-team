@@ -162,7 +162,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
-      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\ntask-state.json\ntasks/*.status.json\n"
+      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\nconductors/\ntask-state.json\ntasks/*.status.json\n"
     );
   } else {
     // 既存 .gitignore に tasks/*.status.json がなければ追記
@@ -226,26 +226,37 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
 }
 
 export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // cmux tree から同一 workspace 内の既存 Conductor を発見して再利用
-  if (daemonSurface) {
-    const existing = await cmux.findWorkspaceConductors(daemonSurface);
-    if (existing.length > 0) {
+  // .team/conductors/ のマーカーファイルから既存 Conductor を発見
+  const conductorsDir = join(state.projectRoot, ".team/conductors");
+  try {
+    const files = await readdir(conductorsDir);
+    const surfaces = files
+      .filter(f => f.startsWith("conductor.surface:"))
+      .map(f => f.replace("conductor.", ""));
+
+    // surface が cmux tree に存在するもののみ復元
+    const alive: string[] = [];
+    for (const surface of surfaces) {
+      if (await cmux.validateSurface(surface)) {
+        alive.push(surface);
+      }
+    }
+
+    if (alive.length > 0) {
       state.conductors.clear();
-      for (let i = 0; i < existing.length; i++) {
-        const { surface, paneId } = existing[i]!;
+      for (const surface of alive) {
         state.conductors.set(surface, {
           surface,
           startedAt: new Date().toISOString(),
           agents: [],
           status: "idle",
-          paneId,
         });
       }
-      console.log(`✅ Conductor スロット: 既存 ${existing.length}個 を再利用`);
-      await log("conductors_discovered", `count=${existing.length} surfaces=${existing.map(e => e.surface).join(",")}`);
+      console.log(`✅ Conductor スロット: 既存 ${alive.length}個 を再利用`);
+      await log("conductors_discovered", `count=${alive.length} surfaces=${alive.join(",")}`);
       return;
     }
-  }
+  } catch {}
 
   // 既存なし → 新規作成
   await log("layout_creating_new_slots", `count=${state.maxConductors}`);

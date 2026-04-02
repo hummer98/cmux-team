@@ -9,7 +9,7 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
- *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt> [--pane <paneId>]
+ *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s> [--conductor-surface <surface>]
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
@@ -574,8 +574,6 @@ async function cmdSpawnAgent(): Promise<void> {
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
   let taskTitle = getArg("task-title");
-  const pane = getArg("pane");
-
   if (!prompt && !promptFile) {
     console.error("Error: --prompt or --prompt-file is required");
     process.exit(1);
@@ -584,30 +582,21 @@ async function cmdSpawnAgent(): Promise<void> {
   // --- 1. プロキシポート読み取り + 生存確認 ---
   const proxyPort = await resolveProxyPort();
 
-  // --- 2. タブ作成（--pane 直接指定 → team.json lookup → CMUX_SURFACE 環境変数 → split フォールバック） ---
-  let paneId: string | undefined = pane;  // --pane が最優先
+  // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
   let worktreePath: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductors: any[] = teamJson.conductors ?? [];
-    // conductor-surface で検索
     const conductor = conductors.find((c: any) => c.surface === conductorSurface);
-    if (!paneId) paneId = conductor?.paneId;
     worktreePath = conductor?.worktreePath;
-    // --task-title 省略時は conductor のタスクタイトルをフォールバック
     if (!taskTitle) taskTitle = conductor?.taskTitle;
-    // フォールバック: 呼び出し元の CMUX_SURFACE 環境変数から pane を逆引き
-    if (!paneId && process.env.CMUX_SURFACE) {
-      const bySurface = conductors.find((c: any) => c.surface === process.env.CMUX_SURFACE);
-      if (bySurface) paneId = bySurface.paneId;
-    }
   } catch {}
 
   let surface: string;
-  if (paneId) {
-    surface = await cmux.newSurface(paneId);
-  } else {
-    surface = await cmux.newSplit("down");
+  try {
+    surface = await cmux.newSurface();
+  } catch {
+    surface = await cmux.newSplit("right");
   }
 
   if (!(await cmux.validateSurface(surface))) {
@@ -1168,7 +1157,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt> [--pane <paneId>]
+  cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface> [--conductor-surface <surface>]
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]

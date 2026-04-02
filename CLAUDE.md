@@ -412,7 +412,7 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 ### ペイン幅の注意
 
-サブエージェントは Conductor と同じワークスペース内に `new-split` で配置するのがデフォルト。ペイン数が多すぎて幅が不足すると `cmux send` や `cmux read-screen` が失敗する場合がある。その場合はペイン数を減らすか、ワークスペースを分けて対応する。
+サブエージェントは Conductor と同じ pane 内にタブとして作成される（`cmux new-surface`）。タブ作成に失敗した場合は `new-split right` にフォールバックする。
 
 ### パーミッション確認
 
