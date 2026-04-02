@@ -251,10 +251,9 @@ describe("キュー処理（ファイルシステム統合）", () => {
       })
     );
     await writeFile(
-      join(testDir, ".team/queue/002-agent-done.json"),
+      join(testDir, ".team/queue/002-session-ended.json"),
       JSON.stringify({
-        type: "AGENT_DONE",
-        conductorSurface: "surface:conductor-1",
+        type: "SESSION_ENDED",
         surface: "surface:1",
         timestamp: new Date().toISOString(),
       })
@@ -263,7 +262,7 @@ describe("キュー処理（ファイルシステム統合）", () => {
     const messages = await readQueue();
     expect(messages.map((m) => m.message.type)).toEqual([
       "TASK_CREATED",
-      "AGENT_DONE",
+      "SESSION_ENDED",
       "SHUTDOWN",
     ]);
   });
