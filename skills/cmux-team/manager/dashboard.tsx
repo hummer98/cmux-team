@@ -567,7 +567,7 @@ export async function startDashboard(
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
-            ? buildJournalRows(state.journalEntries, repoUrl)
+            ? buildJournalRows([...state.journalEntries].reverse(), repoUrl)
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
             : buildLogRows(state.logLines.slice(-200))
