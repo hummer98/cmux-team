@@ -101,6 +101,21 @@ function buildTitleWithLinks(
   return parts.length === 1 ? parts[0] : ui.row({ gap: 0 }, parts);
 }
 
+/**
+ * Markdown ビューアコマンドを解決する
+ * 優先順: CMUX_MD_VIEWER → glow → cat
+ */
+async function resolveMarkdownViewer(): Promise<string> {
+  const envViewer = process.env.CMUX_MD_VIEWER;
+  if (envViewer) return envViewer;
+
+  // glow が利用可能か確認
+  const glowPath = Bun.which("glow");
+  if (glowPath) return "glow";
+
+  return "cat";
+}
+
 // --- 名前付きカラー定数（Ink 版と同等） ---
 const GREEN = rgb(0, 255, 0);
 const YELLOW = rgb(255, 255, 0);
@@ -474,6 +489,49 @@ function buildLogRows(lines: string[]) {
   });
 }
 
+/**
+ * 選択中の artifact を外部ビューアで開く
+ * TUI を一時停止し、ビューア終了後に復帰する
+ */
+async function openArtifactInViewer(
+  app: NodeApp<AppState>,
+  filePath: string,
+  refreshInterval: ReturnType<typeof setInterval> | null,
+  restartRefresh: () => void,
+): Promise<void> {
+  const viewer = await resolveMarkdownViewer();
+
+  // refresh を一時停止
+  if (refreshInterval) clearInterval(refreshInterval);
+
+  // TUI を停止
+  await app.stop();
+
+  try {
+    // ビューアをサブプロセスとして実行（TTY を引き継ぐ）
+    const proc = Bun.spawn([viewer, filePath], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    await proc.exited;
+  } catch {
+    // ビューアが見つからない等のエラー → cat にフォールバック
+    try {
+      const fallback = Bun.spawn(["cat", filePath], {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      await fallback.exited;
+    } catch {}
+  } finally {
+    // TUI を再開（ビューア・フォールバック両方が失敗しても確実に復帰）
+    await app.start();
+    restartRefresh();
+  }
+}
+
 // --- アプリインスタンス管理 ---
 
 let appInstance: NodeApp<AppState> | null = null;
@@ -586,6 +644,8 @@ export async function startDashboard(
           ? [
               ui.kbd("j/k"),
               ui.text("select"),
+              ui.kbd("Enter"),
+              ui.text("open"),
               ui.kbd("s"),
               ui.text(`sort:${state.artifactSort}`),
               ui.kbd("f"),
@@ -626,6 +686,24 @@ export async function startDashboard(
       return { ...s, activeTab: tabs[(idx + 1) % tabs.length]! };
     }),
     // Artifacts タブ専用キー
+    Enter: (ctx) => {
+      const currentState = ctx.state;
+      if (currentState.activeTab !== "artifacts") return;
+      const filtered = getFilteredArtifacts(currentState);
+      if (filtered.length === 0) return;
+      const selected = filtered[currentState.artifactCursor];
+      if (!selected) return;
+
+      openArtifactInViewer(
+        app,
+        selected.filePath,
+        refreshInterval,
+        () => {
+          refreshInterval = setInterval(refresh, 2000);
+          refresh();
+        },
+      ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+    },
     j: () => app.update((s) => {
       if (s.activeTab !== "artifacts") return s;
       const filtered = getFilteredArtifacts(s);
