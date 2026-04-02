@@ -28,6 +28,7 @@ import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { initDB, searchTraces, getTrace } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
+import { loadArtifacts, searchArtifacts, validateArtifact } from "./artifact";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -1025,6 +1026,117 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- artifacts サブコマンド ---
+async function cmdArtifacts(): Promise<void> {
+  const subCmd = args[1];
+
+  // cmux-team artifacts --validate
+  if (getArg("validate") !== undefined || args.includes("--validate")) {
+    const artifacts = await loadArtifacts(PROJECT_ROOT);
+    if (artifacts.length === 0) {
+      console.log("アーティファクトが見つかりません");
+      return;
+    }
+    let hasError = false;
+    for (const a of artifacts) {
+      const errors = validateArtifact(a);
+      if (errors.length > 0) {
+        hasError = true;
+        console.log(`⚠️  ${a.id || a.fileName}: ${errors.join(", ")}`);
+      }
+    }
+    if (!hasError) {
+      console.log(`All ${artifacts.length} artifacts valid`);
+    }
+    return;
+  }
+
+  // cmux-team artifacts show <id>
+  if (subCmd === "show") {
+    const rawId = args[2];
+    if (!rawId) {
+      console.error("Error: アーティファクト ID を指定してください");
+      console.error("Usage: cmux-team artifacts show <id>");
+      process.exit(1);
+    }
+    // "A001" でも "001" でも受け付ける
+    const normalizedId = rawId.startsWith("A") ? rawId : `A${rawId.padStart(3, "0")}`;
+    const artifacts = await loadArtifacts(PROJECT_ROOT);
+    const found = artifacts.find((a) => a.id === normalizedId || a.id === rawId);
+    if (!found) {
+      console.error(`アーティファクト ${rawId} が見つかりません`);
+      process.exit(1);
+    }
+    const content = await readFile(found.filePath, "utf-8");
+    console.log(content);
+    return;
+  }
+
+  // cmux-team artifacts search <query>
+  if (subCmd === "search") {
+    const query = args[2];
+    if (!query) {
+      console.error("Error: 検索クエリを指定してください");
+      console.error("Usage: cmux-team artifacts search <query>");
+      process.exit(1);
+    }
+    const results = await searchArtifacts(PROJECT_ROOT, query);
+    if (results.length === 0) {
+      console.log(`"${query}" に一致するアーティファクトが見つかりません`);
+      return;
+    }
+    for (const { artifact, matches } of results) {
+      console.log(`\n--- ${artifact.id}  ${artifact.type}  ${artifact.title} ---`);
+      for (const m of matches) {
+        // 前後1行のコンテキスト表示
+        const content = await readFile(artifact.filePath, "utf-8");
+        const lines = content.split("\n");
+        const start = Math.max(0, m.lineNum - 2);
+        const end = Math.min(lines.length - 1, m.lineNum);
+        for (let i = start; i <= end; i++) {
+          const prefix = i === m.lineNum - 1 ? ">" : " ";
+          console.log(`${prefix} ${i + 1}: ${lines[i]}`);
+        }
+        console.log("");
+      }
+    }
+    return;
+  }
+
+  // cmux-team artifacts (list — デフォルト)
+  const artifacts = await loadArtifacts(PROJECT_ROOT);
+  if (artifacts.length === 0) {
+    console.log("アーティファクトが見つかりません");
+    return;
+  }
+
+  // フィルタリング
+  const typeFilter = getArg("type");
+  const taskFilter = getArg("task");
+  let filtered = artifacts;
+  if (typeFilter) {
+    filtered = filtered.filter((a) => a.type === typeFilter);
+  }
+  if (taskFilter) {
+    filtered = filtered.filter((a) => a.task === taskFilter);
+  }
+
+  // ソート
+  const sortBy = getArg("sort") || "created";
+  filtered.sort((a, b) => {
+    const aVal = sortBy === "updated" ? (a.updated || a.created) : a.created;
+    const bVal = sortBy === "updated" ? (b.updated || b.created) : b.created;
+    return aVal.localeCompare(bVal);
+  });
+
+  // 一覧表示
+  for (const a of filtered) {
+    const date = (a.updated || a.created).slice(0, 10);
+    const taskLabel = a.task ? `  ${a.task}` : "";
+    console.log(`${a.id.padEnd(6)} ${a.type.padEnd(10)} ${a.title}  ${date}${taskLabel}`);
+  }
+}
+
 // --- ルーティング ---
 switch (command) {
   case "start":
@@ -1072,6 +1184,9 @@ switch (command) {
   case "reset-conductor":
     await cmdResetConductor();
     break;
+  case "artifacts":
+    await cmdArtifacts();
+    break;
   default:
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
@@ -1093,6 +1208,10 @@ Usage:
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
   cmux-team launch-master                      Master 起動（proxy 自動解決）
   cmux-team restart-conductor --conductor-id <id>  Conductor を再起動
-  cmux-team reset-conductor --conductor-id <id>    Conductor をリセット（idle に戻す）`);
+  cmux-team reset-conductor --conductor-id <id>    Conductor をリセット（idle に戻す）
+  cmux-team artifacts                              アーティファクト一覧
+  cmux-team artifacts show <id>                    アーティファクト表示
+  cmux-team artifacts search <query>               全文検索
+  cmux-team artifacts --validate                   フロントマター検証`);
     break;
 }
