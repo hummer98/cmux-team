@@ -29,13 +29,6 @@ export const AgentSpawnedMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
-export const AgentDoneMessage = z.object({
-  type: z.literal("AGENT_DONE"),
-  conductorSurface: z.string(),
-  surface: z.string(),
-  timestamp: z.string().datetime(),
-});
-
 export const SessionStartedMessage = z.object({
   type: z.literal("SESSION_STARTED"),
   surface: z.string(),
@@ -75,7 +68,6 @@ export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   ConductorDoneMessage,
   AgentSpawnedMessage,
-  AgentDoneMessage,
   SessionStartedMessage,
   SessionEndedMessage,
   SessionActiveMessage,

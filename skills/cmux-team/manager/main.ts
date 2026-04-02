@@ -11,7 +11,7 @@
  *   ./main.ts stop                             # graceful shutdown
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
- *   ./main.ts kill-agent --surface <s> [--conductor-surface <surface>]
+ *   ./main.ts kill-agent --surface <s>
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
@@ -340,15 +340,6 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
-    case "AGENT_DONE":
-      message = {
-        type: "AGENT_DONE",
-        conductorSurface: requireArg("conductor-surface"),
-        surface: requireArg("surface"),
-        timestamp: now,
-      };
-      break;
-
     case "SESSION_STARTED":
       message = {
         type: "SESSION_STARTED",
@@ -392,7 +383,7 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|AGENT_DONE|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -693,21 +684,9 @@ async function cmdAgents(): Promise<void> {
 
 async function cmdKillAgent(): Promise<void> {
   const surface = requireArg("surface");
-  const conductorSurface = getArg("conductor-surface");
 
-  // --- 1. surface を閉じる ---
+  // surface を閉じる（SESSION_ENDED が自動発火し daemon が agents から削除する）
   await cmux.closeSurface(surface);
-
-  // --- 2. AGENT_DONE をキューに送信 ---
-  if (conductorSurface) {
-    await ensureQueueDirs();
-    await sendMessage({
-      type: "AGENT_DONE",
-      conductorSurface,
-      surface,
-      timestamp: new Date().toISOString(),
-    });
-  }
 
   console.log(`OK killed ${surface}`);
 }
@@ -1159,7 +1138,7 @@ Usage:
   cmux-team stop                               graceful shutdown
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
-  cmux-team kill-agent --surface <surface> [--conductor-surface <surface>]
+  cmux-team kill-agent --surface <surface>
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]

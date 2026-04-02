@@ -330,20 +330,6 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
       }
 
-      case "AGENT_DONE": {
-        const conductor = findConductor(state, message.conductorSurface);
-        if (conductor) {
-          conductor.agents = conductor.agents.filter(
-            (a) => a.surface !== message.surface
-          );
-          await log(
-            "agent_done",
-            `conductor_surface=${message.conductorSurface} surface=${message.surface}`
-          );
-        }
-        break;
-      }
-
       case "SESSION_STARTED": {
         const conductor = findConductor(state, message.surface);
         if (conductor) {
@@ -386,6 +372,19 @@ async function processQueue(state: DaemonState): Promise<void> {
             "session_ended",
             `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
           );
+        } else {
+          // Agent surface かチェック
+          for (const c of state.conductors.values()) {
+            const idx = c.agents.findIndex(a => a.surface === message.surface);
+            if (idx !== -1) {
+              c.agents.splice(idx, 1);
+              await log(
+                "agent_done",
+                `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended`
+              );
+              break;
+            }
+          }
         }
         break;
       }
