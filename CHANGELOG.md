@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.10.0] - 2026-04-02
+
+### Changed
+- Conductor 起動を並列化し、チーム立ち上げ時間を短縮
+- Trust 確認の待機処理（waitForTrust）を廃止。Conductor hooks による自動承認に統一
+
 ## [3.9.2] - 2026-03-31
 
 ### Fixed
