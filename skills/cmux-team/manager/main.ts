@@ -185,13 +185,17 @@ async function cmdStart(): Promise<void> {
     }
   }
 
-  // daemon surface 取得
-  let daemonSurface: string | undefined;
-  try {
-    daemonSurface = await cmux.getCallerSurface();
-    await log("daemon_surface", `surface=${daemonSurface}`);
-  } catch (e: any) {
-    await log("daemon_surface_fallback", e.message);
+  // daemon surface 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
+  let daemonSurface: string | undefined = process.env.CMUX_SURFACE;
+  if (daemonSurface) {
+    await log("daemon_surface", `surface=${daemonSurface} (env)`);
+  } else {
+    try {
+      daemonSurface = await cmux.getCallerSurface();
+      await log("daemon_surface", `surface=${daemonSurface} (identify)`);
+    } catch (e: any) {
+      await log("daemon_surface_fallback", e.message);
+    }
   }
 
   // daemon タブタイトル設定
@@ -618,16 +622,23 @@ async function cmdSpawnAgent(): Promise<void> {
   // --- 1. プロキシポート読み取り + 生存確認 ---
   const proxyPort = await resolveProxyPort();
 
-  // --- 2. タブ作成（--pane 直接指定 → team.json lookup → split フォールバック） ---
+  // --- 2. タブ作成（--pane 直接指定 → team.json lookup → CMUX_SURFACE 環境変数 → split フォールバック） ---
   let paneId: string | undefined = pane;  // --pane が最優先
   let worktreePath: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
-    const conductor = teamJson.conductors?.find((c: any) => c.id === conductorId);
+    const conductors: any[] = teamJson.conductors ?? [];
+    // conductor-id で検索
+    const conductor = conductors.find((c: any) => c.id === conductorId);
     if (!paneId) paneId = conductor?.paneId;
     worktreePath = conductor?.worktreePath;
     // --task-title 省略時は conductor のタスクタイトルをフォールバック
     if (!taskTitle) taskTitle = conductor?.taskTitle;
+    // フォールバック: 呼び出し元の CMUX_SURFACE 環境変数から pane を逆引き
+    if (!paneId && process.env.CMUX_SURFACE) {
+      const bySurface = conductors.find((c: any) => c.surface === process.env.CMUX_SURFACE);
+      if (bySurface) paneId = bySurface.paneId;
+    }
   } catch {}
 
   let surface: string;
