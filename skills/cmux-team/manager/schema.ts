@@ -99,6 +99,7 @@ export interface AgentState {
   role?: string;
   taskTitle?: string;
   spawnedAt: string;
+  sessionId?: string;
 }
 
 // --- Conductor 状態 ---
