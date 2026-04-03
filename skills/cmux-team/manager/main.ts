@@ -118,16 +118,6 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
 async function cmdStart(): Promise<void> {
   console.log("🚀 cmux-team 起動開始");
 
-  // using-cmux プラグインの競合チェック
-  try {
-    const pluginsPath = join(process.env.HOME || "~", ".claude/plugins/installed_plugins.json");
-    const pluginsJson = await readFile(pluginsPath, "utf-8");
-    if (pluginsJson.includes("using-cmux")) {
-      console.log("⚠️  using-cmux プラグインがインストールされています。cmux-team と機能が競合するためアンインストールを推奨します: claude plugins uninstall using-cmux");
-      await log("using_cmux_conflict", "using-cmux plugin detected");
-    }
-  } catch {}
-
   // cmux 環境チェック
   if (!process.env.CMUX_SOCKET_PATH) {
     console.error("❌ cmux 環境外です。cmux 内で実行してください。");
