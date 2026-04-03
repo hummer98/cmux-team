@@ -575,17 +575,26 @@ async function cmdSpawnAgent(): Promise<void> {
 
   // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
   let worktreePath: string | undefined;
+  let paneId: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductors: any[] = teamJson.conductors ?? [];
     const conductor = conductors.find((c: any) => c.surface === conductorSurface);
     worktreePath = conductor?.worktreePath;
+    paneId = conductor?.paneId;
     if (!taskTitle) taskTitle = conductor?.taskTitle;
   } catch {}
 
+  // フォールバック: cmux tree から paneId を解決
+  if (!paneId) {
+    try {
+      paneId = await cmux.getPaneForSurface(conductorSurface);
+    } catch {}
+  }
+
   let surface: string;
   try {
-    surface = await cmux.newSurface();
+    surface = await cmux.newSurface(paneId);
   } catch {
     surface = await cmux.newSplit("right");
   }
