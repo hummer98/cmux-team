@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.15.0] - 2026-04-03
+
+### Added
+- using-cmux スキルの機能を cmux-team に統合。cmux 環境内でのペイン操作・サブエージェント管理が単一プラグインで完結
+- TUI ログタブにローカルタイムゾーン表示とスクロール機能を追加
+- Master surface のマーカーファイル方式を実装。daemon が Master を確実に識別可能に
+
+### Fixed
+- Agent 完了時に Conductor ツリーから削除されない問題を修正（SESSION_ENDED が Agent surface でも正しく処理されるように）
+- spawn-agent が Conductor のペインではなくフォーカス中のペインにタブを作成するバグを修正。paneId を明示的に指定するように変更
+- TUI で closed タスクが running 表示のままになるバグを修正。task-state.json の status を優先するように変更
+
 ## [3.14.0] - 2026-04-03
 
 ### Added

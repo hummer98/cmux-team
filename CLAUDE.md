@@ -81,10 +81,29 @@ cmux-team/
 ├── skills/
 │   ├── cmux-team/
 │   │   ├── SKILL.md                  # 4層アーキテクチャ定義スキル
-│   │   └── templates/                # エージェントプロンプトテンプレート (10個)
+│   │   ├── manager/                  # Manager daemon（TypeScript / Bun）
+│   │   │   ├── main.ts               #   CLI エントリー（サブコマンド実装）
+│   │   │   ├── daemon.ts             #   メインループ・ファイル監視
+│   │   │   ├── conductor.ts          #   Conductor 初期化・タスク割当・監視
+│   │   │   ├── master.ts             #   Master spawn・監視
+│   │   │   ├── cmux.ts               #   cmux コマンドラッパー
+│   │   │   ├── proxy.ts              #   ロギングプロキシ（API 透過傍受）
+│   │   │   ├── queue.ts              #   メッセージキュー
+│   │   │   ├── trace-store.ts        #   SQLite FTS5 トレース
+│   │   │   ├── task.ts               #   タスク管理
+│   │   │   ├── template.ts           #   プロンプトテンプレート展開
+│   │   │   ├── artifact.ts           #   アーティファクト管理
+│   │   │   ├── dashboard.tsx         #   TUI ダッシュボード
+│   │   │   ├── logger.ts             #   ログ出力
+│   │   │   ├── schema.ts             #   Zod スキーマ定義
+│   │   │   └── package.json          #   Bun 依存関係
+│   │   └── templates/                # エージェントプロンプトテンプレート (13個)
 │   │       ├── common-header.md      #   全エージェント共通ヘッダー
+│   │       ├── master.md             #   Master ロール
 │   │       ├── manager.md            #   Manager ロール
-│   │       ├── conductor.md          #   Conductor ロール
+│   │       ├── conductor.md          #   Conductor ロール（旧）
+│   │       ├── conductor-role.md     #   Conductor 常駐ロール
+│   │       ├── conductor-task.md     #   Conductor タスク割り当て時プロンプト
 │   │       ├── researcher.md         #   リサーチャーロール
 │   │       ├── architect.md          #   アーキテクトロール
 │   │       ├── reviewer.md           #   レビュアーロール
@@ -94,20 +113,24 @@ cmux-team/
 │   │       └── task-manager.md       #   タスク管理者ロール
 │   └── cmux-agent-role/
 │       └── SKILL.md                  # サブエージェント行動規範スキル
-├── commands/                         # スラッシュコマンド定義 (4個)
+├── commands/                         # スラッシュコマンド定義 (5個)
 │   ├── master.md                     #   Master ロール再読み込み（/clear 復帰用）
 │   ├── team-spec.md                  #   要件ブレスト（対話型）
 │   ├── team-task.md                  #   タスク管理
 │   ├── team-archive.md              #   完了タスクのアーカイブ
 │   └── artifact.md                  #   知見のアーティファクト化
-├── docs/seeds/                       # 設計シードドキュメント（実装時の入力仕様）
-│   ├── 00-project-overview.md
-│   ├── 01-skill-cmux-team.md
-│   ├── 02-skill-cmux-agent-role.md
-│   ├── 03-commands.md
-│   ├── 04-templates.md
-│   ├── 05-install-and-infrastructure.md
-│   └── 06-implementation-tasks.md
+├── docs/
+│   ├── seeds/                        # 設計シードドキュメント（実装時の入力仕様）
+│   │   ├── 00-project-overview.md
+│   │   ├── 01-skill-cmux-team.md
+│   │   ├── 02-skill-cmux-agent-role.md
+│   │   ├── 03-commands.md
+│   │   ├── 04-templates.md
+│   │   ├── 05-install-and-infrastructure.md
+│   │   └── 06-implementation-tasks.md
+│   ├── research/                     # リサーチドキュメント
+│   └── slides/                       # プレゼン資料
+├── CHANGELOG.md                      # 変更ログ
 ├── LICENSE                           # MIT
 ├── README.md                         # ユーザー向けドキュメント（英語）
 └── README.ja.md                      # ユーザー向けドキュメント（日本語）
@@ -155,16 +178,25 @@ cmux-team/
 |------|------|
 | `{{ROLE_ID}}` | エージェントの識別子（例: `researcher-1`, `architect`） |
 | `{{TASK_DESCRIPTION}}` | タスクの説明文 |
-| `{{OUTPUT_FILE}}` | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
 | `{{PROJECT_ROOT}}` | プロジェクトルートの絶対パス |
-| `{{WORKTREE_PATH}}` | git worktree のパス（Agent が作業するディレクトリ） |
-| `{{OUTPUT_DIR}}` | 出力ディレクトリパス（例: `.team/output/`） |
 
-### ロール固有変数
+### Conductor 変数
 
 | 変数 | 使用テンプレート | 説明 |
 |------|----------------|------|
-| `{{COMMON_HEADER}}` | 全ロール | common-header.md の展開結果 |
+| `{{TASK_CONTENT}}` | conductor-task | タスクファイル本文 |
+| `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree のパス |
+| `{{OUTPUT_DIR}}` | conductor, conductor-task | 出力ディレクトリパス（例: `.team/output/<taskRunId>/`） |
+| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`run-<timestamp>` 形式） |
+| `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
+| `{{PROJECT_ROOT}}` | conductor-role | プロジェクトルートの絶対パス |
+
+### Agent ロール固有変数
+
+| 変数 | 使用テンプレート | 説明 |
+|------|----------------|------|
+| `{{COMMON_HEADER}}` | 全 Agent ロール | common-header.md の展開結果 |
+| `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | 調査すべきサブ質問リスト |
 | `{{REQUIREMENTS_CONTENT}}` | architect, reviewer, tester | requirements.md の内容 |
@@ -178,9 +210,6 @@ cmux-team/
 | `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
 | `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
 | `{{OPEN_TASKS_LIST}}` | task-manager | オープンタスクの一覧 |
-| `{{MANAGER_INSTRUCTIONS}}` | manager | Manager への指示（イベント駆動監視設定等） |
-| `{{CONDUCTOR_INSTRUCTIONS}}` | conductor | Conductor へのタスク実行指示 |
-| `{{PHASE_NAME}}` | conductor | 実行フェーズ名（research, design, impl 等） |
 
 ## インストール方法
 
@@ -288,7 +317,7 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 
 ### Conductor へのタスク割り当て
 
-1. idle Conductor を検出（done マーカーなし + surface 生存 + `❯` 表示中）
+1. idle Conductor を検出（ConductorState の `status: "idle"` + surface 生存）
 2. worktree 作成・プロンプト生成
 3. Conductor surface に `/clear` + 新プロンプト送信
 
@@ -312,7 +341,7 @@ Manager がやらないこと:
 
 ### ループ継続・アイドル化
 
-- **Conductor 稼働中**: 30秒間隔で pull 型監視を実行
+- **Conductor 稼働中**: デフォルト10秒間隔（`CMUX_TEAM_POLL_INTERVAL`）で pull 型監視を実行
 - **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
 - **起床トリガー**: `[TASK_CREATED]` 通知で再起動
 
@@ -327,11 +356,16 @@ Manager がやらないこと:
 ├── tasks/             # タスクファイル（フラット構造）
 ├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
 ├── artifacts/         # Axxx — 知見の記録（調査・設計判断・セッション要約）
-├── output/conductor-N/ # Conductor が書く、Manager が読む
+├── output/            # Conductor/Agent の出力（taskRunId 別）
+├── conductors/        # Conductor 状態ファイル
 ├── prompts/           # プロンプト（監査証跡）
 ├── specs/             # 要件・設計ドキュメント
-├── traces/            # SQLite トレースDB
-└── team.json          # チーム構成（Master が初期化）
+├── queue/             # メッセージキュー（incoming/ + processed/）
+├── logs/              # manager.log + traces/bodies/
+├── traces/            # SQLite トレースDB（traces.db）
+├── sessions/          # セッション情報
+├── proxy-port         # プロキシポート番号
+└── team.json          # チーム構成（daemon が自動更新）
 ```
 
 ### cmux コマンド通信
@@ -385,13 +419,13 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 ## git worktree（概要）
 
-すべての作業は `.worktrees/conductor-N/` 内で行う。main ブランチは常に無傷。
+すべての作業は `.worktrees/<taskRunId>/` 内で行う。main ブランチは常に無傷。
 
-- **作成**: `git worktree add .worktrees/conductor-N -b conductor-N/task`
+- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId は `run-<timestamp>` 形式）
 - **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
 - **成功時**: worktree 内でコミット → main にマージ → worktree 削除
 - **失敗時**: `git worktree remove --force` + ブランチ削除
-- **クリーンアップ**: `git worktree list` で確認、`git worktree remove <path> --force` で削除、`git worktree prune` で壊れた参照を修復。`.team/worktrees/` 配下の記録も確認すること
+- **クリーンアップ**: `git worktree list` で確認、`git worktree remove <path> --force` で削除、`git worktree prune` で壊れた参照を修復
 
 ## エラーリカバリ
 

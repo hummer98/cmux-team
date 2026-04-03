@@ -70,6 +70,7 @@ description: >
 | `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
 | `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
 | `/team-archive` | 完了タスクのアーカイブ（closed → archived） |
+| `/artifact` | 知見のアーティファクト化（作成・一覧・表示） |
 
 ### CLI サブコマンド
 
