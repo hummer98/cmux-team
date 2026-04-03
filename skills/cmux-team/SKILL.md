@@ -145,3 +145,82 @@ cmux-team trace --task 035
 # エラーに関連するリクエストを全文検索
 cmux-team trace --search "rate_limit"
 ```
+
+## 3. cmux 操作リファレンス
+
+### 環境変数
+
+| 変数 | 意味 |
+|------|------|
+| `CMUX_SOCKET_PATH` | cmux ソケットパス。設定されていれば cmux 環境内で動作中 |
+| `CMUX_WORKSPACE_ID` | 現在のワークスペースID |
+| `CMUX_SURFACE_ID` | 現在のサーフェスID |
+| `CMUX_SURFACE` | cmux-team が設定。`surface:N` 形式。これが設定されていれば cmux-team 管理下 |
+
+### 基本操作コマンド
+
+| コマンド | 用途 |
+|---------|------|
+| `cmux identify` | 自分の workspace/surface を確認 |
+| `cmux tree` | ペイン・サーフェス階層を表示 |
+| `cmux list-panes` | ペイン一覧 |
+| `cmux list-pane-surfaces` | ペイン内のサーフェス一覧 |
+| `cmux new-split right` | 右にペイン分割（`left`/`up`/`down` も可） |
+| `cmux new-surface --pane pane:N` | ペイン内に新しいタブを作成 |
+| `cmux send --surface surface:N "command\n"` | コマンド送信 |
+| `cmux send-key --surface surface:N return` | キー送信 |
+| `cmux read-screen --surface surface:N` | 画面読み取り |
+| `cmux close-surface --surface surface:N` | サーフェス（タブ）を閉じる |
+| `cmux rename-tab --surface surface:N "name"` | タブ名変更 |
+| `cmux refresh-surfaces` | 画面バッファ強制更新 |
+
+### send の改行ルール（重要）
+
+**単一行**: 末尾に `\n` を付ける。
+```bash
+cmux send --surface surface:1 "echo hello\n"
+```
+
+**複数行**: 個別の `send` + `send-key return` で送信する。
+```bash
+cmux send --surface surface:1 "line 1"
+cmux send-key --surface surface:1 return
+cmux send --surface surface:1 "line 2"
+cmux send-key --surface surface:1 return
+```
+
+**注意**: `\n` は最後の1つだけが Enter として機能する。途中の `\n` は改行にならない。
+
+### 制御キーの送信
+
+`send-key` を使う（`send` ではない）:
+
+```bash
+cmux send-key --surface surface:N ctrl+c    # 中断
+cmux send-key --surface surface:N ctrl+d    # EOF
+cmux send-key --surface surface:N ctrl+z    # サスペンド
+cmux send-key --surface surface:N return    # Enter
+cmux send-key --surface surface:N tab       # Tab
+cmux send-key --surface surface:N escape    # Escape
+```
+
+**よくある間違い**: `cmux send "C-c"` や `cmux send "\x03"` → 動作しない。必ず `send-key` を使うこと。
+
+### read-screen トラブルシューティング
+
+| 問題 | 対処 |
+|------|------|
+| 空・古い出力 | `cmux refresh-surfaces` してからリトライ |
+| 出力が切れる | `--scrollback` オプションを追加 |
+| 特定行数だけ必要 | `--lines N` オプションを追加 |
+| surface が見つからない | `cmux list-pane-surfaces` で確認 |
+
+### 通知
+
+```bash
+# アプリ内通知（ペイン強調 + サイドバーバッジ）
+cmux notify --title "完了" --body "ビルドが成功しました"
+
+# macOS 通知センター（サウンド付き）
+osascript -e 'display notification "ビルド完了" with title "Claude" sound name "Glass"'
+```
