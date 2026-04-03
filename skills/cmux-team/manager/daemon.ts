@@ -162,7 +162,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
-      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\nconductors/\ntask-state.json\ntasks/*.status.json\n"
+      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\nconductors/\nmaster.surface\ntask-state.json\ntasks/*.status.json\n"
     );
   } else {
     // 既存 .gitignore に tasks/*.status.json がなければ追記
@@ -194,21 +194,21 @@ export async function initInfra(state: DaemonState): Promise<void> {
 }
 
 export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // 既存 Master の存在チェック
+  // マーカーファイルから既存 Master を検出
+  const markerPath = join(state.projectRoot, ".team/master.surface");
   try {
-    const teamJson = JSON.parse(
-      await readFile(join(state.projectRoot, ".team/team.json"), "utf-8")
-    );
-    const surface = teamJson.master?.surface;
-    if (surface) {
-      const alive = await isMasterAlive(surface);
-      if (alive) {
-        state.masterSurface = surface;
-        console.log("✅ Master: 既存セッション検出 (スキップ)");
-        await log("master_alive", `surface=${surface}`);
-        return;
+    if (existsSync(markerPath)) {
+      const surface = (await readFile(markerPath, "utf-8")).trim();
+      if (surface) {
+        const alive = await isMasterAlive(surface);
+        if (alive) {
+          state.masterSurface = surface;
+          console.log("✅ Master: 既存セッション検出 (スキップ)");
+          await log("master_alive", `surface=${surface}`);
+          return;
+        }
+        await log("master_check_failed", `surface=${surface} alive=false`);
       }
-      await log("master_check_failed", `surface=${surface} alive=false`);
     }
   } catch (e: any) {
     await log("master_check_error", e.message);

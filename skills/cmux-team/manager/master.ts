@@ -1,6 +1,8 @@
 /**
  * Master surface の作成・管理
  */
+import { writeFile } from "fs/promises";
+import { join } from "path";
 import * as cmux from "./cmux";
 import { log } from "./logger";
 
@@ -30,6 +32,10 @@ export async function spawnMaster(
     // タブ名設定
     const num = surface.replace("surface:", "");
     await cmux.renameTab(surface, `[${num}] Master`);
+
+    // マーカーファイル書き込み（restart 時の発見用）
+    const markerPath = join(projectRoot, ".team/master.surface");
+    await writeFile(markerPath, surface);
 
     await log("master_spawned", `surface=${surface}`);
     return { surface };
