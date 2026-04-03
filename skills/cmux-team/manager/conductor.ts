@@ -4,7 +4,7 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, writeFile, mkdir, readdir, unlink, rm } from "fs/promises";
+import { readFile, mkdir, readdir, unlink, rm } from "fs/promises";
 import { join, dirname } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
@@ -90,16 +90,6 @@ export async function initializeConductorSlots(
       return state;
     }));
     slots.push(...results);
-
-    // conductor マーカーファイルを書き出し（restart 時の発見用）
-    const conductorsDir = join(projectRoot, ".team/conductors");
-    await mkdir(conductorsDir, { recursive: true });
-    // 古いマーカーを削除してから新規作成
-    try {
-      const old = await readdir(conductorsDir);
-      await Promise.all(old.filter(f => f.startsWith("conductor.")).map(f => unlink(join(conductorsDir, f))));
-    } catch {}
-    await Promise.all(slots.map(s => writeFile(join(conductorsDir, `conductor.${s.surface}`), "")));
 
     console.log(`✅ Conductor スロット ${slots.length}個 準備完了`);
     await log("conductor_slots_initialized", `count=${slots.length}`);

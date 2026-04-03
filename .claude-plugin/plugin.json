@@ -23,6 +23,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); if echo \"$FILE\" | grep -qE '\\.team/(team|task-state)\\.json$'; then echo 'team.json と task-state.json は daemon が管理するファイルです。直接編集しないでください。タスク操作は cmux-team create-task / update-task / close-task コマンドを使用してください。'; exit 2; fi"
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,7 +1,7 @@
 /**
  * タスクファイルのパース・依存解決
  */
-import { readdir, readFile, writeFile } from "fs/promises";
+import { readdir, readFile, writeFile, rename } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -88,7 +88,9 @@ export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> 
  */
 export async function saveTaskState(projectRoot: string, state: TaskStateMap): Promise<void> {
   const filePath = join(projectRoot, ".team/task-state.json");
-  await writeFile(filePath, JSON.stringify(state, null, 2) + "\n");
+  const tmpPath = filePath + ".tmp";
+  await writeFile(tmpPath, JSON.stringify(state, null, 2) + "\n");
+  await rename(tmpPath, filePath);
 }
 
 /**
