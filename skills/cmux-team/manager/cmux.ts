@@ -69,6 +69,7 @@ export async function readScreen(
   return stdout;
 }
 
+/** surface を閉じる。SESSION_ENDED は送信しないため、呼び出し元が必要に応じて明示的に送信すること */
 export async function closeSurface(surface: string): Promise<void> {
   await execFile("cmux", ["close-surface", "--surface", surface]).catch(
     () => {}
