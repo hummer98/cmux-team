@@ -4,6 +4,7 @@
 import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, cp } from "fs/promises";
 import { join, dirname } from "path";
+import { log } from "./logger";
 
 export function findTemplateDir(): string | null {
   // 1. daemon 自身からの相対パス（manager/ の兄弟 templates/）
@@ -34,6 +35,7 @@ export async function generateMasterPrompt(
   }
 
   await cp(join(templateDir, "master.md"), dst);
+  await log("master_prompt_generated", `path=${dst}`);
 }
 
 export async function generateConductorRolePrompt(
@@ -55,6 +57,7 @@ export async function generateConductorRolePrompt(
   content = content.replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot);
 
   await writeFile(promptFile, content);
+  await log("conductor_role_prompt_generated", `path=${promptFile}`);
   return promptFile;
 }
 
@@ -90,5 +93,6 @@ export async function generateConductorTaskPrompt(
     .replace(/\{\{TASK_STATUS_FILE\}\}/g, taskStatusFile ?? "");
 
   await writeFile(promptFile, content);
+  await log("conductor_task_prompt_generated", `taskRunId=${taskRunId} path=${promptFile}`);
   return promptFile;
 }

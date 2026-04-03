@@ -2,6 +2,7 @@ import { readdir, readFile, mkdir, rename, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join, basename } from "path";
 import { QueueMessage } from "./schema";
+import { log } from "./logger";
 
 function getQueueDir(): string {
   const root = process.env.PROJECT_ROOT || process.cwd();
@@ -36,8 +37,8 @@ export async function readQueue(): Promise<
       const raw = JSON.parse(await readFile(filePath, "utf-8"));
       const message = QueueMessage.parse(raw);
       messages.push({ path: filePath, message });
-    } catch (e) {
-      console.error(`[queue] invalid message: ${file}`, e);
+    } catch (e: any) {
+      await log("error", `queue invalid message: file=${file} error=${e.message}`);
       await rename(filePath, join(getProcessedDir(), file)).catch(() => {});
     }
   }

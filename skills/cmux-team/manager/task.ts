@@ -4,6 +4,7 @@
 import { readdir, readFile, writeFile, rename } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { log } from "./logger";
 
 export interface TaskMeta {
   id: string;
@@ -82,7 +83,8 @@ export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> 
   if (!existsSync(filePath)) return {};
   try {
     return JSON.parse(await readFile(filePath, "utf-8"));
-  } catch {
+  } catch (e: any) {
+    await log("error", `loadTaskState parse failed: ${e.message}`);
     return {};
   }
 }
