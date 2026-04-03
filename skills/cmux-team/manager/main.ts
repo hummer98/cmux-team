@@ -89,6 +89,17 @@ function requireArg(name: string): string {
   return val;
 }
 
+/** --help / -h フラグの有無を判定 */
+function hasHelpFlag(): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+/** ヘルプテキストを表示して正常終了 */
+function showHelp(text: string): never {
+  console.log(text.trim());
+  process.exit(0);
+}
+
 /** tasks/ からタスクファイルを検索（ID プレフィックス or frontmatter id） */
 async function findTaskFile(taskId: string): Promise<string | undefined> {
   const tasksDir = join(PROJECT_ROOT, ".team/tasks");
@@ -116,6 +127,20 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
 }
 
 async function cmdStart(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team start -- daemon 起動 + Master spawn + ダッシュボード表示
+
+Usage:
+  cmux-team start
+
+Options:
+  なし
+
+Notes:
+  - cmux 環境内で実行する必要があります（CMUX_SOCKET_PATH が必要）
+  - daemon + ロギングプロキシ + 2x2 レイアウト（Conductor x3）+ Master を起動します
+  - ダッシュボードが表示され、キーボードショートカットで操作できます
+`);
   console.log("🚀 cmux-team 起動開始");
 
   // cmux 環境チェック
@@ -307,6 +332,57 @@ async function cmdStart(): Promise<void> {
 }
 
 async function cmdSend(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team send -- キューにメッセージを送信
+
+Usage:
+  cmux-team send <type> [options]
+
+Types と必須/任意オプション:
+  TASK_CREATED
+    --task-id <id>          タスク ID（必須）
+    --task-file <path>      タスクファイルパス（必須）
+
+  CONDUCTOR_DONE
+    --surface <surface>     Conductor の surface ID（必須）
+    --success <bool>        成功/失敗（任意、デフォルト true）
+    --reason <text>         理由（任意）
+    --exit-code <number>    終了コード（任意）
+    --session-id <id>       セッション ID（任意）
+    --transcript-path <p>   トランスクリプトパス（任意）
+
+  AGENT_SPAWNED
+    --conductor-surface <s> Conductor の surface ID（必須）
+    --surface <surface>     Agent の surface ID（必須）
+    --role <role>           ロール名（任意）
+    --task-title <title>    タスクタイトル（任意）
+
+  SESSION_STARTED
+    --surface <surface>     surface ID（必須）
+    --pid <number>          プロセス ID（必須）
+    --session-id <id>       セッション ID（任意）
+
+  SESSION_ENDED
+    --surface <surface>     surface ID（必須）
+    --pid <number>          プロセス ID（任意）
+    --reason <text>         理由（任意）
+
+  SESSION_ACTIVE
+    --surface <surface>     surface ID（必須）
+    --pid <number>          プロセス ID（任意）
+
+  SESSION_IDLE
+    --surface <surface>     surface ID（必須）
+    --pid <number>          プロセス ID（任意）
+
+  SHUTDOWN
+    （オプションなし）
+
+Examples:
+  cmux-team send TASK_CREATED --task-id 035 --task-file .team/tasks/035-example.md
+  cmux-team send SHUTDOWN
+  cmux-team send CONDUCTOR_DONE --surface surface:210 --success true
+`);
   await ensureQueueDirs();
   const type = args[1];
   const now = new Date().toISOString();
@@ -399,6 +475,19 @@ async function cmdSend(): Promise<void> {
 }
 
 async function cmdStatus(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team status -- チームのステータスを表示
+
+Usage:
+  cmux-team status [options]
+
+Options:
+  --log <N>     ログ末尾の表示行数（任意、デフォルト 10）
+
+Examples:
+  cmux-team status
+  cmux-team status --log 20
+`);
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
   if (!existsSync(teamJsonPath)) {
     console.log("チーム未起動。`start` で起動してください。");
@@ -488,6 +577,20 @@ async function resolveProxyPort(): Promise<string | undefined> {
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  */
 async function cmdConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
+
+Usage:
+  cmux-team conductor <slot-id>
+
+Arguments:
+  <slot-id>     Conductor のスロット ID（必須）
+
+Notes:
+  - daemon が起動時に自動的に呼び出す内部コマンドです
+  - ロギングプロキシのポートを動的に解決して Claude Code を exec します
+  - --dangerously-skip-permissions で起動されます
+`);
   const slotId = args[1];
   if (!slotId) {
     console.error("Usage: cmux-team conductor <slot-id>");
@@ -530,6 +633,20 @@ async function cmdConductor(): Promise<void> {
  * Master 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  */
 async function cmdLaunchMaster(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team launch-master -- Master 用 Claude Code を起動（内部用）
+
+Usage:
+  cmux-team launch-master
+
+Options:
+  なし
+
+Notes:
+  - daemon が起動時に自動的に呼び出す内部コマンドです
+  - ロギングプロキシのポートを動的に解決して Claude Code を exec します
+  - Master プロンプトを生成してから --dangerously-skip-permissions で起動されます
+`);
   // プロンプト生成
   const { generateMasterPrompt } = await import("./template");
   await generateMasterPrompt(PROJECT_ROOT);
@@ -560,6 +677,18 @@ async function cmdLaunchMaster(): Promise<void> {
 }
 
 async function cmdStop(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team stop -- daemon を graceful shutdown する
+
+Usage:
+  cmux-team stop
+
+Options:
+  なし
+
+Notes:
+  - SHUTDOWN メッセージをキューに送信し、daemon が受信して停止します
+`);
   await ensureQueueDirs();
   const path = await sendMessage({
     type: "SHUTDOWN",
@@ -569,6 +698,28 @@ async function cmdStop(): Promise<void> {
 }
 
 async function cmdSpawnAgent(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team spawn-agent -- サブエージェントを起動
+
+Usage:
+  cmux-team spawn-agent --conductor-surface <surface> --role <role> (--prompt <text> | --prompt-file <path>) [options]
+
+Options:
+  --conductor-surface <surface>   Conductor の surface ID（必須）
+  --role <role>                   エージェントのロール名（必須）
+  --prompt <text>                 インラインプロンプト（--prompt-file と排他、どちらか必須）
+  --prompt-file <path>            プロンプトファイルパス（--prompt と排他、どちらか必須）
+  --task-title <title>            タスクタイトル（任意、タブ名に使用）
+
+Examples:
+  cmux-team spawn-agent --conductor-surface surface:210 --role researcher --prompt "調査してください"
+  cmux-team spawn-agent --conductor-surface surface:210 --role implementer --prompt-file .team/prompts/task.md
+
+Notes:
+  - Conductor ペイン内にタブとして Agent を作成します
+  - タブ作成に失敗した場合は new-split right にフォールバックします
+  - AGENT_SPAWNED メッセージが自動的にキューに送信されます
+`);
   const conductorSurface = requireArg("conductor-surface");
   const role = requireArg("role");
   const prompt = getArg("prompt");
@@ -671,6 +822,15 @@ async function cmdSpawnAgent(): Promise<void> {
 }
 
 async function cmdAgents(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team agents -- 稼働中のエージェント一覧を表示
+
+Usage:
+  cmux-team agents
+
+Options:
+  なし
+`);
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
   if (!existsSync(teamJsonPath)) {
     console.log("チーム未起動。");
@@ -702,6 +862,18 @@ async function cmdAgents(): Promise<void> {
 }
 
 async function cmdKillAgent(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team kill-agent -- エージェントを停止
+
+Usage:
+  cmux-team kill-agent --surface <surface>
+
+Options:
+  --surface <surface>     停止する Agent の surface ID（必須）
+
+Examples:
+  cmux-team kill-agent --surface surface:215
+`);
   const surface = requireArg("surface");
 
   // surface を閉じる（closeSurface は SESSION_ENDED を送信しないため、明示的に通知する）
@@ -719,6 +891,27 @@ async function cmdKillAgent(): Promise<void> {
 }
 
 async function cmdCreateTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team create-task -- タスクを作成
+
+Usage:
+  cmux-team create-task --title <title> [options]
+
+Options:
+  --title <title>         タスクタイトル（必須）
+  --body <text>           タスク本文（任意）
+  --priority <priority>   優先度: high / medium / low（任意、デフォルト medium）
+  --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
+
+Examples:
+  cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
+  cmux-team create-task --title "新機能追加" --priority high
+
+Notes:
+  - status が ready の場合、TASK_CREATED メッセージが自動送信され、
+    daemon が idle Conductor に割り当てます
+  - draft の場合は割り当てされません。update-task --status ready で開始できます
+`);
   const title = requireArg("title");
   const priority = getArg("priority") || "medium";
   const status = getArg("status") || "draft";
@@ -783,6 +976,29 @@ ${body}
 }
 
 async function cmdUpdateTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team update-task -- タスクを更新
+
+Usage:
+  cmux-team update-task --task-id <id> [options]
+
+Options:
+  --task-id <id>          タスク ID（必須）
+  --status <status>       新しいステータス（任意）
+  --title <title>         新しいタイトル（任意）
+  --body <text>           新しい本文（任意）
+
+  ※ --status, --title, --body のうち少なくとも1つが必要
+
+Examples:
+  cmux-team update-task --task-id 035 --status ready
+  cmux-team update-task --task-id 035 --title "新タイトル" --body "新しい説明"
+
+Notes:
+  - assigned（実行中）のタスクは更新できません
+  - closed のタスクは更新できません（新しいタスクを作成してください）
+  - status を ready に変更すると TASK_CREATED メッセージが自動送信されます
+`);
   const taskId = requireArg("task-id");
   const newStatus = getArg("status");
   const body = getArg("body");
@@ -852,6 +1068,25 @@ async function cmdUpdateTask(): Promise<void> {
 }
 
 async function cmdCloseTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team close-task -- タスクを完了（closed）にする
+
+Usage:
+  cmux-team close-task --task-id <id> [options]
+
+Options:
+  --task-id <id>          タスク ID（必須）
+  --journal <text>        完了ジャーナル（任意、正常完了時に記録）
+  --force                 実行中のタスクを強制クローズ（任意フラグ）
+
+Examples:
+  cmux-team close-task --task-id 035 --journal "実装完了、テストパス"
+  cmux-team close-task --task-id 035 --force
+
+Notes:
+  - assigned（実行中）のタスクは --journal または --force が必要です
+  - task-state.json の status が closed に設定されます
+`);
   const taskId = requireArg("task-id");
   const journal = getArg("journal");
   const force = args.includes("--force");
@@ -882,6 +1117,26 @@ async function cmdCloseTask(): Promise<void> {
 }
 
 async function cmdTrace(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team trace -- API トレースの検索・表示
+
+Usage:
+  cmux-team trace [options]
+
+Options:
+  --task <id>             タスク ID でフィルタ（任意）
+  --conductor <surface>   Conductor surface でフィルタ（任意）
+  --role <role>           ロール名でフィルタ（任意）
+  --search <query>        FTS5 全文検索（任意）
+  --show <id>             トレース ID の詳細表示（任意）
+  --limit <N>             表示件数（任意、デフォルト 20）
+
+Examples:
+  cmux-team trace --task 035
+  cmux-team trace --search "エラー"
+  cmux-team trace --show 42
+  cmux-team trace --role researcher --limit 50
+`);
   const db = initDB(PROJECT_ROOT);
   const taskId = getArg("task");
   const conductorSurface = getArg("conductor");
@@ -953,6 +1208,18 @@ async function cmdTrace(): Promise<void> {
 }
 
 async function cmdRestartConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team restart-conductor -- Conductor を再起動
+
+Usage:
+  cmux-team restart-conductor --surface <surface>
+
+Options:
+  --surface <surface>     再起動する Conductor の surface ID（必須）
+
+Examples:
+  cmux-team restart-conductor --surface surface:210
+`);
   const surface = requireArg("surface");
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
   const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
@@ -968,6 +1235,22 @@ async function cmdRestartConductor(): Promise<void> {
 }
 
 async function cmdResetConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team reset-conductor -- Conductor をリセット（idle に戻す）
+
+Usage:
+  cmux-team reset-conductor --surface <surface>
+
+Options:
+  --surface <surface>     リセットする Conductor の surface ID（必須）
+
+Examples:
+  cmux-team reset-conductor --surface surface:210
+
+Notes:
+  - CONDUCTOR_DONE メッセージ（success=false, reason=manual_reset）を送信します
+  - daemon が受信して Conductor を idle 状態に戻します
+`);
   const surface = requireArg("surface");
   await ensureQueueDirs();
   const path = await sendMessage({
@@ -995,6 +1278,30 @@ function sleep(ms: number): Promise<void> {
 
 // --- artifacts サブコマンド ---
 async function cmdArtifacts(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team artifacts -- アーティファクト管理
+
+Usage:
+  cmux-team artifacts [subcommand] [options]
+
+Subcommands:
+  (なし)                  アーティファクト一覧表示（デフォルト）
+  show <id>              アーティファクトの内容を表示
+  search <query>         アーティファクトを全文検索
+
+Options:
+  --type <type>           タイプでフィルタ: research / decision / session / spec / report（任意）
+  --task <id>             関連タスク ID でフィルタ（任意）
+  --sort <field>          ソート基準: created / updated（任意、デフォルト created）
+  --validate              全アーティファクトのフロントマターを検証
+
+Examples:
+  cmux-team artifacts
+  cmux-team artifacts show A001
+  cmux-team artifacts search "認証"
+  cmux-team artifacts --type research --task T038
+  cmux-team artifacts --validate
+`);
   const subCmd = args[1];
 
   // cmux-team artifacts --validate
@@ -1155,6 +1462,7 @@ switch (command) {
     await cmdArtifacts();
     break;
   default:
+    if (!command || hasHelpFlag()) {
     console.log(`cmux-team — マルチエージェント開発オーケストレーション
 
 Usage:
@@ -1179,6 +1487,12 @@ Usage:
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts show <id>                    アーティファクト表示
   cmux-team artifacts search <query>               全文検索
-  cmux-team artifacts --validate                   フロントマター検証`);
-    break;
+  cmux-team artifacts --validate                   フロントマター検証
+
+各コマンドの詳細: cmux-team <command> --help`);
+      process.exit(0);
+    }
+    console.error(`Unknown command: ${command}`);
+    console.error(`Run 'cmux-team --help' for usage.`);
+    process.exit(1);
 }
