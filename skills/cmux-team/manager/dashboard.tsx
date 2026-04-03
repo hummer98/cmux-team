@@ -18,6 +18,8 @@ import { log } from "./logger";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 
+const LOG_VISIBLE_LINES = 30;
+
 // --- GitHub リポジトリ URL 解決 ---
 
 let cachedRepoUrl: string | null = null;
@@ -225,6 +227,8 @@ interface AppState {
   version: string;
   repoUrl: string | null;
   confirmingFullQuit?: boolean;
+  logScrollOffset: number;   // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
+  logAutoScroll: boolean;    // true = 最新に自動追従
 }
 
 // --- セクションタイトル（Ink 版と同じ "─ Title ──────" スタイル） ---
@@ -557,6 +561,8 @@ export async function startDashboard(
       artifactSearch: null,
       version: opts?.version ?? "",
       repoUrl: null,
+      logScrollOffset: 0,
+      logAutoScroll: true,
     },
     config: { executionMode: "inline" },
   });
@@ -628,7 +634,13 @@ export async function startDashboard(
             ? buildJournalRows([...state.journalEntries].reverse(), repoUrl)
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
-            : buildLogRows(state.logLines.slice(-200))
+            : (() => {
+                const total = state.logLines.length;
+                let endIdx = total - state.logScrollOffset;
+                if (endIdx < LOG_VISIBLE_LINES) endIdx = Math.min(total, LOG_VISIBLE_LINES);
+                const startIdx = Math.max(0, endIdx - LOG_VISIBLE_LINES);
+                return buildLogRows(state.logLines.slice(startIdx, endIdx));
+              })()
         ),
       ]),
       footer: ui.statusBar({
@@ -654,6 +666,21 @@ export async function startDashboard(
               ui.text("tabs"),
               ui.kbd("q"),
               ui.text("quit"),
+            ]
+          : state.activeTab === "log"
+          ? [
+              ui.kbd("j/k"),
+              ui.text("scroll"),
+              ui.kbd("g/G"),
+              ui.text("top/bottom"),
+              ui.kbd("1-3"),
+              ui.text("tabs"),
+              ui.kbd("r"),
+              ui.text("reload"),
+              ui.kbd("q"),
+              ui.text("quit"),
+              ui.kbd("Q"),
+              ui.text("full quit"),
             ]
           : [
               ui.kbd("1"),
@@ -705,13 +732,38 @@ export async function startDashboard(
       ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
     },
     j: () => app.update((s) => {
-      if (s.activeTab !== "artifacts") return s;
-      const filtered = getFilteredArtifacts(s);
-      return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
+      if (s.activeTab === "artifacts") {
+        const filtered = getFilteredArtifacts(s);
+        return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
+      }
+      if (s.activeTab === "log") {
+        const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+        return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
+      }
+      return s;
     }),
     k: () => app.update((s) => {
-      if (s.activeTab !== "artifacts") return s;
-      return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+      if (s.activeTab === "artifacts") {
+        return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+      }
+      if (s.activeTab === "log") {
+        const newOffset = Math.max(s.logScrollOffset - 1, 0);
+        return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
+      }
+      return s;
+    }),
+    G: () => app.update((s) => {
+      if (s.activeTab === "log") {
+        return { ...s, logScrollOffset: 0, logAutoScroll: true };
+      }
+      return s;
+    }),
+    g: () => app.update((s) => {
+      if (s.activeTab === "log") {
+        const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+        return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
+      }
+      return s;
     }),
     s: () => app.update((s) => {
       if (s.activeTab !== "artifacts") return s;
@@ -768,6 +820,7 @@ export async function startDashboard(
         journalEntries,
         repoUrl,
         artifacts,
+        logScrollOffset: s.logAutoScroll ? 0 : s.logScrollOffset,
       }));
     } catch (e: any) {
       // lifecycle operation already in flight — skip this tick
