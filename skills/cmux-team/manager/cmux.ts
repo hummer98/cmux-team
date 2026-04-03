@@ -89,6 +89,18 @@ export async function tree(): Promise<string> {
   return stdout;
 }
 
+export async function getPaneForSurface(surface: string): Promise<string | undefined> {
+  const output = await tree();
+  const lines = output.split("\n");
+  let currentPane: string | undefined;
+  for (const line of lines) {
+    const paneMatch = line.match(/pane (pane:\d+)/);
+    if (paneMatch) currentPane = paneMatch[1];
+    if (line.includes(surface) && currentPane) return currentPane;
+  }
+  return undefined;
+}
+
 export async function validateSurface(surface: string): Promise<boolean> {
   try {
     const output = await tree();
