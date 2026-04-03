@@ -89,7 +89,9 @@ export async function initSourceWatcher(): Promise<Map<string, number>> {
       const s = await stat(filePath);
       mtimes.set(filePath, s.mtimeMs);
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `initSourceWatcher failed: ${e.message}`);
+  }
   return mtimes;
 }
 
@@ -107,7 +109,9 @@ export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise
         return f;
       }
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `checkSourceChanged failed: ${e.message}`);
+  }
   return null;
 }
 
@@ -126,8 +130,9 @@ export function initFileWatcher(state: DaemonState): void {
           if (!state.running) break;
           state.wakeup?.();
         }
-      } catch {
+      } catch (e: any) {
         // ウォッチャーが壊れても daemon は停止しない（ポーリングで補完）
+        log("error", `file watcher failed: dir=${dir} ${e.message}`);
       }
     })();
   }
@@ -270,7 +275,9 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
         }
       }
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `initializeLayout team.json restore failed: ${e.message}`);
+  }
 
   // 既存なし → 新規作成
   await log("layout_creating_new_slots", `count=${state.maxConductors}`);
@@ -308,7 +315,9 @@ async function processQueue(state: DaemonState): Promise<void> {
           try {
             const content = await readFile(message.taskFile, "utf-8");
             title = content.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
-          } catch {}
+          } catch (e: any) {
+            await log("error", `processQueue TASK_CREATED readFile failed: taskFile=${message.taskFile} ${e.message}`);
+          }
         }
         await log("task_received", `task_id=${message.taskId}${title ? ` title=${title}` : ""}`);
         break;
@@ -689,5 +698,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     const tmpPath = teamJsonPath + ".tmp";
     await writeFile(tmpPath, JSON.stringify(teamJson, null, 2) + "\n");
     await rename(tmpPath, teamJsonPath);
-  } catch {}
+  } catch (e: any) {
+    await log("error", `updateTeamJson failed: ${e.message}`);
+  }
 }

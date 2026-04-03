@@ -230,7 +230,9 @@ Notes:
     if (existsSync(pluginJsonPath)) {
       version = JSON.parse(await readFile(pluginJsonPath, "utf-8")).version;
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `version read failed: ${e.message}`);
+  }
 
   // ダッシュボード表示（キーボードショートカット付き）
   await startDashboard(() => state, {
@@ -250,7 +252,9 @@ Notes:
           env: process.env,
           cwd: process.cwd(),
         });
-      } catch {}
+      } catch (e: any) {
+        await log("error", `daemon reload exec failed: ${e.message}`);
+      }
       process.exit(0);
     },
     onQuit: () => { shutdown(); },
@@ -292,7 +296,9 @@ Notes:
             if (conductor.taskRunId) {
               await execFileAsync("git", ["branch", "-d", `${conductor.taskRunId}/task`], { cwd: state.projectRoot }).catch(() => {});
             }
-          } catch {}
+          } catch (e: any) {
+            await log("error", `worktree cleanup failed: path=${conductor.worktreePath} error=${e.message}`);
+          }
         }
       }
 

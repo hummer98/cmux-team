@@ -32,7 +32,9 @@ async function getPaneIdForSurface(surface: string): Promise<string | undefined>
       if (paneMatch) currentPane = paneMatch[1];
       if (line.includes(surface) && currentPane) return currentPane;
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `getPaneIdForSurface failed: surface=${surface} ${e.message}`);
+  }
   return undefined;
 }
 
@@ -143,7 +145,9 @@ export async function assignTask(
 
     // worktree ブートストラップ
     if (existsSync(join(worktreePath, "package.json"))) {
-      await execFile("npm", ["install"], { cwd: worktreePath }).catch(() => {});
+      await execFile("npm", ["install"], { cwd: worktreePath }).catch(async (e: any) => {
+        await log("error", `npm install failed in worktree: path=${worktreePath} ${e.message}`);
+      });
     }
 
     // --- 3. Conductor プロンプト生成 ---
@@ -219,7 +223,9 @@ export async function resetConductor(
             await cmux.closeSurface(s);
           }
         }
-      } catch {}
+      } catch (e: any) {
+        await log("error", `resetConductor listPaneSurfaces failed: paneId=${conductor.paneId} ${e.message}`);
+      }
     } else {
       // paneId なし → agents の surface を個別に閉じる
       for (const agent of conductor.agents) {
@@ -227,19 +233,23 @@ export async function resetConductor(
       }
     }
 
-    // 2. worktree 削除
+    // 2. worktree 削除（冪等: 既に削除済みでもエラーにしない）
     if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
       try {
         await execFile("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
           cwd: projectRoot,
         });
-      } catch {}
-      // ブランチ削除
+      } catch (e: any) {
+        await log("cleanup_failed", `resetConductor worktree remove: path=${conductor.worktreePath} ${e.message}`);
+      }
+      // ブランチ削除（冪等: 既に削除済みでもエラーにしない）
       if (conductor.taskRunId) {
         const branch = `${conductor.taskRunId}/task`;
         try {
           await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
-        } catch {}
+        } catch (e: any) {
+          await log("cleanup_failed", `resetConductor branch delete: branch=${branch} ${e.message}`);
+        }
       }
     }
 
@@ -275,12 +285,18 @@ export async function checkConductorStatus(
     try {
       const raw = await readFile(conductor.taskStatusFile, "utf-8");
       const status = JSON.parse(raw);
-      if (status.status === "done") return "done";
-    } catch {}
+      if (status.status === "done") {
+        await log("conductor_done_detected", `surface=${conductor.surface} method=task_status_file file=${conductor.taskStatusFile}`);
+        return "done";
+      }
+    } catch (e: any) {
+      await log("error", `checkConductorStatus status.json parse failed: surface=${conductor.surface} file=${conductor.taskStatusFile} ${e.message}`);
+    }
   }
 
   // 後方互換: run ベースの done マーカーもフォールバックで確認
   if (conductor.outputDir && existsSync(join(conductor.outputDir, "done"))) {
+    await log("conductor_done_detected", `surface=${conductor.surface} method=done_marker_fallback dir=${conductor.outputDir}`);
     return "done";
   }
 
@@ -307,7 +323,9 @@ export async function collectResults(
         result.journalSummary = state.journal;
       }
     }
-  } catch {}
+  } catch (e: any) {
+    await log("error", `collectResults journal read failed: taskId=${conductor.taskId} ${e.message}`);
+  }
 
   return result;
 }

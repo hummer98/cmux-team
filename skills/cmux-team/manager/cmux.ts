@@ -3,6 +3,7 @@
  */
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
+import { log } from "./logger";
 
 const execFile = promisify(execFileCb);
 
@@ -91,22 +92,28 @@ export async function tree(): Promise<string> {
 }
 
 export async function getPaneForSurface(surface: string): Promise<string | undefined> {
-  const output = await tree();
-  const lines = output.split("\n");
-  let currentPane: string | undefined;
-  for (const line of lines) {
-    const paneMatch = line.match(/pane (pane:\d+)/);
-    if (paneMatch) currentPane = paneMatch[1];
-    if (line.includes(surface) && currentPane) return currentPane;
+  try {
+    const output = await tree();
+    const lines = output.split("\n");
+    let currentPane: string | undefined;
+    for (const line of lines) {
+      const paneMatch = line.match(/pane (pane:\d+)/);
+      if (paneMatch) currentPane = paneMatch[1];
+      if (line.includes(surface) && currentPane) return currentPane;
+    }
+    return undefined;
+  } catch (e: any) {
+    await log("error", `getPaneForSurface failed: surface=${surface} ${e.message}`);
+    return undefined;
   }
-  return undefined;
 }
 
 export async function validateSurface(surface: string): Promise<boolean> {
   try {
     const output = await tree();
     return output.includes(surface);
-  } catch {
+  } catch (e: any) {
+    await log("error", `validateSurface failed: surface=${surface} ${e.message}`);
     return false;
   }
 }

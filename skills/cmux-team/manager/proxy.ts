@@ -8,6 +8,7 @@
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
 import { initDB, insertTrace } from "./trace-store";
+import { log } from "./logger";
 import type { Database } from "bun:sqlite";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -222,7 +223,9 @@ export async function start(
           request_body_path: reqBodyPath,
           response_body_path: resBodyPath,
         });
-      } catch {}
+      } catch (e: any) {
+        log("error", `insertTrace failed: ${e.message}`).catch(() => {});
+      }
 
       return new Response(resBody, {
         status: upstreamRes.status,
@@ -235,8 +238,9 @@ export async function start(
   let server: ReturnType<typeof Bun.serve>;
   try {
     server = Bun.serve({ port: preferredPort, fetch: fetchHandler, development: false });
-  } catch {
+  } catch (e: any) {
     if (preferredPort !== 0) {
+      await log("proxy_port_fallback", `preferred=${preferredPort} error=${e.message}`);
       server = Bun.serve({ port: 0, fetch: fetchHandler, development: false });
     } else {
       throw new Error("Failed to start proxy");
@@ -332,5 +336,7 @@ async function drainAndLog(
       request_body_path: ctx.reqBodyPath,
       response_body_path: resBodyPath,
     });
-  } catch {}
+  } catch (e: any) {
+    log("error", `insertTrace (streaming) failed: ${e.message}`).catch(() => {});
+  }
 }
