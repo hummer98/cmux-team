@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.16.0] - 2026-04-03
+
+### Added
+- Master/Conductor/Agent 起動時に `CMUX_NO_RENAME_TAB=1` を設定。using-cmux の SessionStart フックによるタブ名上書きを抑止
+- using-cmux プラグインとの共存が可能に。排他的な競合警告を削除
+
 ## [3.15.0] - 2026-04-03
 
 ### Added
