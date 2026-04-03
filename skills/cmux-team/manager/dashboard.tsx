@@ -274,14 +274,19 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
       ])
     );
   } else if (isDisconnected) {
-    const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
     const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
+    const taskParts: ReturnType<typeof ui.text>[] = [];
+    if (c.taskId) {
+      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+    }
+    if (c.taskTitle) {
+      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+    }
     children.push(
       ui.row({ gap: 1 }, [
         ui.text("⚠", { style: { fg: YELLOW } }),
         ui.text(`[${surface}]`),
-        ui.text(taskId, { bold: true }),
-        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
+        ...taskParts,
         ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
       ])
     );
