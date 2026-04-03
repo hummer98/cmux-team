@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.18.0] - 2026-04-04
+
+### Added
+- ブランチ名・worktree パスをタスクIDベースの命名に変更（`task-<NNN>-<timestamp>` 形式）。git branch や git log からどのタスクの作業か一目で判別可能に
+
+### Fixed
+- タスク未割り当ての Conductor が disconnected になった際に `T000` と表示される問題を修正
+
 ## [3.17.0] - 2026-04-04
 
 ### Added
