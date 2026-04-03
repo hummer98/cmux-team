@@ -12,7 +12,7 @@
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s>
- *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
+ *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--run-after-all]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
  */
@@ -723,6 +723,19 @@ async function cmdCreateTask(): Promise<void> {
   const priority = getArg("priority") || "medium";
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
+  const runAfterAll = process.argv.includes("--run-after-all");
+
+  // run_after_all タスクが既に存在する場合はエラー
+  if (runAfterAll) {
+    const { tasks } = await loadTasks(PROJECT_ROOT);
+    const existingRunAfterAll = tasks.find(t =>
+      t.runAfterAll && t.status !== "closed"
+    );
+    if (existingRunAfterAll) {
+      console.error(`Error: run_after_all task already exists: ${existingRunAfterAll.id} (${existingRunAfterAll.title})`);
+      process.exit(1);
+    }
+  }
 
   // slug 生成
   let slug = title
@@ -753,7 +766,7 @@ async function cmdCreateTask(): Promise<void> {
   const content = `---
 id: ${newId}
 title: ${title}
-priority: ${priority}
+priority: ${priority}${runAfterAll ? "\nrun_after_all: true" : ""}
 created_at: ${new Date().toISOString()}
 ---
 
@@ -1166,7 +1179,7 @@ Usage:
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
-  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>]
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
