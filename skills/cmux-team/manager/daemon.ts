@@ -552,6 +552,19 @@ async function monitorConductors(state: DaemonState): Promise<void> {
         conductor.taskId = undefined;
         break;
     }
+
+    // Agent surface の生存チェック（pull型防御）
+    // kill-agent 以外のルート（tmux quit 等）で surface が消失した場合に対応
+    for (let i = conductor.agents.length - 1; i >= 0; i--) {
+      const agent = conductor.agents[i]!;
+      if (!(await cmux.validateSurface(agent.surface))) {
+        conductor.agents.splice(i, 1);
+        await log(
+          "agent_done",
+          `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost`
+        );
+      }
+    }
   }
 }
 

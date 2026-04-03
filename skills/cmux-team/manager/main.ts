@@ -694,8 +694,16 @@ async function cmdAgents(): Promise<void> {
 async function cmdKillAgent(): Promise<void> {
   const surface = requireArg("surface");
 
-  // surface を閉じる（SESSION_ENDED が自動発火し daemon が agents から削除する）
+  // surface を閉じる（closeSurface は SESSION_ENDED を送信しないため、明示的に通知する）
   await cmux.closeSurface(surface);
+
+  // daemon に SESSION_ENDED を通知して agents リストから削除させる
+  await sendMessage({
+    type: "SESSION_ENDED",
+    surface,
+    reason: "kill-agent",
+    timestamp: new Date().toISOString(),
+  });
 
   console.log(`OK killed ${surface}`);
 }
