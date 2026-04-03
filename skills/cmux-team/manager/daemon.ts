@@ -226,35 +226,49 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
 }
 
 export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // .team/conductors/ のマーカーファイルから既存 Conductor を発見
-  const conductorsDir = join(state.projectRoot, ".team/conductors");
+  // team.json から既存 Conductor を復元
+  const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
-    const files = await readdir(conductorsDir);
-    const surfaces = files
-      .filter(f => f.startsWith("conductor.surface:"))
-      .map(f => f.replace("conductor.", ""));
+    if (existsSync(teamJsonPath)) {
+      const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+      const conductors: any[] = teamJson.conductors ?? [];
 
-    // surface が cmux tree に存在するもののみ復元
-    const alive: string[] = [];
-    for (const surface of surfaces) {
-      if (await cmux.validateSurface(surface)) {
-        alive.push(surface);
-      }
-    }
+      if (conductors.length > 0) {
+        const alive: ConductorState[] = [];
+        for (const c of conductors) {
+          if (!c.surface) continue;
+          if (await cmux.validateSurface(c.surface)) {
+            alive.push({
+              surface: c.surface,
+              taskRunId: c.taskRunId,
+              taskId: c.taskId,
+              taskTitle: c.taskTitle,
+              worktreePath: c.worktreePath,
+              outputDir: c.outputDir,
+              taskStatusFile: c.taskStatusFile,
+              startedAt: c.startedAt ?? new Date().toISOString(),
+              paneId: c.paneId,
+              agents: (c.agents ?? []).map((a: any) => ({
+                surface: a.surface,
+                role: a.role,
+                sessionId: a.sessionId,
+                spawnedAt: a.spawnedAt ?? new Date().toISOString(),
+              })),
+              status: c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle",
+            });
+          }
+        }
 
-    if (alive.length > 0) {
-      state.conductors.clear();
-      for (const surface of alive) {
-        state.conductors.set(surface, {
-          surface,
-          startedAt: new Date().toISOString(),
-          agents: [],
-          status: "idle",
-        });
+        if (alive.length > 0) {
+          state.conductors.clear();
+          for (const c of alive) {
+            state.conductors.set(c.surface, c);
+          }
+          console.log(`✅ Conductor スロット: team.json から ${alive.length}個 を復元`);
+          await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => c.surface).join(",")}`);
+          return;
+        }
       }
-      console.log(`✅ Conductor スロット: 既存 ${alive.length}個 を再利用`);
-      await log("conductors_discovered", `count=${alive.length} surfaces=${alive.join(",")}`);
-      return;
     }
   } catch {}
 
