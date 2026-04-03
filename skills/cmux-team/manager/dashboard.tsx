@@ -334,14 +334,14 @@ function buildConductorsSection(state: DaemonState, repoUrl: string | null) {
 function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null) {
   const isClosed = task.status === "closed";
   const icon = isClosed ? "○" : "●";
-  const label = assigned ? "running" : task.status;
+  const label = isClosed ? "closed" : assigned ? "running" : task.status;
   const taskId = `T${task.id.padStart(3, "0")}`;
   const timeInfo = isClosed && task.closedAt
     ? utcToLocal(task.closedAt).slice(0, 5)
     : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
 
   // ステータス別の色（Ink版と同等）
-  const color = assigned ? GREEN : task.status === "ready" ? YELLOW : isClosed ? GRAY : undefined;
+  const color = isClosed ? GRAY : assigned ? GREEN : task.status === "ready" ? YELLOW : undefined;
   const colorStyle = color ? { style: { fg: color } } : {};
 
   return ui.row({ gap: 1 }, [
