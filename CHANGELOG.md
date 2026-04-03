@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.17.0] - 2026-04-04
+
+### Added
+- 全サブコマンドに `--help` オプションを追加。AI がコマンド仕様を自己参照可能に
+- タスクに `run_after_all` フラグを追加。全通常タスク完了後に実行するタスク（リリース等）をキュー可能に
+- ステートファイルを統一し PreToolUse hook で保護。AI からの直接編集をブロック
+- task-state.json のアトミック書き込み（tmp → rename）を実装
+
+### Fixed
+- `/clear` 時に Conductor が一時的に disconnected 表示になる問題を修正。SessionEnd hook の matcher から `clear` を除外
+
+### Changed
+- ConductorState を team.json に永続化。daemon 再起動時にタスク割り当て情報を復元可能に
+- Conductor マーカーファイル方式を廃止。team.json + cmux tree ベースの管理に統一
+
 ## [3.16.0] - 2026-04-03
 
 ### Added
