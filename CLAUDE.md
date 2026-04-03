@@ -187,7 +187,7 @@ cmux-team/
 | `{{TASK_CONTENT}}` | conductor-task | タスクファイル本文 |
 | `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree のパス |
 | `{{OUTPUT_DIR}}` | conductor, conductor-task | 出力ディレクトリパス（例: `.team/output/<taskRunId>/`） |
-| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`run-<timestamp>` 形式） |
+| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`） |
 | `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
 | `{{PROJECT_ROOT}}` | conductor-role | プロジェクトルートの絶対パス |
 
@@ -421,7 +421,7 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 すべての作業は `.worktrees/<taskRunId>/` 内で行う。main ブランチは常に無傷。
 
-- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId は `run-<timestamp>` 形式）
+- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId は `task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`）
 - **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
 - **成功時**: worktree 内でコミット → main にマージ → worktree 削除
 - **失敗時**: `git worktree remove --force` + ブランチ削除

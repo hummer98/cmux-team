@@ -108,7 +108,7 @@ export async function assignTask(
   projectRoot: string
 ): Promise<ConductorState | null> {
   try {
-    const taskRunId = `run-${Math.floor(Date.now() / 1000)}`;
+    const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
 
     // --- 1. タスクファイル検索 ---
     const tasksDir = join(projectRoot, ".team/tasks");
