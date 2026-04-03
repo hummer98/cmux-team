@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.14.0] - 2026-04-03
+
+### Added
+- Artifacts タブで Enter キーによる Markdown ビューア起動。環境変数 `CMUX_MD_VIEWER` でビューア指定可能（デフォルト: glow → cat フォールバック）
+
+### Changed
+- サブエージェントの TUI ツリー削除トリガーを明示的キューメッセージ (AGENT_DONE) から SESSION_ENDED（Claude フック自動発火）に変更。Conductor クラッシュ時のゴーストエントリを防止
+
+### Fixed
+- SESSION_ACTIVE/SESSION_IDLE イベント受信時に disconnected 状態の Conductor が復帰しない問題を修正。セッションが生存しているのにタスク割り当てされない状態を解消
+
 ## [3.13.1] - 2026-04-03
 
 ### Fixed
