@@ -11,6 +11,7 @@ export interface TaskMeta {
   status: string;
   priority: string;
   dependsOn: string[];
+  runAfterAll: boolean;
   filePath: string;
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
@@ -58,12 +59,15 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     }
   }
 
+  const runAfterAll = fm.match(/^run_after_all:\s*(.+)$/m)?.[1]?.trim() === "true";
+
   return {
     id: id || fileName.match(/^(\d+)/)?.[1] || "",
     title,
     status,
     priority,
     dependsOn,
+    runAfterAll,
     filePath,
     fileName,
     createdAt,
@@ -138,6 +142,9 @@ export function filterExecutableTasks(
     // status チェック
     if (task.status !== "ready") return false;
 
+    // run_after_all タスクは通常のフィルタリングから除外
+    if (task.runAfterAll) return false;
+
     // 既にアサイン済み
     if (assignedIds.has(task.id)) return false;
 
@@ -147,6 +154,49 @@ export function filterExecutableTasks(
       if (!allDepsResolved) return false;
     }
 
+    return true;
+  });
+}
+
+/**
+ * run_after_all タスクの実行可否を判定
+ * 条件: 通常タスク（run_after_all でない、かつ run_after_all タスクに depends_on しているものを除く）の ready + assigned が 0
+ */
+export function filterRunAfterAllTasks(
+  tasks: TaskMeta[],
+  closedIds: Set<string>,
+  assignedIds: Set<string>
+): TaskMeta[] {
+  // run_after_all タスクの ID セット
+  const runAfterAllIds = new Set(
+    tasks.filter(t => t.runAfterAll).map(t => t.id)
+  );
+
+  // run_after_all タスクに depends_on しているタスクの ID セット
+  const dependsOnRunAfterAll = new Set(
+    tasks.filter(t =>
+      !t.runAfterAll && t.dependsOn.some(dep => runAfterAllIds.has(dep))
+    ).map(t => t.id)
+  );
+
+  // 通常タスク（run_after_all でも、run_after_all に依存するタスクでもない）の ready + assigned 数
+  const normalActive = tasks.filter(t =>
+    !t.runAfterAll &&
+    !dependsOnRunAfterAll.has(t.id) &&
+    (t.status === "ready" || assignedIds.has(t.id))
+  );
+
+  if (normalActive.length > 0) return [];
+
+  // 通常タスクが全て完了 → run_after_all タスクのうち実行可能なものを返す
+  return tasks.filter(t => {
+    if (!t.runAfterAll) return false;
+    if (t.status !== "ready") return false;
+    if (assignedIds.has(t.id)) return false;
+    // 依存チェック
+    if (t.dependsOn.length > 0) {
+      if (!t.dependsOn.every(dep => closedIds.has(dep))) return false;
+    }
     return true;
   });
 }

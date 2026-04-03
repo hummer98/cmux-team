@@ -16,7 +16,7 @@ import {
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
+import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority } from "./task";
 import { log } from "./logger";
 import type { ConductorState } from "./schema";
 
@@ -462,7 +462,15 @@ async function scanTasks(state: DaemonState): Promise<void> {
   const executable = sortByPriority(
     filterExecutableTasks(openTasksList, closed, assignedIds)
   );
-  state.pendingTasks = executable.length;
+
+  // run_after_all タスクの判定
+  const runAfterAllExecutable = sortByPriority(
+    filterRunAfterAllTasks(openTasksList, closed, assignedIds)
+  );
+
+  // 両方を結合（通常タスク優先）
+  const allExecutable = [...executable, ...runAfterAllExecutable];
+  state.pendingTasks = allExecutable.length;
 
   // taskList: open を優先表示、残り枠で closed（直近）を表示
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
@@ -481,7 +489,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     closedAt: taskState[t.id]?.closedAt,
   }));
 
-  for (const task of executable) {
+  for (const task of allExecutable) {
     // idle Conductor を探す
     const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
     if (!idleConductor) {
