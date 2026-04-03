@@ -394,6 +394,10 @@ async function processQueue(state: DaemonState): Promise<void> {
         if (conductor) {
           conductor.disconnectedAt = undefined;
           if (message.pid) conductor.pid = message.pid;
+          if (conductor.status === "disconnected") {
+            conductor.status = "running";
+            await log("conductor_recovered", `surface=${message.surface} via=SESSION_ACTIVE new_status=running`);
+          }
         }
         break;
       }
@@ -403,6 +407,10 @@ async function processQueue(state: DaemonState): Promise<void> {
         if (conductor) {
           conductor.disconnectedAt = undefined;  // alive の証拠
           if (message.pid) conductor.pid = message.pid;
+          if (conductor.status === "disconnected") {
+            conductor.status = "idle";
+            await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE new_status=idle`);
+          }
           await log(
             "session_idle",
             `surface=${message.surface}`
