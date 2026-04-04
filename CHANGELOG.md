@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.21.0] - 2026-04-04
+
+### Added
+- TUI の Master 列に状態表示（running/idle/入力プロンプトの先頭部分）を追加。Claude Code hooks + daemon HTTP API で連携
+- ファイルベース IPC を HTTP API に移行（キュー・done マーカーを廃止し、proxy エンドポイント経由の通信に統一）
+- Conductor の自己登録方式を導入（`spawn-conductor` コマンド新設）。daemon が Conductor を直接管理する代わりに、Conductor 起動時に自身を登録する形に変更
+- Conductor に "starting" ステータスを追加。起動途中の Conductor にタスクが割り当てられる問題を防止
+
 ## [3.20.1] - 2026-04-04
 
 ### Changed
