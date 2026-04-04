@@ -348,7 +348,11 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const isAborted = task.status === "aborted";
   const isClosed = task.status === "closed" || isAborted;
   const icon = isAborted ? "✕" : isClosed ? "○" : "●";
-  const label = isAborted ? "aborted" : isClosed ? "closed" : assigned ? "running" : task.status;
+  const isBlocked = !isClosed && !assigned && task.dependsOn.length > 0;
+  const blockedLabel = isBlocked
+    ? `blocked T${task.dependsOn.map(d => d.padStart(3, "0")).join(",T")}`
+    : null;
+  const label = isAborted ? "aborted" : isClosed ? "closed" : assigned ? "running" : blockedLabel ?? task.status;
   const taskId = `T${task.id.padStart(3, "0")}`;
   const timeInfo = isAborted && task.abortedAt
     ? utcToLocal(task.abortedAt).slice(0, 5)
@@ -357,7 +361,7 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
     : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
 
   // ステータス別の色（Ink版と同等）
-  const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : task.status === "ready" ? YELLOW : undefined;
+  const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : isBlocked ? RED : task.status === "ready" ? YELLOW : undefined;
   const colorStyle = color ? { style: { fg: color } } : {};
 
   return ui.row({ gap: 1 }, [
