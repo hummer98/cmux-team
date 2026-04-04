@@ -185,6 +185,25 @@ export async function initInfra(state: DaemonState): Promise<void> {
     }
   }
 
+  // config.json（デフォルト生成）
+  const configJson = join(root, ".team/config.json");
+  if (!existsSync(configJson)) {
+    await writeFile(
+      configJson,
+      JSON.stringify(
+        {
+          models: {
+            master: "opus",
+            conductor: "opus",
+            agent: "opus",
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  }
+
   // team.json
   const teamJson = join(root, ".team/team.json");
   if (!existsSync(teamJson)) {
