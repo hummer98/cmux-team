@@ -10,6 +10,7 @@ import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
+import { sendMessage, ensureQueueDirs } from "./queue";
 import type { ConductorState } from "./schema";
 
 const execFile = promisify(execFileCb);
@@ -38,6 +39,46 @@ async function getPaneIdForSurface(surface: string): Promise<string | undefined>
   return undefined;
 }
 
+// --- spawnSingleConductor ---
+
+export async function spawnSingleConductor(
+  projectRoot: string,
+  direction: "right" | "down",
+  parentSurface?: string,
+): Promise<ConductorState> {
+  const surface = await cmux.newSplit(direction, parentSurface ? { surface: parentSurface } : undefined);
+
+  // Claude 起動
+  await cmux.send(
+    surface,
+    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
+  );
+
+  // タブ名設定
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] ♦ idle`);
+
+  // paneId 取得
+  const paneId = await getPaneIdForSurface(surface);
+
+  // CONDUCTOR_REGISTERED をキューに送信
+  await ensureQueueDirs();
+  await sendMessage({
+    type: "CONDUCTOR_REGISTERED",
+    surface,
+    paneId: paneId ?? "",
+    timestamp: new Date().toISOString(),
+  });
+
+  return {
+    surface,
+    startedAt: new Date().toISOString(),
+    agents: [],
+    status: "starting" as const,
+    paneId,
+  };
+}
+
 // --- initializeConductorSlots ---
 
 export async function initializeConductorSlots(
@@ -51,47 +92,23 @@ export async function initializeConductorSlots(
     console.log(`⏳ Conductor スロット作成中 (${count}個)...`);
 
     // 1. daemon を右に split → Conductor-1
-    const surface1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
-    await log("conductor_slot_created", `slot=1 surface=${surface1}`);
+    console.log(`  ⏳ Conductor 1/${count}: Claude 起動中...`);
+    const c1 = await spawnSingleConductor(projectRoot, "right", daemonSurface);
+    slots.push(c1);
 
-    // 2. daemon を下に split → Conductor-2
-    const surface2 = await cmux.newSplit("down", daemonSurface ? { surface: daemonSurface } : undefined);
-    await log("conductor_slot_created", `slot=2 surface=${surface2}`);
+    if (count >= 2) {
+      // 2. daemon を下に split → Conductor-2
+      console.log(`  ⏳ Conductor 2/${count}: Claude 起動中...`);
+      const c2 = await spawnSingleConductor(projectRoot, "down", daemonSurface);
+      slots.push(c2);
+    }
 
-    // 3. Conductor-1 を下に split → Conductor-3
-    const surface3 = await cmux.newSplit("down", { surface: surface1 });
-    await log("conductor_slot_created", `slot=3 surface=${surface3}`);
-
-    const surfaces = [surface1, surface2, surface3].slice(0, count);
-
-    const results = await Promise.all(surfaces.map(async (surface, i) => {
-      console.log(`  ⏳ Conductor ${i + 1}/${surfaces.length}: Claude 起動中 (${surface})...`);
-
-      // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
-      await cmux.send(
-        surface,
-        `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-      );
-
-      // タブ名設定
-      const num = surface.replace("surface:", "");
-      await cmux.renameTab(surface, `[${num}] ♦ idle`);
-
-      // paneId 取得
-      const paneId = await getPaneIdForSurface(surface);
-
-      const state: ConductorState = {
-        surface,
-        startedAt: new Date().toISOString(),
-        agents: [],
-        status: "starting",
-        paneId,
-      };
-
-      console.log(`  ✅ Conductor ${i + 1}/${surfaces.length}: 準備完了`);
-      return state;
-    }));
-    slots.push(...results);
+    if (count >= 3) {
+      // 3. Conductor-1 を下に split → Conductor-3
+      console.log(`  ⏳ Conductor 3/${count}: Claude 起動中...`);
+      const c3 = await spawnSingleConductor(projectRoot, "down", c1.surface);
+      slots.push(c3);
+    }
 
     console.log(`✅ Conductor スロット ${slots.length}個 準備完了`);
     await log("conductor_slots_initialized", `count=${slots.length}`);

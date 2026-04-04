@@ -368,6 +368,18 @@ async function processQueue(state: DaemonState): Promise<void> {
         break;
       }
 
+      case "CONDUCTOR_REGISTERED": {
+        state.conductors.set(message.surface, {
+          surface: message.surface,
+          paneId: message.paneId,
+          status: "starting",
+          startedAt: message.timestamp,
+          agents: [],
+        });
+        await log("conductor_registered", `surface=${message.surface} pane=${message.paneId}`);
+        break;
+      }
+
       case "AGENT_SPAWNED": {
         const conductor = findConductor(state, message.conductorSurface);
         if (conductor) {

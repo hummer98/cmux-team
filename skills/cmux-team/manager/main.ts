@@ -9,6 +9,7 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
+ *   ./main.ts spawn-conductor [--direction <right|down>] [--surface <surface>]
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s>
@@ -27,6 +28,7 @@ import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
+import { spawnSingleConductor } from "./conductor";
 import { initDB, searchTraces, getTrace } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact } from "./artifact";
@@ -386,6 +388,10 @@ Types と必須/任意オプション:
     --session-id <id>       セッション ID（任意）
     --transcript-path <p>   トランスクリプトパス（任意）
 
+  CONDUCTOR_REGISTERED
+    --surface <surface>     Conductor の surface ID（必須）
+    --pane-id <pane-id>     ペイン ID（任意）
+
   AGENT_SPAWNED
     --conductor-surface <s> Conductor の surface ID（必須）
     --surface <surface>     Agent の surface ID（必須）
@@ -447,6 +453,15 @@ Examples:
       };
       break;
 
+    case "CONDUCTOR_REGISTERED":
+      message = {
+        type: "CONDUCTOR_REGISTERED",
+        surface: requireArg("surface"),
+        paneId: getArg("pane-id") ?? "",
+        timestamp: now,
+      };
+      break;
+
     case "AGENT_SPAWNED":
       message = {
         type: "AGENT_SPAWNED",
@@ -501,7 +516,7 @@ Examples:
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -742,6 +757,28 @@ Notes:
     timestamp: new Date().toISOString(),
   });
   console.log(`SHUTDOWN sent: ${path}`);
+}
+
+async function cmdSpawnConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team spawn-conductor -- 新しい Conductor を起動・登録
+
+Usage:
+  cmux-team spawn-conductor [options]
+
+Options:
+  --direction <right|down>  split 方向（デフォルト: right）
+  --surface <surface>       split 元の surface（任意）
+`);
+  const direction = (getArg("direction") ?? "right") as "right" | "down";
+  if (direction !== "right" && direction !== "down") {
+    console.error("Error: --direction must be 'right' or 'down'");
+    process.exit(1);
+  }
+  const parentSurface = getArg("surface");
+
+  const result = await spawnSingleConductor(PROJECT_ROOT, direction, parentSurface);
+  console.log(`SURFACE=${result.surface}`);
 }
 
 async function cmdSpawnAgent(): Promise<void> {
@@ -1606,6 +1643,9 @@ switch (command) {
   case "stop":
     await cmdStop();
     break;
+  case "spawn-conductor":
+    await cmdSpawnConductor();
+    break;
   case "spawn-agent":
     await cmdSpawnAgent();
     break;
@@ -1655,6 +1695,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
+  cmux-team spawn-conductor [--direction <right|down>] [--surface <s>]
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
