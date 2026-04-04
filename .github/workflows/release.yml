@@ -26,9 +26,12 @@ jobs:
       - name: Install manager dependencies
         run: cd skills/cmux-team/manager && bun install --frozen-lockfile
 
-      - run: npm publish --provenance --access public
-        env:
-          NPM_CONFIG_USERCONFIG: /dev/null
+      - name: Publish to npm (OIDC Trusted Publishing)
+        run: |
+          # setup-node が書き込む .npmrc の TOKEN プレースホルダーを削除し
+          # npm に OIDC 認証を使わせる
+          sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG" 2>/dev/null || true
+          npm publish --provenance --access public
 
       - name: Extract changelog and create GitHub Release
         env:
