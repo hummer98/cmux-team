@@ -29,9 +29,9 @@ worktree は tracked files のみ含む。作業開始前に以下を確認す�
 
 結果サマリーは `{{OUTPUT_DIR}}/summary.md` に書き出す。
 
-## 完了マーカー
+## 完了通知
 
 全ての処理が完了したら、最後に:
 ```bash
-echo '{"status":"done","runId":"{{CONDUCTOR_ID}}","completedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > {{TASK_STATUS_FILE}}
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
 ```

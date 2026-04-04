@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -12,7 +12,6 @@ beforeEach(async () => {
 
   // .team 構造を作成
   await mkdir(join(testDir, ".team/tasks"), { recursive: true });
-  await mkdir(join(testDir, ".team/queue/processed"), { recursive: true });
   await mkdir(join(testDir, ".team/output"), { recursive: true });
   await mkdir(join(testDir, ".team/prompts"), { recursive: true });
   await mkdir(join(testDir, ".team/logs"), { recursive: true });
@@ -77,15 +76,6 @@ async function closeTask(id: string): Promise<void> {
   await saveTaskState(testDir, taskState);
 }
 
-// ヘルパー: キューメッセージを作成
-async function enqueueMessage(message: any): Promise<void> {
-  const ts = Math.floor(Date.now() / 1000);
-  const fileName = `${ts}-${message.type.toLowerCase()}.json`;
-  await writeFile(
-    join(testDir, ".team/queue", fileName),
-    JSON.stringify(message)
-  );
-}
 
 // --- task.ts の統合テスト（ファイルシステム経由）---
 
@@ -219,73 +209,6 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
   });
 });
 
-// --- キュー統合テスト ---
-
-import { readQueue, markProcessed, sendMessage, ensureQueueDirs } from "./queue";
-
-describe("キュー処理（ファイルシステム統合）", () => {
-  test("SHUTDOWN メッセージが正しく伝達される", async () => {
-    await enqueueMessage({
-      type: "SHUTDOWN",
-      timestamp: new Date().toISOString(),
-    });
-
-    const messages = await readQueue();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.type).toBe("SHUTDOWN");
-  });
-
-  test("複数メッセージがタイムスタンプ順に処理される", async () => {
-    // 意図的に逆順で作成
-    await writeFile(
-      join(testDir, ".team/queue/003-shutdown.json"),
-      JSON.stringify({ type: "SHUTDOWN", timestamp: new Date().toISOString() })
-    );
-    await writeFile(
-      join(testDir, ".team/queue/001-task.json"),
-      JSON.stringify({
-        type: "TASK_CREATED",
-        taskId: "1",
-        taskFile: ".team/tasks/001.md",
-        timestamp: new Date().toISOString(),
-      })
-    );
-    await writeFile(
-      join(testDir, ".team/queue/002-session-ended.json"),
-      JSON.stringify({
-        type: "SESSION_ENDED",
-        surface: "surface:1",
-        timestamp: new Date().toISOString(),
-      })
-    );
-
-    const messages = await readQueue();
-    expect(messages.map((m) => m.message.type)).toEqual([
-      "TASK_CREATED",
-      "SESSION_ENDED",
-      "SHUTDOWN",
-    ]);
-  });
-
-  test("不正な JSON ファイルはスキップされる", async () => {
-    await writeFile(
-      join(testDir, ".team/queue/001-bad.json"),
-      "this is not json"
-    );
-    await writeFile(
-      join(testDir, ".team/queue/002-good.json"),
-      JSON.stringify({
-        type: "SHUTDOWN",
-        timestamp: new Date().toISOString(),
-      })
-    );
-
-    const messages = await readQueue();
-    // 不正なファイルはスキップされ、正常なものだけ返る
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.type).toBe("SHUTDOWN");
-  });
-});
 
 // --- テンプレート生成テスト ---
 
@@ -299,149 +222,19 @@ describe("テンプレート生成", () => {
       "42",
       "テストタスクの内容",
       "/tmp/worktree",
-      ".team/output/conductor-test",
-      ".team/tasks/042-test.status.json"
+      ".team/output/conductor-test"
     );
 
     const content = await readFile(promptFile, "utf-8");
     expect(content).toContain("タスク割り当て");
     expect(content).toContain("テストタスクの内容");
     expect(content).toContain("/tmp/worktree");
-    expect(content).toContain("042-test.status.json");
-  });
-});
-
-// --- status.json ベースの完了検出テスト ---
-
-import { checkConductorStatus } from "./conductor";
-import type { ConductorState } from "./schema";
-
-describe("status.json ベースの完了検出", () => {
-  function makeConductor(overrides: Partial<ConductorState> = {}): ConductorState {
-    return {
-      surface: "surface:100",
-      startedAt: new Date().toISOString(),
-      agents: [],
-      status: "running",
-      ...overrides,
-    };
-  }
-
-  test("taskStatusFile に status:done が書かれたら done を返す", async () => {
-    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
-    await writeFile(statusFile, JSON.stringify({ status: "done", runId: "run-123" }));
-
-    const conductor = makeConductor({
-      taskStatusFile: statusFile,
-      taskId: "1",
-      outputDir: join(testDir, ".team/output/run-nonexistent"),
-    });
-
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("done");
-  });
-
-  test("taskStatusFile が存在しない場合は done を返さない", async () => {
-    // cmux.validateSurface をモックして surface 消失をシミュレート
-    const cmuxModule = await import("./cmux");
-    const spy = spyOn(cmuxModule, "validateSurface").mockResolvedValue(false);
-
-    const conductor = makeConductor({
-      taskStatusFile: join(testDir, ".team/tasks/999-missing.status.json"),
-      taskId: "999",
-    });
-
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("crashed"); // surface 消失として検出
-
-    spy.mockRestore();
-  });
-
-  test("後方互換: outputDir/done でも done を検出する", async () => {
-    const outputDir = join(testDir, ".team/output/run-legacy");
-    await mkdir(outputDir, { recursive: true });
-    await writeFile(join(outputDir, "done"), "");
-
-    const conductor = makeConductor({
-      taskStatusFile: undefined, // 旧バージョン: taskStatusFile なし
-      outputDir,
-      taskId: "1",
-    });
-
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("done");
-  });
-
-  test("run が変わっても task ベースの status.json で検出できる", async () => {
-    // 旧 run の outputDir には done がない
-    const oldOutputDir = join(testDir, ".team/output/run-old");
-    await mkdir(oldOutputDir, { recursive: true });
-    // 新 run の outputDir にも done がない
-    const newOutputDir = join(testDir, ".team/output/run-new");
-    await mkdir(newOutputDir, { recursive: true });
-
-    // だが task ベースの status.json に done がある
-    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
-    await writeFile(statusFile, JSON.stringify({ status: "done", runId: "run-old" }));
-
-    const conductor = makeConductor({
-      taskStatusFile: statusFile,
-      outputDir: newOutputDir, // 新しい run の outputDir
-      taskId: "1",
-    });
-
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("done");
-  });
-
-  test("status.json の status が done 以外なら done を返さない", async () => {
-    const statusFile = join(testDir, ".team/tasks/001-test.status.json");
-    await writeFile(statusFile, JSON.stringify({ status: "running" }));
-
-    const cmuxModule = await import("./cmux");
-    const spy = spyOn(cmuxModule, "validateSurface").mockResolvedValue(true);
-
-    const conductor = makeConductor({
-      taskStatusFile: statusFile,
-      taskId: "1",
-    });
-
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("running");
-
-    spy.mockRestore();
-  });
-
-  test("idle Conductor は idle を返す", async () => {
-    const conductor = makeConductor({ status: "idle" });
-    const status = await checkConductorStatus(conductor);
-    expect(status).toBe("idle");
   });
 });
 
 // --- SESSION_IDLE テスト ---
 
 describe("SESSION_IDLE メッセージ処理", () => {
-  test("SESSION_IDLE は disconnectedAt をクリアする", async () => {
-    // SESSION_IDLE メッセージがキューに入った状態をシミュレート
-    await enqueueMessage({
-      type: "SESSION_IDLE",
-      surface: "surface:100",
-      pid: 12345,
-      timestamp: new Date().toISOString(),
-    });
-
-    const messages = await readQueue();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.message.type).toBe("SESSION_IDLE");
-
-    const msg = messages[0]!.message;
-    if (msg.type === "SESSION_IDLE") {
-      expect(msg.surface).toBe("surface:100");
-      expect(msg.pid).toBe(12345);
-    }
-  });
-
   test("SESSION_IDLE は conductor.status を変更しない", async () => {
     // SESSION_IDLE メッセージのスキーマ検証
     const { SessionIdleMessage } = await import("./schema");

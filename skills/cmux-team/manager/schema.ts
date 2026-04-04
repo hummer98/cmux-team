@@ -98,7 +98,6 @@ export const ConductorState = z.object({
   surface: z.string(),
   worktreePath: z.string().optional(),
   outputDir: z.string().optional(),
-  taskStatusFile: z.string().optional(),
   startedAt: z.string().datetime(),
   pid: z.number().optional(),
   sessionId: z.string().optional(),
@@ -107,6 +106,6 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  status: "starting" | "idle" | "running" | "done" | "disconnected";
+  status: "starting" | "idle" | "running" | "disconnected";
   paneId?: string;
 };
