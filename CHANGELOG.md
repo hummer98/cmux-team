@@ -16,10 +16,10 @@
 ## [3.20.0] - 2026-04-04
 
 ### Added
-- `--model` オプションで Master・Conductor・Agent ごとに使用モデルを指定可能に（`cmux-team launch-master --model claude-opus-4-6` 等）
+- `--model` オプションで Master・Conductor・Agent ごとに使用モデルを指定可能に（`cmux-team spawn-master --model claude-opus-4-6` 等）
 
 ### Fixed
-- `launch-master` 経由で起動した Master が指示に無応答になる問題を修正（初期プロンプト引数を渡していたため Claude が print モードで起動・終了していた）
+- `spawn-master` 経由で起動した Master が指示に無応答になる問題を修正（初期プロンプト引数を渡していたため Claude が print モードで起動・終了していた）
 - プロキシのエラーが `manager.log` に記録されなかった問題を修正（`fetchHandler` に try-catch を追加）
 - streaming レスポンスのログ処理中に例外が発生した場合、`reader.releaseLock()` が呼ばれず応答がブロックされる可能性を修正
 
@@ -207,7 +207,7 @@
 ## [3.6.1] - 2026-03-30
 
 ### Changed
-- Master/Conductor の起動を `cmux-team conductor <id>` / `cmux-team launch-master` CLI ラッパー経由に変更。起動時に `.team/proxy-port` から proxy ポートを動的に解決するため、Manager 再起動時に既存セッションの API 接続が切れる問題を解消
+- Master/Conductor の起動を `cmux-team conductor <id>` / `cmux-team spawn-master` CLI ラッパー経由に変更。起動時に `.team/proxy-port` から proxy ポートを動的に解決するため、Manager 再起動時に既存セッションの API 接続が切れる問題を解消
 - Ink 版ダッシュボードを廃止し Rezi 版に一本化
 
 ## [3.6.0] - 2026-03-30

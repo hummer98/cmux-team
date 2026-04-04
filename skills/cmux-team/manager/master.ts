@@ -23,10 +23,10 @@ export async function spawnMaster(
       return null;
     }
 
-    // cmux-team launch-master ラッパー経由で起動（proxy ポートを動的解決）
+    // cmux-team spawn-master ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
       surface,
-      `cmux-team launch-master\n`
+      `cmux-team spawn-master\n`
     );
 
     // タブ名設定

@@ -117,9 +117,7 @@ skills/cmux-team/manager/
 | `close-task` | タスクを closed にマーク + journal 保存 |
 | `trace` | トレースDB 検索・表示（--task, --search, --show） |
 | `conductor` | Conductor 情報表示 |
-| `launch-master` | Master surface 起動 |
-| `restart-conductor` | Conductor 再起動 |
-| `reset-conductor` | Conductor リセット（/clear 送信） |
+| `spawn-master` | Master surface 起動 |
 | `artifacts` | アーティファクト一覧・検索 |
 
 ### メインループ

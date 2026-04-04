@@ -35,10 +35,8 @@ main.ts の switch 文から列挙:
 10. `close-task` — タスク完了
 11. `trace` — トレース検索・表示
 12. `conductor` — Conductor 起動（内部用）
-13. `launch-master` — Master 起動（内部用）
-14. `restart-conductor` — Conductor 再起動
-15. `reset-conductor` — Conductor リセット
-16. `artifacts` — アーティファクト管理
+13. `spawn-master` — Master 起動（内部用）
+14. `artifacts` — アーティファクト管理
 
 ## 実装方針
 

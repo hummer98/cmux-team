@@ -157,9 +157,7 @@
 
 ### Task 6.9: 追加 CLI サブコマンド — 完了
 - `conductor` — Conductor 情報表示
-- `launch-master` — Master surface 起動
-- `restart-conductor` — Conductor 再起動
-- `reset-conductor` — Conductor リセット
+- `spawn-master` — Master surface 起動
 
 ### Task 6.10: ユニットテスト — 完了
 - `daemon.test.ts`, `proxy.test.ts`, `queue.test.ts`, `task.test.ts`

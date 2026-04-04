@@ -711,15 +711,15 @@ Notes:
 }
 
 /**
- * cmux-team launch-master
+ * cmux-team spawn-master
  * Master 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  */
 async function cmdLaunchMaster(): Promise<void> {
   if (hasHelpFlag()) showHelp(`
-cmux-team launch-master -- Master 用 Claude Code を起動（内部用）
+cmux-team spawn-master -- Master 用 Claude Code を起動（内部用）
 
 Usage:
-  cmux-team launch-master [--model <model>]
+  cmux-team spawn-master [--model <model>]
 
 Options:
   --model <model>   使用するモデル（デフォルト: config.models.master or "${DEFAULT_MODEL}"）
@@ -775,7 +775,6 @@ Options:
 Notes:
   - SHUTDOWN メッセージをキューに送信し、daemon が受信して停止します
 `);
-  await ensureQueueDirs();
   const path = await sendMessage({
     type: "SHUTDOWN",
     timestamp: new Date().toISOString(),
@@ -921,7 +920,6 @@ Notes:
   await cmux.renameTab(surface, tabName);
 
   // --- 6. AGENT_SPAWNED をキューに送信 ---
-  await ensureQueueDirs();
   await sendMessage({
     type: "AGENT_SPAWNED",
     conductorSurface,
@@ -1089,7 +1087,6 @@ ${body}
 
   // status が ready の場合のみ TASK_CREATED を送信
   if (status === "ready") {
-    await ensureQueueDirs();
     await sendMessage({
       type: "TASK_CREATED",
       taskId: newId,
@@ -1177,7 +1174,6 @@ Notes:
 
     // ready に変更された場合は TASK_CREATED を送信
     if (newStatus === "ready") {
-      await ensureQueueDirs();
       await sendMessage({
         type: "TASK_CREATED",
         taskId,
@@ -1342,7 +1338,6 @@ Notes:
   await saveTaskState(PROJECT_ROOT, taskState);
 
   // 7. CONDUCTOR_DONE メッセージ送信（daemon に通知）
-  await ensureQueueDirs();
   await sendMessage({
     type: "CONDUCTOR_DONE",
     surface: conductor.surface,
@@ -1447,62 +1442,6 @@ Examples:
     console.log(`${String(t.id).padStart(6)}  ${time}  ${task}  ${r}  ${method}  ${path}  ${status}  ${dur}  ${bytes}`);
   }
   db.close();
-}
-
-async function cmdRestartConductor(): Promise<void> {
-  if (hasHelpFlag()) showHelp(`
-cmux-team restart-conductor -- Conductor を再起動
-
-Usage:
-  cmux-team restart-conductor --surface <surface>
-
-Options:
-  --surface <surface>     再起動する Conductor の surface ID（必須）
-
-Examples:
-  cmux-team restart-conductor --surface surface:210
-`);
-  const surface = requireArg("surface");
-  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
-  const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-  const conductor = teamJson.conductors?.find((c: any) => c.surface === surface);
-  if (!conductor) {
-    console.error(`Conductor with surface ${surface} not found`);
-    process.exit(1);
-  }
-  // surface から slot ID を導出（conductor-slot-N 形式は使わず、surface をそのまま識別子とする）
-  const slotId = surface.replace("surface:", "");
-  await cmux.send(surface, `export CMUX_SURFACE=${surface} && cmux-team conductor ${slotId}\n`);
-  console.log(`Conductor restarting on ${surface}`);
-}
-
-async function cmdResetConductor(): Promise<void> {
-  if (hasHelpFlag()) showHelp(`
-cmux-team reset-conductor -- Conductor をリセット（idle に戻す）
-
-Usage:
-  cmux-team reset-conductor --surface <surface>
-
-Options:
-  --surface <surface>     リセットする Conductor の surface ID（必須）
-
-Examples:
-  cmux-team reset-conductor --surface surface:210
-
-Notes:
-  - CONDUCTOR_DONE メッセージ（success=false, reason=manual_reset）を送信します
-  - daemon が受信して Conductor を idle 状態に戻します
-`);
-  const surface = requireArg("surface");
-  await ensureQueueDirs();
-  const path = await sendMessage({
-    type: "CONDUCTOR_DONE",
-    surface,
-    success: false,
-    reason: "manual_reset",
-    timestamp: new Date().toISOString(),
-  });
-  console.log(`Reset signal sent for conductor on ${surface}: ${path}`);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1697,14 +1636,8 @@ switch (command) {
   case "conductor":
     await cmdConductor();
     break;
-  case "launch-master":
+  case "spawn-master":
     await cmdLaunchMaster();
-    break;
-  case "restart-conductor":
-    await cmdRestartConductor();
-    break;
-  case "reset-conductor":
-    await cmdResetConductor();
     break;
   case "artifacts":
     await cmdArtifacts();
@@ -1731,9 +1664,7 @@ Usage:
   cmux-team trace --search <query>             FTS5 全文検索
   cmux-team trace --show <id>                  トレース詳細表示
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
-  cmux-team launch-master                      Master 起動（proxy 自動解決）
-  cmux-team restart-conductor --surface <surface>  Conductor を再起動
-  cmux-team reset-conductor --surface <surface>    Conductor をリセット（idle に戻す）
+  cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts show <id>                    アーティファクト表示
   cmux-team artifacts search <query>               全文検索
