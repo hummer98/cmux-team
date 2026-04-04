@@ -118,3 +118,20 @@ export type ConductorState = z.infer<typeof ConductorState> & {
   status: "starting" | "idle" | "running" | "disconnected";
   paneId?: string;
 };
+
+// --- レート制限情報 ---
+
+export interface RateLimitInfo {
+  /** tokens remaining（分単位ウィンドウ） */
+  tokensRemaining: number;
+  /** tokens limit（分単位ウィンドウ） */
+  tokensLimit: number;
+  /** tokens reset（ISO 8601） */
+  tokensReset: string;
+  /** input tokens remaining */
+  inputTokensRemaining: number;
+  /** output tokens remaining */
+  outputTokensRemaining: number;
+  /** 最終更新時刻 */
+  updatedAt: string;
+}
