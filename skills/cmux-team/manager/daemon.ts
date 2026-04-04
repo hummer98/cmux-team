@@ -27,6 +27,7 @@ export interface TaskSummary {
   createdAt: string;
   closedAt?: string;
   abortedAt?: string;
+  dependsOn: string[];
 }
 
 export interface DaemonState {
@@ -498,6 +499,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     createdAt: t.createdAt,
     closedAt: taskState[t.id]?.closedAt,
     abortedAt: taskState[t.id]?.abortedAt,
+    dependsOn: t.dependsOn.filter(dep => !closed.has(dep)),
   }));
 
   for (const task of allExecutable) {
