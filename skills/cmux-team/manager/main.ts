@@ -646,6 +646,22 @@ async function resolveProxyPort(): Promise<string | undefined> {
   }
 }
 
+/** daemon の HTTP API にメッセージを送信する。daemon 未起動時はスキップ。 */
+async function postMessage(msg: Record<string, unknown>): Promise<void> {
+  const portFile = join(PROJECT_ROOT, ".team/proxy-port");
+  if (!existsSync(portFile)) return;
+  const port = (await readFile(portFile, "utf-8")).trim();
+  try {
+    await fetch(`http://localhost:${port}/api/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(msg),
+    });
+  } catch {
+    // daemon 未起動・接続失敗時は無視
+  }
+}
+
 /**
  * cmux-team conductor <slot-id>
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
@@ -775,11 +791,11 @@ Options:
 Notes:
   - SHUTDOWN メッセージをキューに送信し、daemon が受信して停止します
 `);
-  const path = await sendMessage({
+  await postMessage({
     type: "SHUTDOWN",
     timestamp: new Date().toISOString(),
   });
-  console.log(`SHUTDOWN sent: ${path}`);
+  console.log("SHUTDOWN sent");
 }
 
 async function cmdSpawnConductor(): Promise<void> {
@@ -919,8 +935,8 @@ Notes:
   const tabName = shortTitle ? `[${num}] ${roleIcon} ${shortTitle}` : `[${num}] ${roleIcon} ${role}`;
   await cmux.renameTab(surface, tabName);
 
-  // --- 6. AGENT_SPAWNED をキューに送信 ---
-  await sendMessage({
+  // --- 6. AGENT_SPAWNED を daemon に送信 ---
+  await postMessage({
     type: "AGENT_SPAWNED",
     conductorSurface,
     surface,
@@ -992,7 +1008,7 @@ Examples:
   await cmux.closeSurface(surface);
 
   // daemon に SESSION_ENDED を通知して agents リストから削除させる
-  await sendMessage({
+  await postMessage({
     type: "SESSION_ENDED",
     surface,
     reason: "kill-agent",
@@ -1087,7 +1103,7 @@ ${body}
 
   // status が ready の場合のみ TASK_CREATED を送信
   if (status === "ready") {
-    await sendMessage({
+    await postMessage({
       type: "TASK_CREATED",
       taskId: newId,
       taskFile: filePath,
@@ -1174,7 +1190,7 @@ Notes:
 
     // ready に変更された場合は TASK_CREATED を送信
     if (newStatus === "ready") {
-      await sendMessage({
+      await postMessage({
         type: "TASK_CREATED",
         taskId,
         taskFile,
@@ -1338,7 +1354,7 @@ Notes:
   await saveTaskState(PROJECT_ROOT, taskState);
 
   // 7. CONDUCTOR_DONE メッセージ送信（daemon に通知）
-  await sendMessage({
+  await postMessage({
     type: "CONDUCTOR_DONE",
     surface: conductor.surface,
     success: false,
