@@ -4,13 +4,12 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, mkdir, readdir, unlink, rm } from "fs/promises";
-import { join, dirname } from "path";
+import { readFile, mkdir, readdir, rm } from "fs/promises";
+import { join } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
-import { sendMessage, ensureQueueDirs } from "./queue";
 import type { ConductorState } from "./schema";
 
 const execFile = promisify(execFileCb);
@@ -61,14 +60,23 @@ export async function spawnSingleConductor(
   // paneId 取得
   const paneId = await getPaneIdForSurface(surface);
 
-  // CONDUCTOR_REGISTERED をキューに送信
-  await ensureQueueDirs();
-  await sendMessage({
-    type: "CONDUCTOR_REGISTERED",
-    surface,
-    paneId: paneId ?? "",
-    timestamp: new Date().toISOString(),
-  });
+  // CONDUCTOR_REGISTERED を HTTP API 経由で送信
+  try {
+    const portFile = join(projectRoot, ".team/proxy-port");
+    const port = (await readFile(portFile, "utf-8")).trim();
+    await fetch(`http://localhost:${port}/api/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "CONDUCTOR_REGISTERED",
+        surface,
+        paneId: paneId ?? "",
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (e: any) {
+    await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
+  }
 
   return {
     surface,
@@ -145,13 +153,6 @@ export async function assignTask(
     const taskContent = await readFile(join(tasksDir, taskFile), "utf-8");
     const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || taskFile.replace(/^\d+-/, "").replace(/\.md$/, "");
 
-    // --- 1.5. task status.json パス計算 + 既存クリア ---
-    const taskFileStem = taskFile.replace(/\.md$/, "");
-    const taskStatusFile = join(projectRoot, `.team/tasks/${taskFileStem}.status.json`);
-    if (existsSync(taskStatusFile)) {
-      await unlink(taskStatusFile);
-    }
-
     // --- 2. git worktree 作成 ---
     const worktreePath = join(projectRoot, ".worktrees", taskRunId);
     const branch = `${taskRunId}/task`;
@@ -177,8 +178,7 @@ export async function assignTask(
       taskId,
       taskContent,
       worktreePath,
-      outputDir,
-      taskStatusFile
+      outputDir
     );
 
     // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
@@ -207,7 +207,6 @@ export async function assignTask(
     conductor.taskTitle = taskTitle;
     conductor.worktreePath = worktreePath;
     conductor.outputDir = outputDir;
-    conductor.taskStatusFile = taskStatusFile;
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
     conductor.status = "running";
@@ -281,7 +280,6 @@ export async function resetConductor(
     conductor.taskTitle = undefined;
     conductor.worktreePath = undefined;
     conductor.outputDir = undefined;
-    conductor.taskStatusFile = undefined;
     conductor.agents = [];
 
     await log("conductor_reset", `surface=${conductor.surface}`);
@@ -294,28 +292,8 @@ export async function resetConductor(
 
 export async function checkConductorStatus(
   conductor: ConductorState
-): Promise<"idle" | "running" | "done" | "crashed"> {
+): Promise<"idle" | "running" | "crashed"> {
   if (conductor.status === "idle") return "idle";
-
-  // task ベースの status.json で完了判定
-  if (conductor.taskStatusFile && existsSync(conductor.taskStatusFile)) {
-    try {
-      const raw = await readFile(conductor.taskStatusFile, "utf-8");
-      const status = JSON.parse(raw);
-      if (status.status === "done") {
-        await log("conductor_done_detected", `surface=${conductor.surface} method=task_status_file file=${conductor.taskStatusFile}`);
-        return "done";
-      }
-    } catch (e: any) {
-      await log("error", `checkConductorStatus status.json parse failed: surface=${conductor.surface} file=${conductor.taskStatusFile} ${e.message}`);
-    }
-  }
-
-  // 後方互換: run ベースの done マーカーもフォールバックで確認
-  if (conductor.outputDir && existsSync(join(conductor.outputDir, "done"))) {
-    await log("conductor_done_detected", `surface=${conductor.surface} method=done_marker_fallback dir=${conductor.outputDir}`);
-    return "done";
-  }
 
   // surface 消失 → クラッシュ
   if (!(await cmux.validateSurface(conductor.surface))) return "crashed";

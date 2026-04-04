@@ -22,8 +22,7 @@
 import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
-import { sendMessage, ensureQueueDirs } from "./queue";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -201,7 +200,10 @@ Notes:
     await log("proxy_reused", `port=${existingProxyPort}`);
   } else {
     try {
-      proxyHandle = await startProxy(PROJECT_ROOT, { getState: () => state });
+      proxyHandle = await startProxy(PROJECT_ROOT, {
+        getState: () => state,
+        onMessage: async (msg) => { await handleMessage(state, msg); },
+      });
       await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
       console.log(`✅ ロギングプロキシ起動完了 (port ${proxyHandle.port})`);
       await log("proxy_started", `port=${proxyHandle.port}`);
@@ -424,7 +426,6 @@ Examples:
   cmux-team send SHUTDOWN
   cmux-team send CONDUCTOR_DONE --surface surface:210 --success true
 `);
-  await ensureQueueDirs();
   const type = args[1];
   const now = new Date().toISOString();
 
@@ -520,8 +521,31 @@ Examples:
       process.exit(1);
   }
 
-  const path = await sendMessage(message);
-  console.log(`OK ${path}`);
+  // proxy-port ファイルからポート取得
+  const portFile = join(PROJECT_ROOT, ".team/proxy-port");
+  if (!existsSync(portFile)) {
+    console.error("Error: daemon が起動していません（proxy-port が見つかりません）");
+    process.exit(1);
+  }
+  const port = (await readFile(portFile, "utf-8")).trim();
+  const url = `http://localhost:${port}/api/messages`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`Error: HTTP ${res.status} ${body}`);
+      process.exit(1);
+    }
+    console.log("OK");
+  } catch (e: any) {
+    console.error(`Error: daemon に接続できません (${url}): ${e.message}`);
+    process.exit(1);
+  }
 }
 
 async function cmdStatus(): Promise<void> {

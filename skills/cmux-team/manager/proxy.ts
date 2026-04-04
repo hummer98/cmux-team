@@ -9,6 +9,7 @@ import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
 import { initDB, insertTrace } from "./trace-store";
 import { log } from "./logger";
+import { QueueMessage } from "./schema";
 import type { Database } from "bun:sqlite";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -34,7 +35,7 @@ interface TraceEntry {
 
 export async function start(
   projectRoot: string,
-  opts?: { conductorSurface?: string; taskId?: string; role?: string; getState?: () => any }
+  opts?: { conductorSurface?: string; taskId?: string; role?: string; getState?: () => any; onMessage?: (msg: QueueMessage) => Promise<void> }
 ): Promise<ProxyHandle> {
   const upstream = process.env.ANTHROPIC_API_URL || DEFAULT_UPSTREAM;
   const tracesDir = join(projectRoot, ".team/logs/traces");
@@ -115,6 +116,21 @@ export async function start(
           if (body.prompt != null) {
             state.masterPrompt = body.prompt.slice(0, 80);
           }
+          return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+        } catch {
+          return new Response(JSON.stringify({ error: "invalid body" }), { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+      }
+
+      // メッセージ受信エンドポイント（ファイルベース IPC の代替）
+      if (req.method === "POST" && url.pathname === "/api/messages") {
+        if (!opts?.onMessage) {
+          return new Response(JSON.stringify({ error: "no handler" }), { status: 503, headers: { "Content-Type": "application/json" } });
+        }
+        try {
+          const body = await req.json();
+          const msg = QueueMessage.parse(body);
+          await opts.onMessage(msg);
           return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
         } catch {
           return new Response(JSON.stringify({ error: "invalid body" }), { status: 400, headers: { "Content-Type": "application/json" } });

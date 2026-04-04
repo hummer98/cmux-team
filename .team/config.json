@@ -1,0 +1,7 @@
+{
+  "models": {
+    "master": "opus",
+    "conductor": "opus",
+    "agent": "opus"
+  }
+}
