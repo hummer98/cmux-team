@@ -190,13 +190,17 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
       result.push({ time, icon: "[+]", taskId, message: title, level: "info" });
     } else if (event === "conductor_started") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ time, icon: "[▶]", taskId, message: title || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn" });
+      const surfaceTag = surface ? `[${surface}] ` : "";
+      result.push({ time, icon: "[▶]", taskId, message: `${surfaceTag}${title}` || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn" });
     } else if (event === "task_completed") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
-      result.push({ time, icon: "[✓]", taskId, message: summary || title || detail, level: "info" });
+      const surfaceTag = surface ? `[${surface}] ` : "";
+      result.push({ time, icon: "[✓]", taskId, message: `${surfaceTag}${summary || title || detail}`, level: "info" });
     } else if (event === "task_aborted") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
@@ -233,7 +237,13 @@ interface AppState {
   confirmingFullQuit?: boolean;
   logScrollOffset: number;   // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
   logAutoScroll: boolean;    // true = 最新に自動追従
+  spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
 }
+
+// --- スピナー定義 ---
+
+const SPINNER_FRAMES = ["▖", "▘", "▝", "▗"];  // boxBounce
+const SPINNER_INTERVAL = 180;
 
 // --- セクションタイトル（Ink 版と同じ "─ Title ──────" スタイル） ---
 
@@ -258,7 +268,7 @@ function buildMasterSection(state: DaemonState) {
   ]);
 }
 
-function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null) {
+function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
   const isIdle = c.status === "idle";
   const isDone = c.status === "done";
   const isDisconnected = c.status === "disconnected";
@@ -297,7 +307,7 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   } else {
     const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
     const iconColor = isDone ? GRAY : YELLOW;
-    const iconChar = isDone ? "✓" : "●";
+    const iconChar = isDone ? "✓" : SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
     children.push(
       ui.row({ gap: 1 }, [
         ui.text(iconChar, { style: { fg: iconColor } }),
@@ -336,12 +346,12 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   return ui.column({ gap: 0 }, children);
 }
 
-function buildConductorsSection(state: DaemonState, repoUrl: string | null) {
+function buildConductorsSection(state: DaemonState, repoUrl: string | null, spinnerFrame: number = 0) {
   const conductors = [...state.conductors.values()];
   if (conductors.length === 0) {
     return ui.text("idle — waiting for tasks", { dim: true });
   }
-  return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl)));
+  return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl, spinnerFrame)));
 }
 
 function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null) {
@@ -522,8 +532,9 @@ async function openArtifactInViewer(
 ): Promise<void> {
   const viewer = await resolveMarkdownViewer();
 
-  // refresh を一時停止
+  // refresh・spinner を一時停止
   if (refreshInterval) clearInterval(refreshInterval);
+  if (spinnerInterval) clearInterval(spinnerInterval);
 
   // TUI を停止
   await app.stop();
@@ -557,6 +568,7 @@ async function openArtifactInViewer(
 
 let appInstance: NodeApp<AppState> | null = null;
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
+let spinnerInterval: ReturnType<typeof setInterval> | null = null;
 
 export async function startDashboard(
   getState: () => DaemonState,
@@ -580,6 +592,7 @@ export async function startDashboard(
       repoUrl: null,
       logScrollOffset: 0,
       logAutoScroll: true,
+      spinnerFrame: 0,
     },
     config: { executionMode: "inline" },
   });
@@ -618,7 +631,7 @@ export async function startDashboard(
         buildMasterSection(daemon),
         // Conductors セクション
         sectionTitle(`Conductors${runningCount > 0 ? ` ${runningCount} running` : ""}`),
-        buildConductorsSection(daemon, repoUrl),
+        buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション
         sectionTitle(`Tasks ${daemon.openTasks} open`),
         ui.column({ gap: 0 }, taskRows),
@@ -744,6 +757,9 @@ export async function startDashboard(
         refreshInterval,
         () => {
           refreshInterval = setInterval(refresh, 2000);
+          spinnerInterval = setInterval(() => {
+            try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
+          }, SPINNER_INTERVAL);
           refresh();
         },
       ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
@@ -856,6 +872,11 @@ export async function startDashboard(
 
   // app.start() 完了後に refresh を開始（start 中に update すると lifecycle error）
   refreshInterval = setInterval(refresh, 2000);
+  spinnerInterval = setInterval(() => {
+    try {
+      app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 }));
+    } catch {}
+  }, SPINNER_INTERVAL);
   refresh();
 }
 
@@ -863,6 +884,10 @@ function cleanup() {
   if (refreshInterval) {
     clearInterval(refreshInterval);
     refreshInterval = null;
+  }
+  if (spinnerInterval) {
+    clearInterval(spinnerInterval);
+    spinnerInterval = null;
   }
 }
 
