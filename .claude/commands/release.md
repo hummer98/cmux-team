@@ -72,9 +72,12 @@ echo "$COMMITS"
 
 コミットメッセージをそのまま転記するのではなく、**ユーザーが読んで意味がわかる説明**に書き直すこと。内部的な実装詳細は省略し、機能・振る舞いの変更にフォーカスする。
 
-### 4. plugin.json を更新
+### 4. package.json と plugin.json のバージョンを更新
 
-Edit ツールで `.claude-plugin/plugin.json` の `version` を新バージョンに更新する。
+Edit ツールで以下の2ファイルの `version` を新バージョンに更新する:
+
+- `package.json` — npm publish で使われるバージョン
+- `.claude-plugin/plugin.json` — plugin marketplace で使われるバージョン
 
 ### 5. コミット・push・タグ
 
