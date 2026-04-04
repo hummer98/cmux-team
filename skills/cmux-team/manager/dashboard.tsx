@@ -19,6 +19,7 @@ import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 
 const LOG_VISIBLE_LINES = 30;
+const TASK_VISIBLE_LINES = 5;
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -228,6 +229,7 @@ interface AppState {
   artifactSort: "id" | "created" | "updated";
   artifactTypeFilter: string | null;
   artifactSearch: string | null;
+  taskCursor: number;
   version: string;
   repoUrl: string | null;
   confirmingFullQuit?: boolean;
@@ -576,6 +578,7 @@ export async function startDashboard(
       artifactSort: "id",
       artifactTypeFilter: null,
       artifactSearch: null,
+      taskCursor: 0,
       version: opts?.version ?? "",
       repoUrl: null,
       logScrollOffset: 0,
@@ -604,10 +607,24 @@ export async function startDashboard(
     }
     const headerSubtitle = headerParts.join("  ");
 
-    // タスク一覧（ui.column + map で可変高さ — virtualList は固定高さで空白が出るため）
-    const taskRows = daemon.taskList.length === 0
+    // タスク一覧（カーソル選択 + スクロール対応）
+    const totalTasks = daemon.taskList.length;
+    let taskStartIdx = 0;
+    if (totalTasks > TASK_VISIBLE_LINES) {
+      taskStartIdx = Math.max(0, Math.min(state.taskCursor - TASK_VISIBLE_LINES + 1, totalTasks - TASK_VISIBLE_LINES));
+      if (state.taskCursor < taskStartIdx) taskStartIdx = state.taskCursor;
+    }
+    const visibleTasks = daemon.taskList.slice(taskStartIdx, taskStartIdx + TASK_VISIBLE_LINES);
+    const taskRows = totalTasks === 0
       ? [ui.text("no tasks", { dim: true })]
-      : daemon.taskList.map((task) => buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl));
+      : visibleTasks.map((task, i) => {
+          const globalIdx = taskStartIdx + i;
+          const isSelected = globalIdx === state.taskCursor;
+          return ui.row({ gap: 0 }, [
+            ui.text(isSelected ? "> " : "  ", isSelected ? { bold: true } : {}),
+            buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl),
+          ]);
+        });
 
     return ui.page({
       body: ui.column({ gap: 0 }, [
@@ -700,6 +717,8 @@ export async function startDashboard(
               ui.text("full quit"),
             ]
           : [
+              ui.kbd("↑/↓"),
+              ui.text("tasks"),
               ui.kbd("1"),
               ui.text("journal"),
               ui.kbd("2"),
@@ -721,6 +740,14 @@ export async function startDashboard(
 
   // キーバインド
   app.keys({
+    Up: () => app.update((s) => ({
+      ...s,
+      taskCursor: Math.max(s.taskCursor - 1, 0),
+    })),
+    Down: () => app.update((s) => ({
+      ...s,
+      taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)),
+    })),
     "1": () => app.update((s) => ({ ...s, activeTab: "journal" })),
     "2": () => app.update((s) => ({ ...s, activeTab: "artifacts" })),
     "3": () => app.update((s) => ({ ...s, activeTab: "log" })),
@@ -838,6 +865,7 @@ export async function startDashboard(
         repoUrl,
         artifacts,
         logScrollOffset: s.logAutoScroll ? 0 : s.logScrollOffset,
+        taskCursor: Math.min(s.taskCursor, Math.max(newDaemon.taskList.length - 1, 0)),
       }));
     } catch (e: any) {
       // lifecycle operation already in flight — skip this tick
