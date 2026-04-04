@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.22.0] - 2026-04-04
+
+### Added
+- Conductor の実装フローを4フェーズ（Plan → Design Review → TDD → Inspection）に刷新。各フェーズに専用テンプレート（planner, design-reviewer, implementer, inspector）を追加
+- 起動コマンド名を `spawn-*` に統一（`launch-master` → `spawn-master`）、未使用の `restart-conductor` / `reset-conductor` を削除
+
+### Fixed
+- IPC 移行で残存していた `sendMessage` 参照を HTTP API (`postMessage`) に移行
+
+### Changed
+- assigned（実行中）タスクの編集禁止ルールを Master テンプレートと CLAUDE.md に明記
+
 ## [3.21.0] - 2026-04-04
 
 ### Added
