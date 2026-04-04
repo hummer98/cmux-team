@@ -33,6 +33,9 @@ export interface TaskSummary {
 export interface DaemonState {
   running: boolean;
   masterSurface: string | null;
+  masterPid: number | undefined;
+  masterStatus: "idle" | "running" | "disconnected";
+  masterDisconnectedAt: string | undefined;
   conductors: Map<string, ConductorState>;
   projectRoot: string;
   pollInterval: number;
@@ -64,6 +67,9 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
   return {
     running: true,
     masterSurface: null,
+    masterPid: undefined,
+    masterStatus: "disconnected",
+    masterDisconnectedAt: undefined,
     conductors: new Map(),
     projectRoot,
     pollInterval: Number(process.env.CMUX_TEAM_POLL_INTERVAL ?? 10_000),
@@ -210,6 +216,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
         const alive = await isMasterAlive(surface);
         if (alive) {
           state.masterSurface = surface;
+          state.masterStatus = "idle";
           console.log("✅ Master: 既存セッション検出 (スキップ)");
           await log("master_alive", `surface=${surface}`);
           return;
@@ -226,6 +233,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   const master = await spawnMaster(state.projectRoot, daemonSurface);
   if (master) {
     state.masterSurface = master.surface;
+    state.masterStatus = "idle";
     console.log(`✅ Master 起動完了 (${master.surface})`);
   } else {
     console.log("❌ Master 起動失敗");
@@ -356,6 +364,15 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "SESSION_STARTED": {
+        // Master surface チェック
+        if (message.surface === state.masterSurface) {
+          state.masterPid = message.pid;
+          state.masterStatus = "idle";
+          state.masterDisconnectedAt = undefined;
+          spawnMasterPidWatcher(state, message.pid);
+          await log("master_session_started", `surface=${message.surface} pid=${message.pid}`);
+          break;
+        }
         const conductor = findConductor(state, message.surface);
         if (conductor) {
           // disconnected → idle に復帰
@@ -379,6 +396,14 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "SESSION_ENDED": {
+        // Master surface チェック
+        if (message.surface === state.masterSurface) {
+          state.masterStatus = "disconnected";
+          state.masterDisconnectedAt = message.timestamp;
+          state.masterPid = undefined;
+          await log("master_session_ended", `surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`);
+          break;
+        }
         const conductor = findConductor(state, message.surface);
         if (conductor) {
           // surface が一致しない場合は旧セッションからの stale イベント → 無視
@@ -415,6 +440,14 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "SESSION_ACTIVE": {
+        // Master surface チェック
+        if (message.surface === state.masterSurface) {
+          state.masterStatus = "running";
+          state.masterDisconnectedAt = undefined;
+          if (message.pid) state.masterPid = message.pid;
+          await log("master_session_active", `surface=${message.surface}`);
+          break;
+        }
         const conductor = findConductor(state, message.surface);
         if (conductor) {
           conductor.disconnectedAt = undefined;
@@ -428,6 +461,14 @@ async function processQueue(state: DaemonState): Promise<void> {
       }
 
       case "SESSION_IDLE": {
+        // Master surface チェック
+        if (message.surface === state.masterSurface) {
+          state.masterStatus = "idle";
+          state.masterDisconnectedAt = undefined;
+          if (message.pid) state.masterPid = message.pid;
+          await log("master_session_idle", `surface=${message.surface}`);
+          break;
+        }
         const conductor = findConductor(state, message.surface);
         if (conductor) {
           conductor.disconnectedAt = undefined;  // alive の証拠
@@ -557,6 +598,29 @@ function spawnPidWatcher(
   }, 1000);
 }
 
+function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
+  const checkInterval = setInterval(async () => {
+    if (!state.running) {
+      clearInterval(checkInterval);
+      return;
+    }
+    try {
+      process.kill(pid, 0);
+    } catch {
+      clearInterval(checkInterval);
+      if (state.masterPid === pid) {
+        state.masterStatus = "disconnected";
+        state.masterDisconnectedAt = new Date().toISOString();
+        state.masterPid = undefined;
+        await log(
+          "master_session_ended",
+          `surface=${state.masterSurface} pid=${pid} reason=pid_watcher`
+        );
+      }
+    }
+  }, 1000);
+}
+
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [surface, conductor] of state.conductors) {
     if (conductor.status === "idle" || conductor.status === "disconnected") continue;
@@ -673,7 +737,11 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
     // master surface が null の場合は既存値を保持（reload 時に消さない）
     if (state.masterSurface) {
-      teamJson.master = { surface: state.masterSurface };
+      teamJson.master = {
+        surface: state.masterSurface,
+        status: state.masterStatus,
+        pid: state.masterPid,
+      };
     }
     teamJson.manager = {
       pid: process.pid,
