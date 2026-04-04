@@ -30,6 +30,7 @@ export interface TaskSummary {
 
 export interface DaemonState {
   running: boolean;
+  bootPhase: "infra" | "conductors" | "master" | "ready";
   masterSurface: string | null;
   masterPid: number | undefined;
   masterStatus: "idle" | "running" | "disconnected";
@@ -67,6 +68,7 @@ function findConductor(state: DaemonState, surface: string): ConductorState | un
 export async function createDaemon(projectRoot: string): Promise<DaemonState> {
   return {
     running: true,
+    bootPhase: "infra",
     masterSurface: null,
     masterPid: undefined,
     masterStatus: "disconnected",
@@ -164,7 +166,7 @@ export function sleepUntilWakeup(state: DaemonState): Promise<void> {
 }
 
 export async function initInfra(state: DaemonState): Promise<void> {
-  console.log("⏳ インフラ準備中...");
+  await log("infra_init");
   const root = state.projectRoot;
   await mkdir(join(root, ".team/tasks"), { recursive: true });
   await mkdir(join(root, ".team/output"), { recursive: true });
@@ -237,7 +239,6 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
         if (alive) {
           state.masterSurface = surface;
           state.masterStatus = "idle";
-          console.log("✅ Master: 既存セッション検出 (スキップ)");
           await log("master_alive", `surface=${surface}`);
           return;
         }
@@ -249,14 +250,14 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   }
 
   // Master spawn
-  console.log("⏳ Master 起動中...");
+  await log("master_spawning");
   const master = await spawnMaster(state.projectRoot, daemonSurface);
   if (master) {
     state.masterSurface = master.surface;
     state.masterStatus = "idle";
-    console.log(`✅ Master 起動完了 (${master.surface})`);
+    await log("master_started", `surface=${master.surface}`);
   } else {
-    console.log("❌ Master 起動失敗");
+    await log("master_spawn_failed");
   }
 }
 
@@ -299,7 +300,6 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
           for (const c of alive) {
             state.conductors.set(c.surface, c);
           }
-          console.log(`✅ Conductor スロット: team.json から ${alive.length}個 を復元`);
           await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => c.surface).join(",")}`);
           return;
         }
