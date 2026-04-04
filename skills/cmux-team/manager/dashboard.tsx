@@ -462,7 +462,7 @@ function buildArtifactRows(state: AppState): any[] {
 
     const parts = [
       ui.text(isSelected ? ">" : " ", isSelected ? { bold: true } : {}),
-      ui.text(a.id, { bold: isSelected, style: { fg: typeColor } }),
+      ui.text(a.id, { style: { bold: isSelected, fg: typeColor } }),
       ui.text(`[${a.type}]`, { style: { fg: typeColor } }),
       ui.text(a.title, isSelected ? { bold: true } : {}),
       date ? ui.text(date, { dim: true }) : null,
