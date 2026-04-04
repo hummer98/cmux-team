@@ -10,6 +10,7 @@ import { join } from "path";
 import { initDB, insertTrace } from "./trace-store";
 import { log } from "./logger";
 import { QueueMessage } from "./schema";
+import type { RateLimitInfo } from "./schema";
 import type { Database } from "bun:sqlite";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -31,6 +32,26 @@ interface TraceEntry {
   request_bytes: number;
   response_bytes: number;
   duration_ms: number;
+}
+
+/** Anthropic レスポンスヘッダーから RateLimitInfo を抽出 */
+function extractRateLimit(headers: Headers): RateLimitInfo | null {
+  const remaining = headers.get("anthropic-ratelimit-tokens-remaining");
+  const limit = headers.get("anthropic-ratelimit-tokens-limit");
+  if (remaining == null || limit == null) return null;
+
+  const tokensRemaining = parseInt(remaining, 10);
+  const tokensLimit = parseInt(limit, 10);
+  if (isNaN(tokensRemaining) || isNaN(tokensLimit)) return null;
+
+  return {
+    tokensRemaining,
+    tokensLimit,
+    tokensReset: headers.get("anthropic-ratelimit-tokens-reset") ?? "",
+    inputTokensRemaining: parseInt(headers.get("anthropic-ratelimit-input-tokens-remaining") ?? "0", 10),
+    outputTokensRemaining: parseInt(headers.get("anthropic-ratelimit-output-tokens-remaining") ?? "0", 10),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export async function start(
@@ -203,6 +224,12 @@ export async function start(
       const isStreaming = contentType.includes("text/event-stream");
 
       if (isStreaming && upstreamRes.body) {
+        // レート制限ヘッダーを DaemonState に反映
+        if (opts?.getState) {
+          const rl = extractRateLimit(upstreamRes.headers);
+          if (rl) opts.getState().rateLimit = rl;
+        }
+
         // streaming: tee して片方をログに使う
         const [clientStream, logStream] = upstreamRes.body.tee();
 
@@ -234,6 +261,12 @@ export async function start(
       // 非 streaming: ボディ全体を取得してログ
       const resBody = await upstreamRes.arrayBuffer();
       const duration = Date.now() - startTime;
+
+      // レート制限ヘッダーを DaemonState に反映
+      if (opts?.getState) {
+        const rl = extractRateLimit(upstreamRes.headers);
+        if (rl) opts.getState().rateLimit = rl;
+      }
 
       const entry: TraceEntry = {
         timestamp: new Date().toISOString(),

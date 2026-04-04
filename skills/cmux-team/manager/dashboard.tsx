@@ -12,7 +12,7 @@ import { createNodeApp, type NodeApp } from "@rezi-ui/node";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState, TaskSummary } from "./daemon";
-import type { ConductorState } from "./schema";
+import type { ConductorState, RateLimitInfo } from "./schema";
 import type { AgentState } from "./schema";
 import { log } from "./logger";
 import { loadArtifacts } from "./artifact";
@@ -161,6 +161,19 @@ function formatElapsed(isoDate: string): string {
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m${sec % 60}s`;
   return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`;
+}
+
+/** レート制限のプログレスバーを生成 */
+function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { label: string; color: typeof GREEN } {
+  if (!rateLimit || rateLimit.tokensLimit === 0) {
+    return { label: "TPM: --", color: GRAY };
+  }
+  const pct = Math.round((rateLimit.tokensRemaining / rateLimit.tokensLimit) * 100);
+  const barWidth = 10;
+  const filled = Math.round((pct / 100) * barWidth);
+  const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
+  const color = pct >= 50 ? GREEN : pct >= 20 ? YELLOW : RED;
+  return { label: `TPM: ${pct}% ${bar}`, color };
 }
 
 // --- ログ・ジャーナル解析 ---
@@ -681,7 +694,16 @@ export async function startDashboard(
     return ui.page({
       body: ui.column({ gap: 0 }, [
         // ヘッダー行（sectionTitle と同じスタイル）
-        ui.text(`─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""} ${HR_FILL}`, { dim: true }),
+        (() => {
+          const rl = buildRateLimitDisplay(daemon.rateLimit);
+          const left = `─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""}`;
+          const right = rl.label;
+          const fill = "─".repeat(Math.max(1, 80 - left.length - right.length));
+          return ui.row({ gap: 0 }, [
+            ui.text(`${left} ${fill} `, { dim: true }),
+            ui.text(right, { style: { fg: rl.color } }),
+          ]);
+        })(),
         // Master セクション
         sectionTitle("Master"),
         buildMasterSection(daemon),

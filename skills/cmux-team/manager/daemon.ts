@@ -16,7 +16,7 @@ import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority } from "./task";
 import { log } from "./logger";
-import type { ConductorState, QueueMessage } from "./schema";
+import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
 
 export interface TaskSummary {
   id: string;
@@ -47,6 +47,8 @@ export interface DaemonState {
   restartRequested: boolean;
   /** 最後に npm 更新チェックした時刻（Date.now()） */
   lastNpmCheckAt: number;
+  /** API レート制限情報（proxy.ts が更新） */
+  rateLimit: RateLimitInfo | null;
   /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
   wakeup: (() => void) | null;
 }
@@ -81,6 +83,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     sourceMtimes: new Map(),
     restartRequested: false,
     lastNpmCheckAt: 0,
+    rateLimit: null,
     wakeup: null,
   };
 }
