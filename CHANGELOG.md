@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.19.1] - 2026-04-04
+
+### Fixed
+- `cmux-team start` 起動時に dashboard.tsx の `SPINNER_FRAMES` 重複宣言で Bun ランタイムエラーが発生する問題を修正
+
 ## [3.19.0] - 2026-04-04
 
 ### Added
