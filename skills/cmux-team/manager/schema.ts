@@ -45,6 +45,13 @@ export const SessionEndedMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const ConductorRegisteredMessage = z.object({
+  type: z.literal("CONDUCTOR_REGISTERED"),
+  surface: z.string(),
+  paneId: z.string(),
+  timestamp: z.string().datetime(),
+});
+
 export const SessionActiveMessage = z.object({
   type: z.literal("SESSION_ACTIVE"),
   surface: z.string(),
@@ -67,6 +74,7 @@ export const ShutdownMessage = z.object({
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   ConductorDoneMessage,
+  ConductorRegisteredMessage,
   AgentSpawnedMessage,
   SessionStartedMessage,
   SessionEndedMessage,
@@ -78,6 +86,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
 export type QueueMessage = z.infer<typeof QueueMessage>;
 export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
+export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
 
 // --- Agent 状態 ---
 
