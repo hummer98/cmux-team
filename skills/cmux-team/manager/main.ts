@@ -712,7 +712,6 @@ Notes:
       "--dangerously-skip-permissions",
       "--model", model,
       "--append-system-prompt-file", join(PROJECT_ROOT, ".team/prompts/master.md"),
-      "ユーザーからのタスクを待ってください。",
     ], {
       stdio: "inherit",
       env: process.env,
