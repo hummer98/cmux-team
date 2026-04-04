@@ -26,6 +26,7 @@ export interface TaskSummary {
   status: string;
   createdAt: string;
   closedAt?: string;
+  abortedAt?: string;
 }
 
 export interface DaemonState {
@@ -457,11 +458,11 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
   const closed = new Set(
     Object.entries(taskState)
-      .filter(([_, s]) => s.status === "closed")
+      .filter(([_, s]) => s.status === "closed" || s.status === "aborted")
       .map(([id]) => id)
   );
 
-  const openTasksList = tasks.filter(t => t.status !== "closed");
+  const openTasksList = tasks.filter(t => t.status !== "closed" && t.status !== "aborted");
   state.openTasks = openTasksList.length;
 
   const assignedIds = new Set(
@@ -485,9 +486,9 @@ async function scanTasks(state: DaemonState): Promise<void> {
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
   const openTasks = [...openTasksList]
     .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1));
-  const closedMetas = tasks.filter(t => t.status === "closed");
+  const closedMetas = tasks.filter(t => t.status === "closed" || t.status === "aborted");
   const closedTasks = [...closedMetas]
-    .sort((a, b) => (taskState[b.id]?.closedAt ?? "").localeCompare(taskState[a.id]?.closedAt ?? ""));
+    .sort((a, b) => (taskState[b.id]?.closedAt ?? taskState[b.id]?.abortedAt ?? "").localeCompare(taskState[a.id]?.closedAt ?? taskState[a.id]?.abortedAt ?? ""));
   const maxItems = Math.max(5, openTasks.length);
   const combined = [...openTasks, ...closedTasks.slice(0, maxItems - openTasks.length)];
   state.taskList = combined.map((t) => ({
@@ -496,6 +497,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     status: t.status,
     createdAt: t.createdAt,
     closedAt: taskState[t.id]?.closedAt,
+    abortedAt: taskState[t.id]?.abortedAt,
   }));
 
   for (const task of allExecutable) {

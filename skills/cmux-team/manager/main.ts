@@ -15,6 +15,7 @@
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--run-after-all]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
+ *   ./main.ts abort-task --task-id <id>
  */
 
 import { join, dirname } from "path";
@@ -1135,6 +1136,121 @@ Notes:
   console.log(`OK closed ${taskId}`);
 }
 
+async function cmdAbortTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team abort-task -- 実行中タスクを中止（aborted）にする
+
+Usage:
+  cmux-team abort-task --task-id <id>
+
+Options:
+  --task-id <id>          タスク ID（必須）
+
+Examples:
+  cmux-team abort-task --task-id 035
+
+Notes:
+  - assigned（実行中）のタスクのみ中止できます
+  - Conductor の sub-agent と Conductor 自体を停止します
+  - worktree を削除し、タスク状態を aborted に変更します
+  - Conductor は自動的に idle 状態に再起動します
+`);
+  const taskId = requireArg("task-id");
+
+  // 1. タスク状態を確認
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskState[taskId]?.status;
+  if (currentStatus !== "assigned") {
+    console.error(`Error: task ${taskId} is not assigned (current status: ${currentStatus ?? "unknown"}). Only assigned tasks can be aborted.`);
+    process.exit(1);
+  }
+
+  // 2. team.json から該当 Conductor を特定
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  let teamJson: any;
+  try {
+    teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  } catch {
+    console.error("Error: team.json not found or unreadable");
+    process.exit(1);
+  }
+  const conductor = teamJson.conductors?.find((c: any) => c.taskId === taskId);
+  if (!conductor) {
+    console.error(`Error: no conductor found for task ${taskId}`);
+    // タスク状態だけ aborted にする
+    taskState[taskId] = {
+      ...taskState[taskId],
+      status: "aborted",
+      abortedAt: new Date().toISOString(),
+    };
+    await saveTaskState(PROJECT_ROOT, taskState);
+    console.log(`OK aborted ${taskId} (no conductor found, state updated only)`);
+    return;
+  }
+
+  // 3. Sub-agent の surface を閉じる
+  if (conductor.agents?.length > 0) {
+    for (const agent of conductor.agents) {
+      try {
+        await cmux.closeSurface(agent.surface);
+      } catch {}
+    }
+  }
+
+  // 4. Conductor の PID を kill
+  if (conductor.pid && isProcessAlive(conductor.pid)) {
+    try {
+      process.kill(conductor.pid, "SIGTERM");
+    } catch {}
+  }
+
+  // 5. worktree 削除
+  if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
+    try {
+      const { execFile: execFileCb } = require("child_process");
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFileCb);
+      await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
+        cwd: PROJECT_ROOT,
+      });
+    } catch {}
+    // ブランチ削除
+    if (conductor.taskRunId) {
+      const branch = `${conductor.taskRunId}/task`;
+      try {
+        const { execFile: execFileCb } = require("child_process");
+        const { promisify } = require("util");
+        const execFileAsync = promisify(execFileCb);
+        await execFileAsync("git", ["branch", "-D", branch], { cwd: PROJECT_ROOT });
+      } catch {}
+    }
+  }
+
+  // 6. タスク状態を aborted に変更
+  taskState[taskId] = {
+    ...taskState[taskId],
+    status: "aborted",
+    abortedAt: new Date().toISOString(),
+  };
+  await saveTaskState(PROJECT_ROOT, taskState);
+
+  // 7. CONDUCTOR_DONE メッセージ送信（daemon に通知）
+  await ensureQueueDirs();
+  await sendMessage({
+    type: "CONDUCTOR_DONE",
+    surface: conductor.surface,
+    success: false,
+    reason: "aborted",
+    timestamp: new Date().toISOString(),
+  });
+
+  // 8. Conductor を再起動（新しいセッション）
+  const slotId = conductor.surface.replace("surface:", "");
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} && cmux-team conductor ${slotId}\n`);
+
+  console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
+}
+
 async function cmdTrace(): Promise<void> {
   if (hasHelpFlag()) showHelp(`
 cmux-team trace -- API トレースの検索・表示
@@ -1462,6 +1578,9 @@ switch (command) {
   case "close-task":
     await cmdCloseTask();
     break;
+  case "abort-task":
+    await cmdAbortTask();
+    break;
   case "trace":
     await cmdTrace();
     break;
@@ -1496,6 +1615,7 @@ Usage:
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
+  cmux-team abort-task --task-id <id>            実行中タスクを中止
   cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
   cmux-team trace --search <query>             FTS5 全文検索
   cmux-team trace --show <id>                  トレース詳細表示

@@ -197,6 +197,10 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
       result.push({ time, icon: "[✓]", taskId, message: summary || title || detail, level: "info" });
+    } else if (event === "task_aborted") {
+      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
+      result.push({ time, icon: "[✕]", taskId, message: title || "aborted", level: "error" });
     }
   }
   return result;
@@ -341,16 +345,19 @@ function buildConductorsSection(state: DaemonState, repoUrl: string | null) {
 }
 
 function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null) {
-  const isClosed = task.status === "closed";
-  const icon = isClosed ? "○" : "●";
-  const label = isClosed ? "closed" : assigned ? "running" : task.status;
+  const isAborted = task.status === "aborted";
+  const isClosed = task.status === "closed" || isAborted;
+  const icon = isAborted ? "✕" : isClosed ? "○" : "●";
+  const label = isAborted ? "aborted" : isClosed ? "closed" : assigned ? "running" : task.status;
   const taskId = `T${task.id.padStart(3, "0")}`;
-  const timeInfo = isClosed && task.closedAt
+  const timeInfo = isAborted && task.abortedAt
+    ? utcToLocal(task.abortedAt).slice(0, 5)
+    : isClosed && task.closedAt
     ? utcToLocal(task.closedAt).slice(0, 5)
     : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
 
   // ステータス別の色（Ink版と同等）
-  const color = isClosed ? GRAY : assigned ? GREEN : task.status === "ready" ? YELLOW : undefined;
+  const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : task.status === "ready" ? YELLOW : undefined;
   const colorStyle = color ? { style: { fg: color } } : {};
 
   return ui.row({ gap: 1 }, [
@@ -368,6 +375,7 @@ const journalIconColors: Record<string, number> = {
   "[+]": CYAN,
   "[▶]": YELLOW,
   "[✓]": GREEN,
+  "[✕]": RED,
 };
 
 function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
