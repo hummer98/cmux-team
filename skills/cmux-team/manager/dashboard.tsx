@@ -295,6 +295,7 @@ function buildMasterSection(state: DaemonState) {
 }
 
 function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
+  const isStarting = c.status === "starting";
   const isIdle = c.status === "idle";
   const isDone = c.status === "done";
   const isDisconnected = c.status === "disconnected";
@@ -305,7 +306,16 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
 
   // メイン行
   const dimStyle = { style: { fg: GRAY } };
-  if (isIdle) {
+  if (isStarting) {
+    const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text(spinChar, { style: { fg: CYAN } }),
+        ui.text(`[${surface}]`, { style: { fg: CYAN } }),
+        ui.text("starting…", { style: { fg: CYAN } }),
+      ])
+    );
+  } else if (isIdle) {
     children.push(
       ui.row({ gap: 1 }, [
         ui.text("○", dimStyle),
@@ -626,6 +636,7 @@ export async function startDashboard(
 
   function buildViewWithApp(state: AppState) {
     const { daemon, repoUrl } = state;
+    const startingCount = [...daemon.conductors.values()].filter(c => c.status === "starting").length;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
@@ -671,7 +682,7 @@ export async function startDashboard(
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors${runningCount > 0 ? ` ${runningCount} running` : ""}`),
+        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション
         sectionTitle(`Tasks ${daemon.openTasks} open`),
