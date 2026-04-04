@@ -97,7 +97,7 @@ cmux-team/
 │   │   │   ├── logger.ts             #   ログ出力
 │   │   │   ├── schema.ts             #   Zod スキーマ定義
 │   │   │   └── package.json          #   Bun 依存関係
-│   │   └── templates/                # エージェントプロンプトテンプレート (13個)
+│   │   └── templates/                # エージェントプロンプトテンプレート (14個)
 │   │       ├── common-header.md      #   全エージェント共通ヘッダー
 │   │       ├── master.md             #   Master ロール
 │   │       ├── manager.md            #   Manager ロール
@@ -106,9 +106,10 @@ cmux-team/
 │   │       ├── conductor-task.md     #   Conductor タスク割り当て時プロンプト
 │   │       ├── researcher.md         #   リサーチャーロール
 │   │       ├── architect.md          #   アーキテクトロール
-│   │       ├── reviewer.md           #   レビュアーロール
+│   │       ├── planner.md            #   計画立案ロール
+│   │       ├── design-reviewer.md    #   設計レビューロール
 │   │       ├── implementer.md        #   実装者ロール
-│   │       ├── tester.md             #   テスターロール
+│   │       ├── inspector.md          #   検品ロール
 │   │       ├── dockeeper.md          #   ドキュメント管理者ロール
 │   │       └── task-manager.md       #   タスク管理者ロール
 │   └── cmux-agent-role/
@@ -209,14 +210,13 @@ cmux-team/
 | `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | 調査すべきサブ質問リスト |
-| `{{REQUIREMENTS_CONTENT}}` | architect, reviewer, tester | requirements.md の内容 |
+| `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |
 | `{{RESEARCH_SUMMARY}}` | architect | リサーチ結果の要約 |
 | `{{CODEBASE_CONTEXT}}` | architect | 既存コードベースのコンテキスト |
-| `{{DESIGN_CONTENT}}` | reviewer, implementer | design.md の内容 |
-| `{{ARTIFACT_CONTENT}}` | reviewer | レビュー対象の成果物 |
+| `{{PLAN_CONTENT}}` | planner, design-reviewer, implementer, inspector | plan.md の内容 |
+| `{{TASK_CONTENT}}` | planner, design-reviewer, inspector | タスク内容 |
+| `{{DESIGN_CONTENT}}` | implementer | design.md の内容 |
 | `{{TASKS_CONTENT}}` | implementer | tasks.md のアサインされたタスク |
-| `{{TEST_SCOPE}}` | tester | テスト範囲 |
-| `{{IMPLEMENTATION_SUMMARY}}` | tester | 実装結果の要約 |
 | `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
 | `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
 | `{{OPEN_TASKS_LIST}}` | task-manager | オープンタスクの一覧 |
