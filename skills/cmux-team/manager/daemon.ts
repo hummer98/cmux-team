@@ -6,7 +6,6 @@ import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { execFile } from "child_process";
 import {
-  spawnConductor,
   checkConductorStatus,
   collectResults,
   initializeConductorSlots,
@@ -309,10 +308,8 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
 
   // 既存なし → 新規作成
   await log("layout_creating_new_slots", `count=${state.maxConductors}`);
-  const slots = await initializeConductorSlots(state.projectRoot, state.maxConductors, daemonSurface);
-  for (const slot of slots) {
-    state.conductors.set(slot.surface, slot);
-  }
+  await initializeConductorSlots(state.projectRoot, state.conductors, state.maxConductors, daemonSurface);
+  // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
 }
 
 export async function tick(state: DaemonState): Promise<void> {
