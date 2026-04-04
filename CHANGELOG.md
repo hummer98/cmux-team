@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.22.1] - 2026-04-04
+
+### Fixed
+- Conductor 初期化時のレースコンディションを修正。pane 分割と Claude 起動を2フェーズに分離し、最初に spawn された Conductor が "starting" に戻されて disconnected になる問題を解消
+
 ## [3.22.0] - 2026-04-04
 
 ### Added
