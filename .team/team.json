@@ -16,13 +16,7 @@
   "conductors": [
     {
       "surface": "surface:390",
-      "taskRunId": "task-070-1775289968",
-      "taskId": "070",
-      "taskTitle": "ファイルベース IPC を HTTP API に移行（queue・done マーカー）",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-070-1775289968",
-      "outputDir": ".team/output/task-070-1775289968",
-      "taskStatusFile": "/Users/yamamoto/git/cmux-team/.team/tasks/070-ipc-http-api-queue-done.status.json",
+      "status": "idle",
       "startedAt": "2026-04-04T08:06:14.416Z",
       "paneId": "pane:255",
       "agents": []
