@@ -84,7 +84,7 @@ export async function start(
             conductors: Object.fromEntries(state.conductors),
             lastUpdate: state.lastUpdate instanceof Date ? state.lastUpdate.toISOString() : state.lastUpdate,
           };
-          return new Response(JSON.stringify(serialized), { headers: jsonHeaders });
+          return new Response(JSON.stringify({ ...serialized, masterPrompt: state.masterPrompt }), { headers: jsonHeaders });
         }
 
         if (url.pathname === "/tasks") {
@@ -99,6 +99,28 @@ export async function start(
           return new Response(JSON.stringify(Object.fromEntries(state.conductors)), { headers: jsonHeaders });
         }
       }
+
+      // Master 状態更新エンドポイント
+      if (req.method === "POST" && url.pathname === "/master-state") {
+        if (!opts?.getState) return new Response("Not Found", { status: 404 });
+        try {
+          const body = await req.json() as { status?: string; prompt?: string };
+          const state = opts.getState();
+          if (body.status === "busy") {
+            state.masterStatus = "running";
+          } else if (body.status === "idle") {
+            state.masterStatus = "idle";
+            state.masterPrompt = undefined;
+          }
+          if (body.prompt != null) {
+            state.masterPrompt = body.prompt.slice(0, 80);
+          }
+          return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+        } catch {
+          return new Response(JSON.stringify({ error: "invalid body" }), { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+      }
+
       const targetUrl = `${upstream}${url.pathname}${url.search}`;
       const startTime = Date.now();
 

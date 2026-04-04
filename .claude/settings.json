@@ -12,6 +12,18 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json,subprocess,os; exec(\\\"\\\\nif os.environ.get('CONDUCTOR_ID'):\\\\n    sys.exit(0)\\\\ntry:\\\\n    d = json.load(sys.stdin)\\\\nexcept Exception:\\\\n    sys.exit(0)\\\\nprompt = d.get('prompt', '')[:80]\\\\nroot = subprocess.run(['git','rev-parse','--show-toplevel'], capture_output=True, text=True).stdout.strip()\\\\nif not root:\\\\n    sys.exit(0)\\\\npf = os.path.join(root, '.team', 'proxy-port')\\\\ntry:\\\\n    port = open(pf).read().strip()\\\\nexcept Exception:\\\\n    sys.exit(0)\\\\nimport urllib.request\\\\ndata = json.dumps({'status':'busy','prompt':prompt}).encode()\\\\ntry:\\\\n    req = urllib.request.Request(f'http://localhost:{port}/master-state', data=data, headers={'Content-Type':'application/json'}, method='POST')\\\\n    urllib.request.urlopen(req, timeout=2)\\\\nexcept Exception:\\\\n    pass\\\\n\\\")\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -19,6 +31,16 @@
           {
             "type": "command",
             "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,os,json,subprocess; exec(\\\"\\\\nif os.environ.get('CONDUCTOR_ID'):\\\\n    sys.exit(0)\\\\nroot = subprocess.run(['git','rev-parse','--show-toplevel'], capture_output=True, text=True).stdout.strip()\\\\nif not root:\\\\n    sys.exit(0)\\\\npf = os.path.join(root, '.team', 'proxy-port')\\\\ntry:\\\\n    port = open(pf).read().strip()\\\\nexcept Exception:\\\\n    sys.exit(0)\\\\nimport urllib.request\\\\ndata = json.dumps({'status':'idle'}).encode()\\\\ntry:\\\\n    req = urllib.request.Request(f'http://localhost:{port}/master-state', data=data, headers={'Content-Type':'application/json'}, method='POST')\\\\n    urllib.request.urlopen(req, timeout=2)\\\\nexcept Exception:\\\\n    pass\\\\n\\\")\"",
             "timeout": 5000
           }
         ]
