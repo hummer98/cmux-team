@@ -5,7 +5,6 @@ import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/pro
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { execFile } from "child_process";
-import { readQueue, markProcessed, ensureQueueDirs } from "./queue";
 import {
   spawnConductor,
   checkConductorStatus,
@@ -18,7 +17,7 @@ import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority } from "./task";
 import { log } from "./logger";
-import type { ConductorState } from "./schema";
+import type { ConductorState, QueueMessage } from "./schema";
 
 export interface TaskSummary {
   id: string;
@@ -125,11 +124,10 @@ export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise
   return null;
 }
 
-/** .team/tasks/ と .team/queue/incoming/ を fs.watch で監視し、変更時に wakeup を呼ぶ */
+/** .team/tasks/ を fs.watch で監視し、変更時に wakeup を呼ぶ */
 export function initFileWatcher(state: DaemonState): void {
   const dirs = [
     join(state.projectRoot, ".team/tasks"),
-    join(state.projectRoot, ".team/queue/incoming"),
   ];
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;
@@ -170,7 +168,6 @@ export async function initInfra(state: DaemonState): Promise<void> {
   await mkdir(join(root, ".team/output"), { recursive: true });
   await mkdir(join(root, ".team/prompts"), { recursive: true });
   await mkdir(join(root, ".team/logs"), { recursive: true });
-  await ensureQueueDirs();
 
   // .gitignore
   const gitignore = join(root, ".team/.gitignore");
@@ -281,7 +278,6 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
               taskTitle: c.taskTitle,
               worktreePath: c.worktreePath,
               outputDir: c.outputDir,
-              taskStatusFile: c.taskStatusFile,
               startedAt: c.startedAt ?? new Date().toISOString(),
               paneId: c.paneId,
               agents: (c.agents ?? []).map((a: any) => ({
@@ -321,7 +317,6 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
 
 export async function tick(state: DaemonState): Promise<void> {
   state.lastUpdate = new Date();
-  await processQueue(state);
   await scanTasks(state);
   await monitorConductors(state);
 
@@ -336,197 +331,193 @@ export async function tick(state: DaemonState): Promise<void> {
   }
 }
 
-async function processQueue(state: DaemonState): Promise<void> {
-  const messages = await readQueue();
-
-  for (const { path, message } of messages) {
-    switch (message.type) {
-      case "TASK_CREATED": {
-        let title = "";
-        if (message.taskFile && existsSync(message.taskFile)) {
-          try {
-            const content = await readFile(message.taskFile, "utf-8");
-            title = content.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
-          } catch (e: any) {
-            await log("error", `processQueue TASK_CREATED readFile failed: taskFile=${message.taskFile} ${e.message}`);
-          }
+export async function handleMessage(state: DaemonState, message: QueueMessage): Promise<void> {
+  switch (message.type) {
+    case "TASK_CREATED": {
+      let title = "";
+      if (message.taskFile && existsSync(message.taskFile)) {
+        try {
+          const content = await readFile(message.taskFile, "utf-8");
+          title = content.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "";
+        } catch (e: any) {
+          await log("error", `handleMessage TASK_CREATED readFile failed: taskFile=${message.taskFile} ${e.message}`);
         }
-        await log("task_received", `task_id=${message.taskId}${title ? ` title=${title}` : ""}`);
-        break;
       }
+      await log("task_received", `task_id=${message.taskId}${title ? ` title=${title}` : ""}`);
+      // wakeup で即時 tick を発火
+      state.wakeup?.();
+      break;
+    }
 
-      case "CONDUCTOR_DONE": {
-        const isSuccess = message.success !== false;
-        await log(
-          isSuccess ? "conductor_done_signal" : "conductor_error",
-          `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
-        );
-        const conductor = findConductor(state, message.surface);
-        if (conductor) {
-          await handleConductorDone(state, conductor);
-        }
-        break;
+    case "CONDUCTOR_DONE": {
+      const isSuccess = message.success !== false;
+      await log(
+        isSuccess ? "conductor_done_signal" : "conductor_error",
+        `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
+      );
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        await handleConductorDone(state, conductor);
       }
+      break;
+    }
 
-      case "CONDUCTOR_REGISTERED": {
-        state.conductors.set(message.surface, {
+    case "AGENT_SPAWNED": {
+      const conductor = findConductor(state, message.conductorSurface);
+      if (conductor) {
+        conductor.agents.push({
           surface: message.surface,
-          paneId: message.paneId,
-          status: "starting",
-          startedAt: message.timestamp,
-          agents: [],
+          role: message.role,
+          taskTitle: message.taskTitle,
+          spawnedAt: message.timestamp,
         });
-        await log("conductor_registered", `surface=${message.surface} pane=${message.paneId}`);
+        await log(
+          "agent_spawned",
+          `conductor_surface=${message.conductorSurface} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
+        );
+      }
+      break;
+    }
+
+    case "SESSION_STARTED": {
+      // Master surface チェック
+      if (message.surface === state.masterSurface) {
+        state.masterPid = message.pid;
+        state.masterStatus = "idle";
+        state.masterDisconnectedAt = undefined;
+        spawnMasterPidWatcher(state, message.pid);
+        await log("master_session_started", `surface=${message.surface} pid=${message.pid}`);
         break;
       }
-
-      case "AGENT_SPAWNED": {
-        const conductor = findConductor(state, message.conductorSurface);
-        if (conductor) {
-          conductor.agents.push({
-            surface: message.surface,
-            role: message.role,
-            taskTitle: message.taskTitle,
-            spawnedAt: message.timestamp,
-          });
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        // starting / disconnected → idle に復帰
+        if (conductor.status === "starting" || conductor.status === "disconnected") {
+          const prevStatus = conductor.status;
+          conductor.status = "idle";
           await log(
-            "agent_spawned",
-            `conductor_surface=${message.conductorSurface} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
-          );
-        }
-        break;
-      }
-
-      case "SESSION_STARTED": {
-        // Master surface チェック
-        if (message.surface === state.masterSurface) {
-          state.masterPid = message.pid;
-          state.masterStatus = "idle";
-          state.masterDisconnectedAt = undefined;
-          spawnMasterPidWatcher(state, message.pid);
-          await log("master_session_started", `surface=${message.surface} pid=${message.pid}`);
-          break;
-        }
-        const conductor = findConductor(state, message.surface);
-        if (conductor) {
-          // starting / disconnected → idle に復帰
-          if (conductor.status === "starting" || conductor.status === "disconnected") {
-            const prevStatus = conductor.status;
-            conductor.status = "idle";
-            await log(
-              prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
-              `surface=${message.surface}`
-            );
-          }
-          conductor.pid = message.pid;
-          if (message.sessionId) conductor.sessionId = message.sessionId;
-          conductor.disconnectedAt = undefined;
-          spawnPidWatcher(state, conductor, message.pid);
-          await log(
-            "session_started",
-            `surface=${message.surface} pid=${message.pid}`
-          );
-        }
-        break;
-      }
-
-      case "SESSION_ENDED": {
-        // Master surface チェック
-        if (message.surface === state.masterSurface) {
-          state.masterStatus = "disconnected";
-          state.masterDisconnectedAt = message.timestamp;
-          state.masterPid = undefined;
-          await log("master_session_ended", `surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`);
-          break;
-        }
-        const conductor = findConductor(state, message.surface);
-        if (conductor) {
-          // surface が一致しない場合は旧セッションからの stale イベント → 無視
-          if (message.surface !== conductor.surface) {
-            await log(
-              "session_ended_ignored",
-              `event_surface=${message.surface} current_surface=${conductor.surface}`
-            );
-            break;
-          }
-          conductor.status = "disconnected";
-          conductor.disconnectedAt = message.timestamp;
-          conductor.pid = undefined;
-          conductor.sessionId = undefined;
-          await log(
-            "session_ended",
-            `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
-          );
-        } else {
-          // Agent surface かチェック
-          for (const c of state.conductors.values()) {
-            const idx = c.agents.findIndex(a => a.surface === message.surface);
-            if (idx !== -1) {
-              c.agents.splice(idx, 1);
-              await log(
-                "agent_done",
-                `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended`
-              );
-              break;
-            }
-          }
-        }
-        break;
-      }
-
-      case "SESSION_ACTIVE": {
-        // Master surface チェック
-        if (message.surface === state.masterSurface) {
-          state.masterStatus = "running";
-          state.masterDisconnectedAt = undefined;
-          if (message.pid) state.masterPid = message.pid;
-          await log("master_session_active", `surface=${message.surface}`);
-          break;
-        }
-        const conductor = findConductor(state, message.surface);
-        if (conductor) {
-          conductor.disconnectedAt = undefined;
-          if (message.pid) conductor.pid = message.pid;
-          if (conductor.status === "disconnected") {
-            conductor.status = "running";
-            await log("conductor_recovered", `surface=${message.surface} via=SESSION_ACTIVE new_status=running`);
-          }
-        }
-        break;
-      }
-
-      case "SESSION_IDLE": {
-        // Master surface チェック
-        if (message.surface === state.masterSurface) {
-          state.masterStatus = "idle";
-          state.masterDisconnectedAt = undefined;
-          if (message.pid) state.masterPid = message.pid;
-          await log("master_session_idle", `surface=${message.surface}`);
-          break;
-        }
-        const conductor = findConductor(state, message.surface);
-        if (conductor) {
-          conductor.disconnectedAt = undefined;  // alive の証拠
-          if (message.pid) conductor.pid = message.pid;
-          if (conductor.status === "disconnected") {
-            conductor.status = "idle";
-            await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE new_status=idle`);
-          }
-          await log(
-            "session_idle",
+            prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
             `surface=${message.surface}`
           );
         }
-        break;
+        conductor.pid = message.pid;
+        if (message.sessionId) conductor.sessionId = message.sessionId;
+        conductor.disconnectedAt = undefined;
+        spawnPidWatcher(state, conductor, message.pid);
+        await log(
+          "session_started",
+          `surface=${message.surface} pid=${message.pid}`
+        );
       }
-
-      case "SHUTDOWN":
-        await log("shutdown_requested");
-        state.running = false;
-        break;
+      break;
     }
 
-    await markProcessed(path);
+    case "CONDUCTOR_REGISTERED": {
+      state.conductors.set(message.surface, {
+        surface: message.surface,
+        paneId: message.paneId,
+        status: "starting",
+        startedAt: message.timestamp,
+        agents: [],
+      });
+      await log("conductor_registered", `surface=${message.surface} pane=${message.paneId}`);
+      break;
+    }
+
+    case "SESSION_ENDED": {
+      // Master surface チェック
+      if (message.surface === state.masterSurface) {
+        state.masterStatus = "disconnected";
+        state.masterDisconnectedAt = message.timestamp;
+        state.masterPid = undefined;
+        await log("master_session_ended", `surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`);
+        break;
+      }
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        // surface が一致しない場合は旧セッションからの stale イベント → 無視
+        if (message.surface !== conductor.surface) {
+          await log(
+            "session_ended_ignored",
+            `event_surface=${message.surface} current_surface=${conductor.surface}`
+          );
+          break;
+        }
+        conductor.status = "disconnected";
+        conductor.disconnectedAt = message.timestamp;
+        conductor.pid = undefined;
+        conductor.sessionId = undefined;
+        await log(
+          "session_ended",
+          `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
+        );
+      } else {
+        // Agent surface かチェック
+        for (const c of state.conductors.values()) {
+          const idx = c.agents.findIndex(a => a.surface === message.surface);
+          if (idx !== -1) {
+            c.agents.splice(idx, 1);
+            await log(
+              "agent_done",
+              `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended`
+            );
+            break;
+          }
+        }
+      }
+      break;
+    }
+
+    case "SESSION_ACTIVE": {
+      // Master surface チェック
+      if (message.surface === state.masterSurface) {
+        state.masterStatus = "running";
+        state.masterDisconnectedAt = undefined;
+        if (message.pid) state.masterPid = message.pid;
+        await log("master_session_active", `surface=${message.surface}`);
+        break;
+      }
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        conductor.disconnectedAt = undefined;
+        if (message.pid) conductor.pid = message.pid;
+        if (conductor.status === "disconnected") {
+          conductor.status = "running";
+          await log("conductor_recovered", `surface=${message.surface} via=SESSION_ACTIVE new_status=running`);
+        }
+      }
+      break;
+    }
+
+    case "SESSION_IDLE": {
+      // Master surface チェック
+      if (message.surface === state.masterSurface) {
+        state.masterStatus = "idle";
+        state.masterDisconnectedAt = undefined;
+        if (message.pid) state.masterPid = message.pid;
+        await log("master_session_idle", `surface=${message.surface}`);
+        break;
+      }
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        conductor.disconnectedAt = undefined;  // alive の証拠
+        if (message.pid) conductor.pid = message.pid;
+        if (conductor.status === "disconnected") {
+          conductor.status = "idle";
+          await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE new_status=idle`);
+        }
+        await log(
+          "session_idle",
+          `surface=${message.surface}`
+        );
+      }
+      break;
+    }
+
+    case "SHUTDOWN":
+      await log("shutdown_requested");
+      state.running = false;
+      break;
   }
 }
 
@@ -676,20 +667,9 @@ async function monitorConductors(state: DaemonState): Promise<void> {
     }
     if (conductor.status === "idle" || conductor.status === "disconnected") continue;
 
-    if (conductor.status === "done") {
-      // 既に done 処理済み、surface 消失チェックのみ
-      if (!(await cmux.validateSurface(conductor.surface))) {
-        await log("conductor_surface_lost", `surface=${surface}`);
-      }
-      continue;
-    }
-
     const status = await checkConductorStatus(conductor);
 
     switch (status) {
-      case "done":
-        await handleConductorDone(state, conductor);
-        break;
       case "running":
         break;
       case "crashed":
@@ -808,7 +788,6 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       status: c.status,
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
-      taskStatusFile: c.taskStatusFile,
       startedAt: c.startedAt,
       paneId: c.paneId,
       agents: c.agents.map((a) => ({

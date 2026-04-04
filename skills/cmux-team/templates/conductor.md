@@ -293,11 +293,11 @@ cmux-team kill-agent --surface $REVIEWER_SURFACE
    ```bash
    cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
    ```
-8. **done マーカーを作成する**（タスクベースの status.json に書き出す）:
+8. **完了通知を送信する**:
    ```bash
-   echo '{"status":"done","runId":"{{CONDUCTOR_ID}}","completedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > {{TASK_STATUS_FILE}}
+   cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
    ```
-9. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信 + done マーカー削除）を行う。
+9. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信）を行う。
 
 ## やらないこと（厳守）
 

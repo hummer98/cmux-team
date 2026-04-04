@@ -8,9 +8,9 @@
 
 - `.team/tasks/` と `.team/task-state.json` を参照し、`status: ready` のタスクを検出する
 - daemon 経由で idle Conductor にタスクを割り当てる
-- Conductor を pull 型で監視する（done マーカーファイルで完了検出、フォールバックとして `cmux list-status`）
+- Conductor の完了を検出する（CONDUCTOR_DONE メッセージ受信、フォールバックとして surface 消失検出）
 - 完了した Conductor の Journal を読み取り、ログを記録する
-- Conductor をリセットする（`/clear` 送信 + done マーカー削除）
+- Conductor をリセットする（`/clear` 送信）
 - `.team/logs/manager.log` に状態変化を記録する
 
 ## やらないこと
@@ -66,63 +66,22 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_assigned task=$TASK_ID" >> .team/log
 
 **Conductor は spawn しない。** 固定ペインの常駐 Conductor にタスクを送信するだけ。daemon が worktree 作成・プロンプト生成・送信を一括処理する。
 
-### 3. Conductor 監視（pull 型）
+### 3. Conductor 監視
 
-done マーカーファイルで Conductor の完了を検出する:
+Conductor の完了は daemon が HTTP API 経由で CONDUCTOR_DONE メッセージを受信することで検出する:
 
-```bash
-# 主要な判定方法: done マーカーファイル
-if [ -f .team/output/conductor-N/done ]; then
-  # → 完了
-  echo "Conductor-N: 完了"
-elif cmux tree 2>&1 | grep -q "surface:N"; then
-  # done ファイルなし + surface 生存 → 実行中
-  echo "Conductor-N: 実行中"
-else
-  # surface 消失 → クラッシュ
-  echo "WARNING: Conductor-N がクラッシュ"
-fi
-```
+- **主要な完了検出**: Conductor が `cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true` を実行 → daemon の HTTP API `/api/messages` にメッセージが送信される
+- **フォールバック**: surface 消失で crashed を検出
 
-**フォールバック:** done マーカーが確認できない場合は `cmux list-status` で判定:
-
-```bash
-# フォールバック: cmux list-status で Conductor workspace の状態を確認
-CONDUCTOR_WS=$(cmux identify --surface surface:N 2>/dev/null | jq -r '.caller.workspace_ref // empty')
-if [ -n "$CONDUCTOR_WS" ]; then
-  STATE=$(cmux list-status --workspace "$CONDUCTOR_WS" 2>/dev/null | grep "^claude_code=" | sed 's/^[^=]*=//' | awk '{print $1}')
-  case "$STATE" in
-    Idle|○) echo "Conductor-N: 完了（list-status: Idle）" ;;
-    Running|⚙) echo "Conductor-N: 実行中" ;;
-  esac
-fi
-```
-
-**完了判定の優先順位:**
-1. done マーカーファイルの存在 → **完了**（最も信頼性が高い）
-2. `cmux list-status` で `Idle` 検出 → **フォールバック**
-3. surface 消失 → **クラッシュ**（エラーリカバリへ）
+daemon が自動的に完了処理を行うため、Manager が直接監視する必要はない。
 
 ### 4. 結果回収（Conductor 完了時）
 
-Conductor が done マーカーを作成し、タスクの close（`cmux-team close-task`）と worktree 削除も完了済み。Manager は Journal 読み取りとログ記録のみ行う:
+Conductor が CONDUCTOR_DONE メッセージを送信し、タスクの close（`cmux-team close-task`）と worktree 削除も完了済み。daemon が自動的に以下を処理する:
 
-```bash
-# 1. 完了タスクの Journal を確認（task-state.json で closed のタスクを特定）
-cat .team/task-state.json | grep -A5 '"closed"'
-
-# 2. 出力サマリーを確認
-cat .team/output/${CONDUCTOR_ID}/summary.md
-
-# 3. ログ記録
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_completed id=<task-id> conductor=${CONDUCTOR_ID}" >> .team/logs/manager.log
-
-# 4. Conductor リセット（/clear 送信で次のタスクに備える）
-cmux send --surface surface:N "/clear\n"
-
-# 5. done マーカーを削除
-rm -f .team/output/${CONDUCTOR_ID}/done
-```
+- 完了タスクの Journal 読み取り
+- ログ記録
+- Conductor リセット（`/clear` 送信で次のタスクに備える）
 
 **Manager がやらないこと（Conductor の責務に移譲済み）:**
 - タスクの close（`cmux-team close-task` は Conductor が実行）
