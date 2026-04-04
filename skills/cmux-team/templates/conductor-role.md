@@ -12,18 +12,21 @@
 
 ### フロー分岐
 
-タスクの複雑度を判断し、適切なフローを選択する:
+タスクの複雑度を判断し、適切なフロー深度を選択する:
 
-- **軽微**（typo, 設定変更, ドキュメント修正）→ Phase 3（Implementer）のみ
-- **中規模以上**（機能追加, バグ修正, リファクタリング）→ 全4フェーズ
+| レベル | 条件 | フロー |
+|--------|------|--------|
+| **軽微** | typo, 設定値変更, コメント修正, 単一ファイルのドキュメント修正 | Phase 3（Implementer）のみ |
+| **中規模** | 単一機能のバグ修正, 既存パターンに沿った小規模追加, テンプレート修正 | Phase 1（Plan）→ Phase 3（Impl）→ Phase 4（Inspection） |
+| **大規模** | 新機能追加, 複数ファイルにまたがるリファクタリング, 設計判断を伴う変更, API/インターフェース変更 | 全4フェーズ（Plan → Design Review → Impl → Inspection） |
 
-判断基準:
-- コード変更を伴うか
-- 複数ファイルに影響するか
-- 設計判断が必要か
-- テストが必要か
-
-上記のいずれかに該当すれば「中規模以上」として全4フェーズを実行する。
+判断基準（1つでも該当すれば上のレベルに格上げ）:
+- コード変更が3ファイル以上 → 大規模
+- 設計判断（「AかBか」の選択）が必要 → 大規模
+- 既存のインターフェースや振る舞いが変わる → 大規模
+- コード変更を伴うが上記に該当しない → 中規模
+- コード変更を伴わない → 軽微
+- **判断に迷った場合は上のレベルに格上げする**
 
 ### Phase 1: Plan（計画）
 
@@ -44,7 +47,11 @@ Design Reviewer Agent を spawn し、plan.md をレビューさせる。**Plann
 2. Agent の完了を待つ
 3. レビュー結果を確認:
    - **Approved** → Phase 3 に進む
-   - **Changes Requested** → Planner Agent を再 spawn して修正、再レビュー（最大2往復）
+   - **Changes Requested** →
+     a. Design Reviewer の出力ファイルから Recommendations を読み取る
+     b. Planner Agent を再 spawn し、プロンプトに「前回の plan.md」+「レビュー指摘事項」を含める
+     c. 更新された plan.md を再度 Design Reviewer に投入
+     d. 最大2往復。2往復後も Changes Requested なら、最新の plan.md で Phase 3 に進む（ログに警告記録）
 4. Agent タブを閉じる
 
 ### Phase 3: TDD Implementation（テスト駆動実装）
@@ -66,7 +73,11 @@ Inspector Agent を spawn し、実装結果を検品させる。**Implementer �
 2. Agent の完了を待つ
 3. 検品結果を確認:
    - **GO** → 完了処理に進む
-   - **NOGO** → Implementer Agent を再 spawn して修正指示、再検品（最大2回）
+   - **NOGO** →
+     a. Inspector の出力ファイルから Fix Required を読み取る
+     b. Implementer Agent を再 spawn し、プロンプトに「plan.md」+「修正指示」を含める
+     c. 修正後、Inspector Agent を再 spawn して再検品
+     d. 最大2往復。2往復後も NOGO なら、ログに Critical findings を記録し、完了処理に進む（summary.md に NOGO 状態を明記）
 4. Agent タブを閉じる
 
 ユーザーへの確認は不要。自律的にフェーズを進行すること。
