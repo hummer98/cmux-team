@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.19.0] - 2026-04-04
+
+### Added
+- `abort-task` コマンドを追加。実行中タスクの中止・Conductor/Agent の強制停止・worktree クリーンアップを一括実行
+- TUI の running Conductor にスピナーアニメーション（boxBounce: ▖▘▝▗）を追加
+- TUI の Tasks セクションにカーソル移動とスクロール機能を追加（上下矢印キー対応）
+- TUI のタスク一覧で `depends_on` の未解決依存を `[blocked Txxx]` として表示
+- TUI の Journal に Conductor の surface 番号 `[xxx]` を表示
+- Master の Claude Code セッション状態を Manager が監視し TUI に反映（connected/disconnected/idle/running）
+- GitHub Actions によるリリース自動化ワークフロー（タグ push で npm publish + GitHub Release）
+- ロギングポリシーを策定し全般的にログを改善。外部コマンド失敗・判断分岐・例外の握りつぶしを解消
+
+### Changed
+- npm auto-update を全 Conductor が idle のときのみ実行するよう制限
+- `docs/seeds/` を `docs/spec/` にリネーム。設計シードから統合仕様書に位置づけを変更
+- 統合仕様書を現在の実装に同期
+
+### Fixed
+- dashboard.tsx の型エラーと task.test.ts のモック不足を修正
+
 ## [3.18.0] - 2026-04-04
 
 ### Added
