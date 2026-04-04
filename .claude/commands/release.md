@@ -129,7 +129,25 @@ claude plugin install cmux-team@hummer98-cmux-team
 ! claude plugin uninstall cmux-team@hummer98-cmux-team && claude plugin install cmux-team@hummer98-cmux-team
 ```
 
-### 9. 完了報告
+### 9. GitHub Actions 監視（バックグラウンド）
+
+タグ push 後、GitHub Actions のリリースワークフローをバックグラウンドで監視する。
+
+```bash
+# ワークフロー実行を検出（最大30秒待機）
+sleep 5
+RUN_ID=$(gh run list --workflow=release.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+```
+
+RUN_ID が取得できたら、Bash ツールの `run_in_background` オプションで以下を実行:
+
+```bash
+gh run watch ${RUN_ID} --exit-status && echo "✅ GitHub Actions 成功: npm publish + GitHub Release 完了" || echo "❌ GitHub Actions 失敗: gh run view ${RUN_ID} --web で確認"
+```
+
+**注意:** バックグラウンドで実行し、完了通知を待つ。ポーリングや sleep ループは不要。
+
+### 10. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
@@ -137,6 +155,6 @@ claude plugin install cmux-team@hummer98-cmux-team
 - コミット: <hash>
 - タグ: v${NEW_VERSION}
 - push: origin/main
-- npm publish / GitHub Release: タグ push で GitHub Actions が自動実行
+- GitHub Actions: バックグラウンドで監視中（完了時に報告）
 - plugin: 更新済み（要セッション再起動）
 ```
