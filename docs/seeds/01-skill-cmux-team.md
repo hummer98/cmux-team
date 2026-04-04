@@ -24,163 +24,139 @@ description: >
 
 ### 0. アーキテクチャ概要
 
-- 4層構造の図解（Master ↔ ユーザー、Manager daemon、Conductor 常駐、Agent 実作業）
-- 各層の責務テーブル
-- 通信方式テーブル（ファイルベース + cmux コマンド）
+**4層構造の図解:**
 
-### 1. Master の行動原則
+```
+[ユーザー] ↔ [Master] → [Manager (daemon)] → [Conductor (常駐)] → [Agent (実作業)]
+```
 
-Master の「やること」「やらないこと」を明示:
+- Master: ユーザー対話。タスク作成。真のソース直接参照で進捗報告。作業しない。ポーリングしない。
+- Manager: daemon として常駐。[TASK_CREATED] 通知で起床→タスク検出→idle Conductor にタスク割り当て→done マーカーで完了検出→ログ記録→Conductor リセット→アイドル化。アイドル時停止、イベント駆動。
+- Conductor: 常駐。タスクを割り当てられると自律実行。git worktree 隔離。Agent spawn（タブ）→結果統合→タスクを close（`cmux-team close-task`）→done マーカー作成→idle に戻る。常駐。タスク完了後も停止しない。
+- Agent: 実作業（実装・テスト・リサーチ等）。完了したら停止。上位が見に来る。
 
-**やること:**
-- ユーザーの指示を解釈し `bun run main.ts create-task` でタスクを作成
-- `bun run main.ts status` で進捗を報告
-- Manager の健全性を `cmux read-screen` で確認
+**通信方式テーブル:**
 
-**やらないこと:**
-- コードの読解・実装・テスト・レビュー
-- Conductor / Agent の直接起動・監視
-- ポーリング・ループ実行
+| 方向 | 手段 |
+|------|------|
+| Master → Manager | `.team/tasks/` + `task-state.json` + `cmux send` 通知（イベント駆動） |
+| Manager → Conductor | `cmux send`（`/clear` + 新プロンプト送信） |
+| Manager ← Conductor | done マーカーファイル（`.team/output/conductor-N/done`）の存在確認（pull 型） |
+| Conductor → Agent | `cmux send`（プロンプト送信） |
+| Conductor ← Agent | pull（`cmux list-status` で Idle/Running 検出） |
+| Manager → Master | `.team/logs/manager.log` + `cmux list-status`（直接参照） |
 
-**Manager spawn 手順:**
+### 1. コマンド一覧
+
+**スラッシュコマンド（Claude 内）:**
+
+| コマンド | 説明 |
+|---------|------|
+| `/master` | Master ロール再読み込み（`/clear` 後の復帰用） |
+| `/team-spec` | 要件ブレスト（Master が直接ユーザーと対話） |
+| `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
+| `/team-archive` | 完了タスクのアーカイブ（closed → archived） |
+| `/artifact` | 知見のアーティファクト化（作成・一覧・表示） |
+
+**CLI サブコマンド:**
+
+| コマンド | 説明 |
+|---------|------|
+| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築 |
+| `cmux-team status` | ステータス表示（team.json + ログ末尾） |
+| `cmux-team stop` | graceful shutdown（SHUTDOWN メッセージ送信） |
+| `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
+| `cmux-team send TODO` | TODO 通知（`--content` 必須） |
+| `cmux-team send SHUTDOWN` | シャットダウン通知 |
+| `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
+| `cmux-team agents` | 稼働中エージェント一覧 |
+| `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
+| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
+| `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
+| `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
+| `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`） |
+
+### 2. トレーサビリティ
+
+daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQLite FTS5 データベースに記録する。Master が過去の作業ログを検索・分析する際に活用できる。
+
+**自動プロキシ設定:**
+daemon が起動すると Proxy が自動で立ち上がり、Master および Conductor に `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` を設定する。全 API リクエストが Proxy 経由になり、リクエスト/レスポンスが自動記録される。
+
+**メタデータ伝播:**
+
+| ヘッダー | 内容 |
+|---------|------|
+| `x-cmux-task-id` | タスクID |
+| `x-cmux-conductor-surface` | Conductor surface |
+| `x-cmux-role` | エージェントロール |
+| `x-claude-code-session-id` | Claude Code セッションID |
+
+**trace CLI:**
 ```bash
-cmux new-split right  # → surface:M
-cmux rename-tab --surface surface:M "[M] Manager"
-cmux send --surface surface:M "claude --dangerously-skip-permissions --model sonnet '...'\n"
-# Trust 確認の自動承認ループ
+cmux-team trace --task 035          # タスクIDでフィルタ
+cmux-team trace --search "error"    # 全文検索（SQLite FTS5）
+cmux-team trace --show 42           # 特定トレースの詳細表示
+cmux-team trace --conductor conductor-1  # Conductor IDでフィルタ
+cmux-team trace --role impl         # ロールでフィルタ
+cmux-team trace --limit 50          # 結果数制限（デフォルト20）
 ```
 
-**タスクファイル形式:**
-- `.team/tasks/<task-id>.md`（YAML frontmatter: id, title, priority）
-- 状態は `.team/task-state.json` で管理（draft/ready/assigned/closed）
+### 3. cmux 操作リファレンス
 
-### 2. Manager プロトコル
+**環境変数:**
 
-Manager は **TypeScript daemon**（`skills/cmux-team/manager/main.ts`）として Bun で動作。
+| 変数 | 意味 |
+|------|------|
+| `CMUX_SOCKET_PATH` | cmux ソケットパス。設定されていれば cmux 環境内で動作中 |
+| `CMUX_WORKSPACE_ID` | 現在のワークスペースID |
+| `CMUX_SURFACE_ID` | 現在のサーフェスID |
+| `CMUX_SURFACE` | cmux-team が設定。`surface:N` 形式。これが設定されていれば cmux-team 管理下 |
 
-**2.1 タスク検出:**
-- `task-state.json` で `status: ready` のタスクをスキャン
-- 依存関係（`depends_on`）が全て closed であることを確認
+**基本操作コマンド:**
 
-**2.2 Conductor へのタスク割り当て:**
-- idle Conductor を見つけ `/clear` + 新プロンプトを送信
-- git worktree 作成 + プロンプト生成を daemon が実行
-- Conductor は spawn しない（起動時に作成された固定ペインを再利用）
-
-**2.3 Conductor 監視（pull 型）:**
-- done マーカーファイル（`.team/output/conductor-N/done`）で完了検出
-- 2 tick 連続で検出 → 完了確定（`doneCandidate` パターン）
-- フォールバック: `cmux read-screen` で `❯` 検出
-- surface 消失 → クラッシュ検出
-
-**2.4 結果回収:**
-- Journal 読み取り（task-state.json の closed タスク）
-- ログ記録（`manager.log`）
-- Conductor リセット（`/clear` 送信 + done マーカー削除）
-- **Manager がやらないこと**: タスクの close、Conductor ペインの close、worktree 削除、マージ
-
-**2.5 ループ継続・アイドル化:**
-- 10秒ポーリング間隔（メインループ）
-- アイドル時: `idle_start` をログに記録
-
-### 3. Conductor プロトコル
-
-Conductor は **常駐 Claude セッション**。タスクを割り当てられると自律的に完遂し、完了後は idle に戻る。
-
-**3.1 タスク受領:** daemon が `/clear` + プロンプト送信
-**3.2 git worktree 内で作業:** `.worktrees/run-<EPOCH>/` 内で全作業
-**3.3 Agent 起動:** `spawn-agent` CLI で起動（直接 `cmux new-surface` 禁止）
-**3.4 Agent 監視:** `cmux read-screen` で `❯` 検出（pull 型、30秒間隔）
-**3.5 結果統合:** Agent 出力確認 + テスト実行
-**3.6 完了:**
-1. Agent タブを close
-2. worktree を削除
-3. `bun run main.ts close-task` でタスクを close（journal 記録）
-4. `touch <outputDir>/done` で done マーカー作成
-5. idle 状態に戻る
-
-### 4. Agent プロトコル
-
-- 割り当てられたタスクを実行
-- 指定された出力ファイルに結果を書く
-- **完了したら停止する。報告は不要。** 上位が検出する
-- worktree 内で作業
-
-### 5. 通信プロトコル
-
-**ファイルベース通信:**
-```
-.team/
-├── tasks/             # タスクファイル（フラット構造）
-├── task-state.json    # タスク状態管理
-├── output/conductor-N/ # Conductor 出力 + done マーカー
-├── queue/             # ファイルベースメッセージキュー
-├── prompts/           # プロンプト（監査証跡）
-├── specs/             # 要件・設計ドキュメント
-└── team.json          # チーム構成（daemon 自動管理）
-```
-
-**cmux コマンド:**
 | コマンド | 用途 |
 |---------|------|
-| `cmux send` | 上位→下位のプロンプト送信 |
-| `cmux send-key return` | 複数行プロンプトの送信確定 |
-| `cmux read-screen` | pull 型監視 |
-| `cmux close-surface` | Agent タブの終了 |
-| `bun run main.ts spawn-agent` | Agent 起動 |
+| `cmux identify` | 自分の workspace/surface を確認 |
+| `cmux tree` | ペイン・サーフェス階層を表示 |
+| `cmux list-panes` | ペイン一覧 |
+| `cmux list-pane-surfaces` | ペイン内のサーフェス一覧 |
+| `cmux new-split right` | 右にペイン分割（`left`/`up`/`down` も可） |
+| `cmux new-surface --pane pane:N` | ペイン内に新しいタブを作成 |
+| `cmux send --surface surface:N "command\n"` | コマンド送信 |
+| `cmux send-key --surface surface:N return` | キー送信 |
+| `cmux read-screen --surface surface:N` | 画面読み取り |
+| `cmux close-surface --surface surface:N` | サーフェス（タブ）を閉じる |
+| `cmux rename-tab --surface surface:N "name"` | タブ名変更 |
+| `cmux refresh-surfaces` | 画面バッファ強制更新 |
 
-### 6. チーム状態管理
+**send の改行ルール（重要）:**
 
-**team.json（daemon 自動管理）:**
-```json
-{
-  "project": "project-name",
-  "phase": "init",
-  "architecture": "4-tier",
-  "manager": { "pid": 12345, "surface": "surface:N", "status": "running" },
-  "master": { "surface": "surface:M" },
-  "conductors": [
-    { "conductorId": "conductor-1", "surface": "surface:C", "status": "idle|running|done", ... }
-  ]
-}
+- **単一行**: 末尾に `\n` を付ける
+- **複数行**: 個別の `send` + `send-key return` で送信する
+- **注意**: `\n` は最後の1つだけが Enter として機能する。途中の `\n` は改行にならない
+
+**制御キーの送信:**
+`send-key` を使う（`send` ではない）:
+```bash
+cmux send-key --surface surface:N ctrl+c    # 中断
+cmux send-key --surface surface:N return    # Enter
 ```
 
-**進捗情報の取得方法（Master 向け）:**
-- Manager の状態: `cmux read-screen`
-- 稼働中 Conductor: `cmux tree`
-- タスク状態: `cat .team/task-state.json`
-- 完了履歴: `cat .team/logs/manager.log`
+**read-screen トラブルシューティング:**
 
-### 7. レイアウト戦略
+| 問題 | 対処 |
+|------|------|
+| 空・古い出力 | `cmux refresh-surfaces` してからリトライ |
+| 出力が切れる | `--scrollback` オプションを追加 |
+| 特定行数だけ必要 | `--lines N` オプションを追加 |
+| surface が見つからない | `cmux list-pane-surfaces` で確認 |
 
-固定2x2レイアウト（4ペイン、5 surface）:
+**通知:**
+```bash
+# アプリ内通知（ペイン強調 + サイドバーバッジ）
+cmux notify --title "完了" --body "ビルドが成功しました"
+
+# macOS 通知センター（サウンド付き）
+osascript -e 'display notification "ビルド完了" with title "Claude" sound name "Glass"'
 ```
-[Manager|Master] | [Conductor-1]
-[Conductor-2   ] | [Conductor-3]
-```
-- 4ペインは不動（close しない）
-- サブエージェントは `spawn-agent` CLI でタブ作成
-- 最大3タスク並列、4つ目以降はキューイング
-
-### 8. git worktree プロトコル
-
-- 作成: `git worktree add .worktrees/run-<EPOCH> -b <branch>`
-- ブートストラップ: `npm install`, `.envrc` 等の初期化
-- 成功時: Conductor が commit → マージ（ローカル or PR）→ worktree 削除
-- 失敗時: `git worktree remove --force`
-
-### 9. エラーリカバリ
-
-| 障害 | 検出者 | 対応 |
-|------|--------|------|
-| Agent クラッシュ | Conductor | 再 spawn |
-| Conductor クラッシュ | Manager | リセット、タスク reopen |
-| Manager クラッシュ | Master | 再 spawn |
-
-### 10. コマンド一覧
-
-**基本コマンド:** `/start`, `/team-status`, `/team-disband`, `/team-spec`, `/team-task`
-
-**daemon CLI サブコマンド:** `start`, `send`, `status`, `stop`, `spawn-agent`, `agents`, `kill-agent`, `create-task`, `update-task`, `close-task`
-
-**手動オーバーライド:** `/team-research`, `/team-design`, `/team-impl`, `/team-review`, `/team-test`, `/team-sync-docs`
