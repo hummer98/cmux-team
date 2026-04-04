@@ -120,7 +120,7 @@ cmux-team/
 │   ├── team-archive.md              #   完了タスクのアーカイブ
 │   └── artifact.md                  #   知見のアーティファクト化
 ├── docs/
-│   ├── seeds/                        # 設計シードドキュメント（実装時の入力仕様）
+│   ├── spec/                         # 統合仕様書（実装と同期された仕様）
 │   │   ├── 00-project-overview.md
 │   │   ├── 01-skill-cmux-team.md
 │   │   ├── 02-skill-cmux-agent-role.md
@@ -143,9 +143,19 @@ cmux-team/
 | `cmux-team` (SKILL.md) | Master（ユーザーセッション） | 4層アーキテクチャ全体の定義、Master 行動原則 |
 | `cmux-agent-role` (SKILL.md) | Agent（実作業エージェント） | 出力プロトコル・タスク作成・作業境界 |
 
-### docs/seeds/ の役割
+### docs/spec/（統合仕様書）
 
-設計フェーズで作成されたシードドキュメント。実装の入力仕様であり、各ファイルの「あるべき姿」を定義している。コード変更時はシードの意図と整合しているか確認すること。
+実装と同期された統合仕様書。各ファイルはプロジェクトの設計・実装仕様を定義しており、コード変更時に参照すべきドキュメント。
+
+| ファイル | 内容 |
+|---------|------|
+| 00-project-overview.md | プロジェクト概要・4層アーキテクチャ・設計原則 |
+| 01-skill-cmux-team.md | cmux-team スキル（SKILL.md）の仕様 |
+| 02-skill-cmux-agent-role.md | cmux-agent-role スキル（SKILL.md）の仕様 |
+| 03-commands.md | スラッシュコマンド定義 |
+| 04-templates.md | エージェントプロンプトテンプレート仕様 |
+| 05-install-and-infrastructure.md | インストール・インフラ構成 |
+| 06-implementation-tasks.md | 実装タスク定義 |
 
 ## スキル・コマンドの追加・修正方法
 
