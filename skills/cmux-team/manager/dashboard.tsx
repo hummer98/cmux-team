@@ -126,7 +126,6 @@ const RED = rgb(255, 0, 0);
 const CYAN = rgb(0, 255, 255);
 const GRAY = rgb(170, 170, 170);
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 let spinnerTick = 0;
 
 // --- ジャーナルエントリ ---
