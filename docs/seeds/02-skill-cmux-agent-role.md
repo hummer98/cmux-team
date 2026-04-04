@@ -63,28 +63,11 @@ Output: .team/output/<role-id>.md
 
 ### 4. タスク作成
 
-判断が必要な事項、ブロッカー、発見事項がある場合に CLI でタスクを作成:
+判断が必要な事項、ブロッカー、発見事項がある場合にタスクを作成:
 
 ```bash
-bun run .team/manager/main.ts create-task --title "タイトル" --body "詳細"
-```
-
-タスク形式:
-```markdown
----
-id: NNN
-title: <簡潔なタイトル>
-type: decision|blocker|finding|question
-raised_by: <role-id>
-created_at: <ISO タイムスタンプ>
----
-## Context
-<経緯>
-## Options
-1. <選択肢 A>
-2. <選択肢 B>
-## Recommendation
-<推奨案>
+# タスク作成は CLI で行う（ID 自動採番・task-state.json 更新を一括実行）
+cmux-team create-task --title "タイトル" --body "詳細"
 ```
 
 ### 5. 他エージェントとの連携
@@ -111,23 +94,65 @@ created_at: <ISO タイムスタンプ>
 
 ### 7. daemon ステータス取得
 
+Manager daemon の状態を確認するには CLI を使う:
+
 ```bash
-# ダッシュボード表示
-bun run .team/manager/main.ts status
+# ダッシュボード表示（Master / Conductors / Tasks / Log）
+cmux-team status
 
 # ログ末尾を多めに表示
-bun run .team/manager/main.ts status --log 20
+cmux-team status --log 20
 ```
+
+**出力内容**: daemon の稼働状態、Master surface、稼働中 Conductor 一覧（タスクタイトル付き）、open/closed タスク数、manager.log 末尾。
 
 `cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
 
-### 8. 言語ルール
+### 8. トレース検索
+
+過去の API リクエスト履歴を検索できる:
+
+```bash
+# タスクに関連するトレースを表示
+cmux-team trace --task <task-id>
+
+# 全文検索
+cmux-team trace --search "keyword"
+
+# 特定トレースの詳細（リクエスト/レスポンス本文含む）
+cmux-team trace --show <trace-id>
+```
+
+### 9. Artifact 出力
+
+作業中に以下に該当する知見が生まれた場合、Artifact として `.team/artifacts/` に保存する:
+
+- 調査結果（複数の選択肢の比較、技術的な発見）→ type: research
+- 設計判断（なぜその方法を選んだか）→ type: decision
+- セッション要約（重要な発見・学び）→ type: session
+
+**手順:**
+
+1. 採番: `ls .team/artifacts/ 2>/dev/null | grep -oE '^A[0-9]+' | sort | tail -1` で最大番号 + 1
+2. ファイル作成: `.team/artifacts/Axxx-<slug>.md`
+3. フロントマター必須: id, type, title, created, author
+4. フロントマター任意: updated, task, tags
+
+```yaml
+---
+id: A001
+type: research
+title: "タイトル"
+created: <ISO 8601>
+author: <自分のロール ID>
+task: <関連タスク ID>
+tags: [tag1]
+---
+```
+
+**判断基準**: output ファイル（`.team/output/`）に書く成果物とは別に、後のセッションで参照される価値のある知見があれば Artifact にする。すべての作業に Artifact が必要なわけではない。
+
+### 10. 言語ルール
 
 - ドキュメント・コメント: 日本語
 - コード: 英語
-
-## 旧仕様からの変更点
-
-- **`cmux set-status` / `cmux wait-for -S` は廃止**: Agent はステータス報告も完了シグナルも送らない。完了したら停止するだけ
-- **タスク作成は CLI 経由**: `bun run main.ts create-task` で ID 自動採番 + task-state.json 更新
-- **`tasks/open/` / `tasks/closed/` は廃止**: フラット構造 `tasks/` + `task-state.json`

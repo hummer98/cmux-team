@@ -1,79 +1,74 @@
-# Seed: Install Script & Infrastructure
+# Seed: Install & Infrastructure
 
 ---
 
 ## 配布方法
 
-### 1. Claude Code Plugin（推奨）
+### 1. npm パッケージ（推奨）
 
-`.claude-plugin/plugin.json` で定義。Plugin Marketplace 経由でインストール。
+```bash
+npm install -g @hummer98/cmux-team
+```
+
+`postinstall` スクリプトにより:
+1. `bun install` で manager/ の依存関係を解決
+2. `claude plugin add hummer98/cmux-team` で Plugin を登録
+
+### 2. Claude Code Plugin
+
+`.claude-plugin/plugin.json`（npm パッケージ内に同梱）で定義。`postinstall` で自動登録される。
 
 ```json
 {
   "name": "cmux-team",
-  "version": "2.18.1",
+  "version": "3.18.0",
   "description": "Multi-agent development orchestration with Claude Code + cmux.",
   "skills": "./skills/",
-  "commands": "./commands/"
+  "commands": "./commands/",
+  "hooks": {
+    "SessionStart": [...],
+    "PreToolUse": [...]
+  }
 }
 ```
 
-### 2. install.sh（レガシー）
-
-plugin 未対応環境向け。`~/.claude/` にファイルを直接コピーする。
-
----
-
-## install.sh
-
-**Purpose:** Skills, commands, templates を `~/.claude/` にコピーする。
-
-**Behavior:**
-1. `~/.claude/` の存在確認（なければエラー終了）
-2. ディレクトリ作成:
-   - `~/.claude/skills/cmux-team/templates/`
-   - `~/.claude/skills/cmux-agent-role/`
-   - `~/.claude/commands/`
-3. ファイルコピー（`cp -f`、symlink ではない）:
-   - スキル SKILL.md × 2
-   - テンプレート × 13
-   - コマンド × 13
-4. 依存チェック:
-   - `using-cmux` スキルの存在確認（警告のみ）
-   - `cmux` コマンドの存在確認（警告のみ）
-5. コマンド一覧を表示
-
-**Flags:**
-- `--check` — インストール状態を確認（ファイル変更なし）
-- `--uninstall` — アンインストール
-- `--help` — ヘルプ表示
+**Plugin hooks:**
+- **SessionStart**: cmux 環境外での起動時にタブ名をリネーム
+- **PreToolUse (Write|Edit)**: `team.json` と `task-state.json` への直接編集をブロック（daemon 管理ファイルの保護）
 
 ---
 
-## install.sh --uninstall
+## npm パッケージ構成
 
-削除するもの:
-- `~/.claude/skills/cmux-team/`
-- `~/.claude/skills/cmux-agent-role/`
-- `~/.claude/commands/team-*.md`
+### package.json
 
-削除しないもの:
-- `~/.claude/` 自体
-- 他のスキル・コマンド
-- プロジェクトの `.team/` ディレクトリ
+```json
+{
+  "name": "@hummer98/cmux-team",
+  "version": "3.18.0",
+  "bin": { "cmux-team": "bin/cmux-team.js" },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js",
+    "prepublishOnly": "cd skills/cmux-team/manager && bun test"
+  },
+  "engines": { "node": ">=18" }
+}
+```
 
----
+### bin/cmux-team.js
 
-## install.sh --check
+CLI ラッパー。Bun で `skills/cmux-team/manager/main.ts` を実行する。
 
-確認項目:
-- `~/.claude/` の存在
-- `cmux-team` スキル
-- `cmux-agent-role` スキル
-- テンプレート
-- コマンド（11個基準 — レガシーチェック）
-- `using-cmux` スキル（依存）
-- `cmux` コマンド
+- `bun` の存在を確認（未インストール時はエラー）
+- `start` コマンドの場合: exit code 42 による自動再起動をサポート（最大10回）
+- その他のコマンド: 引数を透過して `bun run main.ts` に渡す
+
+### bin/postinstall.js
+
+npm postinstall スクリプト。
+
+1. `bun install` で manager/ の依存関係を解決（bun 未インストール時は手動実行を案内）
+2. `claude plugin add hummer98/cmux-team` で Plugin を登録（claude 未インストール時は手動実行を案内）
 
 ---
 
@@ -83,20 +78,26 @@ plugin 未対応環境向け。`~/.claude/` にファイルを直接コピーす
 
 ```
 skills/cmux-team/manager/
-├── main.ts          # CLI エントリーポイント（10サブコマンド）
+├── main.ts          # CLI エントリーポイント（15サブコマンド）
 ├── daemon.ts        # イベント駆動ステートマシン + メインループ
 ├── master.ts        # Master surface 起動
 ├── conductor.ts     # Conductor ライフサイクル管理
 ├── task.ts          # タスクファイルパース + 依存解決
 ├── proxy.ts         # API ロギングプロキシ
 ├── queue.ts         # ファイルベースメッセージキュー
+├── trace-store.ts   # SQLite FTS5 トレースDB
+├── artifact.ts      # アーティファクト管理
 ├── schema.ts        # Zod 型定義
 ├── template.ts      # プロンプトテンプレート検索・生成
 ├── logger.ts        # 追記型ログ
 ├── cmux.ts          # cmux CLI ラッパー
 ├── dashboard.tsx    # React (ink) TUI ダッシュボード
 ├── e2e.ts           # E2E テストランナー
-├── package.json     # 依存: ink, react, zod
+├── daemon.test.ts   # daemon ユニットテスト
+├── proxy.test.ts    # proxy ユニットテスト
+├── queue.test.ts    # queue ユニットテスト
+├── task.test.ts     # task ユニットテスト
+├── package.json     # 依存: ink, react, zod, @rezi-ui/core, @rezi-ui/node
 └── tsconfig.json
 ```
 
@@ -114,6 +115,12 @@ skills/cmux-team/manager/
 | `create-task` | タスクファイル作成 + task-state.json 初期エントリー |
 | `update-task` | タスク状態更新（draft → ready で TASK_CREATED トリガー） |
 | `close-task` | タスクを closed にマーク + journal 保存 |
+| `trace` | トレースDB 検索・表示（--task, --search, --show） |
+| `conductor` | Conductor 情報表示 |
+| `launch-master` | Master surface 起動 |
+| `restart-conductor` | Conductor 再起動 |
+| `reset-conductor` | Conductor リセット（/clear 送信） |
+| `artifacts` | アーティファクト一覧・検索 |
 
 ### メインループ
 
@@ -126,12 +133,16 @@ while (state.running):
   5. sleep(pollInterval)     # デフォルト10秒
 ```
 
+ファイルシステム監視（tasks/, queue/）により変更検出時は即時 tick を実行。
+ソースファイル mtime 監視によりコード変更時は自動再起動（exit code 42）。
+
 ### プロキシサーバー
 
 - Bun.serve ベースの HTTP プロキシ
-- Anthropic API へのリクエスト/レスポンスをログ記録（JSONL形式）
+- Anthropic API へのリクエスト/レスポンスを SQLite FTS5 データベースに記録
 - ストリーミング対応（`text/event-stream` の tee）
 - ポートは `.team/proxy-port` に保存
+- 既存プロセスが生きていれば再利用
 - デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`
 
 ### TUI ダッシュボード
@@ -166,11 +177,14 @@ while (state.running):
 - リポジトリ構造
 - スキル・コマンド・テンプレートの追加方法
 - テンプレート変数仕様
-- install.sh の動作
+- インストール方法（npm）
 - テスト方法（E2E 手動テスト）
 - コーディング規約
+- ロギングポリシー
 - プロンプト編集ルール（テンプレートがソースオブトゥルース）
-- 既知の注意点（Manager 仕様、cmux send 改行、Trust 確認 等）
+- Manager プロトコル（内部実装）
+- 通信プロトコル
+- 既知の注意点（Trust 確認、レート制限、トレーサビリティ 等）
 
 ---
 
@@ -192,38 +206,4 @@ task-state.json
 - `team.json` — チーム構成
 - `tasks/` — タスクファイル
 - `specs/` — 要件・設計ドキュメント
-
----
-
-## Hooks Configuration（任意、推奨）
-
-`~/.claude/settings.json` に追加:
-
-```json
-{
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v cmux >/dev/null 2>&1 && cmux claude-hook notification || true"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v cmux >/dev/null 2>&1 && cmux claude-hook stop || true"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+- `artifacts/` — 知見の記録
