@@ -24,6 +24,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Install manager dependencies
+        run: cd skills/cmux-team/manager && bun install --frozen-lockfile
+
       - run: npm publish --provenance --access public
 
       - name: Extract changelog and create GitHub Release
