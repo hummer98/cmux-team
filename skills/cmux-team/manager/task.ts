@@ -19,8 +19,9 @@ export interface TaskMeta {
 }
 
 export interface TaskState {
-  status: string;     // "draft" | "ready" | "in_progress" | "closed"
+  status: string;     // "draft" | "ready" | "in_progress" | "closed" | "aborted"
   closedAt?: string;  // ISO 8601
+  abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
   journal?: string;   // 完了時のサマリー
 }
 
