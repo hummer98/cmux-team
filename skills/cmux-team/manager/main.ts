@@ -72,6 +72,30 @@ const PROJECT_ROOT = findProjectRoot();
 process.env.PROJECT_ROOT = PROJECT_ROOT;
 process.chdir(PROJECT_ROOT);
 
+// --- config ---
+const DEFAULT_MODEL = "opus";
+
+interface TeamConfig {
+  models?: {
+    master?: string;
+    conductor?: string;
+    agent?: string;
+  };
+}
+
+async function loadConfig(): Promise<TeamConfig> {
+  const configPath = join(PROJECT_ROOT, ".team/config.json");
+  try {
+    return JSON.parse(await readFile(configPath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
+  return cliOverride ?? config.models?.[role] ?? DEFAULT_MODEL;
+}
+
 // --- サブコマンド ---
 const args = process.argv.slice(2);
 const command = args[0];
@@ -591,10 +615,13 @@ async function cmdConductor(): Promise<void> {
 cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
 
 Usage:
-  cmux-team conductor <slot-id>
+  cmux-team conductor <slot-id> [--model <model>]
 
 Arguments:
   <slot-id>     Conductor のスロット ID（必須）
+
+Options:
+  --model <model>   使用するモデル（デフォルト: config.models.conductor or "${DEFAULT_MODEL}"）
 
 Notes:
   - daemon が起動時に自動的に呼び出す内部コマンドです
@@ -620,11 +647,16 @@ Notes:
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   }
 
+  // モデル解決
+  const config = await loadConfig();
+  const model = getModelForRole(config, "conductor", getArg("model"));
+
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
   try {
     execFileSync("claude", [
       "--dangerously-skip-permissions",
+      "--model", model,
       "--append-system-prompt-file", rolePromptFile,
       "あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。",
     ], {
@@ -647,10 +679,10 @@ async function cmdLaunchMaster(): Promise<void> {
 cmux-team launch-master -- Master 用 Claude Code を起動（内部用）
 
 Usage:
-  cmux-team launch-master
+  cmux-team launch-master [--model <model>]
 
 Options:
-  なし
+  --model <model>   使用するモデル（デフォルト: config.models.master or "${DEFAULT_MODEL}"）
 
 Notes:
   - daemon が起動時に自動的に呼び出す内部コマンドです
@@ -669,11 +701,16 @@ Notes:
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   }
 
+  // モデル解決
+  const config = await loadConfig();
+  const model = getModelForRole(config, "master", getArg("model"));
+
   // claude を exec
   const { execFileSync } = require("child_process");
   try {
     execFileSync("claude", [
       "--dangerously-skip-permissions",
+      "--model", model,
       "--append-system-prompt-file", join(PROJECT_ROOT, ".team/prompts/master.md"),
       "ユーザーからのタスクを待ってください。",
     ], {
@@ -720,6 +757,7 @@ Options:
   --prompt <text>                 インラインプロンプト（--prompt-file と排他、どちらか必須）
   --prompt-file <path>            プロンプトファイルパス（--prompt と排他、どちらか必須）
   --task-title <title>            タスクタイトル（任意、タブ名に使用）
+  --model <model>                 使用するモデル（デフォルト: config.models.agent or "${DEFAULT_MODEL}"）
 
 Examples:
   cmux-team spawn-agent --conductor-surface surface:210 --role researcher --prompt "調査してください"
@@ -775,6 +813,10 @@ Notes:
   }
 
   // --- 3. Claude Code 起動 ---
+  // モデル解決
+  const config = await loadConfig();
+  const model = getModelForRole(config, "agent", getArg("model"));
+
   // 環境変数を export（Conductor のシェルセッションに永続化し子プロセスに自動継承）
   const exports: string[] = [
     `export ROLE=${role}`,
@@ -787,14 +829,15 @@ Notes:
   }
 
   const cdPrefix = worktreePath ? `cd ${worktreePath} && ` : "";
+  const modelFlag = `--model ${model}`;
 
   let claudeCmd: string;
   if (promptFile) {
     // --bare は OAuth 認証（Claude Max）をスキップするため使用しない
-    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions '${promptFile} を読んで指示に従ってください。'`;
+    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${modelFlag} '${promptFile} を読んで指示に従ってください。'`;
   } else {
     // 後方互換: --prompt でインライン渡し
-    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions '${prompt}'`;
+    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${modelFlag} '${prompt}'`;
   }
   await cmux.send(surface, claudeCmd + "\n");
 
