@@ -167,8 +167,6 @@ Notes:
   - daemon + ロギングプロキシ + 2x2 レイアウト（Conductor x3）+ Master を起動します
   - ダッシュボードが表示され、キーボードショートカットで操作できます
 `);
-  console.log("🚀 cmux-team 起動開始");
-
   // cmux 環境チェック
   if (!process.env.CMUX_SOCKET_PATH) {
     console.error("❌ cmux 環境外です。cmux 内で実行してください。");
@@ -185,18 +183,16 @@ Notes:
 
   // インフラ準備
   await initInfra(state);
-  console.log("✅ インフラ準備完了");
+  await log("infra_ready");
   await log(
     "daemon_started",
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
   );
 
   // ロギングプロキシ起動（既存 proxy が生きていればスキップ）
-  console.log("⏳ ロギングプロキシ確認中...");
   let proxyHandle: { port: number; stop: () => void } | null = null;
   const existingProxyPort = await resolveProxyPort();
   if (existingProxyPort) {
-    console.log(`✅ ロギングプロキシ: 既存プロセスを再利用 (port ${existingProxyPort})`);
     await log("proxy_reused", `port=${existingProxyPort}`);
   } else {
     try {
@@ -205,54 +201,13 @@ Notes:
         onMessage: async (msg) => { await handleMessage(state, msg); },
       });
       await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
-      console.log(`✅ ロギングプロキシ起動完了 (port ${proxyHandle.port})`);
       await log("proxy_started", `port=${proxyHandle.port}`);
     } catch (e: any) {
-      console.log("⚠️  ロギングプロキシ起動失敗 (続行)");
       await log("proxy_start_failed", e.message);
     }
   }
 
-  // daemon surface 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
-  let daemonSurface: string | undefined = process.env.CMUX_SURFACE;
-  if (daemonSurface) {
-    await log("daemon_surface", `surface=${daemonSurface} (env)`);
-  } else {
-    try {
-      daemonSurface = await cmux.getCallerSurface();
-      await log("daemon_surface", `surface=${daemonSurface} (identify)`);
-    } catch (e: any) {
-      await log("daemon_surface_fallback", e.message);
-    }
-  }
-
-  // daemon タブタイトル設定
-  if (daemonSurface) {
-    const num = daemonSurface.replace("surface:", "");
-    await cmux.renameTab(daemonSurface, `[${num}] Manager`);
-  }
-
-  // Conductor を先に作成（全インフラ準備完了後に Master を起動）
-  await initializeLayout(state, daemonSurface);
-
-  // Master spawn（最後に作成）
-  await startMaster(state, daemonSurface);
-
-  await updateTeamJson(state);
-  console.log("✅ 起動完了 — ダッシュボードに切り替えます\n");
-
-  // シグナルハンドリング
-  // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
-  const shutdown = async () => {
-    state.running = false;
-    await log("daemon_stopped");
-    await updateTeamJson(state);
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  // バージョン取得（plugin.json から）
+  // バージョン取得（plugin.json から — startDashboard に渡すため先に実行）
   let version: string | undefined;
   try {
     const pluginJsonPath = join(dirname(import.meta.path), "../../..", ".claude-plugin/plugin.json");
@@ -263,17 +218,26 @@ Notes:
     await log("error", `version read failed: ${e.message}`);
   }
 
-  // ダッシュボード表示（キーボードショートカット付き）
+  // シグナルハンドリング（TUI 起動前に設定）
+  // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
+  const shutdown = async () => {
+    state.running = false;
+    await log("daemon_stopped");
+    await updateTeamJson(state);
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  // --- TUI ダッシュボード早期表示 ---
   const { scheduleRefresh } = await startDashboard(() => state, {
     version,
     onReload: async () => {
-      // ink を解放し、exec でプロセスを置換（PID は変わらない、env は完全に引き継ぐ）
       unmountDashboard();
       const latestMainTs = findLatestMainTs();
       await log("daemon_reload");
       await log("daemon_reload_target", latestMainTs);
       state.running = false;
-      // execSync で自プロセスを置換（bun → bash exec → bun）
       const { execFileSync } = require("child_process");
       try {
         execFileSync("bash", ["-c", `exec bun run "${latestMainTs}" start`], {
@@ -299,7 +263,6 @@ Notes:
 
       // 2. 全 Conductor surface を close（Agent タブも含む）
       for (const [, conductor] of state.conductors) {
-        // ペイン内の全サブ surface を close
         if (conductor.paneId) {
           const surfaces = await cmux.listPaneSurfaces(conductor.paneId).catch(() => [] as string[]);
           for (const s of surfaces) {
@@ -337,6 +300,45 @@ Notes:
       process.exit(0);
     },
   });
+
+  // --- Conductor + Master 起動（TUI 上で進捗表示） ---
+
+  // daemon surface 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
+  let daemonSurface: string | undefined = process.env.CMUX_SURFACE;
+  if (daemonSurface) {
+    await log("daemon_surface", `surface=${daemonSurface} (env)`);
+  } else {
+    try {
+      daemonSurface = await cmux.getCallerSurface();
+      await log("daemon_surface", `surface=${daemonSurface} (identify)`);
+    } catch (e: any) {
+      await log("daemon_surface_fallback", e.message);
+    }
+  }
+
+  // daemon タブタイトル設定
+  if (daemonSurface) {
+    const num = daemonSurface.replace("surface:", "");
+    await cmux.renameTab(daemonSurface, `[${num}] Manager`);
+  }
+
+  // Conductor スロット作成
+  state.bootPhase = "conductors";
+  scheduleRefresh();
+  await initializeLayout(state, daemonSurface);
+  scheduleRefresh();
+
+  // Master spawn
+  state.bootPhase = "master";
+  scheduleRefresh();
+  await startMaster(state, daemonSurface);
+  scheduleRefresh();
+
+  // 起動完了
+  state.bootPhase = "ready";
+  await updateTeamJson(state);
+  await log("boot_completed");
+  scheduleRefresh();
 
   // メインループ
   const NPM_CHECK_INTERVAL = 300_000; // 5分
