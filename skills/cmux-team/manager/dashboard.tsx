@@ -281,10 +281,14 @@ function buildMasterSection(state: DaemonState) {
   if (status === "running") {
     const frame = SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length];
     spinnerTick++;
-    return ui.row({ gap: 1 }, [
+    const children = [
       ui.text(frame!, { style: { fg: YELLOW } }),
       ui.text(surfaceLabel),
-    ]);
+    ];
+    if (state.masterPrompt) {
+      children.push(ui.text(state.masterPrompt, { style: { fg: GRAY } }));
+    }
+    return ui.row({ gap: 1 }, children);
   }
 
   // idle

@@ -36,6 +36,7 @@ export interface DaemonState {
   masterPid: number | undefined;
   masterStatus: "idle" | "running" | "disconnected";
   masterDisconnectedAt: string | undefined;
+  masterPrompt: string | undefined;
   conductors: Map<string, ConductorState>;
   projectRoot: string;
   pollInterval: number;
@@ -70,6 +71,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     masterPid: undefined,
     masterStatus: "disconnected",
     masterDisconnectedAt: undefined,
+    masterPrompt: undefined,
     conductors: new Map(),
     projectRoot,
     pollInterval: Number(process.env.CMUX_TEAM_POLL_INTERVAL ?? 10_000),
