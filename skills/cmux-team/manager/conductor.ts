@@ -84,7 +84,7 @@ export async function initializeConductorSlots(
         surface,
         startedAt: new Date().toISOString(),
         agents: [],
-        status: "idle",
+        status: "starting",
         paneId,
       };
 

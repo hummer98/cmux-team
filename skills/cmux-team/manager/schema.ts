@@ -107,6 +107,6 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  status: "idle" | "running" | "done" | "disconnected";
+  status: "starting" | "idle" | "running" | "done" | "disconnected";
   paneId?: string;
 };

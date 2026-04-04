@@ -288,6 +288,7 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
                 sessionId: a.sessionId,
                 spawnedAt: a.spawnedAt ?? new Date().toISOString(),
               })),
+              // starting は復元しない（再起動時はセッション状態が不明なため idle として扱う）
               status: c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle",
             });
           }
@@ -394,11 +395,12 @@ async function processQueue(state: DaemonState): Promise<void> {
         }
         const conductor = findConductor(state, message.surface);
         if (conductor) {
-          // disconnected → idle に復帰
-          if (conductor.status === "disconnected") {
+          // starting / disconnected → idle に復帰
+          if (conductor.status === "starting" || conductor.status === "disconnected") {
+            const prevStatus = conductor.status;
             conductor.status = "idle";
             await log(
-              "conductor_recovered",
+              prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
               `surface=${message.surface}`
             );
           }
@@ -640,8 +642,24 @@ function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
   }, 1000);
 }
 
+/** starting 状態のタイムアウト（秒） */
+const STARTING_TIMEOUT_SEC = 60;
+
 async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [surface, conductor] of state.conductors) {
+    // starting: タイムアウトチェックのみ
+    if (conductor.status === "starting") {
+      const elapsed = (Date.now() - new Date(conductor.startedAt).getTime()) / 1000;
+      if (elapsed > STARTING_TIMEOUT_SEC) {
+        conductor.status = "disconnected";
+        conductor.disconnectedAt = new Date().toISOString();
+        await log(
+          "conductor_start_timeout",
+          `surface=${surface} elapsed=${Math.round(elapsed)}s`
+        );
+      }
+      continue;
+    }
     if (conductor.status === "idle" || conductor.status === "disconnected") continue;
 
     if (conductor.status === "done") {
