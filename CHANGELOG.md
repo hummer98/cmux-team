@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.23.0] - 2026-04-05
+
+### Added
+- TUI ダッシュボードを起動シーケンスの早期に表示。プロキシ起動直後に TUI を立ち上げ、Conductor/Master の起動進捗はジャーナルで確認可能に。console.log を廃止し manager.log に統一
+- TUI 右上にトークン残量 % をリアルタイム表示。proxy.ts で API レスポンスのレート制限ヘッダーを記録し、ダッシュボードに反映
+- Conductor の実装フローテンプレートを強化。4フェーズ（Plan → Design Review → TDD → Inspection）の各テンプレートに詳細な指示・チェックリストを追加
+
 ## [3.22.1] - 2026-04-04
 
 ### Fixed
