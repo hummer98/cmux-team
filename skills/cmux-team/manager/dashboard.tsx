@@ -650,7 +650,7 @@ export async function startDashboard(
     // cols >= 75: + poll Ns
     // cols >= 85: + N ready (pendingTasks > 0)
     const headerParts = [
-      daemon.running ? "RUNNING" : "STOPPED",
+      !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : "RUNNING",
       `PID ${process.pid}`,
       `tasks ${daemon.openTasks} open`,
     ];
