@@ -58,6 +58,18 @@ export async function start(
   }
 
   const fetchHandler = async (req: Request) => {
+    try {
+      return await fetchHandlerInner(req);
+    } catch (e: any) {
+      log("proxy_request_error", `${req.method} ${req.url} ${e.message}`).catch(() => {});
+      return new Response(JSON.stringify({ type: "error", error: { type: "proxy_error", message: e.message } }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  };
+
+  const fetchHandlerInner = async (req: Request) => {
       const url = new URL(req.url);
 
       // デバッグエンドポイント
@@ -232,16 +244,16 @@ export async function start(
         statusText: upstreamRes.statusText,
         headers: resHeaders,
       });
-  };
+  };  // fetchHandlerInner end
 
   // 前回ポートで起動を試み、失敗時はランダムポートにフォールバック
   let server: ReturnType<typeof Bun.serve>;
   try {
-    server = Bun.serve({ port: preferredPort, fetch: fetchHandler, development: false });
+    server = Bun.serve({ port: preferredPort, fetch: fetchHandler, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
   } catch (e: any) {
     if (preferredPort !== 0) {
       await log("proxy_port_fallback", `preferred=${preferredPort} error=${e.message}`);
-      server = Bun.serve({ port: 0, fetch: fetchHandler, development: false });
+      server = Bun.serve({ port: 0, fetch: fetchHandler, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
     } else {
       throw new Error("Failed to start proxy");
     }
@@ -276,16 +288,21 @@ async function drainAndLog(
 ): Promise<void> {
   let responseBytes = 0;
   const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
   try {
-    const reader = stream.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       responseBytes += value.byteLength;
       chunks.push(value);
     }
-  } catch {
-    // stream エラーは無視（クライアント切断等）
+  } catch (e: any) {
+    // クライアント切断等は無視するが、予期しないエラーは記録
+    if (!e.message?.includes("closed") && !e.message?.includes("aborted")) {
+      log("proxy_stream_error", e.message).catch(() => {});
+    }
+  } finally {
+    reader.releaseLock();
   }
 
   const duration = Date.now() - ctx.startTime;
