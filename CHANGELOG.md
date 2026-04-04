@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.20.0] - 2026-04-04
+
+### Added
+- `--model` オプションで Master・Conductor・Agent ごとに使用モデルを指定可能に（`cmux-team launch-master --model claude-opus-4-6` 等）
+
+### Fixed
+- `launch-master` 経由で起動した Master が指示に無応答になる問題を修正（初期プロンプト引数を渡していたため Claude が print モードで起動・終了していた）
+- プロキシのエラーが `manager.log` に記録されなかった問題を修正（`fetchHandler` に try-catch を追加）
+- streaming レスポンスのログ処理中に例外が発生した場合、`reader.releaseLock()` が呼ばれず応答がブロックされる可能性を修正
+
 ## [3.19.1] - 2026-04-04
 
 ### Fixed
