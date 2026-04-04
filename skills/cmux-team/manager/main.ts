@@ -260,7 +260,7 @@ Notes:
   }
 
   // ダッシュボード表示（キーボードショートカット付き）
-  await startDashboard(() => state, {
+  const { scheduleRefresh } = await startDashboard(() => state, {
     version,
     onReload: async () => {
       // ink を解放し、exec でプロセスを置換（PID は変わらない、env は完全に引き継ぐ）
@@ -340,6 +340,7 @@ Notes:
     try {
       await tick(state);
       await updateTeamJson(state);
+      scheduleRefresh(); // state 変更を TUI に反映（debounce 付き）
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
     }
