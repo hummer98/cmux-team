@@ -16,16 +16,17 @@ Claude Code + cmux によるマルチエージェント開発オーケストレ�
     │            │              │                       │                      └─ 完了→停止
     │            │              │                       │
     │            │              │                       ├─ git worktree 内で作業
-    │            │              │                       ├─ Agent 起動（spawn-agent CLI でタブ作成）
+    │            │              │                       ├─ Agent 起動・監視（タブとして作成）
     │            │              │                       ├─ 結果統合
+    │            │              │                       ├─ タスクを close（cmux-team close-task）
     │            │              │                       └─ done マーカー作成→idle に戻る
     │            │              │
     │            │              ├─ タスク検出→idle Conductor にタスク割り当て
     │            │              ├─ done マーカーで完了検出（pull 型）
-    │            │              └─ Conductor リセット→次のタスクへ
+    │            │              └─ Journal 読み取り + ログ記録 + Conductor リセット
     │            │
-    │            ├─ タスク作成（bun run main.ts create-task）
-    │            ├─ 真のソース直接参照→進捗報告
+    │            ├─ タスク作成
+    │            ├─ 真のソース直接参照→報告
     │            └─ Manager 健全性確認
     │
     └─ 指示・確認
@@ -61,63 +62,33 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 
 ## 配布方法
 
-### Claude Code Plugin（推奨）
+### npm パッケージ（推奨）
+
+```bash
+npm install -g @hummer98/cmux-team
+```
+
+`postinstall` スクリプトにより manager/ の依存関係が自動解決される。
+
+### Claude Code Plugin
 
 `.claude-plugin/plugin.json` によるプラグイン配布。
 
-### install.sh（レガシー）
-
-`~/.claude/` に直接コピーする方式。plugin 未対応環境向け。
-
-```
-~/.claude/
-├── skills/
-│   ├── cmux-team/
-│   │   ├── SKILL.md
-│   │   ├── templates/     # テンプレート13個
-│   │   └── manager/       # TypeScript daemon
-│   └── cmux-agent-role/
-│       └── SKILL.md
-└── commands/               # コマンド13個
-    ├── start.md
-    ├── master.md
-    ├── team-status.md
-    ├── team-disband.md
-    ├── team-research.md
-    ├── team-spec.md
-    ├── team-design.md
-    ├── team-impl.md
-    ├── team-review.md
-    ├── team-test.md
-    ├── team-sync-docs.md
-    ├── team-task.md
-    └── team-archive.md
-```
-
-## Per-Project State（/start で作成）
+## Per-Project State（cmux-team start で作成）
 
 ```
 .team/
-├── team.json           # チーム構成（daemon が自動管理）
-├── task-state.json     # タスク状態管理（status: draft/ready/in_progress/closed/archived）
-├── manager/            # Manager daemon の実行用（main.ts へのシンボリックリンク等）
-├── queue/              # ファイルベースメッセージキュー
-│   └── processed/
-├── specs/
-│   ├── requirements.md
-│   ├── design.md
-│   ├── research.md
-│   └── tasks.md
-├── output/             # Agent 成果物
-│   └── conductor-N/    # Conductor 別出力ディレクトリ
 ├── tasks/              # タスクファイル（フラット構造）
-│   └── archived/       # アーカイブ済みタスク（日付別）
-├── prompts/            # 生成されたプロンプト（監査証跡）
-├── logs/
-│   ├── manager.log     # Manager イベントログ
-│   └── traces/         # API トレースログ（JSONL）
-├── proxy-port          # プロキシサーバーのポート番号
-├── scripts/            # ランタイムスクリプト
-├── docs-snapshot/      # ドキュメント同期用スナップショット
-└── .gitignore          # output/, prompts/, logs/, task-state.json 等を除外
+├── task-state.json     # タスク状態管理（status: draft/ready/assigned/closed）
+├── artifacts/          # Axxx — 知見の記録（調査・設計判断・セッション要約）
+├── output/             # Conductor/Agent の出力（taskRunId 別）
+├── conductors/         # Conductor 状態ファイル
+├── prompts/            # プロンプト（監査証跡）
+├── specs/              # 要件・設計ドキュメント
+├── queue/              # メッセージキュー（incoming/ + processed/）
+├── logs/               # manager.log + traces/bodies/
+├── traces/             # SQLite トレースDB（traces.db）
+├── sessions/           # セッション情報
+├── proxy-port          # プロキシポート番号
+└── team.json           # チーム構成（daemon が自動更新）
 ```
