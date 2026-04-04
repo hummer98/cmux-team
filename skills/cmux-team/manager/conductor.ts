@@ -87,44 +87,117 @@ export async function spawnSingleConductor(
   };
 }
 
+// --- createConductorPanes ---
+
+/**
+ * Conductor 用の pane を分割作成する（Claude は起動しない）
+ */
+export async function createConductorPanes(
+  count: number,
+  daemonSurface?: string,
+): Promise<{ surface: string; paneId?: string }[]> {
+  const panes: { surface: string; paneId?: string }[] = [];
+
+  // 1. daemon を右に split → Conductor-1 pane
+  const s1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
+  panes.push({ surface: s1, paneId: await getPaneIdForSurface(s1) });
+
+  if (count >= 2) {
+    // 2. daemon を下に split → Conductor-2 pane
+    const s2 = await cmux.newSplit("down", daemonSurface ? { surface: daemonSurface } : undefined);
+    panes.push({ surface: s2, paneId: await getPaneIdForSurface(s2) });
+  }
+
+  if (count >= 3) {
+    // 3. Conductor-1 を下に split → Conductor-3 pane
+    const s3 = await cmux.newSplit("down", { surface: s1 });
+    panes.push({ surface: s3, paneId: await getPaneIdForSurface(s3) });
+  }
+
+  return panes;
+}
+
+// --- launchConductorOnSurface ---
+
+/**
+ * 既存 pane 上で Claude を起動し CONDUCTOR_REGISTERED を送信する
+ */
+export async function launchConductorOnSurface(
+  projectRoot: string,
+  surface: string,
+  paneId?: string,
+): Promise<void> {
+  // Claude 起動
+  await cmux.send(
+    surface,
+    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
+  );
+
+  // タブ名設定
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] ♦ idle`);
+
+  // CONDUCTOR_REGISTERED を HTTP API 経由で送信
+  try {
+    const portFile = join(projectRoot, ".team/proxy-port");
+    const port = (await readFile(portFile, "utf-8")).trim();
+    await fetch(`http://localhost:${port}/api/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "CONDUCTOR_REGISTERED",
+        surface,
+        paneId: paneId ?? "",
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (e: any) {
+    await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
+  }
+}
+
 // --- initializeConductorSlots ---
 
 export async function initializeConductorSlots(
   projectRoot: string,
+  conductors: Map<string, ConductorState>,
   count: number = 3,
-  daemonSurface?: string
-): Promise<ConductorState[]> {
-  const slots: ConductorState[] = [];
-
+  daemonSurface?: string,
+): Promise<void> {
   try {
     console.log(`⏳ Conductor スロット作成中 (${count}個)...`);
 
-    // 1. daemon を右に split → Conductor-1
-    console.log(`  ⏳ Conductor 1/${count}: Claude 起動中...`);
-    const c1 = await spawnSingleConductor(projectRoot, "right", daemonSurface);
-    slots.push(c1);
+    // Phase 1: pane 分割（Claude は起動しない）
+    console.log(`  ⏳ Phase 1: pane 分割中...`);
+    const panes = await createConductorPanes(count, daemonSurface);
+    console.log(`  ✅ Phase 1: ${panes.length}個の pane 作成完了`);
 
-    if (count >= 2) {
-      // 2. daemon を下に split → Conductor-2
-      console.log(`  ⏳ Conductor 2/${count}: Claude 起動中...`);
-      const c2 = await spawnSingleConductor(projectRoot, "down", daemonSurface);
-      slots.push(c2);
+    // Phase 2: Claude 一斉起動
+    console.log(`  ⏳ Phase 2: Claude 起動中...`);
+    for (const pane of panes) {
+      await launchConductorOnSurface(projectRoot, pane.surface, pane.paneId);
     }
 
-    if (count >= 3) {
-      // 3. Conductor-1 を下に split → Conductor-3
-      console.log(`  ⏳ Conductor 3/${count}: Claude 起動中...`);
-      const c3 = await spawnSingleConductor(projectRoot, "down", c1.surface);
-      slots.push(c3);
+    // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え、
+    // state.conductors に未登録の surface を直接登録する
+    for (const pane of panes) {
+      if (!conductors.has(pane.surface)) {
+        await log("conductor_registered_fallback", `surface=${pane.surface}`);
+        conductors.set(pane.surface, {
+          surface: pane.surface,
+          paneId: pane.paneId,
+          status: "starting",
+          startedAt: new Date().toISOString(),
+          agents: [],
+        });
+      }
     }
 
-    console.log(`✅ Conductor スロット ${slots.length}個 準備完了`);
-    await log("conductor_slots_initialized", `count=${slots.length}`);
+    console.log(`✅ Conductor スロット ${panes.length}個 準備完了`);
+    await log("conductor_slots_initialized", `count=${panes.length}`);
   } catch (e: any) {
     await log("error", `initializeConductorSlots failed: ${e.message}`);
   }
-
-  return slots;
 }
 
 // --- assignTask ---
