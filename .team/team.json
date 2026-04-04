@@ -6,32 +6,40 @@
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
     "surface": "surface:389",
-    "status": "idle"
+    "status": "running"
   },
   "manager": {
-    "pid": 73207,
+    "pid": 54220,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
       "surface": "surface:390",
-      "status": "idle",
-      "startedAt": "2026-04-04T08:06:14.416Z",
+      "taskRunId": "task-078-1775311404",
+      "taskTitle": "assigned タスクの編集禁止ルールを Master テンプレートと CLAUDE.md に追加",
+      "status": "disconnected",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-078-1775311404",
+      "outputDir": ".team/output/task-078-1775311404",
+      "startedAt": "2026-04-04T14:03:29.267Z",
       "paneId": "pane:255",
       "agents": []
     },
     {
       "surface": "surface:391",
       "status": "idle",
-      "startedAt": "2026-04-04T08:06:20.312Z",
+      "startedAt": "2026-04-04T14:07:03.215Z",
       "paneId": "pane:256",
       "agents": []
     },
     {
       "surface": "surface:392",
+      "taskRunId": "task-074-1775310445",
+      "taskTitle": "起動コマンド名の統一: launch-master → spawn-master + restart/reset-conductor 削除",
       "status": "idle",
-      "startedAt": "2026-04-04T06:04:14.593Z",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-074-1775310445",
+      "outputDir": ".team/output/task-074-1775310445",
+      "startedAt": "2026-04-04T13:47:32.452Z",
       "paneId": "pane:257",
       "agents": []
     }
