@@ -126,6 +126,9 @@ const RED = rgb(255, 0, 0);
 const CYAN = rgb(0, 255, 255);
 const GRAY = rgb(170, 170, 170);
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+let spinnerTick = 0;
+
 // --- ジャーナルエントリ ---
 
 interface JournalEntry {
@@ -258,15 +261,37 @@ function sectionTitle(label: string) {
 // --- ビュー構築 ---
 
 function buildMasterSection(state: DaemonState) {
-  if (state.masterSurface) {
+  if (!state.masterSurface) {
     return ui.row({ gap: 1 }, [
-      ui.text("●", { style: { fg: GREEN } }),
-      ui.text(`[${state.masterSurface.replace("surface:", "")}]`),
+      ui.text("○", { style: { fg: GRAY } }),
+      ui.text("not spawned", { style: { fg: GRAY } }),
     ]);
   }
+
+  const surfaceLabel = `[${state.masterSurface.replace("surface:", "")}]`;
+  const status = state.masterStatus ?? "idle";
+
+  if (status === "disconnected") {
+    return ui.row({ gap: 1 }, [
+      ui.text("⚠", { style: { fg: YELLOW } }),
+      ui.text(surfaceLabel),
+      ui.text("disconnected", { style: { fg: YELLOW } }),
+    ]);
+  }
+
+  if (status === "running") {
+    const frame = SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length];
+    spinnerTick++;
+    return ui.row({ gap: 1 }, [
+      ui.text(frame!, { style: { fg: YELLOW } }),
+      ui.text(surfaceLabel),
+    ]);
+  }
+
+  // idle
   return ui.row({ gap: 1 }, [
-    ui.text("○", { style: { fg: RED } }),
-    ui.text("not spawned", { style: { fg: RED } }),
+    ui.text("●", { style: { fg: GREEN } }),
+    ui.text(surfaceLabel),
   ]);
 }
 
