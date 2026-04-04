@@ -114,6 +114,7 @@ describe("filterExecutableTasks", () => {
     filePath: `/path/${id}.md`,
     fileName: `${id}.md`,
     createdAt: "",
+    runAfterAll: false,
   });
 
   test("ready かつ依存なしのタスクは実行可能", () => {
@@ -227,6 +228,7 @@ describe("sortByPriority", () => {
     filePath: "",
     fileName: "",
     createdAt: "",
+    runAfterAll: false,
   });
 
   test("high > medium > low の順でソートされる", () => {
