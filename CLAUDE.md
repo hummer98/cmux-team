@@ -379,6 +379,10 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 - **フォールバック**: `cmux list-status` で Idle 検出
 - **重要**: push ではなく pull 型。Conductor は done マーカーを作成して idle に戻り、Manager が見に来る
 
+### assigned タスクの編集禁止
+
+assigned 状態のタスクファイルの編集は禁止。Conductor は起動時のプロンプトのスナップショットで動作するため、タスクファイルの変更は実行中の作業に反映されない。変更が必要な場合: `abort-task` で中止 → 新タスク作成。
+
 ### 結果回収
 
 完了検出後: ログ記録 → Conductor リセット（`/clear`）→ done マーカー削除。
