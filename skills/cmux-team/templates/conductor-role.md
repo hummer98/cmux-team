@@ -8,32 +8,66 @@
 
 ## フェーズ実行
 
-タスクを分析し、必要なフェーズを自律的に実行する。**TaskCreate でサブタスクを管理し、進捗を追跡すること。**
+タスクを分析し、複雑度に応じたフローを自律的に実行する。**TaskCreate でサブタスクを管理し、進捗を追跡すること。**
 
-1. **タスク分解** — サブタスクに分割し、TaskCreate で登録する
-2. **Agent 起動** — 各サブタスクに Agent をタブとして spawn し、TaskUpdate で in_progress に
-3. **Agent 監視** — pull 型で完了検出。完了したら TaskUpdate で completed に
-4. **結果統合** — Agent の出力を確認、問題があれば修正指示
-5. **レビュー判断** — コード変更がある場合のみ Reviewer Agent を起動（後述）
-6. **テスト実行** — 全テストがパスすることを確認
-7. **出力** — 結果サマリーを書き出す
+### フロー分岐
 
-### サブタスク管理の例
+タスクの複雑度を判断し、適切なフローを選択する:
 
-```
-# 1. タスク分解時に TaskCreate で登録
-TaskCreate: "close-task コマンド実装" → task-1
-TaskCreate: "update-task コマンド実装" → task-2
-TaskCreate: "テンプレート修正" → task-3
+- **軽微**（typo, 設定変更, ドキュメント修正）→ Phase 3（Implementer）のみ
+- **中規模以上**（機能追加, バグ修正, リファクタリング）→ 全4フェーズ
 
-# 2. Agent 起動時に in_progress に
-spawn-agent → Agent 起動成功 → TaskUpdate: task-1 → in_progress
+判断基準:
+- コード変更を伴うか
+- 複数ファイルに影響するか
+- 設計判断が必要か
+- テストが必要か
 
-# 3. Agent 完了検出後に completed に
-cmux read-screen で ❯ 検出 → TaskUpdate: task-1 → completed
+上記のいずれかに該当すれば「中規模以上」として全4フェーズを実行する。
 
-# 4. 全タスク完了を確認してから結果統合へ
-```
+### Phase 1: Plan（計画）
+
+Planner Agent を spawn し、実装計画書 (plan.md) を作成させる。
+
+1. Planner Agent を spawn（role: planner）
+2. Agent の完了を待つ（pull 型監視）
+3. plan.md が worktree 内に作成されていることを確認
+4. plan.md を git commit: `git add plan.md && git commit -m "plan: <タスク概要>"`
+5. plan.md を出力ディレクトリにもコピー: `cp plan.md <OUTPUT_DIR>/plan.md`
+
+### Phase 2: Design Review（設計レビュー）
+
+Design Reviewer Agent を spawn し、plan.md をレビューさせる。**Planner とは別セッション**で実行する（生成と批評の分離）。
+
+1. Design Reviewer Agent を spawn（role: design-reviewer）
+   - plan.md の内容をプロンプトに含める
+2. Agent の完了を待つ
+3. レビュー結果を確認:
+   - **Approved** → Phase 3 に進む
+   - **Changes Requested** → Planner Agent を再 spawn して修正、再レビュー（最大2往復）
+4. Agent タブを閉じる
+
+### Phase 3: TDD Implementation（テスト駆動実装）
+
+Implementer Agent を spawn し、TDD で実装させる。
+
+1. Implementer Agent を spawn（role: impl）
+   - plan.md の内容をプロンプトに含める
+2. Agent の完了を待つ
+3. 実装結果を確認（出力ファイル）
+4. Agent タブを閉じる
+
+### Phase 4: Inspection（検品）
+
+Inspector Agent を spawn し、実装結果を検品させる。**Implementer とは別セッション**で実行する（生成と批評の分離）。
+
+1. Inspector Agent を spawn（role: inspector）
+   - plan.md の内容をプロンプトに含める
+2. Agent の完了を待つ
+3. 検品結果を確認:
+   - **GO** → 完了処理に進む
+   - **NOGO** → Implementer Agent を再 spawn して修正指示、再検品（最大2回）
+4. Agent タブを閉じる
 
 ユーザーへの確認は不要。自律的にフェーズを進行すること。
 
@@ -112,78 +146,9 @@ done
 - `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
 - surface が存在しない → **クラッシュ**
 
-## レビュー判断（ステップ 5）
-
-結果統合の後、コード変更を伴うタスクかどうかを判断し、必要な場合のみ Reviewer Agent を起動する。
-
-### 判断基準
-
-```bash
-cd <タスク割り当てで指定された作業ディレクトリ>
-DIFF_STAT=$(git diff --stat HEAD 2>/dev/null)
-CODE_CHANGES=$(git diff --name-only HEAD 2>/dev/null | grep -E '\.(js|ts|tsx|jsx|py|go|rs|java|rb|sh|bash|zsh)$')
-```
-
-- `CODE_CHANGES` が空でない → **レビューが必要**（コードファイルの変更あり）
-- `CODE_CHANGES` が空 → **レビューをスキップ**（ドキュメント・設定のみの変更、または変更なし）
-
-### レビューが必要な場合: Reviewer Agent 起動
-
-```bash
-# Reviewer プロンプトファイルを書き出す
-REVIEWER_PROMPT="${PROMPT_DIR}/${CONDUCTOR_ID}-reviewer-$(date +%s).md"
-cat > "$REVIEWER_PROMPT" << REVIEW_PROMPT
-# レビュー指示
-
-作業ディレクトリ: <タスク割り当てで指定された作業ディレクトリ>
-
-## やること
-
-\`git diff --stat HEAD\` および \`git diff HEAD\` を確認し、以下の観点でレビューしてください:
-- セキュリティ上の問題はないか
-- 既存機能を壊す変更はないか
-- 不要な複雑さはないか
-
-## 出力
-
-問題があれば <タスク割り当てで指定された出力ディレクトリ>/review.md に指摘を書き出し、問題がなければ Approved と書いてください。
-
-## 完了時
-
-完了したら停止してください。
-REVIEW_PROMPT
-
-# Reviewer Agent spawn（--prompt-file でファイルパスだけを渡す）
-RESULT=$(cmux-team spawn-agent \
-  --conductor-surface $CMUX_SURFACE \
-  --role reviewer \
-  --task-title "Code Review" \
-  --prompt-file "$REVIEWER_PROMPT")
-REVIEWER_SURFACE=$(echo "$RESULT" | grep -o 'SURFACE=surface:[0-9]*' | cut -d= -f2)
-
-# Reviewer の完了を待つ（pull 型）
-# Agent 完了検出と同じ方法で ❯ プロンプトを検出する
-```
-
-### レビュー結果の確認
-
-Reviewer 完了後、タスク割り当てで指定された出力ディレクトリの `review.md` を確認する:
-
-- **Approved** → テスト実行に進む
-- **Changes Requested** → 指摘内容を元に修正 Agent を再起動し、修正後に再レビュー（最大 2 回まで）
-
-Reviewer のタブは確認後に閉じる:
-```bash
-cmux-team kill-agent --surface $REVIEWER_SURFACE
-```
-
-### レビューをスキップする場合
-
-コード変更がない場合（ドキュメント・設定ファイルのみ）はレビューをスキップし、そのままテスト実行に進む。
-
 ## 完了時の処理
 
-1. 全 Agent が完了し、テストがパスしたことを確認
+1. 全フェーズが完了したことを確認（Inspection で GO 判定済み）
 2. Agent のタブを閉じる:
    ```bash
    cmux-team kill-agent --surface $AGENT_SURFACE
