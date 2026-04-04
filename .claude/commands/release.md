@@ -1,11 +1,11 @@
 ---
 allowed-tools: Bash, Read, Edit, Write
-description: "バージョン自動判定・CHANGELOG 更新・コミット・push・GitHub Release・npm publish・plugin 更新を一括実行する"
+description: "バージョン自動判定・CHANGELOG 更新・コミット・タグ push・plugin 更新を一括実行する"
 ---
 
 # /cmux-team:release
 
-cmux-team のリリースを実行する。前回リリースからのコミットを分析してバージョンを自動判定し、CHANGELOG 更新 → コミット → push → GitHub Release → plugin 更新を一括で行う。
+cmux-team のリリースを実行する。前回リリースからのコミットを分析してバージョンを自動判定し、CHANGELOG 更新 → コミット → タグ push → plugin 更新を一括で行う。npm publish と GitHub Release はタグ push で GitHub Actions が自動実行する。
 
 ## 引数
 
@@ -86,15 +86,7 @@ git push origin main
 git push origin "v${NEW_VERSION}"
 ```
 
-### 6. GitHub Release を作成
-
-```bash
-gh release create "v${NEW_VERSION}" \
-  --title "v${NEW_VERSION}" \
-  --notes-file <(CHANGELOG から該当バージョンのセクションを抽出)
-```
-
-### 7. plugin marketplace キャッシュを更新
+### 6. plugin marketplace キャッシュを更新
 
 Claude Code の plugin install は `~/.claude/plugins/marketplaces/` のローカル git clone からバージョンを取得する。
 push しただけではキャッシュが古いままなので、明示的に pull する:
@@ -107,7 +99,7 @@ if [ -d "$MARKETPLACE_DIR/.git" ]; then
 fi
 ```
 
-### 8. 旧バージョンの plugin キャッシュを削除
+### 7. 旧バージョンの plugin キャッシュを削除
 
 plugin キャッシュに旧バージョンが残ると、テンプレート検索の glob で古いバージョンが先にマッチする問題がある。最新以外を削除する:
 
@@ -121,28 +113,7 @@ for dir in "$CACHE_BASE"/*/; do
 done
 ```
 
-### 9. npm publish
-
-npm パッケージを公開する。OTP 認証が必要なため、別 surface でインタラクティブに実行する:
-
-```bash
-# 別 surface で npm publish を実行（OTP ブラウザ認証が必要）
-cmux send --surface surface:$(cmux new-surface) "cd $(pwd) && npm publish\n"
-```
-
-publish 完了を確認後、作成した surface を閉じる:
-
-```bash
-cmux close-surface --surface surface:<作成した surface>
-```
-
-cmux 環境外の場合はユーザーに手動実行を案内する:
-```
-npm publish には OTP 認証が必要です。以下を実行してください:
-! npm publish
-```
-
-### 10. plugin を再インストール
+### 8. plugin を再インストール
 
 marketplace キャッシュ更新後、uninstall → install で最新バージョンを反映する:
 
@@ -158,7 +129,7 @@ claude plugin install cmux-team@hummer98-cmux-team
 ! claude plugin uninstall cmux-team@hummer98-cmux-team && claude plugin install cmux-team@hummer98-cmux-team
 ```
 
-### 11. 完了報告
+### 9. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
@@ -166,6 +137,6 @@ claude plugin install cmux-team@hummer98-cmux-team
 - コミット: <hash>
 - タグ: v${NEW_VERSION}
 - push: origin/main
-- GitHub Release: <url>
+- npm publish / GitHub Release: タグ push で GitHub Actions が自動実行
 - plugin: 更新済み（要セッション再起動）
 ```
