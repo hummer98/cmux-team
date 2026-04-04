@@ -553,14 +553,13 @@ function buildLogRows(lines: string[]) {
 async function openArtifactInViewer(
   app: NodeApp<AppState>,
   filePath: string,
-  refreshInterval: ReturnType<typeof setInterval> | null,
-  restartRefresh: () => void,
+  onResumed: () => void,
 ): Promise<void> {
   const viewer = await resolveMarkdownViewer();
 
-  // refresh・spinner を一時停止
-  if (refreshInterval) clearInterval(refreshInterval);
-  if (spinnerInterval) clearInterval(spinnerInterval);
+  // TUI 停止中は app.update を呼ばない
+  dashboardActive = false;
+  if (spinnerInterval) { clearInterval(spinnerInterval); spinnerInterval = null; }
 
   // TUI を停止
   await app.stop();
@@ -586,20 +585,21 @@ async function openArtifactInViewer(
   } finally {
     // TUI を再開（ビューア・フォールバック両方が失敗しても確実に復帰）
     await app.start();
-    restartRefresh();
+    onResumed();
   }
 }
 
 // --- アプリインスタンス管理 ---
 
 let appInstance: NodeApp<AppState> | null = null;
-let refreshInterval: ReturnType<typeof setInterval> | null = null;
 let spinnerInterval: ReturnType<typeof setInterval> | null = null;
+/** TUI が表示中かどうか（ビューア表示中は false にして app.update を防ぐ） */
+let dashboardActive = false;
 
 export async function startDashboard(
   getState: () => DaemonState,
   opts?: { version?: string; onReload?: () => void; onQuit?: () => void; onFullQuit?: () => void }
-): Promise<void> {
+): Promise<{ scheduleRefresh: () => void }> {
   const daemonState = getState();
   let confirmingFullQuit = false;
 
@@ -805,9 +805,8 @@ export async function startDashboard(
       openArtifactInViewer(
         app,
         selected.filePath,
-        refreshInterval,
         () => {
-          refreshInterval = setInterval(refresh, 2000);
+          dashboardActive = true;
           spinnerInterval = setInterval(() => {
             try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
           }, SPINNER_INTERVAL);
@@ -919,24 +918,35 @@ export async function startDashboard(
     cleanup();
     console.error(`❌ ダッシュボード起動失敗: ${e.message}`);
     console.error("ヒント: TTY 環境で cmux-team start を実行してください");
-    return;
+    return { scheduleRefresh: () => {} };
   }
 
-  // app.start() 完了後に refresh を開始（start 中に update すると lifecycle error）
-  refreshInterval = setInterval(refresh, 2000);
+  // app.start() 完了後に spinner を開始（start 中に update すると lifecycle error）
+  // refresh は daemon の tick 後に scheduleRefresh 経由で呼ばれる（ポーリング不要）
+  dashboardActive = true;
   spinnerInterval = setInterval(() => {
     try {
       app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 }));
     } catch {}
   }, SPINNER_INTERVAL);
   refresh();
+
+  // debounce 付き refresh スケジューラ（daemon の state 変更時に呼ばれる）
+  let refreshDebounce: ReturnType<typeof setTimeout> | null = null;
+  const scheduleRefresh = () => {
+    if (!dashboardActive) return;
+    if (refreshDebounce) return;
+    refreshDebounce = setTimeout(() => {
+      refreshDebounce = null;
+      if (dashboardActive) refresh().catch(() => {});
+    }, 100);
+  };
+
+  return { scheduleRefresh };
 }
 
 function cleanup() {
-  if (refreshInterval) {
-    clearInterval(refreshInterval);
-    refreshInterval = null;
-  }
+  dashboardActive = false;
   if (spinnerInterval) {
     clearInterval(spinnerInterval);
     spinnerInterval = null;
