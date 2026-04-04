@@ -91,6 +91,18 @@ daemon がタスク割り当て時に使用する簡易テンプレート。タ�
 
 conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報を直接使わず「タスク割り当てで指定された作業ディレクトリ」のような汎用参照を使用。タスク割り当て時にパス情報が動的に付与される。
 
+**フロー分岐（3段階）:**
+| レベル | 条件 | フロー |
+|--------|------|--------|
+| 軽微 | typo, 設定値変更, コメント修正, 単一ファイルのドキュメント修正 | Phase 3（Implementer）のみ |
+| 中規模 | 単一機能のバグ修正, 既存パターンに沿った小規模追加 | Plan → Impl → Inspection |
+| 大規模 | 新機能追加, 複数ファイルリファクタリング, 設計判断を伴う変更 | 全4フェーズ |
+
+判断に迷った場合は上のレベルに格上げする。
+
+**Design Review ループ:** Changes Requested → Planner 再 spawn（前回 plan.md + 指摘事項）→ 再レビュー（最大2往復）
+**Inspection NOGO ループ:** NOGO → Implementer 再 spawn（plan.md + Fix Required）→ 再検品（最大2往復）
+
 **テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`（パス情報はタスク割り当て時に付与）
 
 ---
@@ -160,7 +172,7 @@ Use Mermaid diagrams where they add clarity.
 
 ## Planner Template
 
-計画立案エージェント。タスクを分析し plan.md を作成する。
+計画立案エージェント。タスクを分析し plan.md を作成する。サブタスク分割ではメソッド制約・カテゴリ分類・削除タスク必須ルールを適用し、Decision Log で設計判断を記録する。
 
 ```markdown
 {{COMMON_HEADER}}
@@ -176,7 +188,11 @@ Use Mermaid diagrams where they add clarity.
 ### 2. 技術アプローチ
 ### 3. 変更対象
 ### 4. サブタスク分割
+  - 各サブタスクにタスク名・対象ファイル・完了条件・メソッド制約・検証コマンドを含める
+  - カテゴリ: 実装タスク / 配線タスク / 削除タスク
+  - 制約: 並列実装禁止、削除タスク必須
 ### 5. リスク
+### 6. Decision Log（設計判断の記録テーブル）
 
 ## 出力
 1. 作業ディレクトリ内に `plan.md` を作成（git commit する）
@@ -189,7 +205,7 @@ Use Mermaid diagrams where they add clarity.
 
 ## Design Reviewer Template
 
-設計レビューエージェント。Planner が作成した plan.md をレビューし Approved / Changes Requested を判定する。Planner とは別セッションで動作し、生成バイアスに影響されない独立した視点でレビューする。
+設計レビューエージェント。Planner が作成した plan.md をレビューし Approved / Changes Requested を判定する。Planner とは別セッションで動作し、生成バイアスに影響されない独立した視点でレビューする。CRITICAL チェック項目と明確な判定基準を持つ。
 
 ```markdown
 {{COMMON_HEADER}}
@@ -209,6 +225,12 @@ Use Mermaid diagrams where they add clarity.
 3. 設計原則（DRY / SSOT）
 4. セキュリティ
 5. 既存パターンとの整合性
+6. CRITICAL チェック項目（サブタスクカバレッジ、統合検証、削除タスク完全性、既存テスト影響）
+
+## 判定基準
+- Approved: Critical findings 0件 AND 全 CRITICAL チェック項目パス
+- Changes Requested: Critical findings 1件以上 OR CRITICAL チェック項目に不合格あり
+- Minor findings のみ → Approved + Recommendations に改善提案
 
 ## 出力
 {{OUTPUT_FILE}} に以下を書き出す:
@@ -224,7 +246,7 @@ Use Mermaid diagrams where they add clarity.
 
 ## Implementer Template（TDD 版）
 
-TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実装を行う。
+TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実装を行う。plan.md のサブタスクを番号順に実行し、メソッド制約に従う。テスト基盤がない場合は RED/GREEN を検証手順に読み替える。
 
 ```markdown
 {{COMMON_HEADER}}
@@ -238,6 +260,9 @@ TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実
 ## 実装タスク
 {{TASKS_CONTENT}}
 
+## サブタスク実行
+plan.md のサブタスクを番号順に実行。メソッド制約に従い、完了条件と検証コマンドで確認。
+
 ## TDD サイクル
 各変更に対して以下のサイクルを繰り返す:
 1. RED — テストを先に書く（失敗確認）
@@ -246,14 +271,17 @@ TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実
 4. VERIFY — 新規＋既存テスト全実行
 
 ## テスト基盤がない場合のフォールバック
-手動検証手順を作成・実行・記録
+TDD の RED/GREEN を以下に読み替える:
+- RED → 検証手順の定義（grep 等の確認コマンド）
+- GREEN → 実装 + 検証実行
+- REFACTOR → コード整理
+- VERIFY → 全検証再実行（TypeScript: bun build / 型チェック含む）
 
 ## 出力
 {{OUTPUT_FILE}} に以下を書き出す:
-- ## Completed Tasks（タスク ID 付き）
+- ## Completed Tasks（サブタスク番号 + タスク名）
 - ## Files Changed（パス + 変更概要）
-- ## TDD Cycles（各サイクルの RED/GREEN/REFACTOR/VERIFY 結果）
-- ## Tests Run（結果）
+- ## TDD Cycles / Verification Results
 - ## Issues Encountered（あれば）
 ```
 
@@ -263,7 +291,7 @@ TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実
 
 ## Inspector Template
 
-検品エージェント。実装結果を5つの観点で検査し GO/NOGO 判定を行う。Implementer とは別セッションで動作し、独立した視点で検品する。
+検品エージェント。実装結果を5つの観点で検査し GO/NOGO 判定を行う。Implementer とは別セッションで動作し、独立した視点で検品する。grep 検証・削除タスク検証・配線タスク検証・TypeScript コンパイル確認を含む。
 
 ```markdown
 {{COMMON_HEADER}}
@@ -278,11 +306,11 @@ TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実
 {{TASK_CONTENT}}
 
 ## 検品観点
-1. 計画充足（Critical if 未実装）
+1. 計画充足（Critical if 未実装）— メソッド制約の grep 検証、削除タスクの不在確認を含む
 2. Dead/Zombie Code（Major）
 3. テスト（Critical if 破壊）
 4. 設計原則（Major）
-5. 統合（Critical if 未接続）
+5. 統合（Critical if 未接続）— 配線タスク検証、TypeScript コンパイル確認を含む
 
 ## GO/NOGO 判定基準
 - GO: Critical 0 件 AND Major 2 件以下
@@ -293,7 +321,8 @@ TDD サイクル（RED→GREEN→REFACTOR→VERIFY）で計画に基づいた実
 - ## Verdict: GO | NOGO
 - ## Summary（2-3文）
 - ## Findings（番号付きリスト、severity: critical / major / minor）
-- ## Fix Required（NOGO の場合のみ、具体的な修正指示）
+- ## Fix Required（NOGO の場合のみ）
+  対象ファイル・問題・期待する状態・検証方法を含む具体的な修正指示
 ```
 
 **テンプレート変数:** `{{COMMON_HEADER}}`, `{{PLAN_CONTENT}}`, `{{TASK_CONTENT}}`, `{{OUTPUT_FILE}}`
