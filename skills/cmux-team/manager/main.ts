@@ -319,10 +319,13 @@ Notes:
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
     }
-    // npm 更新チェック（5分間隔）
+    // npm 更新チェック（5分間隔、全 Conductor が idle のときのみ）
     if (Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
-      state.lastNpmCheckAt = Date.now();
-      await checkNpmUpdate(state);
+      const allIdle = [...state.conductors.values()].every(c => c.status === "idle");
+      if (allIdle) {
+        state.lastNpmCheckAt = Date.now();
+        await checkNpmUpdate(state);
+      }
     }
     await sleepUntilWakeup(state);
   }
