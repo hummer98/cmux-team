@@ -351,15 +351,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "CONDUCTOR_DONE": {
+      const conductor = findConductor(state, message.surface);
+      if (!conductor || conductor.status !== "running") {
+        await log(
+          "conductor_done_ignored",
+          `surface=${message.surface} status=${conductor?.status ?? "not_found"} taskId=${conductor?.taskId} reason=not_running`
+        );
+        break;
+      }
       const isSuccess = message.success !== false;
       await log(
         isSuccess ? "conductor_done_signal" : "conductor_error",
         `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
       );
-      const conductor = findConductor(state, message.surface);
-      if (conductor) {
-        await handleConductorDone(state, conductor);
-      }
+      await handleConductorDone(state, conductor);
       break;
     }
 

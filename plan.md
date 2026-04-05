@@ -1,131 +1,112 @@
-# T087: Journal の Tundefined 防御 + 不正ログ行削除
+# T085: task_completed 二重記録バグの修正計画
 
-## 概要
+## 根本原因
 
-manager.log に `task_id=undefined` のログ行が存在し、Dashboard の Journal に `Tundefined` と表示される問題を修正する。
+### 直接原因: `handleConductorDone` にステータスガードがない
 
-## 変更ファイル一覧
-
-| # | ファイル | 変更内容 |
-|---|---------|---------|
-| 1 | `skills/cmux-team/manager/dashboard.tsx` | parseJournalEntries で不正 taskId をスキップ |
-| 2 | `skills/cmux-team/manager/dashboard.tsx` | buildJournalRows で防御的フィルタ追加 |
-| 3 | `skills/cmux-team/manager/main.ts` | status コマンドの taskId 表示を防御 |
-| 4 | `skills/cmux-team/manager/daemon.ts` | handleConductorDone で taskId undefined 時にエラーログ |
-| 5 | `.team/logs/manager.log` | 不正ログ行の削除（sed） |
-
-## 変更順序と具体的な変更内容
-
-### Step 1: dashboard.tsx — isValidTaskId ヘルパー追加 + parseJournalEntries 修正
-
-**追加（L199 の `parseJournalEntries` 関数の直前）:**
+`daemon.ts:353-365` の `CONDUCTOR_DONE` ハンドラは、Conductor の `status` を一切チェックせずに `handleConductorDone` を呼び出している。
 
 ```typescript
-function isValidTaskId(id: string): boolean {
-  return id !== "" && id !== "?" && id !== "undefined";
+// daemon.ts:353-365
+case "CONDUCTOR_DONE": {
+  const isSuccess = message.success !== false;
+  await log(...);
+  const conductor = findConductor(state, message.surface);
+  if (conductor) {
+    await handleConductorDone(state, conductor);  // ← ステータスチェックなし
+  }
+  break;
 }
 ```
 
-**変更（parseJournalEntries 内 L199-231）:**
+1回目の `CONDUCTOR_DONE` 受信後、`handleConductorDone` → `resetConductor` が完了すると:
+- `conductor.status = "idle"` (conductor.ts:352)
+- `conductor.taskId = undefined` (conductor.ts:354)
 
-各イベント分岐で `result.push` の前に `if (!isValidTaskId(taskId)) continue;` を追加する。4箇所すべてに適用:
+2回目の `CONDUCTOR_DONE` が同じ surface で届いた場合、`findConductor` は surface で検索するため conductor を発見し、そのまま `handleConductorDone` が再度実行される。この時点で `taskId` は `undefined` なので `task_completed task_id=undefined` がログに記録される。
 
-```typescript
-    if (event === "task_received") {
-      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-      if (!isValidTaskId(taskId)) continue;  // ← 追加
-      const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ time, icon: nerdIcon("\uf055", "[+]"), taskId, message: title, level: "info", iconColor: CYAN });
-    } else if (event === "conductor_started") {
-      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-      if (!isValidTaskId(taskId)) continue;  // ← 追加
-      const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
-      const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ ... });
-    } else if (event === "task_completed") {
-      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-      if (!isValidTaskId(taskId)) continue;  // ← 追加
-      ...
-    } else if (event === "task_aborted") {
-      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
-      if (!isValidTaskId(taskId)) continue;  // ← 追加
-      ...
-    }
+### 間接原因: CONDUCTOR_DONE が2回送信される構造的問題
+
+Conductor は2つのテンプレートから「CONDUCTOR_DONE を送信せよ」という指示を受けている:
+
+1. **`conductor-role.md`** (システムプロンプト `--append-system-prompt-file`): ステップ8で `cmux-team send CONDUCTOR_DONE` を指示
+2. **`conductor-task.md`** (ユーザーメッセージ): 末尾に `cmux-team send CONDUCTOR_DONE` を指示
+
+`conductor-role.md` は `--append-system-prompt-file` で渡される（`main.ts:733`）ため、`/clear` 後もシステムプロンプトとして残り続ける。AI エージェントが conductor-task.md の指示で CONDUCTOR_DONE を送信した後、conductor-role.md のステップ8に再度従って CONDUCTOR_DONE を送信する可能性がある。
+
+さらに `resetConductor` (`conductor.ts:303-364`) は **`/clear` を送信しない**。つまり1回目の CONDUCTOR_DONE 処理後も Conductor のセッションは生きたまま、AI エージェントが引き続きコマンドを実行できる状態にある。
+
+### タイムライン（再現シナリオ）
+
+```
+T+0:00  Conductor が close-task + CONDUCTOR_DONE を送信（conductor-task.md の指示）
+T+0:00  daemon が CONDUCTOR_DONE を受信 → handleConductorDone → task_completed (taskId=082) ← 正常
+T+0:01  resetConductor 完了 → conductor.status="idle", taskId=undefined
+T+1:30  Conductor AI が conductor-role.md ステップ8 に従い再度 CONDUCTOR_DONE を送信
+T+1:30  daemon が CONDUCTOR_DONE を受信 → handleConductorDone → task_completed (taskId=undefined) ← 異常
 ```
 
-### Step 2: dashboard.tsx — buildJournalRows に防御フィルタ (L464-477)
+## 修正方針
 
-二重防御として、entries を filter してから map する。
+**最小限の変更で確実に修正する。** daemon 側でガードを追加し、status が `"running"` でない Conductor からの CONDUCTOR_DONE を無視する。
 
-**変更（L468）:**
+テンプレートの重複指示は修正しない（防御的多重化として有用）。根本的に daemon が冪等に処理できることが重要。
 
-```typescript
-// before
-  return entries.map((entry) => {
+## 修正箇所
 
-// after
-  return entries.filter((e) => isValidTaskId(e.taskId)).map((entry) => {
-```
+### `daemon.ts` — CONDUCTOR_DONE ハンドラにステータスガードを追加
 
-### Step 3: main.ts — status コマンド (L614)
-
-taskId が undefined/"undefined"/falsy の場合に "---" を表示する。
-
-**変更（L614）:**
+**ファイル**: `skills/cmux-team/manager/daemon.ts`
+**箇所**: `handleMessage` 関数内の `case "CONDUCTOR_DONE"` (L353-365)
 
 ```typescript
-// before
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  T${c.taskId}${title}`);
-
-// after
-      const tid = c.taskId && c.taskId !== "undefined" ? `T${c.taskId}` : "---";
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  ${tid}${title}`);
-```
-
-### Step 4: daemon.ts — handleConductorDone (L715-726)
-
-conductor.taskId が undefined の場合はエラーログに切り替え、`task_id=undefined` がログに書き込まれないようにする。
-
-**変更（L721-726）:**
-
-```typescript
-// before
+// 修正前
+case "CONDUCTOR_DONE": {
+  const isSuccess = message.success !== false;
   await log(
-    "task_completed",
-    `task_id=${conductor.taskId} surface=${conductor.surface}${
-      conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
-    }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
+    isSuccess ? "conductor_done_signal" : "conductor_error",
+    `surface=${message.surface}...`
   );
-
-// after
-  if (!conductor.taskId || conductor.taskId === "undefined") {
-    await log(
-      "error",
-      `handleConductorDone: conductor.taskId is undefined surface=${conductor.surface}`
-    );
-  } else {
-    await log(
-      "task_completed",
-      `task_id=${conductor.taskId} surface=${conductor.surface}${
-        conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
-      }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
-    );
+  const conductor = findConductor(state, message.surface);
+  if (conductor) {
+    await handleConductorDone(state, conductor);
   }
+  break;
+}
+
+// 修正後
+case "CONDUCTOR_DONE": {
+  const conductor = findConductor(state, message.surface);
+  if (!conductor || conductor.status !== "running") {
+    await log(
+      "conductor_done_ignored",
+      `surface=${message.surface} status=${conductor?.status ?? "not_found"} taskId=${conductor?.taskId} reason=not_running`
+    );
+    break;
+  }
+  const isSuccess = message.success !== false;
+  await log(
+    isSuccess ? "conductor_done_signal" : "conductor_error",
+    `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
+  );
+  await handleConductorDone(state, conductor);
+  break;
+}
 ```
 
-### Step 5: manager.log クリーンアップ
-
-プロジェクトルート（worktree ではなく元リポジトリ）の `.team/logs/manager.log` から `task_id=undefined` を含む行を削除する。
-
-```bash
-sed -i '' '/task_id=undefined/d' /Users/yamamoto/git/cmux-team/.team/logs/manager.log
-```
-
-**注意**: この操作は worktree 内ではなく、元リポジトリの `.team/` に対して実行する。worktree 内に `.team/` は存在しない。
+**変更内容**:
+- `conductor.status === "running"` ガードを追加（early return パターン）
+- running 以外の場合は `conductor_done_ignored` をログに記録して `break`
+- conductor 未発見の場合も同じパスで処理
+- 修正は **1ファイル、1箇所のみ**
 
 ## テスト方法
 
-1. **ビルド確認**: `cd skills/cmux-team/manager && bun build ./main.ts --outdir=./dist --target=bun` が成功すること
-2. **動作確認**: `cmux-team start` → Dashboard の Journal に `Tundefined` が表示されないこと
-3. **status 確認**: `cmux-team status` で taskId 未設定の Conductor が `---` 表示になること
-4. **ログ確認**: `grep task_id=undefined .team/logs/manager.log` が 0 件であること
+1. **E2E テスト**: タスクを実行し、`manager.log` に `task_completed` が1回だけ記録されることを確認
+2. **ガード動作確認**: `conductor_done_ignored` がログに記録されていれば、2回目の CONDUCTOR_DONE が正しく無視されている
+3. **手動テスト**: 同一 surface に対して `cmux-team send CONDUCTOR_DONE` を連続2回送信:
+   ```bash
+   cmux-team send CONDUCTOR_DONE --surface surface:490 --success true
+   # → conductor_done_ignored (status=idle なので無視される)
+   ```
+   ※ idle 状態の surface に送信するだけでガードの動作を確認できる
