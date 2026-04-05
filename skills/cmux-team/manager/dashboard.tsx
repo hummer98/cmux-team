@@ -196,6 +196,10 @@ function parseLogLine(line: string): { time: string; event: string; detail: stri
   return { time, event, detail, level };
 }
 
+function isValidTaskId(id: string): boolean {
+  return id !== "" && id !== "?" && id !== "undefined";
+}
+
 function parseJournalEntries(lines: string[]): JournalEntry[] {
   const result: JournalEntry[] = [];
   for (const line of lines) {
@@ -208,21 +212,25 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
 
     if (event === "task_received") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf055", "[+]"), taskId, message: title, level: "info", iconColor: CYAN });
     } else if (event === "conductor_started") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
       const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf04b", "[▶]"), taskId, message: title || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn", surface: surface || undefined, iconColor: YELLOW });
     } else if (event === "task_completed") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
       const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf058", "[✓]"), taskId, message: summary || title || detail, level: "info", surface: surface || undefined, iconColor: GREEN });
     } else if (event === "task_aborted") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf057", "[✕]"), taskId, message: title || "aborted", level: "error", iconColor: RED });
     }
@@ -465,7 +473,7 @@ function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
   if (entries.length === 0) {
     return [ui.text("no journal entries", { dim: true })];
   }
-  return entries.map((entry) => {
+  return entries.filter((e) => isValidTaskId(e.taskId)).map((entry) => {
     return ui.row({ gap: 1 }, [
       ui.text(entry.time, { dim: true }),
       ui.text(entry.icon, entry.iconColor ? { style: { fg: entry.iconColor } } : {}),

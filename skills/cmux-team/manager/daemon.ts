@@ -718,12 +718,19 @@ async function handleConductorDone(
 ): Promise<void> {
   const { journalSummary } = await collectResults(conductor, state.projectRoot);
 
-  await log(
-    "task_completed",
-    `task_id=${conductor.taskId} surface=${conductor.surface}${
-      conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
-    }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
-  );
+  if (!conductor.taskId || conductor.taskId === "undefined") {
+    await log(
+      "error",
+      `handleConductorDone: conductor.taskId is undefined surface=${conductor.surface}`
+    );
+  } else {
+    await log(
+      "task_completed",
+      `task_id=${conductor.taskId} surface=${conductor.surface}${
+        conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
+      }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
+    );
+  }
 
   // Conductor をリセットして idle に戻す
   await resetConductor(conductor, state.projectRoot);
