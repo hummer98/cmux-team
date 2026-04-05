@@ -14,3 +14,4 @@
 .team/e2e-results/
 .worktrees/
 .claude/worktrees/
+.envrc
