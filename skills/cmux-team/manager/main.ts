@@ -611,7 +611,8 @@ Examples:
   } else {
     for (const c of conductors) {
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  T${c.taskId}${title}`);
+      const tid = c.taskId && c.taskId !== "undefined" ? `T${c.taskId}` : "---";
+      console.log(`  ● [${c.surface.replace("surface:", "")}]  ${tid}${title}`);
     }
   }
 
