@@ -1,140 +1,112 @@
-# T082: TUI ダッシュボード QoL 改善 — 実装計画
+# T085: task_completed 二重記録バグの修正計画
 
-## 対象ファイル
+## 根本原因
 
-`skills/cmux-team/manager/dashboard.tsx` のみ
+### 直接原因: `handleConductorDone` にステータスガードがない
 
-## 変更1: Tasks 列のカーソル表示改善
+`daemon.ts:353-365` の `CONDUCTOR_DONE` ハンドラは、Conductor の `status` を一切チェックせずに `handleConductorDone` を呼び出している。
 
-### 現状（L694-701）
-```tsx
-const isSelected = globalIdx === state.taskCursor;
-return ui.row({ gap: 0 }, [
-  ui.text(isSelected ? "> " : "  ", isSelected ? { bold: true } : {}),
-  buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl),
-]);
-```
-常時 `>` カーソルが表示される。
-
-### 変更内容
-- **フォーカス判定**: `activeTab === "journal"` のとき Tasks セクションがフォーカス状態（↑/↓ キーがタスク操作に使われるため）。`artifacts` / `log` タブ時は非フォーカス（j/k がそれぞれの操作に使われる）。
-- **非フォーカス時**: カーソル非表示（`"  "` 固定）
-- **フォーカス時**: 選択行に `_ ` を表示、非選択行は `"  "`
-
-### 具体的変更
-```tsx
-const tasksFocused = state.activeTab === "journal";
-// ...
-ui.text(tasksFocused && isSelected ? "_ " : "  ", tasksFocused && isSelected ? { bold: true } : {})
-```
-
-## 変更2: Tasks のステータス表示を Nerd Font アイコン化
-
-### 現状（L414-445 buildTaskRow 関数）
-```tsx
-const label = isAborted ? "aborted" : isClosed ? "closed" : assigned ? "running" : blockedLabel ?? task.status;
-// ...
-ui.text(`[${label}]`, colorStyle),
-```
-テキストで `[running]`, `[closed]` 等を表示。
-
-### 変更内容
-ステータスに応じた Nerd Font アイコンを使用。`nerdIcon()` ヘルパー（既存）でフォールバック。
-
-| status | Nerd Font | fallback |
-|--------|-----------|----------|
-| running | `` (U+F04B nf-fa-play) | `[running]` |
-| closed | `` (U+F00C nf-fa-check) | `[closed]` |
-| ready | `◆` (U+25C6) | `[ready]` |
-| aborted | `` (U+F00D nf-fa-times) | `[aborted]` |
-| blocked | `` (U+F023 nf-fa-lock) | `[blocked]` |
-| draft | `` (U+F040 nf-fa-pencil) | `[draft]` |
-
-### 具体的変更
-`buildTaskRow` 内で `label` テキストの代わりにアイコンマッピングを使用:
-```tsx
-const statusIcons: Record<string, { nerd: string; fallback: string }> = {
-  running: { nerd: "\uf04b", fallback: "[running]" },
-  closed: { nerd: "\uf00c", fallback: "[closed]" },
-  ready: { nerd: "\u25c6", fallback: "[ready]" },
-  aborted: { nerd: "\uf00d", fallback: "[aborted]" },
-  blocked: { nerd: "\uf023", fallback: "[blocked]" },
-  draft: { nerd: "\uf040", fallback: "[draft]" },
-};
-const iconInfo = statusIcons[label] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
-const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
-```
-既存の `icon` 変数（行頭の `●/○/✕`）も Nerd Font 化する:
-- `icon` 変数は行頭のドット表示で、status アイコンとは別。こちらはそのまま維持する（タスク指示に含まれていない）。
-
-## 変更3: Journal のイベントアイコンを Nerd Font 化 + surface dim
-
-### 3a. アイコン変更
-
-#### 現状（L207-228 parseJournalEntries）
-```tsx
-result.push({ time, icon: "[+]", ... });   // タスク追加
-result.push({ time, icon: "[▶]", ... });   // タスク開始
-result.push({ time, icon: "[✓]", ... });   // タスク完了
-result.push({ time, icon: "[✕]", ... });   // タスク中止
-```
-
-#### 変更内容
-| event | Nerd Font | fallback |
-|-------|-----------|----------|
-| task_received `[+]` | `` (U+F055 nf-fa-plus_circle) | `[+]` |
-| conductor_started `[▶]` | `` (U+F04B nf-fa-play) | `[▶]` |
-| task_completed `[✓]` | `` (U+F058 nf-fa-check_circle) | `[✓]` |
-| task_aborted `[✕]` | `` (U+F057 nf-fa-times_circle) | `[✕]` |
-
-`parseJournalEntries` 内で `nerdIcon()` を呼ぶ:
-```tsx
-result.push({ time, icon: nerdIcon("\uf055", "[+]"), ... });
-```
-
-`journalIconColors` のキーも Nerd Font アイコンに対応するように更新が必要。
-→ アイコン文字列が環境依存で変わるため、色は `parseJournalEntries` 内で level ベースにするか、アイコンとセットで色情報を持つ構造に変更。
-
-### 3b. surface 表示を dim にする
-
-#### 現状
-`parseJournalEntries` で `message` に `surfaceTag` を含めている:
-```tsx
-const surfaceTag = surface ? `[${surface}] ` : "";
-result.push({ ..., message: `${surfaceTag}${title}` });
-```
-`buildJournalRows` では message 全体を同じスタイルで表示。
-
-#### 変更内容
-`JournalEntry` に `surface?: string` フィールドを追加し、`buildJournalRows` で dim スタイルで個別レンダリング。
-
-```tsx
-// JournalEntry に追加
-interface JournalEntry {
-  time: string;
-  icon: string;
-  taskId: string;
-  message: string;
-  level: "info" | "warn" | "error";
-  surface?: string;        // ← 追加
-  iconColor?: number;      // ← 追加（アイコンの色を直接持つ）
+```typescript
+// daemon.ts:353-365
+case "CONDUCTOR_DONE": {
+  const isSuccess = message.success !== false;
+  await log(...);
+  const conductor = findConductor(state, message.surface);
+  if (conductor) {
+    await handleConductorDone(state, conductor);  // ← ステータスチェックなし
+  }
+  break;
 }
 ```
 
-`buildJournalRows` で:
-```tsx
-return ui.row({ gap: 1 }, [
-  ui.text(entry.time, { dim: true }),
-  ui.text(entry.icon, entry.iconColor ? { style: { fg: entry.iconColor } } : {}),
-  ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
-  entry.surface ? ui.text(`[${entry.surface}]`, { dim: true }) : null,
-  buildTitleWithLinks(entry.message, repoUrl),
-]);
+1回目の `CONDUCTOR_DONE` 受信後、`handleConductorDone` → `resetConductor` が完了すると:
+- `conductor.status = "idle"` (conductor.ts:352)
+- `conductor.taskId = undefined` (conductor.ts:354)
+
+2回目の `CONDUCTOR_DONE` が同じ surface で届いた場合、`findConductor` は surface で検索するため conductor を発見し、そのまま `handleConductorDone` が再度実行される。この時点で `taskId` は `undefined` なので `task_completed task_id=undefined` がログに記録される。
+
+### 間接原因: CONDUCTOR_DONE が2回送信される構造的問題
+
+Conductor は2つのテンプレートから「CONDUCTOR_DONE を送信せよ」という指示を受けている:
+
+1. **`conductor-role.md`** (システムプロンプト `--append-system-prompt-file`): ステップ8で `cmux-team send CONDUCTOR_DONE` を指示
+2. **`conductor-task.md`** (ユーザーメッセージ): 末尾に `cmux-team send CONDUCTOR_DONE` を指示
+
+`conductor-role.md` は `--append-system-prompt-file` で渡される（`main.ts:733`）ため、`/clear` 後もシステムプロンプトとして残り続ける。AI エージェントが conductor-task.md の指示で CONDUCTOR_DONE を送信した後、conductor-role.md のステップ8に再度従って CONDUCTOR_DONE を送信する可能性がある。
+
+さらに `resetConductor` (`conductor.ts:303-364`) は **`/clear` を送信しない**。つまり1回目の CONDUCTOR_DONE 処理後も Conductor のセッションは生きたまま、AI エージェントが引き続きコマンドを実行できる状態にある。
+
+### タイムライン（再現シナリオ）
+
+```
+T+0:00  Conductor が close-task + CONDUCTOR_DONE を送信（conductor-task.md の指示）
+T+0:00  daemon が CONDUCTOR_DONE を受信 → handleConductorDone → task_completed (taskId=082) ← 正常
+T+0:01  resetConductor 完了 → conductor.status="idle", taskId=undefined
+T+1:30  Conductor AI が conductor-role.md ステップ8 に従い再度 CONDUCTOR_DONE を送信
+T+1:30  daemon が CONDUCTOR_DONE を受信 → handleConductorDone → task_completed (taskId=undefined) ← 異常
 ```
 
-## 注意事項
+## 修正方針
 
-- `nerdIcon()` は既存（L129-131）。`CMUX_NERD_FONT === "0"` でフォールバック。
-- Nerd Font のコードポイントは nerdfonts.com/cheat-sheet で要確認。計画書のコードポイントが正しいか実装時に検証すること。
-- `journalIconColors` マップ（L450-455）はキーがアイコン文字列。Nerd Font 化で動的になるため、`iconColor` フィールドで直接色を渡す方式に変更する。
-- 既存のテスト（`daemon.test.ts`）には dashboard のテストはないため、テスト追加は不要。
+**最小限の変更で確実に修正する。** daemon 側でガードを追加し、status が `"running"` でない Conductor からの CONDUCTOR_DONE を無視する。
+
+テンプレートの重複指示は修正しない（防御的多重化として有用）。根本的に daemon が冪等に処理できることが重要。
+
+## 修正箇所
+
+### `daemon.ts` — CONDUCTOR_DONE ハンドラにステータスガードを追加
+
+**ファイル**: `skills/cmux-team/manager/daemon.ts`
+**箇所**: `handleMessage` 関数内の `case "CONDUCTOR_DONE"` (L353-365)
+
+```typescript
+// 修正前
+case "CONDUCTOR_DONE": {
+  const isSuccess = message.success !== false;
+  await log(
+    isSuccess ? "conductor_done_signal" : "conductor_error",
+    `surface=${message.surface}...`
+  );
+  const conductor = findConductor(state, message.surface);
+  if (conductor) {
+    await handleConductorDone(state, conductor);
+  }
+  break;
+}
+
+// 修正後
+case "CONDUCTOR_DONE": {
+  const conductor = findConductor(state, message.surface);
+  if (!conductor || conductor.status !== "running") {
+    await log(
+      "conductor_done_ignored",
+      `surface=${message.surface} status=${conductor?.status ?? "not_found"} taskId=${conductor?.taskId} reason=not_running`
+    );
+    break;
+  }
+  const isSuccess = message.success !== false;
+  await log(
+    isSuccess ? "conductor_done_signal" : "conductor_error",
+    `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
+  );
+  await handleConductorDone(state, conductor);
+  break;
+}
+```
+
+**変更内容**:
+- `conductor.status === "running"` ガードを追加（early return パターン）
+- running 以外の場合は `conductor_done_ignored` をログに記録して `break`
+- conductor 未発見の場合も同じパスで処理
+- 修正は **1ファイル、1箇所のみ**
+
+## テスト方法
+
+1. **E2E テスト**: タスクを実行し、`manager.log` に `task_completed` が1回だけ記録されることを確認
+2. **ガード動作確認**: `conductor_done_ignored` がログに記録されていれば、2回目の CONDUCTOR_DONE が正しく無視されている
+3. **手動テスト**: 同一 surface に対して `cmux-team send CONDUCTOR_DONE` を連続2回送信:
+   ```bash
+   cmux-team send CONDUCTOR_DONE --surface surface:490 --success true
+   # → conductor_done_ignored (status=idle なので無視される)
+   ```
+   ※ idle 状態の surface に送信するだけでガードの動作を確認できる
