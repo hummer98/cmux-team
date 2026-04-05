@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.24.1] - 2026-04-05
+
+### Fixed
+- `create-task` CLI で `dependsOn` 変数が二重宣言されていたバグを修正。`cmux-team start` が即クラッシュする問題を解消
+
 ## [3.24.0] - 2026-04-05
 
 ### Added

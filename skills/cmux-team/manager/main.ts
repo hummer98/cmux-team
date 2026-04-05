@@ -1069,7 +1069,6 @@ Notes:
   const baseBranch = getArg("base-branch") || "";
   const dependsOn = getArg("depends-on") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
-  const dependsOn = getArg("depends-on") || "";
 
   // run_after_all タスクが既に存在する場合はエラー
   if (runAfterAll) {
