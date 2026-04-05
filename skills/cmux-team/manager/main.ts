@@ -1033,6 +1033,7 @@ Options:
   --priority <priority>   優先度: high / medium / low（任意、デフォルト medium）
   --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
   --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
+  --depends-on <ids>      依存タスク ID（カンマ区切り、任意）
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
@@ -1049,6 +1050,7 @@ Notes:
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
+  const dependsOn = getArg("depends-on") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
 
   // run_after_all タスクが既に存在する場合はエラー
@@ -1092,7 +1094,7 @@ Notes:
   const content = `---
 id: ${newId}
 title: ${title}
-priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}
+priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${dependsOn ? `\ndepends_on: [${dependsOn}]` : ""}
 created_at: ${new Date().toISOString()}
 ---
 
@@ -1677,7 +1679,7 @@ Usage:
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
-  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--run-after-all]
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team abort-task --task-id <id>            実行中タスクを中止
