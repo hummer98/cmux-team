@@ -420,6 +420,11 @@ Types と必須/任意オプション:
     --surface <surface>     surface ID（必須）
     --pid <number>          プロセス ID（任意）
 
+  SESSION_CLEAR
+    --surface <surface>     surface ID（必須）
+    --conductor-id <id>     Conductor ID（任意）
+    --pid <number>          プロセス ID（任意）
+
   SHUTDOWN
     （オプションなし）
 
@@ -514,12 +519,22 @@ Examples:
       };
       break;
 
+    case "SESSION_CLEAR":
+      message = {
+        type: "SESSION_CLEAR",
+        surface: requireArg("surface"),
+        conductorId: getArg("conductor-id"),
+        pid: getArg("pid") ? Number(getArg("pid")) : undefined,
+        timestamp: now,
+      };
+      break;
+
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
       process.exit(1);
   }
 

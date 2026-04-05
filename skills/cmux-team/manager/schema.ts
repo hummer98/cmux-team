@@ -66,6 +66,14 @@ export const SessionIdleMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const SessionClearMessage = z.object({
+  type: z.literal("SESSION_CLEAR"),
+  surface: z.string(),
+  conductorId: z.string().optional(),
+  pid: z.number().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const ShutdownMessage = z.object({
   type: z.literal("SHUTDOWN"),
   timestamp: z.string().datetime(),
@@ -80,6 +88,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionEndedMessage,
   SessionActiveMessage,
   SessionIdleMessage,
+  SessionClearMessage,
   ShutdownMessage,
 ]);
 
