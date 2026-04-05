@@ -1032,10 +1032,12 @@ Options:
   --body <text>           タスク本文（任意）
   --priority <priority>   優先度: high / medium / low（任意、デフォルト medium）
   --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
+  --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
   cmux-team create-task --title "新機能追加" --priority high
+  cmux-team create-task --title "hotfix" --base-branch develop --status ready
 
 Notes:
   - status が ready の場合、TASK_CREATED メッセージが自動送信され、
@@ -1046,6 +1048,7 @@ Notes:
   const priority = getArg("priority") || "medium";
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
+  const baseBranch = getArg("base-branch") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
 
   // run_after_all タスクが既に存在する場合はエラー
@@ -1089,7 +1092,7 @@ Notes:
   const content = `---
 id: ${newId}
 title: ${title}
-priority: ${priority}${runAfterAll ? "\nrun_after_all: true" : ""}
+priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}
 created_at: ${new Date().toISOString()}
 ---
 

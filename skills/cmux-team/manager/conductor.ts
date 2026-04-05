@@ -225,6 +225,7 @@ export async function assignTask(
 
     const taskContent = await readFile(join(tasksDir, taskFile), "utf-8");
     const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || taskFile.replace(/^\d+-/, "").replace(/\.md$/, "");
+    const baseBranch = taskContent.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim();
 
     // --- 2. git worktree 作成 ---
     const worktreePath = join(projectRoot, ".worktrees", taskRunId);
@@ -251,7 +252,8 @@ export async function assignTask(
       taskId,
       taskContent,
       worktreePath,
-      outputDir
+      outputDir,
+      baseBranch
     );
 
     // --- 4. 既存セッションをリセットして新プロンプトを送信 ---

@@ -16,6 +16,7 @@ export interface TaskMeta {
   filePath: string;
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
+  baseBranch?: string;  // マージ先ブランチ（未指定時は暗黙的に main）
 }
 
 export interface TaskState {
@@ -42,6 +43,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
   const status = unquote(fm.match(/^status:\s*(.+)$/m)?.[1]?.trim() ?? "ready");
   const priority = unquote(fm.match(/^priority:\s*(.+)$/m)?.[1]?.trim() ?? "medium");
   const createdAt = unquote(fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "");
+  const baseBranch = unquote(fm.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim() ?? "");
 
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
@@ -73,6 +75,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     filePath,
     fileName,
     createdAt,
+    baseBranch: baseBranch || undefined,
   };
 }
 

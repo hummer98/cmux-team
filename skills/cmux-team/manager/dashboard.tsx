@@ -126,6 +126,10 @@ const RED = rgb(255, 0, 0);
 const CYAN = rgb(0, 255, 255);
 const GRAY = rgb(170, 170, 170);
 
+function nerdIcon(nerd: string, fallback: string): string {
+  return process.env.CMUX_NERD_FONT === "0" ? fallback : nerd;
+}
+
 let spinnerTick = 0;
 
 // --- ジャーナルエントリ ---
@@ -427,10 +431,15 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : isBlocked ? RED : task.status === "ready" ? YELLOW : undefined;
   const colorStyle = color ? { style: { fg: color } } : {};
 
+  const branchEl = task.baseBranch
+    ? ui.text(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`, { dim: true })
+    : null;
+
   return ui.row({ gap: 1 }, [
     ui.text(icon, colorStyle),
     ui.text(taskId, { bold: !isClosed, ...colorStyle }),
     ui.text(`[${label}]`, colorStyle),
+    branchEl,
     buildTitleWithLinks(task.title, repoUrl, colorStyle),
     timeInfo ? ui.text(timeInfo, colorStyle) : null,
   ]);

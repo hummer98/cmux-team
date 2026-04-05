@@ -23,6 +23,11 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 - [cmux](https://github.com/manaflow-ai/cmux) installed
 - [bun](https://bun.sh/) installed (required for the Manager daemon)
 - Running Claude Code inside a cmux session
+- [Nerd Font](https://www.nerdfonts.com/) (recommended) — enhances TUI dashboard icons
+  ```bash
+  brew install --cask font-hack-nerd-font
+  ```
+  Works without Nerd Font (falls back to Unicode symbols). Set `CMUX_NERD_FONT=0` to use fallback icons explicitly.
 
 ## Installation
 
