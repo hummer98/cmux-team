@@ -515,6 +515,18 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "SESSION_CLEAR": {
+      const conductor = findConductor(state, message.surface);
+      if (conductor && conductor.status === "disconnected") {
+        conductor.status = "idle";
+        conductor.disconnectedAt = undefined;
+        if (message.pid) conductor.pid = message.pid;
+        await log("conductor_recovered", `surface=${message.surface} via=SESSION_CLEAR new_status=idle`);
+      }
+      // idle/running 時は何もしない（TUI チラつき防止）
+      break;
+    }
+
     case "SHUTDOWN":
       await log("shutdown_requested");
       state.running = false;
