@@ -1034,6 +1034,7 @@ Options:
   --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
   --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
+  --depends-on <ids>      依存タスク ID（カンマ区切り、任意）
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
@@ -1051,6 +1052,7 @@ Notes:
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
+  const dependsOn = getArg("depends-on") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
   const dependsOn = getArg("depends-on") || "";
 
