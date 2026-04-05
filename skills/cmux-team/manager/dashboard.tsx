@@ -136,10 +136,12 @@ let spinnerTick = 0;
 
 interface JournalEntry {
   time: string;  // HH:MM:SS
-  icon: string;  // [+], [▶], [✓]
+  icon: string;  // Nerd Font アイコン or フォールバック
   taskId: string;
   message: string;
   level: "info" | "warn" | "error";
+  surface?: string;    // surface 名（dim 表示用）
+  iconColor?: number;  // アイコンの色を直接保持
 }
 
 // --- ヘルパー ---
@@ -207,24 +209,22 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
     if (event === "task_received") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ time, icon: "[+]", taskId, message: title, level: "info" });
+      result.push({ time, icon: nerdIcon("\uf055", "[+]"), taskId, message: title, level: "info", iconColor: CYAN });
     } else if (event === "conductor_started") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      const surfaceTag = surface ? `[${surface}] ` : "";
-      result.push({ time, icon: "[▶]", taskId, message: `${surfaceTag}${title}` || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn" });
+      result.push({ time, icon: nerdIcon("\uf04b", "[▶]"), taskId, message: title || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn", surface: surface || undefined, iconColor: YELLOW });
     } else if (event === "task_completed") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
-      const surfaceTag = surface ? `[${surface}] ` : "";
-      result.push({ time, icon: "[✓]", taskId, message: `${surfaceTag}${summary || title || detail}`, level: "info" });
+      result.push({ time, icon: nerdIcon("\uf058", "[✓]"), taskId, message: summary || title || detail, level: "info", surface: surface || undefined, iconColor: GREEN });
     } else if (event === "task_aborted") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ time, icon: "[✕]", taskId, message: title || "aborted", level: "error" });
+      result.push({ time, icon: nerdIcon("\uf057", "[✕]"), taskId, message: title || "aborted", level: "error", iconColor: RED });
     }
   }
   return result;
@@ -431,6 +431,20 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : isBlocked ? RED : task.status === "ready" ? YELLOW : undefined;
   const colorStyle = color ? { style: { fg: color } } : {};
 
+  // ステータスの Nerd Font アイコン
+  const statusIcons: Record<string, { nerd: string; fallback: string }> = {
+    running: { nerd: "\uf04b", fallback: "[running]" },
+    closed: { nerd: "\uf00c", fallback: "[closed]" },
+    ready: { nerd: "\u25c6", fallback: "[ready]" },
+    aborted: { nerd: "\uf00d", fallback: "[aborted]" },
+    blocked: { nerd: "\uf023", fallback: "[blocked]" },
+    draft: { nerd: "\uf040", fallback: "[draft]" },
+  };
+  // blocked ラベルは "blocked T001,T002" のようになるため、先頭を見てマッチ
+  const statusKey = label.startsWith("blocked") ? "blocked" : label;
+  const iconInfo = statusIcons[statusKey] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
+  const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
+
   const branchEl = task.baseBranch
     ? ui.text(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`, { dim: true })
     : null;
@@ -438,7 +452,7 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   return ui.row({ gap: 1 }, [
     ui.text(icon, colorStyle),
     ui.text(taskId, { bold: !isClosed, ...colorStyle }),
-    ui.text(`[${label}]`, colorStyle),
+    ui.text(statusDisplay, colorStyle),
     branchEl,
     buildTitleWithLinks(task.title, repoUrl, colorStyle),
     timeInfo ? ui.text(timeInfo, colorStyle) : null,
@@ -447,23 +461,16 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
 
 // --- Journal/Log テキスト行構築（ui.logsConsole の代替） ---
 
-const journalIconColors: Record<string, number> = {
-  "[+]": CYAN,
-  "[▶]": YELLOW,
-  "[✓]": GREEN,
-  "[✕]": RED,
-};
-
 function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
   if (entries.length === 0) {
     return [ui.text("no journal entries", { dim: true })];
   }
   return entries.map((entry) => {
-    const iconColor = journalIconColors[entry.icon];
     return ui.row({ gap: 1 }, [
       ui.text(entry.time, { dim: true }),
-      ui.text(entry.icon, iconColor ? { style: { fg: iconColor } } : {}),
+      ui.text(entry.icon, entry.iconColor ? { style: { fg: entry.iconColor } } : {}),
       ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
+      entry.surface ? ui.text(`[${entry.surface}]`, { dim: true }) : null,
       buildTitleWithLinks(entry.message, repoUrl),
     ]);
   });
@@ -689,13 +696,15 @@ export async function startDashboard(
       if (state.taskCursor < taskStartIdx) taskStartIdx = state.taskCursor;
     }
     const visibleTasks = daemon.taskList.slice(taskStartIdx, taskStartIdx + TASK_VISIBLE_LINES);
+    // journal タブ時のみ Tasks セクションにカーソル表示（↑/↓ がタスク操作に使われるため）
+    const tasksFocused = state.activeTab === "journal";
     const taskRows = totalTasks === 0
       ? [ui.text("no tasks", { dim: true })]
       : visibleTasks.map((task, i) => {
           const globalIdx = taskStartIdx + i;
           const isSelected = globalIdx === state.taskCursor;
           return ui.row({ gap: 0 }, [
-            ui.text(isSelected ? "> " : "  ", isSelected ? { bold: true } : {}),
+            ui.text(tasksFocused && isSelected ? "_ " : "  ", tasksFocused && isSelected ? { bold: true } : {}),
             buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl),
           ]);
         });
