@@ -16,25 +16,15 @@
   "conductors": [
     {
       "surface": "surface:490",
-      "taskRunId": "task-083-1775358288",
-      "taskId": "083",
-      "taskTitle": "create-task CLI に --depends-on オプションを実装",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-083-1775358288",
-      "outputDir": ".team/output/task-083-1775358288",
-      "startedAt": "2026-04-05T03:04:53.640Z",
+      "status": "idle",
+      "startedAt": "2026-04-05T03:43:58.836Z",
       "paneId": "pane:288",
       "agents": []
     },
     {
       "surface": "surface:491",
-      "taskRunId": "task-081-1775358062",
-      "taskId": "081",
-      "taskTitle": "タスクに base_branch フィールド追加 + TUI 表示（Nerd Font ブランチアイコン）",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-081-1775358062",
-      "outputDir": ".team/output/task-081-1775358062",
-      "startedAt": "2026-04-05T03:01:07.868Z",
+      "status": "idle",
+      "startedAt": "2026-04-05T03:11:55.180Z",
       "paneId": "pane:289",
       "agents": []
     },

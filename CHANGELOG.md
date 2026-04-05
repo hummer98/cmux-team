@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.24.0] - 2026-04-05
+
+### Added
+- タスクに `base_branch` フィールド追加。`create-task --base-branch` でマージ先ブランチを明示的に指定可能。TUI に Nerd Font ブランチアイコン（）で表示
+- `create-task` CLI に `--depends-on` オプション追加。タスク間の依存���係を指定可能に
+- `SESSION_CLEAR` メッセージ追加。`/clear` 実行時に disconnected Conductor を自動回復（TUI チラつきなし）
+- TUI ダッシ��ボード QoL 改善: Tasks/Journal のステータスを Nerd Font アイコン化、カーソル表示をアンダーバーに変更、Journal 内の surface 表示を dim 化
+
+### Fixed
+- `create-task --depends-on` が無視されるバグを修正。frontmatter に `depends_on` が書き出されず依存チェックが機能しなかった問題を解消
+
 ## [3.23.0] - 2026-04-05
 
 ### Added
