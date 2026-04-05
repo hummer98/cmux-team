@@ -20,6 +20,7 @@ import type { ArtifactMeta } from "./artifact";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
+const JOURNAL_VISIBLE_LINES = 30;
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -267,6 +268,8 @@ interface AppState {
   logScrollOffset: number;   // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
   logAutoScroll: boolean;    // true = 最新に自動追従
   spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
+  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts";
+  journalScrollOffset: number;  // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
 }
 
 // --- スピナー定義 ---
@@ -419,7 +422,7 @@ function buildConductorsSection(state: DaemonState, repoUrl: string | null, spin
   return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl, spinnerFrame)));
 }
 
-function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null) {
+function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null, styleOverride?: Record<string, any>) {
   const isAborted = task.status === "aborted";
   const isClosed = task.status === "closed" || isAborted;
   const icon = isAborted ? "✕" : isClosed ? "○" : "●";
@@ -453,17 +456,19 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const iconInfo = statusIcons[statusKey] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
   const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
 
+  const mergeStyle = (base: Record<string, any>) => styleOverride ? { ...base, ...styleOverride } : base;
+
   const branchEl = task.baseBranch
-    ? ui.text(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`, { dim: true })
+    ? ui.text(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`, mergeStyle({ dim: true }))
     : null;
 
   return ui.row({ gap: 1 }, [
-    ui.text(icon, colorStyle),
-    ui.text(taskId, { bold: !isClosed, ...colorStyle }),
-    ui.text(statusDisplay, colorStyle),
+    ui.text(icon, mergeStyle(colorStyle)),
+    ui.text(taskId, mergeStyle({ bold: !isClosed, ...colorStyle })),
+    ui.text(statusDisplay, mergeStyle(colorStyle)),
     branchEl,
-    buildTitleWithLinks(task.title, repoUrl, colorStyle),
-    timeInfo ? ui.text(timeInfo, colorStyle) : null,
+    buildTitleWithLinks(task.title, repoUrl, mergeStyle(colorStyle)),
+    timeInfo ? ui.text(timeInfo, mergeStyle(colorStyle)) : null,
   ]);
 }
 
@@ -671,6 +676,8 @@ export async function startDashboard(
       logScrollOffset: 0,
       logAutoScroll: true,
       spinnerFrame: 0,
+      focusedArea: "global",
+      journalScrollOffset: 0,
     },
     config: { executionMode: "inline" },
   });
@@ -704,17 +711,14 @@ export async function startDashboard(
       if (state.taskCursor < taskStartIdx) taskStartIdx = state.taskCursor;
     }
     const visibleTasks = daemon.taskList.slice(taskStartIdx, taskStartIdx + TASK_VISIBLE_LINES);
-    // journal タブ時のみ Tasks セクションにカーソル表示（↑/↓ がタスク操作に使われるため）
-    const tasksFocused = state.activeTab === "journal";
+    const tasksFocused = state.focusedArea === "tasks";
     const taskRows = totalTasks === 0
       ? [ui.text("no tasks", { dim: true })]
       : visibleTasks.map((task, i) => {
           const globalIdx = taskStartIdx + i;
           const isSelected = globalIdx === state.taskCursor;
-          return ui.row({ gap: 0 }, [
-            ui.text(tasksFocused && isSelected ? "_ " : "  ", tasksFocused && isSelected ? { bold: true } : {}),
-            buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl),
-          ]);
+          const cursorStyle = tasksFocused && isSelected ? { underline: true } : undefined;
+          return buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl, cursorStyle);
         });
 
     return ui.page({
@@ -765,7 +769,14 @@ export async function startDashboard(
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
-            ? buildJournalRows([...state.journalEntries].reverse(), repoUrl)
+            ? (() => {
+                const reversed = [...state.journalEntries].reverse();
+                const total = reversed.length;
+                let endIdx = total - state.journalScrollOffset;
+                if (endIdx < JOURNAL_VISIBLE_LINES) endIdx = Math.min(total, JOURNAL_VISIBLE_LINES);
+                const startIdx = Math.max(0, endIdx - JOURNAL_VISIBLE_LINES);
+                return buildJournalRows(reversed.slice(startIdx, endIdx), repoUrl);
+              })()
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
             : (() => {
@@ -786,51 +797,38 @@ export async function startDashboard(
               ui.kbd("n"),
               ui.text("cancel"),
             ]
-          : state.activeTab === "artifacts"
+          : state.focusedArea === "tasks"
           ? [
-              ui.kbd("j/k"),
-              ui.text("select"),
-              ui.kbd("Enter"),
-              ui.text("open"),
-              ui.kbd("s"),
-              ui.text(`sort:${state.artifactSort}`),
-              ui.kbd("f"),
-              ui.text(state.artifactTypeFilter ? `type:${state.artifactTypeFilter}` : "filter"),
-              ui.kbd("1-3"),
-              ui.text("tabs"),
-              ui.kbd("q"),
-              ui.text("quit"),
+              ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("ESC"), ui.text("back"),
             ]
-          : state.activeTab === "log"
+          : state.focusedArea === "journal"
           ? [
-              ui.kbd("j/k"),
-              ui.text("scroll"),
-              ui.kbd("g/G"),
-              ui.text("top/bottom"),
-              ui.kbd("1-3"),
-              ui.text("tabs"),
-              ui.kbd("r"),
-              ui.text("reload"),
-              ui.kbd("q"),
-              ui.text("quit"),
-              ui.kbd("Q"),
-              ui.text("full quit"),
+              ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("ESC"), ui.text("back"),
             ]
-          : [
-              ui.kbd("↑/↓"),
-              ui.text("tasks"),
-              ui.kbd("1"),
-              ui.text("journal"),
-              ui.kbd("2"),
-              ui.text("artifacts"),
-              ui.kbd("3"),
-              ui.text("log"),
-              ui.kbd("r"),
-              ui.text("reload"),
-              ui.kbd("q"),
-              ui.text("quit"),
-              ui.kbd("Q"),
-              ui.text("full quit"),
+          : state.focusedArea === "log"
+          ? [
+              ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("ESC"), ui.text("back"),
+            ]
+          : state.focusedArea === "artifacts"
+          ? [
+              ui.kbd("↑/↓"), ui.text("select"),
+              ui.kbd("Enter"), ui.text("open"),
+              ui.kbd("s"), ui.text(`sort:${state.artifactSort}`),
+              ui.kbd("f"), ui.text(state.artifactTypeFilter ? `type:${state.artifactTypeFilter}` : "filter"),
+              ui.kbd("ESC"), ui.text("back"),
+            ]
+          : [ // global
+              ui.kbd("T"), ui.text("tasks"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("L"), ui.text("log"),
+              ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("r"), ui.text("reload"),
+              ui.kbd("q"), ui.text("quit"),
+              ui.kbd("Q"), ui.text("full quit"),
             ],
       }),
     });
@@ -840,14 +838,45 @@ export async function startDashboard(
 
   // キーバインド
   app.keys({
-    Up: () => app.update((s) => ({
-      ...s,
-      taskCursor: Math.max(s.taskCursor - 1, 0),
-    })),
-    Down: () => app.update((s) => ({
-      ...s,
-      taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)),
-    })),
+    Up: () => app.update((s) => {
+      switch (s.focusedArea) {
+        case "tasks":
+          return { ...s, taskCursor: Math.max(s.taskCursor - 1, 0) };
+        case "journal": {
+          const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
+          return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + 1, maxOffset) };
+        }
+        case "log": {
+          const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+          return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
+        }
+        case "artifacts": {
+          return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+        }
+        default:
+          return s;
+      }
+    }),
+    Down: () => app.update((s) => {
+      switch (s.focusedArea) {
+        case "tasks":
+          return { ...s, taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)) };
+        case "journal": {
+          const newOffset = Math.max(s.journalScrollOffset - 1, 0);
+          return { ...s, journalScrollOffset: newOffset };
+        }
+        case "log": {
+          const newOffset = Math.max(s.logScrollOffset - 1, 0);
+          return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
+        }
+        case "artifacts": {
+          const filtered = getFilteredArtifacts(s);
+          return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
+        }
+        default:
+          return s;
+      }
+    }),
     "1": () => app.update((s) => ({ ...s, activeTab: "journal" })),
     "2": () => app.update((s) => ({ ...s, activeTab: "artifacts" })),
     "3": () => app.update((s) => ({ ...s, activeTab: "log" })),
@@ -856,10 +885,14 @@ export async function startDashboard(
       const idx = tabs.indexOf(s.activeTab);
       return { ...s, activeTab: tabs[(idx + 1) % tabs.length]! };
     }),
+    T: () => app.update((s) => ({ ...s, focusedArea: "tasks" })),
+    J: () => app.update((s) => ({ ...s, activeTab: "journal", focusedArea: "journal" })),
+    L: () => app.update((s) => ({ ...s, activeTab: "log", focusedArea: "log" })),
+    A: () => app.update((s) => ({ ...s, activeTab: "artifacts", focusedArea: "artifacts" })),
     // Artifacts タブ専用キー
     Enter: (ctx) => {
       const currentState = ctx.state;
-      if (currentState.activeTab !== "artifacts") return;
+      if (currentState.focusedArea !== "artifacts") return;
       const filtered = getFilteredArtifacts(currentState);
       if (filtered.length === 0) return;
       const selected = filtered[currentState.artifactCursor];
@@ -877,58 +910,39 @@ export async function startDashboard(
         },
       ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
     },
-    j: () => app.update((s) => {
-      if (s.activeTab === "artifacts") {
-        const filtered = getFilteredArtifacts(s);
-        return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
-      }
-      if (s.activeTab === "log") {
-        const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
-        return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
-      }
-      return s;
-    }),
-    k: () => app.update((s) => {
-      if (s.activeTab === "artifacts") {
-        return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
-      }
-      if (s.activeTab === "log") {
-        const newOffset = Math.max(s.logScrollOffset - 1, 0);
-        return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
-      }
-      return s;
-    }),
     G: () => app.update((s) => {
-      if (s.activeTab === "log") {
+      if (s.focusedArea === "log") {
         return { ...s, logScrollOffset: 0, logAutoScroll: true };
       }
       return s;
     }),
     g: () => app.update((s) => {
-      if (s.activeTab === "log") {
+      if (s.focusedArea === "log") {
         const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
         return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
       }
       return s;
     }),
     s: () => app.update((s) => {
-      if (s.activeTab !== "artifacts") return s;
+      if (s.focusedArea !== "artifacts") return s;
       const sorts: AppState["artifactSort"][] = ["id", "created", "updated"];
       const idx = sorts.indexOf(s.artifactSort);
       return { ...s, artifactSort: sorts[(idx + 1) % sorts.length]!, artifactCursor: 0 };
     }),
     f: () => app.update((s) => {
-      if (s.activeTab !== "artifacts") return s;
+      if (s.focusedArea !== "artifacts") return s;
       const types = [null, "research", "decision", "session", "spec", "report"];
       const idx = types.indexOf(s.artifactTypeFilter);
       return { ...s, artifactTypeFilter: types[(idx + 1) % types.length]!, artifactCursor: 0 };
     }),
-    r: () => opts?.onReload?.(),
-    q: () => {
+    r: (ctx) => { if (ctx.state.focusedArea === "global") opts?.onReload?.(); },
+    q: (ctx) => {
+      if (ctx.state.focusedArea !== "global") return;
       cleanup();
       opts?.onQuit?.();
     },
-    Q: () => {
+    Q: (ctx) => {
+      if (ctx.state.focusedArea !== "global") return;
       confirmingFullQuit = true;
       app.update((s) => ({ ...s, confirmingFullQuit: true }));
     },
@@ -944,7 +958,7 @@ export async function startDashboard(
     },
     Escape: () => {
       confirmingFullQuit = false;
-      app.update((s) => ({ ...s, confirmingFullQuit: false }));
+      app.update((s) => ({ ...s, confirmingFullQuit: false, focusedArea: "global" }));
     },
   });
 
