@@ -29,6 +29,11 @@ worktree は tracked files のみ含む。作業開始前に以下を確認す�
 
 結果サマリーは `{{OUTPUT_DIR}}/summary.md` に書き出す。
 
+## マージ先ブランチ
+
+このタスクの成果は `{{BASE_BRANCH}}` にマージすること。
+納品方法（ローカルマージ or PR）は conductor-role.md の完了時の処理に従う。
+
 ## 完了通知
 
 全ての処理が完了したら、最後に:

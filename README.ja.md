@@ -23,6 +23,11 @@ cmux-team は、cmux のターミナル分割を使ってサブエージェン�
 - [cmux](https://github.com/manaflow-ai/cmux) がインストール済み
 - [bun](https://bun.sh/) がインストール済み（Manager daemon に必要）
 - cmux 内で Claude Code を実行していること
+- [Nerd Font](https://www.nerdfonts.com/)（推奨）— TUI ダッシュボードのアイコン表示が向上します
+  ```bash
+  brew install --cask font-hack-nerd-font
+  ```
+  Nerd Font がなくても動作します（Unicode シンボルにフォールバック）。`CMUX_NERD_FONT=0` を設定するとフォールバックアイコンを明示的に使用できます。
 
 ## インストール
 
