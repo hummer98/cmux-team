@@ -1,17 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --session-id \"${SESSION_ID:-}\" 2>/dev/null || true'",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -30,39 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
-            "timeout": 5000
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
             "command": "python3 -c \"import sys,os,json,subprocess; exec(\\\"\\\\nif os.environ.get('CONDUCTOR_ID'):\\\\n    sys.exit(0)\\\\nroot = subprocess.run(['git','rev-parse','--show-toplevel'], capture_output=True, text=True).stdout.strip()\\\\nif not root:\\\\n    sys.exit(0)\\\\npf = os.path.join(root, '.team', 'proxy-port')\\\\ntry:\\\\n    port = open(pf).read().strip()\\\\nexcept Exception:\\\\n    sys.exit(0)\\\\nimport urllib.request\\\\ndata = json.dumps({'status':'idle'}).encode()\\\\ntry:\\\\n    req = urllib.request.Request(f'http://localhost:{port}/master-state', data=data, headers={'Content-Type':'application/json'}, method='POST')\\\\n    urllib.request.urlopen(req, timeout=2)\\\\nexcept Exception:\\\\n    pass\\\\n\\\")\"",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_CLEAR --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
-            "timeout": 5000
-          }
-        ]
-      },
-      {
-        "matcher": "logout|prompt_input_exit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c '[ -z \"$CONDUCTOR_ID\" ] && exit 0; cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             "timeout": 5000
           }
         ]
