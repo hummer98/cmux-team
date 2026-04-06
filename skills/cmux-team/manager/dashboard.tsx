@@ -1058,9 +1058,23 @@ export async function startDashboard(
   // app.start() 完了後に spinner を開始（start 中に update すると lifecycle error）
   // refresh は daemon の tick 後に scheduleRefresh 経由で呼ばれる（ポーリング不要）
   dashboardActive = true;
+  let wasAnimating = false;
+
   spinnerInterval = setInterval(() => {
     try {
-      app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 }));
+      const daemon = getState();
+      const needsAnimation =
+        daemon.masterStatus === "running" ||
+        [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting");
+
+      if (needsAnimation) {
+        wasAnimating = true;
+        app.update((s) => ({ ...s, daemon, spinnerFrame: s.spinnerFrame + 1 }));
+      } else if (wasAnimating) {
+        // アニメーション → idle 遷移時: 最後の1回で idle 状態を反映
+        wasAnimating = false;
+        app.update((s) => ({ ...s, daemon }));
+      }
     } catch {}
   }, SPINNER_INTERVAL);
   refresh();
