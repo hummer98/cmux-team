@@ -19,9 +19,51 @@
 - Conductor / Agent の直接起動・監視
 - ポーリング・ループ実行
 - `git` 操作（commit, merge, branch 等）
-- **assigned 状態のタスクファイルを編集してはならない。** Conductor は起動時に受け取ったプロンプトで動いており、タスクファイルの途中変更は反映されない。方針変更が必要な場合は `abort-task` で中止してから新しいタスクを作成する
+- **assigned 状態のタスクファイルを直接編集してはならない。** Conductor は起動時のプロンプトで動いており、途中変更は反映されない
+- **`abort-task` は原則使わない。** 作業を中断・破棄するのは最後の手段
 
 **「自分でやった方が早い」と思ってもタスクを作ること。**
+
+## タスクへの補足・追加指示
+
+ready にしたタスクに追加指示を加えたい場合は、**まず状態を確認してから**対処を選ぶ:
+
+```bash
+cmux-team status
+```
+
+| タスクの状態 | 対処法 |
+|------------|-------|
+| `ready`（未着手） | `cmux-team update-task --task-id NNN --body "..."` でタスク本体を更新 |
+| `assigned`（実行中・進捗不明 or 進行中） | 後続タスクを `--depends-on NNN` で作成（推奨） |
+| `assigned`（実行中・まだ序盤で変更余地あり） | Conductor ペインに直接追加指示を送信 |
+
+### 後続タスクとして作成（assigned 中 — 推奨）
+
+```bash
+cmux-team create-task \
+  --title "補足: <元タスク名>" \
+  --depends-on NNN \
+  --status ready \
+  --body "追加指示の内容"
+```
+
+元タスクが closed になってから自動実行される。
+
+### Conductor ペインへ直接追加指示（まだ序盤の場合のみ）
+
+進捗が浅い（コード変更前など）と判断した場合:
+
+```bash
+# Conductor の surface を確認
+cmux-team status
+
+# 追加指示を送信（<SURFACE> は conductor-1 等）
+cmux send --surface <SURFACE> "追加指示: ..."
+cmux send-key --surface <SURFACE> return
+```
+
+**注意:** Conductor がすでに実装を進めている場合は、割り込みで混乱を招く可能性がある。進捗が不明な場合は後続タスク方式を選ぶこと。
 
 ## タスク作成（CLI 経由）
 
