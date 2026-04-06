@@ -91,6 +91,7 @@ function buildTitleWithLinks(
       url: `${repoUrl}/issues/${issueNum}`,
       label: `#${issueNum}`,
       style: { fg: rgb(100, 149, 237) },  // cornflower blue
+      focusable: false,
     }));
     lastIndex = match.index + match[0].length;
   }
@@ -703,6 +704,9 @@ export async function startDashboard(
 ): Promise<{ scheduleRefresh: () => void }> {
   const daemonState = getState();
   let confirmingFullQuit = false;
+
+  // OSC 8 ハイパーリンクを有効化（ターミナル自動検出に依存せず明示的に設定）
+  process.env.REZI_TERMINAL_SUPPORTS_OSC8 = "1";
 
   const app = createNodeApp<AppState>({
     initialState: {
