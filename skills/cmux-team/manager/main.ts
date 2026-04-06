@@ -20,7 +20,7 @@
  */
 
 import { join, dirname } from "path";
-import { existsSync } from "fs";
+import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
@@ -747,11 +747,59 @@ Notes:
   const config = await loadConfig();
   const model = getModelForRole(config, "conductor", getArg("model"));
 
+  // conductor-settings.json を生成（Conductor 固有の hook を注入）
+  const conductorSettingsPath = join(PROJECT_ROOT, `.team/prompts/${slotId}-settings.json`);
+  const conductorSettings = {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "startup",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --session-id \"${SESSION_ID:-}\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
+      Stop: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
+      SessionEnd: [
+        {
+          matcher: "clear",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_CLEAR --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+        {
+          matcher: "logout|prompt_input_exit",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
+    },
+  };
+  try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
+  writeFileSync(conductorSettingsPath, JSON.stringify(conductorSettings, null, 2));
+
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
   try {
     execFileSync("claude", [
       "--dangerously-skip-permissions",
+      "--settings", conductorSettingsPath,
       "--model", model,
       "--append-system-prompt-file", rolePromptFile,
       "あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。",
