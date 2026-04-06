@@ -171,10 +171,47 @@ function formatElapsed(isoDate: string): string {
   return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`;
 }
 
-/** レート制限のプログレスバーを生成 */
+/** 使用率のプログレスバーを1つ生成 */
+function buildUtilizationBar(label: string, utilization: number): { text: string; color: typeof GREEN } {
+  const pct = Math.round(utilization * 100);
+  const barWidth = 10;
+  const filled = Math.round((pct / 100) * barWidth);
+  const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
+  const color = pct >= 90 ? RED : pct >= 70 ? YELLOW : GREEN;
+  return { text: `${label}: ${pct}% ${bar}`, color };
+}
+
+/** レート制限の表示文字列を生成 */
 function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { label: string; color: typeof GREEN } {
-  if (!rateLimit || rateLimit.tokensLimit === 0) {
-    return { label: "TPM: --", color: GRAY };
+  if (!rateLimit) {
+    return { label: "Rate: --", color: GRAY };
+  }
+
+  // unified データがある場合: 5h/7d 使用率を表示
+  if (rateLimit.unified5hUtilization != null || rateLimit.unified7dUtilization != null) {
+    const parts: string[] = [];
+    let worstColor: typeof GREEN = GREEN;
+
+    if (rateLimit.unified5hUtilization != null) {
+      const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization);
+      parts.push(h5.text);
+      if (h5.color === RED || (h5.color === YELLOW && worstColor === GREEN)) worstColor = h5.color;
+    }
+    if (rateLimit.unified7dUtilization != null) {
+      const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization);
+      parts.push(d7.text);
+      if (d7.color === RED || (d7.color === YELLOW && worstColor === GREEN)) worstColor = d7.color;
+    }
+
+    // rate_limited の場合は赤に強制
+    if (rateLimit.unifiedStatus === "rate_limited") worstColor = RED;
+
+    return { label: parts.join("  "), color: worstColor };
+  }
+
+  // フォールバック: 従来の TPM 表示
+  if (rateLimit.tokensLimit === 0) {
+    return { label: "Rate: --", color: GRAY };
   }
   const pct = Math.round((rateLimit.tokensRemaining / rateLimit.tokensLimit) * 100);
   const barWidth = 10;

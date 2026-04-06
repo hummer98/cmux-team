@@ -141,6 +141,16 @@ export interface RateLimitInfo {
   inputTokensRemaining: number;
   /** output tokens remaining */
   outputTokensRemaining: number;
+  /** unified 5h 使用率（0.0-1.0、null = ヘッダーなし） */
+  unified5hUtilization: number | null;
+  /** unified 7d 使用率（0.0-1.0、null = ヘッダーなし） */
+  unified7dUtilization: number | null;
+  /** unified 5h リセット時刻（unix timestamp 文字列、null = ヘッダーなし） */
+  unified5hReset: string | null;
+  /** unified 7d リセット時刻（unix timestamp 文字列、null = ヘッダーなし） */
+  unified7dReset: string | null;
+  /** unified ステータス（allowed/rate_limited、null = ヘッダーなし） */
+  unifiedStatus: string | null;
   /** 最終更新時刻 */
   updatedAt: string;
 }
