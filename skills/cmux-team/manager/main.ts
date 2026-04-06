@@ -1176,18 +1176,22 @@ Options:
   --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
   --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
-  --depends-on <ids>      依存タスク ID（カンマ区切り、任意）
+  --run-after-all         全通常タスク完了後に実行（任意）
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
   cmux-team create-task --title "新機能追加" --priority high
   cmux-team create-task --title "リファクタ" --depends-on "081,082" --status ready
   cmux-team create-task --title "hotfix" --base-branch develop --status ready
+  cmux-team create-task --title "リリース v3.5.0" --run-after-all --status ready
 
 Notes:
   - status が ready の場合、TASK_CREATED メッセージが自動送信され、
     daemon が idle Conductor に割り当てます
   - draft の場合は割り当てされません。update-task --status ready で開始できます
+  - --run-after-all タスクはシステム内に1つだけ存在可能です（未クローズの
+    run_after_all タスクがあるとエラーになります）
+  - run_after_all タスクは全通常タスクが closed になった後に自動実行されます
 `);
   const title = requireArg("title");
   const priority = getArg("priority") || "medium";
