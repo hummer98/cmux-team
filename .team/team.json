@@ -5,39 +5,34 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:38",
-    "status": "idle"
+    "surface": "surface:83",
+    "status": "running"
   },
   "manager": {
-    "pid": 18437,
+    "pid": 41210,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
-      "surface": "surface:35",
+      "surface": "surface:80",
       "status": "idle",
-      "startedAt": "2026-04-05T15:49:31.969Z",
-      "paneId": "pane:33",
+      "startedAt": "2026-04-06T09:52:26.039Z",
+      "paneId": "pane:56",
       "agents": []
     },
     {
-      "surface": "surface:36",
-      "taskRunId": "task-086-1775404193",
-      "taskId": "086",
-      "taskTitle": "task_completed 二重記録の原因調査・修正",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-086-1775404193",
-      "outputDir": ".team/output/task-086-1775404193",
-      "startedAt": "2026-04-05T15:49:58.411Z",
-      "paneId": "pane:34",
+      "surface": "surface:81",
+      "status": "idle",
+      "startedAt": "2026-04-06T05:09:43.678Z",
+      "paneId": "pane:57",
       "agents": []
     },
     {
-      "surface": "surface:37",
+      "surface": "surface:82",
       "status": "idle",
-      "startedAt": "2026-04-05T15:50:13.908Z",
-      "paneId": "pane:35",
+      "startedAt": "2026-04-06T04:24:09.871Z",
+      "paneId": "pane:58",
       "agents": []
     }
   ]
