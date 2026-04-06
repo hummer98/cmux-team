@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.26.1] - 2026-04-06
+
+### Fixed
+- Conductor の hook 注入を `CMUX_CLAUDE_HOOKS_DISABLED` 方式に修正。cmux ラッパーが `--settings` を先に注入するため cmux-team の hooks が無視される問題を解消。cmux hooks と cmux-team hooks をマージした単一の settings で両方が正常に動作するように (T092)
+
 ## [3.26.0] - 2026-04-06
 
 ### Added
