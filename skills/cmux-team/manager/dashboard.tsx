@@ -738,14 +738,14 @@ export async function startDashboard(
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー（Ink版と同等のロジック）
-    // 基本: cmux-team RUNNING conductors N/M tasks N open
+    // 基本: cmux-team [STOPPED|STARTING|vX.Y.Z] PID XXXX
     // cols >= 65: + PID XXXX
     // cols >= 75: + poll Ns
     // cols >= 85: + N ready (pendingTasks > 0)
     const headerParts = [
-      !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : "RUNNING",
+      !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : (state.version ? `v${state.version}` : ""),
       `PID ${process.pid}`,
-    ];
+    ].filter(Boolean);
     const headerSubtitle = headerParts.join("  ");
 
     // タスク一覧（カーソル選択 + スクロール対応）
@@ -775,7 +775,7 @@ export async function startDashboard(
         (() => {
           const rl = buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
-          const left = `─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""}${portLabel}`;
+          const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
           const right = rl.label;
           const fill = "─".repeat(Math.max(1, 80 - left.length - right.length));
           return ui.row({ gap: 0 }, [
