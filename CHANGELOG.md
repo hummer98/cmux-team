@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.26.0] - 2026-04-06
+
+### Added
+- Conductor 起動時に `--settings` フラグで hook 設定を自動注入 (T089)。worktree 内でも SessionStart フックが正しく動作するように
+
+### Fixed
+- daemon 起動時の `console.log` 出力を `log()` に置換。ログがファイルに統一され TUI 表示が崩れなくなった
+
 ## [3.25.0] - 2026-04-06
 
 ### Added
