@@ -422,7 +422,13 @@ function buildConductorsSection(state: DaemonState, repoUrl: string | null, spin
   return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl, spinnerFrame)));
 }
 
-function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | null, styleOverride?: Record<string, any>) {
+function buildTaskRow(
+  task: TaskSummary,
+  assigned: boolean,
+  repoUrl: string | null,
+  styleOverride?: Record<string, any>,
+  buttonConfig?: { id: string; onPress: () => void },
+) {
   const isAborted = task.status === "aborted";
   const isClosed = task.status === "closed" || isAborted;
   const icon = isAborted ? "✕" : isClosed ? "○" : "●";
@@ -455,6 +461,25 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const statusKey = label.startsWith("blocked") ? "blocked" : label;
   const iconInfo = statusIcons[statusKey] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
   const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
+
+  // ボタンモード: ui.button でクリック可能な行を返す
+  if (buttonConfig) {
+    const branchPart = task.baseBranch ? ` ${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}` : "";
+    const flatLabel = `${icon} ${taskId} ${statusDisplay}${branchPart} ${task.title}${timeInfo ? ` ${timeInfo}` : ""}`;
+    const btnStyle: Record<string, any> = {};
+    if (color) btnStyle.fg = color;
+    if (!isClosed) btnStyle.bold = true;
+    if (styleOverride?.style) Object.assign(btnStyle, styleOverride.style);
+    return ui.button({
+      id: buttonConfig.id,
+      label: flatLabel,
+      px: 0,
+      dsVariant: "ghost",
+      focusable: false,
+      style: Object.keys(btnStyle).length > 0 ? btnStyle : undefined,
+      onPress: buttonConfig.onPress,
+    });
+  }
 
   const mergeStyle = (base: Record<string, any>) => {
     if (!styleOverride) return base;
@@ -734,7 +759,10 @@ export async function startDashboard(
           const globalIdx = taskStartIdx + i;
           const isSelected = globalIdx === state.taskCursor;
           const cursorStyle = tasksFocused && isSelected ? { style: { underline: true } } : undefined;
-          return buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl, cursorStyle);
+          return buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl, cursorStyle, {
+            id: `task-${task.id}`,
+            onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks", taskCursor: globalIdx })); } catch {} },
+          });
         });
 
     return ui.page({
