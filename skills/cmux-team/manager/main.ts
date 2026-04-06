@@ -738,6 +738,7 @@ Notes:
   process.env.PROJECT_ROOT = PROJECT_ROOT;
   process.env.CONDUCTOR_ID = slotId;
   process.env.CMUX_NO_RENAME_TAB = "1";
+  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
   if (proxyPort) {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
@@ -747,7 +748,7 @@ Notes:
   const config = await loadConfig();
   const model = getModelForRole(config, "conductor", getArg("model"));
 
-  // conductor-settings.json を生成（Conductor 固有の hook を注入）
+  // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
   const conductorSettingsPath = join(PROJECT_ROOT, `.team/prompts/${slotId}-settings.json`);
   const conductorSettings = {
     hooks: {
@@ -760,6 +761,14 @@ Notes:
             timeout: 5000,
           }],
         },
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook session-start",
+            timeout: 10000,
+          }],
+        },
       ],
       Stop: [
         {
@@ -768,6 +777,14 @@ Notes:
             type: "command",
             command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
+          }],
+        },
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook stop",
+            timeout: 10000,
           }],
         },
       ],
@@ -786,6 +803,45 @@ Notes:
             type: "command",
             command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             timeout: 5000,
+          }],
+        },
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook session-end",
+            timeout: 1000,
+          }],
+        },
+      ],
+      Notification: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook notification",
+            timeout: 10000,
+          }],
+        },
+      ],
+      UserPromptSubmit: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook prompt-submit",
+            timeout: 10000,
+          }],
+        },
+      ],
+      PreToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "cmux claude-hook pre-tool-use",
+            timeout: 5000,
+            async: true,
           }],
         },
       ],
