@@ -266,11 +266,12 @@ interface AppState {
   version: string;
   repoUrl: string | null;
   confirmingFullQuit?: boolean;
-  logScrollOffset: number;   // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
+  logScrollOffset: number;   // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   logAutoScroll: boolean;    // true = 最新に自動追従
   spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
   focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts";
-  journalScrollOffset: number;  // 0 = 最下部（最新）、正の数 = 上にスクロールした行数
+  journalScrollOffset: number;  // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
+  journalAutoScroll: boolean;   // true = 最新に自動追従
 }
 
 // --- スピナー定義 ---
@@ -727,6 +728,7 @@ export async function startDashboard(
       spinnerFrame: 0,
       focusedArea: "global",
       journalScrollOffset: 0,
+      journalAutoScroll: true,
     },
     config: { executionMode: "inline" },
   });
@@ -827,21 +829,22 @@ export async function startDashboard(
         ui.column({ gap: 0 },
           state.activeTab === "journal"
             ? (() => {
-                // journalEntries は時系列順（古→新）。reverse せず、Log と同じく末尾が最新
-                const total = state.journalEntries.length;
-                let endIdx = total - state.journalScrollOffset;
-                if (endIdx < JOURNAL_VISIBLE_LINES) endIdx = Math.min(total, JOURNAL_VISIBLE_LINES);
-                const startIdx = Math.max(0, endIdx - JOURNAL_VISIBLE_LINES);
-                return buildJournalRows(state.journalEntries.slice(startIdx, endIdx), repoUrl);
+                // 逆順表示: 最新が先頭、offset=0 で最新を表示
+                const reversed = [...state.journalEntries].reverse();
+                const total = reversed.length;
+                const startIdx = Math.min(state.journalScrollOffset, Math.max(0, total - JOURNAL_VISIBLE_LINES));
+                const endIdx = Math.min(startIdx + JOURNAL_VISIBLE_LINES, total);
+                return buildJournalRows(reversed.slice(startIdx, endIdx), repoUrl);
               })()
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
             : (() => {
-                const total = state.logLines.length;
-                let endIdx = total - state.logScrollOffset;
-                if (endIdx < LOG_VISIBLE_LINES) endIdx = Math.min(total, LOG_VISIBLE_LINES);
-                const startIdx = Math.max(0, endIdx - LOG_VISIBLE_LINES);
-                return buildLogRows(state.logLines.slice(startIdx, endIdx));
+                // 逆順表示: 最新が先頭、offset=0 で最新を表示
+                const reversed = [...state.logLines].reverse();
+                const total = reversed.length;
+                const startIdx = Math.min(state.logScrollOffset, Math.max(0, total - LOG_VISIBLE_LINES));
+                const endIdx = Math.min(startIdx + LOG_VISIBLE_LINES, total);
+                return buildLogRows(reversed.slice(startIdx, endIdx));
               })()
         ),
       ]),
@@ -862,6 +865,7 @@ export async function startDashboard(
           : state.focusedArea === "journal"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("g/G"), ui.text("top/bottom"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : state.focusedArea === "log"
@@ -900,12 +904,14 @@ export async function startDashboard(
         case "tasks":
           return { ...s, taskCursor: Math.max(s.taskCursor - 1, 0) };
         case "journal": {
-          const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
-          return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + 1, maxOffset) };
+          // Up = 新しい方へ（offset 減少）
+          const newOffset = Math.max(s.journalScrollOffset - 1, 0);
+          return { ...s, journalScrollOffset: newOffset, journalAutoScroll: newOffset === 0 };
         }
         case "log": {
-          const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
-          return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
+          // Up = 新しい方へ（offset 減少）
+          const newOffset = Math.max(s.logScrollOffset - 1, 0);
+          return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
         }
         case "artifacts": {
           return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
@@ -919,12 +925,14 @@ export async function startDashboard(
         case "tasks":
           return { ...s, taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)) };
         case "journal": {
-          const newOffset = Math.max(s.journalScrollOffset - 1, 0);
-          return { ...s, journalScrollOffset: newOffset };
+          // Down = 古い方へ（offset 増加）
+          const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
+          return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + 1, maxOffset), journalAutoScroll: false };
         }
         case "log": {
-          const newOffset = Math.max(s.logScrollOffset - 1, 0);
-          return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
+          // Down = 古い方へ（offset 増加）
+          const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+          return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
         }
         case "artifacts": {
           const filtered = getFilteredArtifacts(s);
@@ -967,13 +975,22 @@ export async function startDashboard(
         },
       ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
     },
-    G: () => app.update((s) => {
+    g: () => app.update((s) => {
+      // g = 先頭（最新）へ、autoScroll ON
+      if (s.focusedArea === "journal") {
+        return { ...s, journalScrollOffset: 0, journalAutoScroll: true };
+      }
       if (s.focusedArea === "log") {
         return { ...s, logScrollOffset: 0, logAutoScroll: true };
       }
       return s;
     }),
-    g: () => app.update((s) => {
+    G: () => app.update((s) => {
+      // G = 末尾（最古）へ、autoScroll OFF
+      if (s.focusedArea === "journal") {
+        const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
+        return { ...s, journalScrollOffset: maxOffset, journalAutoScroll: false };
+      }
       if (s.focusedArea === "log") {
         const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
         return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
@@ -1030,16 +1047,27 @@ export async function startDashboard(
     const artifacts = await loadArtifacts(newDaemon.projectRoot);
 
     try {
-      app.update((s) => ({
-        ...s,
-        daemon: newDaemon,
-        logLines: lines,
-        journalEntries,
-        repoUrl,
-        artifacts,
-        logScrollOffset: s.logAutoScroll ? 0 : s.logScrollOffset,
-        taskCursor: Math.min(s.taskCursor, Math.max(newDaemon.taskList.length - 1, 0)),
-      }));
+      app.update((s) => {
+        // フォーカス中は自動スクロールしない
+        const journalAuto = s.journalAutoScroll && s.focusedArea !== "journal";
+        const logAuto = s.logAutoScroll && s.focusedArea !== "log";
+
+        // 自動スクロール OFF 時: 新エントリ分だけ offset を増加して表示位置を保持
+        const journalDelta = journalEntries.length - s.journalEntries.length;
+        const logDelta = lines.length - s.logLines.length;
+
+        return {
+          ...s,
+          daemon: newDaemon,
+          logLines: lines,
+          journalEntries,
+          repoUrl,
+          artifacts,
+          journalScrollOffset: journalAuto ? 0 : s.journalScrollOffset + Math.max(0, journalDelta),
+          logScrollOffset: logAuto ? 0 : s.logScrollOffset + Math.max(0, logDelta),
+          taskCursor: Math.min(s.taskCursor, Math.max(newDaemon.taskList.length - 1, 0)),
+        };
+      });
     } catch (e: any) {
       // lifecycle operation already in flight — skip this tick
       log("dashboard_update_error", e?.message ?? String(e)).catch(() => {});
