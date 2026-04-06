@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.27.0] - 2026-04-07
+
+### Added
+- `dockeeper` スキル (`skills/dockeeper/SKILL.md`) を新規追加。`git log` と closed タスク履歴を参照して `docs/spec/` を実装と同期する
+- `/docs-sync` スラッシュコマンドを追加。`--dry-run`（差分確認のみ）・`--auto`（確認なし自動更新）オプション対応
+- ダッシュボードの GitHub issue リンクに OSC 8 ハイパーリンクを有効化。対応ターミナルでクリック可能に (T093)
+- ダッシュボード Tasks 行全体をクリック可能に (T094)
+
+### Changed
+- ダッシュボードヘッダーから RUNNING 表示を削除し、バージョン番号の表示位置を移動 (T095)
+- Master プロンプト: assigned タスクへの補足指示フローを改善。`abort-task` 推奨を廃止し、状態確認 → `--depends-on` 後続タスク作成 or `cmux send` 直接送信の判断フローを追加
+
+### Fixed
+- `create-task --help` に `--run-after-all` オプションの説明を追加 (T098)
+- ダッシュボード Tasks セクションのスクロールが5件で止まるバグを修正 (T096)
+- Master がアイドル時にスピナーが回り続けるバグを修正 (T097)
+
 ## [3.26.1] - 2026-04-06
 
 ### Fixed
