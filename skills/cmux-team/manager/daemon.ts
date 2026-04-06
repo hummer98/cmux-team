@@ -600,8 +600,8 @@ async function scanTasks(state: DaemonState): Promise<void> {
   const closedMetas = tasks.filter(t => t.status === "closed" || t.status === "aborted");
   const closedTasks = [...closedMetas]
     .sort((a, b) => (taskState[b.id]?.closedAt ?? taskState[b.id]?.abortedAt ?? "").localeCompare(taskState[a.id]?.closedAt ?? taskState[a.id]?.abortedAt ?? ""));
-  const maxItems = Math.max(5, openTasks.length);
-  const combined = [...openTasks, ...closedTasks.slice(0, maxItems - openTasks.length)];
+  const MAX_CLOSED_DISPLAY = 20;
+  const combined = [...openTasks, ...closedTasks.slice(0, MAX_CLOSED_DISPLAY)];
   state.taskList = combined.map((t) => ({
     id: t.id,
     title: t.title,
