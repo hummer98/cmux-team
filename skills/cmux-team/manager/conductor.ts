@@ -165,15 +165,15 @@ export async function initializeConductorSlots(
   daemonSurface?: string,
 ): Promise<void> {
   try {
-    console.log(`⏳ Conductor スロット作成中 (${count}個)...`);
+    await log("conductor_slots_creating", `count=${count}`);
 
     // Phase 1: pane 分割（Claude は起動しない）
-    console.log(`  ⏳ Phase 1: pane 分割中...`);
+    await log("conductor_panes_creating", "");
     const panes = await createConductorPanes(count, daemonSurface);
-    console.log(`  ✅ Phase 1: ${panes.length}個の pane 作成完了`);
+    await log("conductor_panes_created", `count=${panes.length}`);
 
     // Phase 2: Claude 一斉起動
-    console.log(`  ⏳ Phase 2: Claude 起動中...`);
+    await log("conductor_claude_launching", "");
     for (const pane of panes) {
       await launchConductorOnSurface(projectRoot, pane.surface, pane.paneId);
     }
@@ -193,7 +193,6 @@ export async function initializeConductorSlots(
       }
     }
 
-    console.log(`✅ Conductor スロット ${panes.length}個 準備完了`);
     await log("conductor_slots_initialized", `count=${panes.length}`);
   } catch (e: any) {
     await log("error", `initializeConductorSlots failed: ${e.message}`);
