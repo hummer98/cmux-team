@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.25.0] - 2026-04-06
+
+### Added
+- ダッシュボードヘッダーに proxy ポート番号を表示（例: `:60372`）。proxy が生きているかひと目でわかるように
+- ダッシュボード Tasks セクションのヘッダーをクリックでタスクフォーカスに切り替え可能に
+- タブボタン（Journal / Artifacts / Log）クリック時に対応エリアにフォーカス移動
+
+### Fixed
+- `daemon_reload`（R キー）後に proxy が道連れ停止するバグを修正。`exit 42`（auto_restart）を受け取った子 daemon が終了すると proxy 所有者の親 daemon も `process.exit(0)` して proxy が停止する問題を解消。cmux-team.js と同様の再起動ループを組み込み、proxy を安定させる
+- `tick()` で proxy の死活を毎ポーリング確認し、停止時にログ（`proxy_dead`）を記録。問題発生時の原因追跡が可能に
+- ダッシュボードのカーソルスタイルを `{ underline: true }` → `{ style: { underline: true } }` に修正（rezi-ui スタイル仕様に合わせる）
+- ダッシュボード QoL 改善: フォーカスシステム・スクロール・カーソル (T088)
+
 ## [3.24.2] - 2026-04-06
 
 ### Fixed
