@@ -19,7 +19,7 @@ import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 
 const LOG_VISIBLE_LINES = 30;
-const TASK_VISIBLE_LINES = 5;
+const TASK_VISIBLE_LINES = 15;
 const JOURNAL_VISIBLE_LINES = 30;
 
 // --- GitHub リポジトリ URL 解決 ---
