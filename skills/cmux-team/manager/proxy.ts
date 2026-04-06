@@ -36,20 +36,36 @@ interface TraceEntry {
 
 /** Anthropic レスポンスヘッダーから RateLimitInfo を抽出 */
 function extractRateLimit(headers: Headers): RateLimitInfo | null {
+  // unified ヘッダーの読み取り
+  const unified5hRaw = headers.get("anthropic-ratelimit-unified-5h-utilization");
+  const unified7dRaw = headers.get("anthropic-ratelimit-unified-7d-utilization");
+  const unified5h = unified5hRaw != null ? parseFloat(unified5hRaw) : null;
+  const unified7d = unified7dRaw != null ? parseFloat(unified7dRaw) : null;
+  const unified5hReset = headers.get("anthropic-ratelimit-unified-5h-reset") ?? null;
+  const unified7dReset = headers.get("anthropic-ratelimit-unified-7d-reset") ?? null;
+  const unifiedStatus = headers.get("anthropic-ratelimit-unified-status") ?? null;
+
+  // 従来の TPM ヘッダーの読み取り
   const remaining = headers.get("anthropic-ratelimit-tokens-remaining");
   const limit = headers.get("anthropic-ratelimit-tokens-limit");
-  if (remaining == null || limit == null) return null;
 
-  const tokensRemaining = parseInt(remaining, 10);
-  const tokensLimit = parseInt(limit, 10);
-  if (isNaN(tokensRemaining) || isNaN(tokensLimit)) return null;
+  // unified も TPM も両方ない場合は null
+  if ((remaining == null || limit == null) && unified5h == null && unified7d == null) return null;
+
+  const tokensRemaining = remaining != null ? parseInt(remaining, 10) : 0;
+  const tokensLimit = limit != null ? parseInt(limit, 10) : 0;
 
   return {
-    tokensRemaining,
-    tokensLimit,
+    tokensRemaining: isNaN(tokensRemaining) ? 0 : tokensRemaining,
+    tokensLimit: isNaN(tokensLimit) ? 0 : tokensLimit,
     tokensReset: headers.get("anthropic-ratelimit-tokens-reset") ?? "",
     inputTokensRemaining: parseInt(headers.get("anthropic-ratelimit-input-tokens-remaining") ?? "0", 10),
     outputTokensRemaining: parseInt(headers.get("anthropic-ratelimit-output-tokens-remaining") ?? "0", 10),
+    unified5hUtilization: unified5h != null && !isNaN(unified5h) ? unified5h : null,
+    unified7dUtilization: unified7d != null && !isNaN(unified7d) ? unified7d : null,
+    unified5hReset,
+    unified7dReset,
+    unifiedStatus,
     updatedAt: new Date().toISOString(),
   };
 }
