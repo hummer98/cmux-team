@@ -456,11 +456,31 @@ function buildTaskRow(task: TaskSummary, assigned: boolean, repoUrl: string | nu
   const iconInfo = statusIcons[statusKey] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
   const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
 
-  const mergeStyle = (base: Record<string, any>) => styleOverride ? { ...base, ...styleOverride } : base;
+  const mergeStyle = (base: Record<string, any>) => {
+    if (!styleOverride) return base;
+    const merged = { ...base, ...styleOverride };
+    if (base.style || styleOverride.style) {
+      merged.style = { ...(base.style ?? {}), ...(styleOverride.style ?? {}) };
+    }
+    return merged;
+  };
 
   const branchEl = task.baseBranch
     ? ui.text(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`, mergeStyle({ dim: true }))
     : null;
+
+  // styleOverride 時は gap: 0 + 手動スペースで underline を途切れさせない
+  if (styleOverride) {
+    const sp = (s: string) => ` ${s}`;
+    return ui.row({ gap: 0 }, [
+      ui.text(icon, mergeStyle(colorStyle)),
+      ui.text(sp(taskId), mergeStyle({ bold: !isClosed, ...colorStyle })),
+      ui.text(sp(statusDisplay), mergeStyle(colorStyle)),
+      branchEl ? ui.text(sp(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`), mergeStyle({ dim: true })) : null,
+      buildTitleWithLinks(` ${task.title}`, repoUrl, mergeStyle(colorStyle)),
+      timeInfo ? ui.text(sp(timeInfo), mergeStyle(colorStyle)) : null,
+    ]);
+  }
 
   return ui.row({ gap: 1 }, [
     ui.text(icon, mergeStyle(colorStyle)),
@@ -696,11 +716,7 @@ export async function startDashboard(
     const headerParts = [
       !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : "RUNNING",
       `PID ${process.pid}`,
-      `tasks ${daemon.openTasks} open`,
     ];
-    if (daemon.pendingTasks > 0) {
-      headerParts.push(`${daemon.pendingTasks} ready`);
-    }
     const headerSubtitle = headerParts.join("  ");
 
     // タスク一覧（カーソル選択 + スクロール対応）
@@ -717,7 +733,7 @@ export async function startDashboard(
       : visibleTasks.map((task, i) => {
           const globalIdx = taskStartIdx + i;
           const isSelected = globalIdx === state.taskCursor;
-          const cursorStyle = tasksFocused && isSelected ? { underline: true } : undefined;
+          const cursorStyle = tasksFocused && isSelected ? { style: { underline: true } } : undefined;
           return buildTaskRow(task, assignedTaskIds.has(task.id), repoUrl, cursorStyle);
         });
 
@@ -726,7 +742,8 @@ export async function startDashboard(
         // ヘッダー行（sectionTitle と同じスタイル）
         (() => {
           const rl = buildRateLimitDisplay(daemon.rateLimit);
-          const left = `─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""}`;
+          const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
+          const left = `─ cmux-team ${headerSubtitle}${state.version ? ` v${state.version}` : ""}${portLabel}`;
           const right = rl.label;
           const fill = "─".repeat(Math.max(1, 80 - left.length - right.length));
           return ui.row({ gap: 0 }, [
@@ -740,42 +757,50 @@ export async function startDashboard(
         // Conductors セクション
         sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
-        // Tasks セクション
-        sectionTitle(`Tasks ${daemon.openTasks} open`),
+        // Tasks セクション（クリックでフォーカス）
+        ui.button({
+          id: "section-tasks",
+          label: `─ Tasks ${daemon.openTasks} open ${HR_FILL}`,
+          px: 0,
+          dsVariant: "ghost",
+          style: { dim: true },
+          focusable: false,
+          onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks" })); } catch {} },
+        }),
         ui.column({ gap: 0 }, taskRows),
-        // Journal / Artifacts / Log タブ（クリック + キーボード 1/2/3 で切り替え）
+        // Journal / Artifacts / Log タブ（クリックでタブ切り替え + フォーカス）
         ui.row({ gap: 1 }, [
           ui.button({
             id: "tab-journal",
             label: "Journal",
             px: 1,
             style: state.activeTab === "journal" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "journal" })); } catch {} },
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "journal", focusedArea: "journal" })); } catch {} },
           }),
           ui.button({
             id: "tab-artifacts",
             label: "Artifacts",
             px: 1,
             style: state.activeTab === "artifacts" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "artifacts" })); } catch {} },
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "artifacts", focusedArea: "artifacts" })); } catch {} },
           }),
           ui.button({
             id: "tab-log",
             label: "Log",
             px: 1,
             style: state.activeTab === "log" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "log" })); } catch {} },
+            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "log", focusedArea: "log" })); } catch {} },
           }),
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
             ? (() => {
-                const reversed = [...state.journalEntries].reverse();
-                const total = reversed.length;
+                // journalEntries は時系列順（古→新）。reverse せず、Log と同じく末尾が最新
+                const total = state.journalEntries.length;
                 let endIdx = total - state.journalScrollOffset;
                 if (endIdx < JOURNAL_VISIBLE_LINES) endIdx = Math.min(total, JOURNAL_VISIBLE_LINES);
                 const startIdx = Math.max(0, endIdx - JOURNAL_VISIBLE_LINES);
-                return buildJournalRows(reversed.slice(startIdx, endIdx), repoUrl);
+                return buildJournalRows(state.journalEntries.slice(startIdx, endIdx), repoUrl);
               })()
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
