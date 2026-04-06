@@ -193,6 +193,7 @@ Notes:
   let proxyHandle: { port: number; stop: () => void } | null = null;
   const existingProxyPort = await resolveProxyPort();
   if (existingProxyPort) {
+    state.proxyPort = parseInt(existingProxyPort, 10);
     await log("proxy_reused", `port=${existingProxyPort}`);
   } else {
     try {
@@ -201,6 +202,7 @@ Notes:
         onMessage: async (msg) => { await handleMessage(state, msg); },
       });
       await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
+      state.proxyPort = proxyHandle.port;
       await log("proxy_started", `port=${proxyHandle.port}`);
     } catch (e: any) {
       await log("proxy_start_failed", e.message);
@@ -239,14 +241,34 @@ Notes:
       await log("daemon_reload_target", latestMainTs);
       state.running = false;
       const { execFileSync } = require("child_process");
-      try {
-        execFileSync("bash", ["-c", `exec bun run "${latestMainTs}" start`], {
-          stdio: "inherit",
-          env: process.env,
-          cwd: process.cwd(),
-        });
-      } catch (e: any) {
-        await log("error", `daemon reload exec failed: ${e.message}`);
+      // exit 42（auto_restart）が来た場合も再起動ループを継続する（cmux-team.js と同じ挙動）
+      // これがないと proxy_reused した子 daemon が auto_restart で終了した瞬間に
+      // 親（onReload 呼び出し元）が process.exit(0) して proxy も道連れになる
+      const MAX_RESTARTS = 10;
+      let restarts = 0;
+      while (restarts < MAX_RESTARTS) {
+        let exitStatus = 0;
+        try {
+          execFileSync("bun", ["run", latestMainTs, "start"], {
+            stdio: "inherit",
+            env: process.env,
+            cwd: process.cwd(),
+          });
+          break; // 正常終了
+        } catch (e: any) {
+          exitStatus = e.status ?? 1;
+        }
+        if (exitStatus === 42) {
+          restarts++;
+          await log("daemon_reload_restart", `restarts=${restarts}/${MAX_RESTARTS}`);
+          try { execFileSync("sleep", ["1"]); } catch {}
+          continue;
+        }
+        await log("error", `daemon reload exec failed status=${exitStatus}`);
+        break;
+      }
+      if (restarts >= MAX_RESTARTS) {
+        await log("error", "daemon reload restart limit reached");
       }
       process.exit(0);
     },

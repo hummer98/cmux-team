@@ -51,6 +51,8 @@ export interface DaemonState {
   lastNpmCheckAt: number;
   /** API レート制限情報（proxy.ts が更新） */
   rateLimit: RateLimitInfo | null;
+  /** ロギングプロキシのポート番号（null = 未起動または不明） */
+  proxyPort: number | null;
   /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
   wakeup: (() => void) | null;
 }
@@ -87,6 +89,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     restartRequested: false,
     lastNpmCheckAt: 0,
     rateLimit: null,
+    proxyPort: null,
     wakeup: null,
   };
 }
@@ -316,10 +319,32 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
   // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
 }
 
+/** proxy ポートに TCP 接続して生存確認 */
+async function isProxyAlive(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const net = require("net");
+    const sock = net.connect({ port, host: "127.0.0.1", timeout: 500 }, () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.on("error", () => resolve(false));
+    sock.on("timeout", () => { sock.destroy(); resolve(false); });
+  });
+}
+
 export async function tick(state: DaemonState): Promise<void> {
   state.lastUpdate = new Date();
   await scanTasks(state);
   await monitorConductors(state);
+
+  // proxy 死活チェック（死んでいたらログに記録）
+  if (state.proxyPort) {
+    const alive = await isProxyAlive(state.proxyPort);
+    if (!alive) {
+      await log("proxy_dead", `port=${state.proxyPort} — Master/Conductor がAPIに接続できない状態`);
+    }
+  }
 
   // ソースファイルの mtime 変更を検出
   if (state.sourceMtimes.size > 0) {
