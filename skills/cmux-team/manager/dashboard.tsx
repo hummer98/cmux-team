@@ -897,6 +897,7 @@ export async function startDashboard(
           : state.focusedArea === "tasks"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("Enter"), ui.text("open"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : state.focusedArea === "journal"
@@ -994,6 +995,25 @@ export async function startDashboard(
     // Artifacts タブ専用キー
     Enter: (ctx) => {
       const currentState = ctx.state;
+      // tasks タブ: 選択中タスクをビューアで開く
+      if (currentState.focusedArea === "tasks") {
+        const { taskList } = currentState.daemon;
+        const selected = taskList[currentState.taskCursor];
+        if (!selected?.filePath) return;
+
+        openArtifactInViewer(
+          app,
+          selected.filePath,
+          () => {
+            dashboardActive = true;
+            spinnerInterval = setInterval(() => {
+              try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
+            }, SPINNER_INTERVAL);
+            refresh();
+          },
+        ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+        return;
+      }
       if (currentState.focusedArea !== "artifacts") return;
       const filtered = getFilteredArtifacts(currentState);
       if (filtered.length === 0) return;
