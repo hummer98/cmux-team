@@ -68,7 +68,8 @@ export async function generateConductorTaskPrompt(
   taskContent: string,
   worktreePath: string,
   outputDir: string,
-  baseBranch?: string
+  baseBranch?: string,
+  taskDir?: string
 ): Promise<string> {
   const templateDir = findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
@@ -77,10 +78,18 @@ export async function generateConductorTaskPrompt(
     );
   }
 
-  const promptsDir = join(projectRoot, ".team/prompts");
-  await mkdir(promptsDir, { recursive: true });
-
-  const promptFile = join(promptsDir, `${taskRunId}.md`);
+  let promptFile: string;
+  if (taskDir) {
+    // 新形式: タスクフォルダ内の runs/ に出力
+    const runDir = join(taskDir, "runs", taskRunId);
+    await mkdir(runDir, { recursive: true });
+    promptFile = join(runDir, "conductor-prompt.md");
+  } else {
+    // 旧形式: .team/prompts/ に出力
+    const promptsDir = join(projectRoot, ".team/prompts");
+    await mkdir(promptsDir, { recursive: true });
+    promptFile = join(promptsDir, `${taskRunId}.md`);
+  }
 
   let content = await readFile(join(templateDir, "conductor-task.md"), "utf-8");
 

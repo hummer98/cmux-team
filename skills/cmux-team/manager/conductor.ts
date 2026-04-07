@@ -4,8 +4,8 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, mkdir, readdir, rm } from "fs/promises";
-import { join } from "path";
+import { readFile, mkdir, readdir, rm, stat } from "fs/promises";
+import { join, relative } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
@@ -209,21 +209,37 @@ export async function assignTask(
   try {
     const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
 
-    // --- 1. タスクファイル検索 ---
+    // --- 1. タスクファイル検索（ハイブリッド対応） ---
     const tasksDir = join(projectRoot, ".team/tasks");
-    const files = await readdir(tasksDir);
-    const taskFile = files.find((f) => {
-      const id = f.match(/^0*(\d+)/)?.[1];
-      return id === taskId || id === taskId.replace(/^0+/, "");
-    });
+    const entries = await readdir(tasksDir);
+    let taskContent: string | null = null;
+    let taskDir: string | undefined;
 
-    if (!taskFile) {
+    for (const entry of entries) {
+      const id = entry.match(/^0*(\d+)/)?.[1];
+      if (id !== taskId && id !== taskId.replace(/^0+/, "")) continue;
+
+      const fullPath = join(tasksDir, entry);
+      const s = await stat(fullPath);
+
+      if (s.isDirectory()) {
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) {
+          taskContent = await readFile(taskMdPath, "utf-8");
+          taskDir = fullPath;
+        }
+      } else if (entry.endsWith(".md")) {
+        taskContent = await readFile(fullPath, "utf-8");
+      }
+      break;
+    }
+
+    if (!taskContent) {
       await log("error", `Task file not found for ID=${taskId}`);
       return null;
     }
 
-    const taskContent = await readFile(join(tasksDir, taskFile), "utf-8");
-    const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || taskFile.replace(/^\d+-/, "").replace(/\.md$/, "");
+    const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || "unknown";
     const baseBranch = taskContent.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim();
 
     // --- 2. git worktree 作成 ---
@@ -242,7 +258,14 @@ export async function assignTask(
     }
 
     // --- 3. Conductor プロンプト生成 ---
-    const outputDir = `.team/output/${taskRunId}`;
+    let outputDir: string;
+    if (taskDir) {
+      // 新形式: タスクフォルダ内
+      outputDir = relative(projectRoot, join(taskDir, "runs", taskRunId));
+    } else {
+      // 旧形式: .team/output/
+      outputDir = `.team/output/${taskRunId}`;
+    }
     await mkdir(join(projectRoot, outputDir), { recursive: true });
 
     const promptFile = await generateConductorTaskPrompt(
@@ -252,7 +275,8 @@ export async function assignTask(
       taskContent,
       worktreePath,
       outputDir,
-      baseBranch
+      baseBranch,
+      taskDir
     );
 
     // --- 4. 既存セッションをリセットして新プロンプトを送信 ---

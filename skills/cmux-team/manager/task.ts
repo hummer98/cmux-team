@@ -1,7 +1,7 @@
 /**
  * タスクファイルのパース・依存解決
  */
-import { readdir, readFile, writeFile, rename } from "fs/promises";
+import { readdir, readFile, writeFile, rename, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { log } from "./logger";
@@ -17,6 +17,7 @@ export interface TaskMeta {
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
   baseBranch?: string;  // マージ先ブランチ（未指定時は暗黙的に main）
+  taskDir?: string;  // フォルダ構造の場合のディレクトリパス
 }
 
 export interface TaskState {
@@ -117,12 +118,28 @@ export async function loadTasks(projectRoot: string): Promise<{
   if (existsSync(tasksDir)) {
     const files = await readdir(tasksDir);
     for (const f of files) {
-      if (!f.endsWith(".md")) continue;
-      const filePath = join(tasksDir, f);
-      const content = await readFile(filePath, "utf-8");
-      const meta = parseTaskMeta(content, f, filePath);
+      const fullPath = join(tasksDir, f);
+      const s = await stat(fullPath);
+
+      let meta: TaskMeta | null = null;
+
+      if (s.isDirectory()) {
+        // 新形式: ディレクトリ → {dir}/task.md を読む
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) {
+          const content = await readFile(taskMdPath, "utf-8");
+          meta = parseTaskMeta(content, f, taskMdPath);
+          if (meta) {
+            meta.taskDir = fullPath;
+          }
+        }
+      } else if (f.endsWith(".md")) {
+        // 旧形式: フラットファイル
+        const content = await readFile(fullPath, "utf-8");
+        meta = parseTaskMeta(content, f, fullPath);
+      }
+
       if (meta) {
-        // task-state.json の状態で上書き（後方互換: なければファイルの frontmatter 値を使用）
         if (taskState[meta.id]) {
           meta.status = taskState[meta.id]!.status;
         }

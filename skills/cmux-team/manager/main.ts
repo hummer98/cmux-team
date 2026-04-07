@@ -21,7 +21,7 @@
 
 import { join, dirname } from "path";
 import { existsSync, writeFileSync, mkdirSync } from "fs";
-import { readFile, readdir, writeFile, mkdir } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
@@ -132,8 +132,14 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   try {
     const files = await readdir(tasksDir);
     for (const f of files) {
-      if (f.endsWith(".md") && f.startsWith(taskId)) {
-        return join(tasksDir, f);
+      if (!f.startsWith(taskId)) continue;
+      const fullPath = join(tasksDir, f);
+      const s = await stat(fullPath);
+      if (s.isDirectory()) {
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) return taskMdPath;
+      } else if (f.endsWith(".md")) {
+        return fullPath;
       }
     }
   } catch {}
@@ -141,11 +147,23 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   try {
     const files = await readdir(tasksDir);
     for (const f of files) {
-      if (!f.endsWith(".md")) continue;
-      const content = await readFile(join(tasksDir, f), "utf-8");
-      const idMatch = content.match(/^id:\s*(.+)$/m);
-      if (idMatch && idMatch[1]?.trim() === taskId) {
-        return join(tasksDir, f);
+      const fullPath = join(tasksDir, f);
+      const s = await stat(fullPath);
+      let content: string | undefined;
+      if (s.isDirectory()) {
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) {
+          content = await readFile(taskMdPath, "utf-8");
+        }
+      } else if (f.endsWith(".md")) {
+        content = await readFile(fullPath, "utf-8");
+      }
+      if (content) {
+        const idMatch = content.match(/^id:\s*(.+)$/m);
+        if (idMatch && idMatch[1]?.trim() === taskId) {
+          if (s.isDirectory()) return join(fullPath, "task.md");
+          return fullPath;
+        }
       }
     }
   } catch {}
@@ -1235,8 +1253,10 @@ Notes:
   } catch {}
 
   const newId = String(maxId + 1).padStart(3, "0");
-  const fileName = `${newId}-${slug}.md`;
-  const filePath = join(tasksDir, fileName);
+  const dirName = `${newId}-${slug}`;
+  const taskDir = join(tasksDir, dirName);
+  await mkdir(taskDir, { recursive: true });
+  const filePath = join(taskDir, "task.md");
 
   // depends_on パース
   const depsArray = dependsOn
@@ -1271,7 +1291,7 @@ ${body}
     });
   }
 
-  const relPath = `.team/tasks/${fileName}`;
+  const relPath = `.team/tasks/${dirName}/task.md`;
   console.log(`TASK_ID=${newId} FILE=${relPath}`);
 }
 
