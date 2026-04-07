@@ -148,6 +148,66 @@ const relPath = `.team/tasks/${dirName}/task.md`;
 
 ---
 
+### Step 3b: main.ts — findTaskFile() のハイブリッド化
+
+**ファイル**: `skills/cmux-team/manager/main.ts` L130-153 の `findTaskFile()`
+
+**背景**:
+`findTaskFile()` は `cmdUpdateTask()`, `cmdCloseTask()` 等から呼ばれるが、現在 `.md` ファイルのみを検索している。新形式のディレクトリ（`013-some-task/task.md`）に対応しないと、ディレクトリ形式のタスクを見つけられない。
+
+**変更内容**:
+- ファイル名マッチの第1パス: `.md` ファイルに加え、ディレクトリ名が taskId で始まる場合に `{dir}/task.md` を返す
+- frontmatter フォールバックの第2パス: ディレクトリ内の `task.md` も読んで id を照合する
+
+```typescript
+async function findTaskFile(taskId: string): Promise<string | undefined> {
+  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      if (!f.startsWith(taskId)) continue;
+      const fullPath = join(tasksDir, f);
+      const s = await stat(fullPath);
+      if (s.isDirectory()) {
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) return taskMdPath;
+      } else if (f.endsWith(".md")) {
+        return fullPath;
+      }
+    }
+  } catch {}
+  // ファイル名が数値IDで始まらない場合、frontmatter の id でも検索
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      const fullPath = join(tasksDir, f);
+      const s = await stat(fullPath);
+      let content: string | undefined;
+      if (s.isDirectory()) {
+        const taskMdPath = join(fullPath, "task.md");
+        if (existsSync(taskMdPath)) {
+          content = await readFile(taskMdPath, "utf-8");
+        }
+      } else if (f.endsWith(".md")) {
+        content = await readFile(fullPath, "utf-8");
+      }
+      if (content) {
+        const idMatch = content.match(/^id:\s*(.+)$/m);
+        if (idMatch && idMatch[1]?.trim() === taskId) {
+          if (s.isDirectory()) return join(fullPath, "task.md");
+          return fullPath;
+        }
+      }
+    }
+  } catch {}
+  return undefined;
+}
+```
+
+**import 追加**: `stat` を `fs/promises` から追加（Step 2 と共通）
+
+---
+
 ### Step 4: template.ts — プロンプト出力先の変更
 
 **ファイル**: `skills/cmux-team/manager/template.ts` L64-98 の `generateConductorTaskPrompt()`
@@ -263,7 +323,7 @@ export async function assignTask(
     let outputDir: string;
     if (taskDir) {
       // 新形式: タスクフォルダ内
-      const relRunDir = join(taskDir, "runs", taskRunId).replace(projectRoot + "/", "");
+      const relRunDir = relative(projectRoot, join(taskDir, "runs", taskRunId));
       outputDir = relRunDir;
     } else {
       // 旧形式: .team/output/
@@ -287,7 +347,9 @@ export async function assignTask(
 }
 ```
 
-**import 追加**: `stat` を `fs/promises` から追加
+**import 追加**:
+- `stat` を `fs/promises` から追加
+- `relative` を `path` から追加（`import { join, resolve, dirname, relative } from "path";`）
 
 ---
 
@@ -296,7 +358,7 @@ export async function assignTask(
 | 項目 | 影響 |
 |------|------|
 | task-state.json | 変更なし（ID ベースの管理は維持） |
-| done マーカー | `outputDir` パスに含まれるため自動的に新パスに配置される |
+| 完了検出 | `CONDUCTOR_DONE` キューメッセージベースのため変更不要（done マーカーファイルは使用していない） |
 | `resetConductor()` | `conductor.outputDir` を参照するため変更不要 |
 | TASK_CREATED メッセージ | `taskFile` フィールドのパスが変わる（`schema.ts` のバリデーションは `z.string()` のため問題なし） |
 | テンプレート変数 `{{OUTPUT_DIR}}` | 新パスが渡されるためテンプレート自体の変更不要 |
@@ -309,6 +371,7 @@ export async function assignTask(
 Step 1 (TaskMeta 拡張)
   └→ Step 2 (loadTasks ハイブリッド化) ← Step 1 の taskDir フィールドを使用
        └→ Step 3 (cmdCreateTask ディレクトリ作成) ← Step 2 と独立だが先に構造を作る側
+       └→ Step 3b (findTaskFile ハイブリッド化) ← Step 2 と独立、stat import を共有
        └→ Step 4 (template.ts) ← taskDir 引数追加
-            └→ Step 5 (conductor.ts) ← Step 4 の新シグネチャを使用
+            └→ Step 5 (conductor.ts) ← Step 4 の新シグネチャを使用、relative import 追加
 ```
