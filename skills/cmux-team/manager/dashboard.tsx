@@ -122,11 +122,11 @@ async function resolveMarkdownViewer(): Promise<string> {
 }
 
 // --- 名前付きカラー定数（Ink 版と同等） ---
-const GREEN = rgb(0, 255, 0);
-const YELLOW = rgb(255, 255, 0);
-const RED = rgb(255, 0, 0);
-const CYAN = rgb(0, 255, 255);
-const GRAY = rgb(170, 170, 170);
+const GREEN = rgb(0, 160, 0);
+const YELLOW = rgb(200, 160, 0);
+const RED = rgb(180, 40, 40);
+const CYAN = rgb(0, 180, 180);
+const GRAY = rgb(130, 130, 130);
 
 function nerdIcon(nerd: string, fallback: string): string {
   return process.env.CMUX_NERD_FONT === "0" ? fallback : nerd;
@@ -181,44 +181,39 @@ function buildUtilizationBar(label: string, utilization: number): { text: string
   return { text: `${label}: ${pct}% ${bar}`, color };
 }
 
-/** レート制限の表示文字列を生成 */
-function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { label: string; color: typeof GREEN } {
+/** レート制限の表示文字列を生成（各パーツが個別の色を持つ） */
+function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { parts: Array<{ text: string; color: typeof GREEN }> } {
   if (!rateLimit) {
-    return { label: "Rate: --", color: GRAY };
+    return { parts: [{ text: "Rate: --", color: GRAY }] };
   }
 
   // unified データがある場合: 5h/7d 使用率を表示
   if (rateLimit.unified5hUtilization != null || rateLimit.unified7dUtilization != null) {
-    const parts: string[] = [];
-    let worstColor: typeof GREEN = GREEN;
+    const parts: Array<{ text: string; color: typeof GREEN }> = [];
+    const forceRed = rateLimit.unifiedStatus === "rate_limited";
 
     if (rateLimit.unified5hUtilization != null) {
       const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization);
-      parts.push(h5.text);
-      if (h5.color === RED || (h5.color === YELLOW && worstColor === GREEN)) worstColor = h5.color;
+      parts.push({ text: h5.text, color: forceRed ? RED : h5.color });
     }
     if (rateLimit.unified7dUtilization != null) {
       const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization);
-      parts.push(d7.text);
-      if (d7.color === RED || (d7.color === YELLOW && worstColor === GREEN)) worstColor = d7.color;
+      parts.push({ text: d7.text, color: forceRed ? RED : d7.color });
     }
 
-    // rate_limited の場合は赤に強制
-    if (rateLimit.unifiedStatus === "rate_limited") worstColor = RED;
-
-    return { label: parts.join("  "), color: worstColor };
+    return { parts };
   }
 
   // フォールバック: 従来の TPM 表示
   if (rateLimit.tokensLimit === 0) {
-    return { label: "Rate: --", color: GRAY };
+    return { parts: [{ text: "Rate: --", color: GRAY }] };
   }
   const pct = Math.round((rateLimit.tokensRemaining / rateLimit.tokensLimit) * 100);
   const barWidth = 10;
   const filled = Math.round((pct / 100) * barWidth);
   const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
   const color = pct >= 50 ? GREEN : pct >= 20 ? YELLOW : RED;
-  return { label: `TPM: ${pct}% ${bar}`, color };
+  return { parts: [{ text: `TPM: ${pct}% ${bar}`, color }] };
 }
 
 // --- ログ・ジャーナル解析 ---
@@ -815,11 +810,14 @@ export async function startDashboard(
           const rl = buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
-          const right = rl.label;
-          const fill = "─".repeat(Math.max(1, 80 - left.length - right.length));
+          const rightText = rl.parts.map(p => p.text).join("  ");
+          const fill = "─".repeat(Math.max(1, 80 - left.length - rightText.length));
           return ui.row({ gap: 0 }, [
             ui.text(`${left} ${fill} `, { dim: true }),
-            ui.text(right, { style: { fg: rl.color } }),
+            ...rl.parts.flatMap((p, i) => [
+              ...(i > 0 ? [ui.text("  ", { dim: true })] : []),
+              ui.text(p.text, { style: { fg: p.color } }),
+            ]),
           ]);
         })(),
         // Master セクション
