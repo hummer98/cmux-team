@@ -1432,6 +1432,24 @@ Notes:
   };
   await saveTaskState(PROJECT_ROOT, taskState);
 
+  // CONDUCTOR_DONE メッセージ送信（daemon に完了を通知）
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  let teamJson: any;
+  try {
+    teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  } catch {
+    // team.json 読めなくても close 自体は成功させる
+  }
+  const conductor = teamJson?.conductors?.find((c: any) => c.taskId === taskId);
+  if (conductor?.surface) {
+    await postMessage({
+      type: "CONDUCTOR_DONE",
+      surface: conductor.surface,
+      success: true,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   console.log(`OK closed ${taskId}`);
 }
 
