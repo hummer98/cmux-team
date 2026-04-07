@@ -27,6 +27,7 @@ export interface TaskSummary {
   abortedAt?: string;
   dependsOn: string[];
   baseBranch?: string;
+  filePath?: string;  // タスクファイルのパス
 }
 
 export interface DaemonState {
@@ -611,6 +612,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     abortedAt: taskState[t.id]?.abortedAt,
     dependsOn: t.dependsOn.filter(dep => !closed.has(dep)),
     baseBranch: t.baseBranch,
+    filePath: t.filePath,
   }));
 
   for (const task of allExecutable) {
