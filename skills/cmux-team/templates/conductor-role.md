@@ -34,22 +34,20 @@ Planner Agent を spawn し、実装計画書 (plan.md) を作成させる。
 
 1. Planner Agent を spawn（role: planner）
 2. Agent の完了を待つ（pull 型監視）
-3. plan.md が worktree 内に作成されていることを確認
-4. plan.md を git commit: `git add plan.md && git commit -m "plan: <タスク概要>"`
-5. plan.md を出力ディレクトリにもコピー: `cp plan.md <OUTPUT_DIR>/plan.md`
+3. plan.md が出力ディレクトリに作成されていることを確認: `ls <OUTPUT_DIR>/plan.md`
 
 ### Phase 2: Design Review（設計レビュー）
 
 Design Reviewer Agent を spawn し、plan.md をレビューさせる。**Planner とは別セッション**で実行する（生成と批評の分離）。
 
 1. Design Reviewer Agent を spawn（role: design-reviewer）
-   - plan.md の内容をプロンプトに含める
+   - 出力ディレクトリの plan.md（`<OUTPUT_DIR>/plan.md`）の内容をプロンプトに含める
 2. Agent の完了を待つ
 3. レビュー結果を確認:
    - **Approved** → Phase 3 に進む
    - **Changes Requested** →
      a. Design Reviewer の出力ファイルから Recommendations を読み取る
-     b. Planner Agent を再 spawn し、プロンプトに「前回の plan.md」+「レビュー指摘事項」を含める
+     b. Planner Agent を再 spawn し、プロンプトに「前回の `<OUTPUT_DIR>/plan.md`」+「レビュー指摘事項」を含める（plan.md の出力先は `<OUTPUT_DIR>/plan.md`）
      c. 更新された plan.md を再度 Design Reviewer に投入
      d. 最大2往復。2往復後も Changes Requested なら、最新の plan.md で Phase 3 に進む（ログに警告記録）
 4. Agent タブを閉じる
@@ -59,7 +57,7 @@ Design Reviewer Agent を spawn し、plan.md をレビューさせる。**Plann
 Implementer Agent を spawn し、TDD で実装させる。
 
 1. Implementer Agent を spawn（role: impl）
-   - plan.md の内容をプロンプトに含める
+   - 出力ディレクトリの plan.md（`<OUTPUT_DIR>/plan.md`）の内容をプロンプトに含める
 2. Agent の完了を待つ
 3. 実装結果を確認（出力ファイル）
 4. Agent タブを閉じる
@@ -69,13 +67,13 @@ Implementer Agent を spawn し、TDD で実装させる。
 Inspector Agent を spawn し、実装結果を検品させる。**Implementer とは別セッション**で実行する（生成と批評の分離）。
 
 1. Inspector Agent を spawn（role: inspector）
-   - plan.md の内容をプロンプトに含める
+   - 出力ディレクトリの plan.md（`<OUTPUT_DIR>/plan.md`）の内容をプロンプトに含める
 2. Agent の完了を待つ
 3. 検品結果を確認:
    - **GO** → 完了処理に進む
    - **NOGO** →
      a. Inspector の出力ファイルから Fix Required を読み取る
-     b. Implementer Agent を再 spawn し、プロンプトに「plan.md」+「修正指示」を含める
+     b. Implementer Agent を再 spawn し、プロンプトに「`<OUTPUT_DIR>/plan.md`」+「修正指示」を含める
      c. 修正後、Inspector Agent を再 spawn して再検品
      d. 最大2往復。2往復後も NOGO なら、ログに Critical findings を記録し、完了処理に進む（summary.md に NOGO 状態を明記）
 4. Agent タブを閉じる
