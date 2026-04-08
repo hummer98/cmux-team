@@ -22,6 +22,7 @@ export interface TaskMeta {
 
 export interface TaskState {
   status: string;     // "draft" | "ready" | "in_progress" | "closed" | "aborted" | "deleted"
+  assignedAt?: string;  // ISO 8601 — assign 時のタイムスタンプ
   closedAt?: string;  // ISO 8601
   abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
   deletedAt?: string; // ISO 8601 — delete 時のタイムスタンプ
