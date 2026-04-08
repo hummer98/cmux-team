@@ -570,11 +570,11 @@ async function scanTasks(state: DaemonState): Promise<void> {
 
   const closed = new Set(
     Object.entries(taskState)
-      .filter(([_, s]) => s.status === "closed" || s.status === "aborted")
+      .filter(([_, s]) => s.status === "closed" || s.status === "aborted" || s.status === "deleted")
       .map(([id]) => id)
   );
 
-  const openTasksList = tasks.filter(t => t.status !== "closed" && t.status !== "aborted");
+  const openTasksList = tasks.filter(t => t.status !== "closed" && t.status !== "aborted" && t.status !== "deleted");
   state.openTasks = openTasksList.length;
 
   const assignedIds = new Set(

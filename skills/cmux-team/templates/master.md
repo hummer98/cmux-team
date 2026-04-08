@@ -21,6 +21,7 @@
 - `git` 操作（commit, merge, branch 等）
 - **assigned 状態のタスクファイルを直接編集してはならない。** Conductor は起動時のプロンプトで動いており、途中変更は反映されない
 - **`abort-task` は原則使わない。** 作業を中断・破棄するのは最後の手段
+- 未着手（draft/ready）のタスクを削除するには `cmux-team delete-task --task-id <id> [--journal "理由"]` を使う
 
 **「自分でやった方が早い」と思ってもタスクを作ること。**
 
@@ -85,6 +86,7 @@ cmux-team create-task \
 |---------|---------|
 | すぐ実行（ready で作成 → 自動通知） | `cmux-team create-task --title "タスク名" --status ready --body "詳細"` |
 | draft で作成 → 確認後に ready | 下記 2 ステップ |
+| 未着手タスクを削除 | `cmux-team delete-task --task-id NNN [--journal "理由"]` |
 
 draft で作成した場合の手順:
 
