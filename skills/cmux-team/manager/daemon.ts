@@ -14,7 +14,7 @@ import {
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority } from "./task";
+import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
 import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
 
@@ -595,9 +595,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
   state.pendingTasks = allExecutable.length;
 
   // taskList: open を優先表示、残り枠で closed（直近）を表示
-  const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  const openTasks = [...openTasksList]
-    .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1));
+  const openTasks = sortOpenTasksForDisplay(openTasksList);
   const closedMetas = tasks.filter(t => t.status === "closed" || t.status === "aborted");
   const closedTasks = [...closedMetas]
     .sort((a, b) => (taskState[b.id]?.closedAt ?? taskState[b.id]?.abortedAt ?? "").localeCompare(taskState[a.id]?.closedAt ?? taskState[a.id]?.abortedAt ?? ""));
