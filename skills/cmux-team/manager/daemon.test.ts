@@ -35,6 +35,7 @@ async function createTask(
     priority?: string;
     dependsOn?: string[];
     content?: string;
+    createdAt?: string;
   } = {}
 ): Promise<void> {
   const {
@@ -42,13 +43,14 @@ async function createTask(
     priority = "medium",
     dependsOn,
     content = "テストタスク",
+    createdAt = new Date().toISOString(),
   } = opts;
 
   let yaml = `---
 id: ${id}
 title: ${slug}
 priority: ${priority}
-created_at: ${new Date().toISOString()}`;
+created_at: ${createdAt}`;
 
   if (dependsOn?.length) {
     yaml += `\ndepends_on: [${dependsOn.join(", ")}]`;
@@ -79,7 +81,7 @@ async function closeTask(id: string): Promise<void> {
 
 // --- task.ts の統合テスト（ファイルシステム経由）---
 
-import { loadTasks, filterExecutableTasks, sortByPriority } from "./task";
+import { loadTasks, filterExecutableTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import type { TaskMeta, TaskStateMap } from "./task";
 
 // ヘルパー: loadTasks の結果から open タスクと closed ID セットを導出
@@ -209,6 +211,46 @@ describe("タスク依存解決（ファイルシステム統合）", () => {
   });
 });
 
+
+// --- taskList の並び順テスト ---
+
+describe("taskList の並び順", () => {
+  test("open タスクは createdAt 降順で並ぶ", async () => {
+    await createTask("1", "oldest", { createdAt: "2026-04-01T00:00:00Z" });
+    await createTask("2", "middle", { createdAt: "2026-04-05T00:00:00Z" });
+    await createTask("3", "newest", { createdAt: "2026-04-08T00:00:00Z" });
+
+    const { tasks } = await loadTasks(testDir);
+    const open = tasks.filter(t => t.status !== "closed" && t.status !== "aborted");
+    const sorted = sortOpenTasksForDisplay(open);
+    expect(sorted.map(t => t.id)).toEqual(["3", "2", "1"]);
+  });
+
+  test("open タスクが closed タスクより上に来る（loadTasks 統合）", async () => {
+    await createTask("1", "open-task", { createdAt: "2026-04-01T00:00:00Z" });
+    await createTask("2", "closed-task", { createdAt: "2026-04-08T00:00:00Z" });
+    await closeTask("2");
+
+    const { tasks } = await loadTasks(testDir);
+    const open = tasks.filter(t => t.status !== "closed" && t.status !== "aborted");
+    const closedTasks = tasks.filter(t => t.status === "closed" || t.status === "aborted");
+    const sortedOpen = sortOpenTasksForDisplay(open);
+    // open が先、closed が後（combined の構造）
+    const combined = [...sortedOpen, ...closedTasks];
+    expect(combined.map(t => t.id)).toEqual(["1", "2"]);
+  });
+
+  test("priority はソート順に影響しない", async () => {
+    await createTask("1", "high-old", { priority: "high", createdAt: "2026-04-01T00:00:00Z" });
+    await createTask("2", "low-new", { priority: "low", createdAt: "2026-04-08T00:00:00Z" });
+
+    const { tasks } = await loadTasks(testDir);
+    const open = tasks.filter(t => t.status !== "closed" && t.status !== "aborted");
+    const sorted = sortOpenTasksForDisplay(open);
+    // low でも新しい方が上
+    expect(sorted.map(t => t.id)).toEqual(["2", "1"]);
+  });
+});
 
 // --- テンプレート生成テスト ---
 

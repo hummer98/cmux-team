@@ -233,3 +233,8 @@ export function sortByPriority(tasks: TaskMeta[]): TaskMeta[] {
     (a, b) => (order[a.priority] ?? 1) - (order[b.priority] ?? 1)
   );
 }
+
+/** ダッシュボード表示用: open タスクを createdAt 降順（新しい順）にソート */
+export function sortOpenTasksForDisplay(tasks: TaskMeta[]): TaskMeta[] {
+  return [...tasks].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+}
