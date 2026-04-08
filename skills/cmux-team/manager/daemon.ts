@@ -445,6 +445,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "session_started",
           `surface=${message.surface} pid=${message.pid}`
         );
+      } else {
+        await log("session_started_ignored", `surface=${message.surface} reason=conductor_not_found`);
       }
       break;
     }
@@ -521,6 +523,9 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (conductor.status === "disconnected") {
           conductor.status = "running";
           await log("conductor_recovered", `surface=${message.surface} via=SESSION_ACTIVE new_status=running`);
+        } else if (conductor.status === "starting") {
+          conductor.status = "idle";
+          await log("conductor_ready", `surface=${message.surface} via=SESSION_ACTIVE`);
         }
       }
       break;
@@ -539,9 +544,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (conductor) {
         conductor.disconnectedAt = undefined;  // alive の証拠
         if (message.pid) conductor.pid = message.pid;
-        if (conductor.status === "disconnected") {
+        if (conductor.status === "disconnected" || conductor.status === "starting") {
+          const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
           conductor.status = "idle";
-          await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE new_status=idle`);
+          await log(event, `surface=${message.surface} via=SESSION_IDLE`);
         }
         await log(
           "session_idle",
@@ -553,11 +559,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "SESSION_CLEAR": {
       const conductor = findConductor(state, message.surface);
-      if (conductor && conductor.status === "disconnected") {
+      if (conductor && (conductor.status === "disconnected" || conductor.status === "starting")) {
+        const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
         conductor.status = "idle";
         conductor.disconnectedAt = undefined;
         if (message.pid) conductor.pid = message.pid;
-        await log("conductor_recovered", `surface=${message.surface} via=SESSION_CLEAR new_status=idle`);
+        await log(event, `surface=${message.surface} via=SESSION_CLEAR`);
       }
       // idle/running 時は何もしない（TUI チラつき防止）
       break;
