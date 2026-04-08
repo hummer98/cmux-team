@@ -265,7 +265,9 @@ export async function start(
           traceId,
           sessionId,
           reqBodyPath,
-        });
+        }).catch((e: any) =>
+          log("error", `drainAndLog failed: ${e.message}`).catch(() => {})
+        );
 
         return new Response(clientStream, {
           status: upstreamRes.status,

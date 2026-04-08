@@ -57,6 +57,8 @@ export interface DaemonState {
   proxyPort: number | null;
   /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
   wakeup: (() => void) | null;
+  /** Master PID ウォッチャーの interval */
+  masterPidWatcherInterval?: ReturnType<typeof setInterval>;
 }
 
 /** surface または taskRunId で Conductor を検索 */
@@ -142,8 +144,8 @@ export function initFileWatcher(state: DaemonState): void {
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;
     (async () => {
+      const watcher = watch(dir);
       try {
-        const watcher = watch(dir);
         for await (const _event of watcher) {
           if (!state.running) break;
           state.wakeup?.();
@@ -151,6 +153,8 @@ export function initFileWatcher(state: DaemonState): void {
       } catch (e: any) {
         // ウォッチャーが壊れても daemon は停止しない（ポーリングで補完）
         log("error", `file watcher failed: dir=${dir} ${e.message}`);
+      } finally {
+        (watcher as any).close();
       }
     })();
   }
@@ -655,15 +659,20 @@ function spawnPidWatcher(
   conductor: ConductorState,
   pid: number
 ): void {
+  if (conductor.pidWatcherInterval) {
+    clearInterval(conductor.pidWatcherInterval);
+  }
   const checkInterval = setInterval(async () => {
     if (!state.running) {
       clearInterval(checkInterval);
+      conductor.pidWatcherInterval = undefined;
       return;
     }
     try {
       process.kill(pid, 0);
     } catch {
       clearInterval(checkInterval);
+      conductor.pidWatcherInterval = undefined;
       if (conductor.pid === pid) {
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
@@ -676,18 +685,24 @@ function spawnPidWatcher(
       }
     }
   }, 1000);
+  conductor.pidWatcherInterval = checkInterval;
 }
 
 function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
+  if (state.masterPidWatcherInterval) {
+    clearInterval(state.masterPidWatcherInterval);
+  }
   const checkInterval = setInterval(async () => {
     if (!state.running) {
       clearInterval(checkInterval);
+      state.masterPidWatcherInterval = undefined;
       return;
     }
     try {
       process.kill(pid, 0);
     } catch {
       clearInterval(checkInterval);
+      state.masterPidWatcherInterval = undefined;
       if (state.masterPid === pid) {
         state.masterStatus = "disconnected";
         state.masterDisconnectedAt = new Date().toISOString();
@@ -699,6 +714,7 @@ function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
       }
     }
   }, 1000);
+  state.masterPidWatcherInterval = checkInterval;
 }
 
 /** starting 状態のタイムアウト（秒） */
