@@ -59,6 +59,8 @@ export interface DaemonState {
   wakeup: (() => void) | null;
   /** Master PID ウォッチャーの interval */
   masterPidWatcherInterval?: ReturnType<typeof setInterval>;
+  /** proxy ポートが前回起動時から変化したか（Master 再起動トリガー） */
+  proxyPortChanged: boolean;
 }
 
 /** surface または taskRunId で Conductor を検索 */
@@ -95,6 +97,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     rateLimit: null,
     proxyPort: null,
     wakeup: null,
+    proxyPortChanged: false,
   };
 }
 
@@ -247,10 +250,18 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
       if (surface) {
         const alive = await isMasterAlive(surface);
         if (alive) {
-          state.masterSurface = surface;
-          state.masterStatus = "idle";
-          await log("master_alive", `surface=${surface}`);
-          return;
+          // proxy ポート変化時: 旧 Master を close して再 spawn
+          if (state.proxyPortChanged) {
+            await log("master_respawn_proxy_changed", `surface=${surface} newPort=${state.proxyPort}`);
+            await cmux.closeSurface(surface).catch(() => {});
+            state.proxyPortChanged = false;  // フラグリセット
+            // fall-through して下の spawn コードへ
+          } else {
+            state.masterSurface = surface;
+            state.masterStatus = "idle";
+            await log("master_alive", `surface=${surface}`);
+            return;
+          }
         }
         await log("master_check_failed", `surface=${surface} alive=false`);
       }

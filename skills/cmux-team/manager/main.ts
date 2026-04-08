@@ -208,6 +208,12 @@ Notes:
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
   );
 
+  // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
+  let previousProxyPort: string | undefined;
+  try {
+    previousProxyPort = (await readFile(join(PROJECT_ROOT, ".team/proxy-port"), "utf-8")).trim();
+  } catch {}
+
   // ロギングプロキシ起動（既存 proxy が生きていればスキップ）
   let proxyHandle: { port: number; stop: () => void } | null = null;
   const existingProxyPort = await resolveProxyPort();
@@ -226,6 +232,12 @@ Notes:
     } catch (e: any) {
       await log("proxy_start_failed", e.message);
     }
+  }
+
+  // proxy ポート変化の検出
+  if (previousProxyPort && state.proxyPort && String(state.proxyPort) !== previousProxyPort) {
+    state.proxyPortChanged = true;
+    await log("proxy_port_changed", `prev=${previousProxyPort} new=${state.proxyPort}`);
   }
 
   // バージョン取得（plugin.json から — startDashboard に渡すため先に実行）
@@ -919,6 +931,7 @@ Notes:
   if (proxyPort) {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   }
+  await log("master_spawn_proxy", `port=${proxyPort ?? "none"}`);
 
   // モデル解決
   const config = await loadConfig();
