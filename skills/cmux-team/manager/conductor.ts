@@ -47,20 +47,10 @@ export async function spawnSingleConductor(
 ): Promise<ConductorState> {
   const surface = await cmux.newSplit(direction, parentSurface ? { surface: parentSurface } : undefined);
 
-  // Claude 起動
-  await cmux.send(
-    surface,
-    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-  );
-
-  // タブ名設定
   const num = surface.replace("surface:", "");
-  await cmux.renameTab(surface, `[${num}] ♦ idle`);
-
-  // paneId 取得
   const paneId = await getPaneIdForSurface(surface);
 
-  // CONDUCTOR_REGISTERED を HTTP API 経由で送信
+  // CONDUCTOR_REGISTERED を HTTP API 経由で送信（Claude 起動前に登録）
   try {
     const portFile = join(projectRoot, ".team/proxy-port");
     const port = (await readFile(portFile, "utf-8")).trim();
@@ -77,6 +67,13 @@ export async function spawnSingleConductor(
   } catch (e: any) {
     await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
   }
+
+  // Claude 起動
+  await cmux.send(
+    surface,
+    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
+  );
+  await cmux.renameTab(surface, `[${num}] ♦ idle`);
 
   return {
     surface,
@@ -127,17 +124,7 @@ export async function launchConductorOnSurface(
   surface: string,
   paneId?: string,
 ): Promise<void> {
-  // Claude 起動
-  await cmux.send(
-    surface,
-    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-  );
-
-  // タブ名設定
-  const num = surface.replace("surface:", "");
-  await cmux.renameTab(surface, `[${num}] ♦ idle`);
-
-  // CONDUCTOR_REGISTERED を HTTP API 経由で送信
+  // CONDUCTOR_REGISTERED を HTTP API 経由で送信（Claude 起動前に登録）
   try {
     const portFile = join(projectRoot, ".team/proxy-port");
     const port = (await readFile(portFile, "utf-8")).trim();
@@ -154,6 +141,16 @@ export async function launchConductorOnSurface(
   } catch (e: any) {
     await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
   }
+
+  // Claude 起動
+  await cmux.send(
+    surface,
+    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
+  );
+
+  // タブ名設定
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] ♦ idle`);
 }
 
 // --- initializeConductorSlots ---
