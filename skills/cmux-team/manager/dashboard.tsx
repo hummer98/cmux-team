@@ -171,6 +171,18 @@ function formatElapsed(isoDate: string): string {
   return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`;
 }
 
+/** 経過時間のコンパクト表示（ダッシュボード用） */
+function compactElapsed(startIso: string, endIso?: string): string {
+  const startMs = new Date(startIso).getTime();
+  const endMs = endIso ? new Date(endIso).getTime() : Date.now();
+  const sec = Math.floor((endMs - startMs) / 1000);
+  if (sec < 60) return "<1m";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m > 0 ? `${h}h${m}m` : `${h}h`;
+}
+
 /** 使用率のプログレスバーを1つ生成 */
 function buildUtilizationBar(label: string, utilization: number): { text: string; color: typeof GREEN } {
   const pct = Math.round(utilization * 100);
@@ -480,10 +492,14 @@ function buildTaskRow(
   const label = isAborted ? "aborted" : isClosed ? "closed" : assigned ? "running" : blockedLabel ?? task.status;
   const taskId = `T${task.id.padStart(3, "0")}`;
   const timeInfo = isAborted && task.abortedAt
-    ? utcToLocal(task.abortedAt).slice(0, 5)
+    ? `${utcToLocal(task.abortedAt).slice(0, 5)}${task.assignedAt ? ` (${compactElapsed(task.assignedAt, task.abortedAt)})` : ""}`
     : isClosed && task.closedAt
-    ? utcToLocal(task.closedAt).slice(0, 5)
-    : !isClosed && task.createdAt ? formatElapsed(task.createdAt) : "";
+    ? `${utcToLocal(task.closedAt).slice(0, 5)}${task.assignedAt ? ` (${compactElapsed(task.assignedAt, task.closedAt)})` : task.createdAt ? ` (${compactElapsed(task.createdAt, task.closedAt)})` : ""}`
+    : assigned && task.assignedAt
+    ? `${utcToLocal(task.assignedAt).slice(0, 5)} (${compactElapsed(task.assignedAt)})`
+    : task.createdAt
+    ? utcToLocal(task.createdAt).slice(0, 5)
+    : "";
 
   // ステータス別の色（Ink版と同等）
   const color = isAborted ? RED : isClosed ? GRAY : assigned ? GREEN : isBlocked ? RED : task.status === "ready" ? YELLOW : undefined;

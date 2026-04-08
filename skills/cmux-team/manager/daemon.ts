@@ -14,7 +14,7 @@ import {
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
+import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
 import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
 
@@ -23,6 +23,7 @@ export interface TaskSummary {
   title: string;
   status: string;
   createdAt: string;
+  assignedAt?: string;
   closedAt?: string;
   abortedAt?: string;
   dependsOn: string[];
@@ -606,6 +607,7 @@ async function scanTasks(state: DaemonState): Promise<void> {
     title: t.title,
     status: t.status,
     createdAt: t.createdAt,
+    assignedAt: taskState[t.id]?.assignedAt,
     closedAt: taskState[t.id]?.closedAt,
     abortedAt: taskState[t.id]?.abortedAt,
     dependsOn: t.dependsOn.filter(dep => !closed.has(dep)),
@@ -627,6 +629,14 @@ async function scanTasks(state: DaemonState): Promise<void> {
     const updated = await assignTask(idleConductor, task.id, state.projectRoot);
     if (updated) {
       state.conductors.set(updated.surface, updated);
+      // task-state.json に assigned + assignedAt を記録
+      const ts = await loadTaskState(state.projectRoot);
+      ts[task.id] = {
+        ...ts[task.id],
+        status: 'assigned',
+        assignedAt: new Date().toISOString(),
+      };
+      await saveTaskState(state.projectRoot, ts);
     } else {
       // assignTask 失敗 → conductor を disconnected にして再選択を防ぐ
       idleConductor.status = "disconnected";
