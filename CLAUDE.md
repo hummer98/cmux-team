@@ -298,6 +298,20 @@ cmux-team stop
 - テンプレートは `{{VARIABLE}}` プレースホルダーを使用
 - README.md やユーザー向けテキストは日本語
 
+## cmux API 使用上の注意
+
+`cmux tree` はデフォルトで**全ワークスペース**のsurfaceを返す。
+複数のワークスペースで cmux-team を同時起動している場合、別ワークスペースのsurface IDと混同する原因になる。
+
+以下のルールを守ること：
+
+- `validateSurface(surface)` ではなく `validateSurface(surface, workspace)` を使う
+- `tree()` ではなく `tree(workspace)` を使う（`cmux tree --workspace <id>` に対応）
+- daemon の `state.workspace` に起動時のワークスペースが格納されている（`main.ts` 起動時に `getCallerWorkspace()` で取得・設定）
+- `getCallerWorkspace()` で呼び出し元のワークスペースを取得できる（`cmux identify` の `caller.workspace_ref`）
+- 既存surfaceの検証（`initializeLayout`, `isMasterAlive`, `checkConductorStatus` など）では必ず workspace を渡す
+- `newSplit` 直後など**新規作成したsurface**は現在のワークスペースに確実に属するため、workspace指定は不要
+
 ## ロギングポリシー
 
 Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルール。
@@ -380,6 +394,17 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 - **主要判定**: done マーカーファイル（`.team/output/conductor-N/done`）の存在で完了判定
 - **フォールバック**: `cmux list-status` で Idle 検出
 - **重要**: push ではなく pull 型。Conductor は done マーカーを作成して idle に戻り、Manager が見に来る
+
+### タスクの作成・更新は CLI 経由（直接ファイル操作禁止）
+
+タスクの作成・更新は必ず CLI を使うこと。`.team/tasks/` への直接ファイル書き込みは hook でブロックされる。
+
+```bash
+cmux-team create-task --title "タイトル" --status draft --body "説明"
+cmux-team update-task --task-id 112 --status ready
+```
+
+> **注意:** `.team/artifacts/` は直接ファイル作成が前提だが、`.team/tasks/` は CLI 経由のみ。混同しないこと。
 
 ### assigned タスクの編集禁止
 
