@@ -126,6 +126,7 @@ export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
   status: "starting" | "idle" | "running" | "disconnected";
   paneId?: string;
+  pidWatcherInterval?: ReturnType<typeof setInterval>;
 };
 
 // --- レート制限情報 ---
