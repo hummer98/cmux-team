@@ -382,7 +382,6 @@ function buildMasterSection(state: DaemonState) {
 function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
   const isStarting = c.status === "starting";
   const isIdle = c.status === "idle";
-  const isDone = c.status === "done";
   const isDisconnected = c.status === "disconnected";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
@@ -427,14 +426,13 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
     );
   } else {
     const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
-    const iconColor = isDone ? GRAY : YELLOW;
-    const iconChar = isDone ? "✓" : SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
+    const iconChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
     children.push(
       ui.row({ gap: 1 }, [
-        ui.text(iconChar, { style: { fg: iconColor } }),
-        ui.text(`[${surface}]`, isDone ? dimStyle : {}),
-        ui.text(taskId, { bold: !isDone, ...(isDone ? dimStyle : {}) }),
-        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl, isDone ? dimStyle : {}) : null,
+        ui.text(iconChar, { style: { fg: YELLOW } }),
+        ui.text(`[${surface}]`),
+        ui.text(taskId, { bold: true }),
+        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
         ui.text(elapsed, { dim: true }),
       ])
     );
