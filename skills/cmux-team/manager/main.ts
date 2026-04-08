@@ -17,6 +17,7 @@
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
  *   ./main.ts abort-task --task-id <id>
+ *   ./main.ts delete-task --task-id <id> [--journal <text>]
  */
 
 import { join, dirname } from "path";
@@ -1458,13 +1459,15 @@ async function cmdAbortTask(): Promise<void> {
 cmux-team abort-task -- 実行中タスクを中止（aborted）にする
 
 Usage:
-  cmux-team abort-task --task-id <id>
+  cmux-team abort-task --task-id <id> [--journal <text>]
 
 Options:
   --task-id <id>          タスク ID（必須）
+  --journal <text>        中止ジャーナル（任意、デフォルト: "中断: T{id} {title}"）
 
 Examples:
   cmux-team abort-task --task-id 035
+  cmux-team abort-task --task-id 035 --journal "方針変更のため中止"
 
 Notes:
   - assigned（実行中）のタスクのみ中止できます
@@ -1473,6 +1476,16 @@ Notes:
   - Conductor は自動的に idle 状態に再起動します
 `);
   const taskId = requireArg("task-id");
+  const journalArg = getArg("journal");
+
+  // タスクタイトル取得（journal デフォルト生成用）
+  const taskFile = await findTaskFile(taskId);
+  let title = "";
+  if (taskFile) {
+    const taskContent = await readFile(taskFile, "utf-8");
+    title = taskContent.match(/^title:\s*["']?(.+?)["']?\s*$/m)?.[1] ?? "";
+  }
+  const journal = journalArg ?? `中断: T${taskId} ${title}`.trim();
 
   // 1. タスク状態を確認
   const taskState = await loadTaskState(PROJECT_ROOT);
@@ -1499,8 +1512,10 @@ Notes:
       ...taskState[taskId],
       status: "aborted",
       abortedAt: new Date().toISOString(),
+      journal,
     };
     await saveTaskState(PROJECT_ROOT, taskState);
+    await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
     console.log(`OK aborted ${taskId} (no conductor found, state updated only)`);
     return;
   }
@@ -1548,8 +1563,11 @@ Notes:
     ...taskState[taskId],
     status: "aborted",
     abortedAt: new Date().toISOString(),
+    journal,
   };
   await saveTaskState(PROJECT_ROOT, taskState);
+
+  await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
 
   // 7. CONDUCTOR_DONE メッセージ送信（daemon に通知）
   await postMessage({
@@ -1565,6 +1583,64 @@ Notes:
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} && cmux-team conductor ${slotId}\n`);
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
+}
+
+async function cmdDeleteTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(`
+cmux-team delete-task -- タスクを削除（deleted）にする
+
+Usage:
+  cmux-team delete-task --task-id <id> [options]
+
+Options:
+  --task-id <id>          タスク ID（必須）
+  --journal <text>        削除ジャーナル（任意、デフォルト: "削除: T{id} {title}"）
+
+Examples:
+  cmux-team delete-task --task-id 035
+  cmux-team delete-task --task-id 035 --journal "不要になったため削除"
+
+Notes:
+  - draft/ready のタスクのみ削除できます（assigned は abort-task を使用）
+  - task-state.json の status が deleted に設定されます
+  - Journal タブに記録が残ります
+`);
+  const taskId = requireArg("task-id");
+  const journalArg = getArg("journal");
+
+  const taskFile = await findTaskFile(taskId);
+  if (!taskFile) {
+    console.error(`Error: task ${taskId} not found in .team/tasks/`);
+    process.exit(1);
+  }
+
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskState[taskId]?.status;
+  if (currentStatus === "assigned") {
+    console.error(`Error: task ${taskId} is assigned (running). Use abort-task to stop a running task.`);
+    process.exit(1);
+  }
+  if (currentStatus === "closed" || currentStatus === "aborted" || currentStatus === "deleted") {
+    console.error(`Error: task ${taskId} is already ${currentStatus}.`);
+    process.exit(1);
+  }
+
+  const taskContent = await readFile(taskFile, "utf-8");
+  const titleMatch = taskContent.match(/^title:\s*["']?(.+?)["']?\s*$/m);
+  const title = titleMatch?.[1] ?? "";
+
+  const journal = journalArg ?? `削除: T${taskId} ${title}`.trim();
+
+  taskState[taskId] = {
+    status: "deleted",
+    deletedAt: new Date().toISOString(),
+    journal,
+  };
+  await saveTaskState(PROJECT_ROOT, taskState);
+
+  await log("task_deleted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+
+  console.log(`OK deleted ${taskId}`);
 }
 
 async function cmdTrace(): Promise<void> {
@@ -1844,6 +1920,9 @@ switch (command) {
   case "abort-task":
     await cmdAbortTask();
     break;
+  case "delete-task":
+    await cmdDeleteTask();
+    break;
   case "trace":
     await cmdTrace();
     break;
@@ -1873,7 +1952,8 @@ Usage:
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
-  cmux-team abort-task --task-id <id>            実行中タスクを中止
+  cmux-team abort-task --task-id <id> [--journal <text>] 実行中タスクを中止
+  cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
   cmux-team trace --search <query>             FTS5 全文検索
   cmux-team trace --show <id>                  トレース詳細表示

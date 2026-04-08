@@ -266,7 +266,14 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       if (!isValidTaskId(taskId)) continue;
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
-      result.push({ time, icon: nerdIcon("\uf057", "[✕]"), taskId, message: title || "aborted", level: "error", iconColor: RED });
+      const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
+      result.push({ time, icon: nerdIcon("\uf057", "[✕]"), taskId, message: summary || title || "aborted", level: "error", iconColor: RED });
+    } else if (event === "task_deleted") {
+      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
+      const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
+      const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
+      result.push({ time, icon: nerdIcon("\uf056", "[−]"), taskId, message: summary || title || "deleted", level: "warn", iconColor: YELLOW });
     }
   }
   return result;

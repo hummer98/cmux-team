@@ -21,10 +21,11 @@ export interface TaskMeta {
 }
 
 export interface TaskState {
-  status: string;     // "draft" | "ready" | "in_progress" | "closed" | "aborted"
+  status: string;     // "draft" | "ready" | "in_progress" | "closed" | "aborted" | "deleted"
   closedAt?: string;  // ISO 8601
   abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
-  journal?: string;   // 完了時のサマリー
+  deletedAt?: string; // ISO 8601 — delete 時のタイムスタンプ
+  journal?: string;   // 完了時/中止時/削除時のサマリー
 }
 
 export type TaskStateMap = Record<string, TaskState>;
