@@ -57,6 +57,7 @@ description: >
 | `/team-task` | タスク管理（タスクの作成・一覧・クローズ） |
 | `/team-archive` | 完了タスクのアーカイブ（closed → archived） |
 | `/artifact` | 知見のアーティファクト化（作成・一覧・表示） |
+| `/docs-sync` | `docs/spec/` を実装の現状に同期（dockeeper スキル経由） |
 
 **CLI サブコマンド:**
 
@@ -68,13 +69,19 @@ description: >
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send TODO` | TODO 通知（`--content` 必須） |
 | `cmux-team send SHUTDOWN` | シャットダウン通知 |
+| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録（`--direction right|down`, `--surface`） |
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
-| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
-| `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
-| `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
-| `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`） |
+| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body`, `--depends-on`, `--base-branch`, `--run-after-all` 任意） |
+| `cmux-team update-task` | タスク状態更新（`--task-id` 必須、`--status` / `--title` / `--body` のいずれか必須） |
+| `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal`, `--force` 任意。close 後 `CONDUCTOR_DONE` を送信） |
+| `cmux-team abort-task` | 実行中タスクの中止（`--task-id` 必須、`--journal` 任意）。Conductor 停止 → worktree 削除 → `aborted` に遷移 → Conductor を再起動 |
+| `cmux-team delete-task` | draft/ready タスクの削除（`--task-id` 必須、`--journal` 任意）。`assigned` のタスクは `abort-task` を使う |
+| `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
+| `cmux-team conductor` | Conductor 情報表示 |
+| `cmux-team spawn-master` | Master surface 起動 |
+| `cmux-team artifacts` | アーティファクト一覧・検索 |
 
 ### 2. トレーサビリティ
 
@@ -113,12 +120,16 @@ cmux-team trace --limit 50          # 結果数制限（デフォルト20）
 | `CMUX_SURFACE_ID` | 現在のサーフェスID |
 | `CMUX_SURFACE` | cmux-team が設定。`surface:N` 形式。これが設定されていれば cmux-team 管理下 |
 
+**workspace 分離（重要）:**
+
+`cmux tree` はデフォルトで全ワークスペースの surface を返すため、複数ワークスペースで cmux-team を同時起動している場合は別ワークスペースの surface ID と混同する原因になる。daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、surface 検証や tree 取得には常に `--workspace` を付けて問い合わせる。
+
 **基本操作コマンド:**
 
 | コマンド | 用途 |
 |---------|------|
 | `cmux identify` | 自分の workspace/surface を確認 |
-| `cmux tree` | ペイン・サーフェス階層を表示 |
+| `cmux tree --workspace <id>` | ペイン・サーフェス階層を表示（cmux-team では必ず workspace を指定） |
 | `cmux list-panes` | ペイン一覧 |
 | `cmux list-pane-surfaces` | ペイン内のサーフェス一覧 |
 | `cmux new-split right` | 右にペイン分割（`left`/`up`/`down` も可） |
