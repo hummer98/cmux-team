@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.31.0] - 2026-04-09
+
+### Added
+- worktree 作成時に `.claude/settings.local.json` をコピーし、サブエージェントが同じローカル設定で動作するように (T116)
+
 ## [3.30.0] - 2026-04-09
 
 ### Added
