@@ -335,7 +335,14 @@ const SPINNER_INTERVAL = 180;
 const HR_FILL = "─".repeat(120);
 
 function sectionTitle(label: string) {
-  return ui.text(`─ ${label} ${HR_FILL}`, { dim: true });
+  return ui.button({
+    id: `section-${label}`,
+    label: `─ ${label} ${HR_FILL}`,
+    px: 0,
+    dsVariant: "unstyled",
+    style: { dim: true },
+    focusable: false,
+  });
 }
 
 // --- ビュー構築 ---
@@ -852,7 +859,7 @@ export async function startDashboard(
           id: "section-tasks",
           label: `─ Tasks ${daemon.openTasks} open ${HR_FILL}`,
           px: 0,
-          dsVariant: "ghost",
+          dsVariant: "unstyled",
           style: { dim: true },
           focusable: false,
           onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks" })); } catch {} },

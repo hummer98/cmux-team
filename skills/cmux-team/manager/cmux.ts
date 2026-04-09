@@ -86,14 +86,16 @@ export async function renameTab(
   );
 }
 
-export async function tree(): Promise<string> {
-  const { stdout } = await execFile("cmux", ["tree"]);
+export async function tree(workspace?: string): Promise<string> {
+  const args = ["tree"];
+  if (workspace) args.push("--workspace", workspace);
+  const { stdout } = await execFile("cmux", args);
   return stdout;
 }
 
-export async function getPaneForSurface(surface: string): Promise<string | undefined> {
+export async function getPaneForSurface(surface: string, workspace?: string): Promise<string | undefined> {
   try {
-    const output = await tree();
+    const output = await tree(workspace);
     const lines = output.split("\n");
     let currentPane: string | undefined;
     for (const line of lines) {
@@ -108,9 +110,9 @@ export async function getPaneForSurface(surface: string): Promise<string | undef
   }
 }
 
-export async function validateSurface(surface: string): Promise<boolean> {
+export async function validateSurface(surface: string, workspace?: string): Promise<boolean> {
   try {
-    const output = await tree();
+    const output = await tree(workspace);
     return output.includes(surface);
   } catch (e: any) {
     await log("error", `validateSurface failed: surface=${surface} ${e.message}`);
@@ -126,4 +128,14 @@ export async function getCallerSurface(): Promise<string> {
     throw new Error(`Failed to get caller surface: ${stdout}`);
   }
   return surface;
+}
+
+export async function getCallerWorkspace(): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFile("cmux", ["identify"]);
+    const data = JSON.parse(stdout);
+    return data?.caller?.workspace_ref;
+  } catch {
+    return undefined;
+  }
 }
