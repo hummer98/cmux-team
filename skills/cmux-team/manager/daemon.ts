@@ -61,6 +61,8 @@ export interface DaemonState {
   masterPidWatcherInterval?: ReturnType<typeof setInterval>;
   /** proxy ポートが前回起動時から変化したか（Master 再起動トリガー） */
   proxyPortChanged: boolean;
+  /** daemon が稼働しているワークスペース（他 workspace の surface との混同を防ぐ） */
+  workspace: string | null;
 }
 
 /** surface または taskRunId で Conductor を検索 */
@@ -98,6 +100,7 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     proxyPort: null,
     wakeup: null,
     proxyPortChanged: false,
+    workspace: null,
   };
 }
 
@@ -248,7 +251,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
     if (existsSync(markerPath)) {
       const surface = (await readFile(markerPath, "utf-8")).trim();
       if (surface) {
-        const alive = await isMasterAlive(surface);
+        const alive = await isMasterAlive(surface, state.workspace ?? undefined);
         if (alive) {
           // proxy ポート変化時: 旧 Master を close して再 spawn
           if (state.proxyPortChanged) {
@@ -294,7 +297,7 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
         const alive: ConductorState[] = [];
         for (const c of conductors) {
           if (!c.surface) continue;
-          if (await cmux.validateSurface(c.surface)) {
+          if (await cmux.validateSurface(c.surface, state.workspace ?? undefined)) {
             alive.push({
               surface: c.surface,
               taskRunId: c.taskRunId,
@@ -755,7 +758,7 @@ async function monitorConductors(state: DaemonState): Promise<void> {
     }
     if (conductor.status === "idle" || conductor.status === "disconnected") continue;
 
-    const status = await checkConductorStatus(conductor);
+    const status = await checkConductorStatus(conductor, state.workspace ?? undefined);
 
     switch (status) {
       case "running":
@@ -775,7 +778,7 @@ async function monitorConductors(state: DaemonState): Promise<void> {
     // kill-agent 以外のルート（tmux quit 等）で surface が消失した場合に対応
     for (let i = conductor.agents.length - 1; i >= 0; i--) {
       const agent = conductor.agents[i]!;
-      if (!(await cmux.validateSurface(agent.surface))) {
+      if (!(await cmux.validateSurface(agent.surface, state.workspace ?? undefined))) {
         conductor.agents.splice(i, 1);
         await log(
           "agent_done",

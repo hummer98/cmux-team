@@ -20,10 +20,10 @@ function sleep(ms: number): Promise<void> {
 
 // --- paneId 取得ヘルパー ---
 
-async function getPaneIdForSurface(surface: string): Promise<string | undefined> {
+async function getPaneIdForSurface(surface: string, workspace?: string): Promise<string | undefined> {
   // cmux tree をパースして surface が属する pane を特定
   try {
-    const output = await cmux.tree();
+    const output = await cmux.tree(workspace);
     // tree 出力形式: pane:N の行の後に surface:M が続く
     const lines = output.split("\n");
     let currentPane: string | undefined;
@@ -386,12 +386,13 @@ export async function resetConductor(
 // --- checkConductorStatus ---
 
 export async function checkConductorStatus(
-  conductor: ConductorState
+  conductor: ConductorState,
+  workspace?: string
 ): Promise<"idle" | "running" | "crashed"> {
   if (conductor.status === "idle") return "idle";
 
   // surface 消失 → クラッシュ
-  if (!(await cmux.validateSurface(conductor.surface))) return "crashed";
+  if (!(await cmux.validateSurface(conductor.surface, workspace))) return "crashed";
 
   return "running";
 }
@@ -430,7 +431,7 @@ export async function spawnConductor(
   try {
     const surface = await cmux.newSplit("down");
 
-    if (!(await cmux.validateSurface(surface))) {
+    if (!(await cmux.validateSurface(surface, await cmux.getCallerWorkspace()))) {
       await log("error", `spawnConductor: surface ${surface} validation failed`);
       return null;
     }

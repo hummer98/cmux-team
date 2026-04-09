@@ -18,7 +18,8 @@ export async function spawnMaster(
     // ペイン作成（daemon surface を右に split）
     const surface = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
 
-    if (!(await cmux.validateSurface(surface))) {
+    const workspace = await cmux.getCallerWorkspace();
+    if (!(await cmux.validateSurface(surface, workspace))) {
       await log("error", `Master surface ${surface} validation failed`);
       return null;
     }
@@ -45,6 +46,6 @@ export async function spawnMaster(
   }
 }
 
-export async function isMasterAlive(surface: string): Promise<boolean> {
-  return cmux.validateSurface(surface);
+export async function isMasterAlive(surface: string, workspace?: string): Promise<boolean> {
+  return cmux.validateSurface(surface, workspace);
 }

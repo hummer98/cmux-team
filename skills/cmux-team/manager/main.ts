@@ -356,16 +356,27 @@ Notes:
 
   // --- Conductor + Master 起動（TUI 上で進捗表示） ---
 
-  // daemon surface 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
+  // daemon surface / workspace 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
   let daemonSurface: string | undefined = process.env.CMUX_SURFACE;
   if (daemonSurface) {
     await log("daemon_surface", `surface=${daemonSurface} (env)`);
+    // surface が env 経由の場合も identify でworkspaceを取得
+    const ws = await cmux.getCallerWorkspace();
+    if (ws) {
+      state.workspace = ws;
+      await log("daemon_workspace", `workspace=${ws}`);
+    }
   } else {
     try {
       daemonSurface = await cmux.getCallerSurface();
       await log("daemon_surface", `surface=${daemonSurface} (identify)`);
     } catch (e: any) {
       await log("daemon_surface_fallback", e.message);
+    }
+    const ws = await cmux.getCallerWorkspace();
+    if (ws) {
+      state.workspace = ws;
+      await log("daemon_workspace", `workspace=${ws}`);
     }
   }
 
@@ -1046,9 +1057,10 @@ Notes:
   } catch {}
 
   // フォールバック: cmux tree から paneId を解決
+  const callerWorkspace = await cmux.getCallerWorkspace();
   if (!paneId) {
     try {
-      paneId = await cmux.getPaneForSurface(conductorSurface);
+      paneId = await cmux.getPaneForSurface(conductorSurface, callerWorkspace);
     } catch {}
   }
 
@@ -1059,7 +1071,7 @@ Notes:
     surface = await cmux.newSplit("right");
   }
 
-  if (!(await cmux.validateSurface(surface))) {
+  if (!(await cmux.validateSurface(surface, callerWorkspace))) {
     console.error(`Error: surface ${surface} validation failed`);
     process.exit(1);
   }
