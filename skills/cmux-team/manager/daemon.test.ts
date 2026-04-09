@@ -344,3 +344,51 @@ describe("エラーハンドリング", () => {
     expect(executable).toHaveLength(0);
   });
 });
+
+// --- scanTasks 統合テスト (assignTask エラー分離) ---
+
+import { scanTasks, createDaemon } from "./daemon";
+import type { DaemonState } from "./daemon";
+import type { ConductorState } from "./schema";
+
+describe("scanTasks: assignTask エラー分離", () => {
+  test("git 未初期化で assignTask 失敗時、タスクは aborted、Conductor は idle のまま", async () => {
+    // testDir は git init していない → git worktree add が失敗する
+    await createTask("100", "test-task", { priority: "high" });
+
+    const state = await createDaemon(testDir);
+    const fakeConductor: ConductorState = {
+      surface: "surface:fake-c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    };
+    state.conductors.set(fakeConductor.surface, fakeConductor);
+
+    await scanTasks(state);
+
+    // Conductor は idle のまま維持される（disconnected にならない）
+    expect(fakeConductor.status).toBe("idle");
+
+    // タスクは aborted 状態になる
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    expect(ts["100"]?.status).toBe("aborted");
+    expect(ts["100"]?.abortedAt).toBeDefined();
+    expect(ts["100"]?.journal).toContain("assign_failed");
+    expect(ts["100"]?.journal).toContain("git worktree add");
+  });
+
+  test("idle Conductor 不在時は何も変更しない (throttled)", async () => {
+    await createTask("101", "pending-task");
+
+    const state = await createDaemon(testDir);
+    // Conductor を登録しない
+    await scanTasks(state);
+
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    // タスクは ready のまま
+    expect(ts["101"]?.status).toBe("ready");
+  });
+});

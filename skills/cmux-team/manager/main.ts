@@ -32,6 +32,7 @@ import { spawnSingleConductor } from "./conductor";
 import { initDB, searchTraces, getTrace } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact } from "./artifact";
+import { runPreflight, printPreflightIssues } from "./preflight";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -189,6 +190,16 @@ Notes:
   // cmux 環境チェック
   if (!process.env.CMUX_SOCKET_PATH) {
     console.error("❌ cmux 環境外です。cmux 内で実行してください。");
+    process.exit(1);
+  }
+
+  // --- preflight チェック ---
+  // daemon 起動前に前提を検証し、失敗時は即 exit
+  // （daemon / Master / Conductor を spawn した後で失敗すると
+  //  中途半端なプロセスが残るため、spawn する前に止める）
+  const preflight = await runPreflight(PROJECT_ROOT);
+  if (!preflight.ok) {
+    printPreflightIssues(preflight);
     process.exit(1);
   }
 

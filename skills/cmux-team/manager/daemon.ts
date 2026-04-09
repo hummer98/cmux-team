@@ -11,6 +11,7 @@ import {
   initializeConductorSlots,
   assignTask,
   resetConductor,
+  AssignTaskError,
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
@@ -591,7 +592,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
   }
 }
 
-async function scanTasks(state: DaemonState): Promise<void> {
+export async function scanTasks(state: DaemonState): Promise<void> {
   const { tasks, taskState } = await loadTasks(state.projectRoot);
 
   const closed = new Set(
@@ -651,26 +652,55 @@ async function scanTasks(state: DaemonState): Promise<void> {
     // spawn 前にロック（次の tick での二重起動を防止）
     assignedIds.add(task.id);
 
-    const updated = await assignTask(idleConductor, task.id, state.projectRoot);
-    if (updated) {
-      state.conductors.set(updated.surface, updated);
-      // task-state.json に assigned + assignedAt を記録
-      const ts = await loadTaskState(state.projectRoot);
-      ts[task.id] = {
-        ...ts[task.id],
-        status: 'assigned',
-        assignedAt: new Date().toISOString(),
-      };
-      await saveTaskState(state.projectRoot, ts);
-    } else {
-      // assignTask 失敗 → conductor を disconnected にして再選択を防ぐ
+    let updated: ConductorState;
+    try {
+      updated = await assignTask(idleConductor, task.id, state.projectRoot);
+    } catch (e: unknown) {
+      if (e instanceof AssignTaskError) {
+        if (e.kind === "task") {
+          // タスク側の問題 → 該当タスクを abort し Conductor は idle のまま維持
+          const ts = await loadTaskState(state.projectRoot);
+          ts[task.id] = {
+            ...ts[task.id],
+            status: "aborted",
+            abortedAt: new Date().toISOString(),
+            journal: `assign_failed: ${e.reason}`,
+          };
+          await saveTaskState(state.projectRoot, ts);
+          await log(
+            "task_aborted",
+            `task_id=${task.id} title=${task.title} journal_summary=assign_failed: ${e.reason}`
+          );
+          // 次のタスクへ。idle Conductor はそのまま維持
+          continue;
+        }
+        // e.kind === "conductor" → 従来通り disconnected
+        idleConductor.status = "disconnected";
+        idleConductor.disconnectedAt = new Date().toISOString();
+        await log(
+          "conductor_disconnected",
+          `surface=${idleConductor.surface} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason}`
+        );
+        continue;
+      }
+      // AssignTaskError 以外の想定外例外（defensive: conductor.ts の catch-all が
+      // すべてを AssignTaskError にラップしているためデッドコードに近いが、
+      // 将来の変更に備えて最悪ケースとして conductor を落とす）
+      await log("error", `assignTask unexpected: task_id=${task.id} ${(e as Error).message}`);
       idleConductor.status = "disconnected";
       idleConductor.disconnectedAt = new Date().toISOString();
-      await log(
-        "conductor_disconnected",
-        `surface=${idleConductor.surface} reason=assign_failed task_id=${task.id}`
-      );
+      continue;
     }
+
+    state.conductors.set(updated.surface, updated);
+    // task-state.json に assigned + assignedAt を記録
+    const ts = await loadTaskState(state.projectRoot);
+    ts[task.id] = {
+      ...ts[task.id],
+      status: 'assigned',
+      assignedAt: new Date().toISOString(),
+    };
+    await saveTaskState(state.projectRoot, ts);
   }
 }
 

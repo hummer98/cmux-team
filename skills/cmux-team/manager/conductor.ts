@@ -18,6 +18,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- AssignTaskError ---
+
+/**
+ * assignTask 失敗時の分類
+ * - "task": タスク固有の問題（worktree 作成失敗、タスクファイル不備など）
+ *   → 該当タスクを abort、Conductor は idle のまま
+ * - "conductor": Conductor 側の問題（cmux send 失敗、surface 不在など）
+ *   → Conductor を disconnected にする
+ */
+export type AssignFailureKind = "task" | "conductor";
+
+export class AssignTaskError extends Error {
+  public readonly kind: AssignFailureKind;
+  public readonly reason: string;
+  constructor(kind: AssignFailureKind, reason: string, cause?: unknown) {
+    super(reason);
+    this.name = "AssignTaskError";
+    this.kind = kind;
+    this.reason = reason;
+    if (cause !== undefined) {
+      (this as any).cause = cause;
+    }
+  }
+}
+
 // --- paneId 取得ヘルパー ---
 
 async function getPaneIdForSurface(surface: string, workspace?: string): Promise<string | undefined> {
@@ -202,13 +227,21 @@ export async function assignTask(
   conductor: ConductorState,
   taskId: string,
   projectRoot: string
-): Promise<ConductorState | null> {
-  try {
-    const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
+): Promise<ConductorState> {
+  const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
+  const worktreePath = join(projectRoot, ".worktrees", taskRunId);
+  const branch = `${taskRunId}/task`;
+  let worktreeCreated = false;
 
+  try {
     // --- 1. タスクファイル検索（ハイブリッド対応） ---
     const tasksDir = join(projectRoot, ".team/tasks");
-    const entries = await readdir(tasksDir);
+    let entries: string[];
+    try {
+      entries = await readdir(tasksDir);
+    } catch (e: any) {
+      throw new AssignTaskError("task", `tasks dir not readable: ${e.message}`, e);
+    }
     let taskContent: string | null = null;
     let taskDir: string | undefined;
 
@@ -232,20 +265,21 @@ export async function assignTask(
     }
 
     if (!taskContent) {
-      await log("error", `Task file not found for ID=${taskId}`);
-      return null;
+      throw new AssignTaskError("task", `task file not found: id=${taskId}`);
     }
 
     const taskTitle = taskContent.match(/^title:\s*(.+)/m)?.[1]?.trim() || "unknown";
     const baseBranch = taskContent.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim();
 
     // --- 2. git worktree 作成 ---
-    const worktreePath = join(projectRoot, ".worktrees", taskRunId);
-    const branch = `${taskRunId}/task`;
-
-    await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
-      cwd: projectRoot,
-    });
+    try {
+      await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
+        cwd: projectRoot,
+      });
+      worktreeCreated = true;
+    } catch (e: any) {
+      throw new AssignTaskError("task", `git worktree add failed: ${e.message}`, e);
+    }
 
     // .claude/settings.local.json を worktree にコピー
     // （untracked なので worktree に含まれないが、Agent 起動時に必要）
@@ -278,36 +312,51 @@ export async function assignTask(
     }
     await mkdir(join(projectRoot, outputDir), { recursive: true });
 
-    const promptFile = await generateConductorTaskPrompt(
-      projectRoot,
-      taskRunId,
-      taskId,
-      taskContent,
-      worktreePath,
-      outputDir,
-      baseBranch,
-      taskDir
-    );
+    let promptFile: string;
+    try {
+      promptFile = await generateConductorTaskPrompt(
+        projectRoot,
+        taskRunId,
+        taskId,
+        taskContent,
+        worktreePath,
+        outputDir,
+        baseBranch,
+        taskDir
+      );
+    } catch (e: any) {
+      throw new AssignTaskError("task", `prompt generation failed: ${e.message}`, e);
+    }
 
     // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
     // /clear + Enter でセッションリセット
-    await cmux.send(conductor.surface, "/clear");
-    await sleep(500);
-    await cmux.sendKey(conductor.surface, "return");
-    await sleep(2000);
+    try {
+      await cmux.send(conductor.surface, "/clear");
+      await sleep(500);
+      await cmux.sendKey(conductor.surface, "return");
+      await sleep(2000);
 
-    // 新しいプロンプトを送信
-    await cmux.send(
-      conductor.surface,
-      `${promptFile} を読んで指示に従って作業してください。`
-    );
-    await sleep(500);
-    await cmux.sendKey(conductor.surface, "return");
+      // 新しいプロンプトを送信
+      await cmux.send(
+        conductor.surface,
+        `${promptFile} を読んで指示に従って作業してください。`
+      );
+      await sleep(500);
+      await cmux.sendKey(conductor.surface, "return");
+    } catch (e: any) {
+      throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
+    }
 
-    // --- 5. タブ名更新 ---
+    // --- 5. タブ名更新（失敗しても task は継続）---
+    // renameTab は表示用の冪等な後処理。catch-all に捕まって task abort
+    // されると実害の無い失敗でタスクが吹き飛ぶため、個別に握りつぶす。
     const num = conductor.surface.replace("surface:", "");
     const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
-    await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
+    try {
+      await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
+    } catch (e: any) {
+      await log("error", `renameTab failed: surface=${conductor.surface} ${e.message}`);
+    }
 
     // --- 6. ConductorState 更新 ---
     conductor.taskRunId = taskRunId;
@@ -326,8 +375,23 @@ export async function assignTask(
 
     return conductor;
   } catch (e: any) {
-    await log("error", `assignTask failed for task ${taskId}: ${e.message}`);
-    return null;
+    // worktree 作成後に失敗した場合は cleanup する（残骸がブランチ名衝突を引き起こすのを防ぐ）
+    if (worktreeCreated) {
+      try {
+        await execFile("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot });
+      } catch (ce: any) {
+        await log("error", `assignTask cleanup worktree remove failed: path=${worktreePath} ${ce.message}`);
+      }
+      try {
+        await execFile("git", ["branch", "-D", branch], { cwd: projectRoot });
+      } catch (ce: any) {
+        await log("error", `assignTask cleanup branch delete failed: branch=${branch} ${ce.message}`);
+      }
+    }
+
+    if (e instanceof AssignTaskError) throw e;
+    // 想定外エラーはタスク側に寄せる（Conductor を守る保守的挙動）
+    throw new AssignTaskError("task", `assignTask unexpected error: ${e.message}`, e);
   }
 }
 
@@ -464,7 +528,17 @@ export async function spawnConductor(
       `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
     );
 
-    return await assignTask(conductor, taskId, projectRoot);
+    try {
+      return await assignTask(conductor, taskId, projectRoot);
+    } catch (e) {
+      if (e instanceof AssignTaskError) {
+        // spawnConductor は戻り値 null 仕様を維持するため、ここで kind/reason を log する
+        // （daemon.scanTasks 経路とは異なり、呼び出し側には詳細情報を渡せない）
+        await log("error", `spawnConductor assignTask failed: kind=${e.kind} ${e.reason}`);
+        return null;
+      }
+      throw e;
+    }
   } catch (e: any) {
     await log("error", `spawnConductor failed for task ${taskId}: ${e.message}`);
     return null;
