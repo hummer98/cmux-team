@@ -2,7 +2,7 @@
 
 コマンドは `commands/` に配置。プラグインインストール時は自動で参照される。
 
-全5コマンド。
+全6コマンド。
 
 > **注意:** 初期設計では13コマンドを想定していたが、ワークフロー系コマンド（research, design, impl, review, test, sync-docs）は廃止され、起動・停止・ステータスは CLI サブコマンド（`cmux-team start`, `cmux-team status`, `cmux-team stop`）に移行した。
 
@@ -129,5 +129,28 @@ tags: [tag1, tag2]      # 任意
 ```
 
 **Arguments:** サブコマンド + 引数
+
+**allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /docs-sync
+
+**File:** `docs-sync.md`
+
+**Purpose:** `docs/spec/` を実装の現状に合わせて同期する（`skills/dockeeper/` スキル経由）。
+
+**Behavior:**
+1. `git log -1 -- docs/spec/` で最終更新コミット（base hash）を取得
+2. `git log <base_hash>..HEAD -- skills/ commands/ bin/ package.json .claude-plugin/` で実装変更を収集
+3. `.team/task-state.json` の closed タスクを参照してコミット意図を補強
+4. 7ファイル（00〜06）を順に読んで差分を抽出し、差分レポートを生成
+5. デフォルトはユーザー確認後に Edit ツールで更新／`--dry-run` はレポートのみ／`--auto` は確認なしで更新
+6. 完了報告（更新ファイル一覧 + スキップしたファイル一覧）
+
+**Arguments:**
+- 空 → 差分提示 → ユーザー確認 → 更新
+- `--dry-run` → レポートのみ
+- `--auto` → 確認なしで自動更新
 
 **allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`

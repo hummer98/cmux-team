@@ -21,7 +21,7 @@ npm install -g @hummer98/cmux-team
 ```json
 {
   "name": "cmux-team",
-  "version": "3.18.0",
+  "version": "3.31.0",
   "description": "Multi-agent development orchestration with Claude Code + cmux.",
   "skills": "./skills/",
   "commands": "./commands/",
@@ -36,6 +36,8 @@ npm install -g @hummer98/cmux-team
 - **SessionStart**: cmux 環境外での起動時にタブ名をリネーム
 - **PreToolUse (Write|Edit)**: `team.json` と `task-state.json` への直接編集をブロック（daemon 管理ファイルの保護）
 
+Conductor 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。
+
 ---
 
 ## npm パッケージ構成
@@ -45,7 +47,7 @@ npm install -g @hummer98/cmux-team
 ```json
 {
   "name": "@hummer98/cmux-team",
-  "version": "3.18.0",
+  "version": "3.31.0",
   "bin": { "cmux-team": "bin/cmux-team.js" },
   "scripts": {
     "postinstall": "node bin/postinstall.js",
@@ -78,13 +80,12 @@ npm postinstall スクリプト。
 
 ```
 skills/cmux-team/manager/
-├── main.ts          # CLI エントリーポイント（15サブコマンド）
+├── main.ts          # CLI エントリーポイント（17サブコマンド）
 ├── daemon.ts        # イベント駆動ステートマシン + メインループ
 ├── master.ts        # Master surface 起動
 ├── conductor.ts     # Conductor ライフサイクル管理
 ├── task.ts          # タスクファイルパース + 依存解決
 ├── proxy.ts         # API ロギングプロキシ
-├── queue.ts         # ファイルベースメッセージキュー
 ├── trace-store.ts   # SQLite FTS5 トレースDB
 ├── artifact.ts      # アーティファクト管理
 ├── schema.ts        # Zod 型定義
@@ -93,29 +94,31 @@ skills/cmux-team/manager/
 ├── cmux.ts          # cmux CLI ラッパー
 ├── dashboard.tsx    # React (ink) TUI ダッシュボード
 ├── e2e.ts           # E2E テストランナー
-├── daemon.test.ts   # daemon ユニットテスト
-├── proxy.test.ts    # proxy ユニットテスト
-├── queue.test.ts    # queue ユニットテスト
-├── task.test.ts     # task ユニットテスト
+├── *.test.ts        # ユニットテスト（daemon / proxy / task など）
 ├── package.json     # 依存: ink, react, zod, @rezi-ui/core, @rezi-ui/node
 └── tsconfig.json
 ```
+
+メッセージキューはファイルベースから HTTP API（プロキシ経由）に移行済みのため、`queue.ts` は廃止されている。
 
 ### CLI サブコマンド
 
 | コマンド | 説明 |
 |---------|------|
 | `start` | daemon 起動 + Master spawn + Conductor スロット初期化 + TUI + プロキシ |
-| `send <TYPE>` | メッセージキューイング（TASK_CREATED, CONDUCTOR_DONE, SHUTDOWN 等） |
+| `send <TYPE>` | メッセージ投入（TASK_CREATED, CONDUCTOR_DONE, SHUTDOWN 等） |
 | `status` | daemon ステータス表示（conductor、タスク数、ログ末尾） |
 | `stop` | グレースフルシャットダウン |
+| `spawn-conductor` | 単一 Conductor の起動・登録（`--direction right|down`, `--surface`） |
 | `spawn-agent` | Agent タブ作成 + Claude 起動 + プロキシ設定 + Trust 承認 |
 | `agents` | 稼働中エージェント一覧 |
 | `kill-agent` | Agent surface close + AGENT_DONE メッセージ |
-| `create-task` | タスクファイル作成 + task-state.json 初期エントリー |
-| `update-task` | タスク状態更新（draft → ready で TASK_CREATED トリガー） |
-| `close-task` | タスクを closed にマーク + journal 保存 |
-| `trace` | トレースDB 検索・表示（--task, --search, --show） |
+| `create-task` | タスクファイル作成 + task-state.json 初期エントリー（`--depends-on`, `--base-branch`, `--run-after-all` をサポート） |
+| `update-task` | タスク更新（`--status` / `--title` / `--body`、draft → ready で TASK_CREATED トリガー） |
+| `close-task` | タスクを closed にマーク + journal 保存 + CONDUCTOR_DONE 送信（`--force` で実行中も強制クローズ可能） |
+| `abort-task` | 実行中タスクの中止（sub-agent 停止 → Conductor 停止 → worktree 削除 → `aborted` 遷移 → Conductor 再起動） |
+| `delete-task` | draft/ready タスクの削除（`deleted` 遷移、journal 記録）。`assigned` のタスクは `abort-task` を使う |
+| `trace` | トレースDB 検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `conductor` | Conductor 情報表示 |
 | `spawn-master` | Master surface 起動 |
 | `artifacts` | アーティファクト一覧・検索 |
@@ -131,8 +134,10 @@ while (state.running):
   5. sleep(pollInterval)     # デフォルト10秒
 ```
 
-ファイルシステム監視（tasks/, queue/）により変更検出時は即時 tick を実行。
-ソースファイル mtime 監視によりコード変更時は自動再起動（exit code 42）。
+ファイルシステム監視（tasks/）と HTTP メッセージ通知により変更検出時は即時 tick を実行。
+ソースファイル mtime 監視によりコード変更時は自動再起動（exit code 42）。auto-restart 後に proxy ポートが変わった場合は Master を自動再接続する。
+
+daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、`cmux tree` / `validateSurface` には常に workspace を渡して別ワークスペースの surface ID と混同しないようにする。Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。
 
 ### プロキシサーバー
 
@@ -141,21 +146,31 @@ while (state.running):
 - ストリーミング対応（`text/event-stream` の tee）
 - ポートは `.team/proxy-port` に保存
 - 既存プロセスが生きていれば再利用
+- daemon の auto-restart 後にポートが変わった場合は Master セッションを自動再接続
+- レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
 - デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`
 
 ### TUI ダッシュボード
 
 - React + ink ベースのフルスクリーン TUI
-- セクション: ヘッダー（ステータス・PID・稼働時間）、Conductor 一覧、タスクリスト、ログ/Journal タブ
-- キーボードショートカット: `r` = リロード、`q` = 終了
+- セクション: ヘッダー（ステータス・PID・稼働時間・proxy ポート・5h/7d unified 使用率）、Conductor 一覧、タスクリスト、ログ/Journal タブ
+- 起動時は `bootPhase` を導入してプロキシ起動直後から TUI を表示
+- キーボードショートカット: `r` = リロード、`q` = 終了、Tasks タブで Enter = タスクドキュメントをフルスクリーン表示
+- フォーカスシステム / カーソル / フッターを備え、Tasks 行はクリック可能（行全体がボタン）
+- Tasks の並び順は open 上位 + createdAt 降順、5件制限は撤廃
+- Tasks に `assignedAt` を記録し、running は経過時間、closed/aborted は総実行時間を表示
+- ブランチアイコン・GitHub issue リンク（OSC 8 ハイパーリンク）・Nerd Font アイコンを表示
+- Journal/Log は最新を一番上に逆順表示し、スクロール追従ロジックを改善
+- レート制限のリセット時間は色分け（5h/7d 個別色）し、ダッシュボード全体はダーク基調
+- Master idle スピナーを `spinnerInterval` で `DaemonState` に同期
 - 2秒間隔でデータ更新
 
-### メッセージキュー
+### メッセージング
 
-- ファイルベース（`.team/queue/*.json`）
-- 処理済みファイルは `.team/queue/processed/` に移動
-- アトミック書き込み（tmp ファイル + rename）
+- daemon の HTTP プロキシが受け口を兼ね、CLI（`cmux-team send <TYPE>`）から POST されたメッセージを受信
+- メッセージ種別: `TASK_CREATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_CLEAR`, `SHUTDOWN`
 - Zod バリデーション（不正メッセージはスキップ）
+- `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
 
 ### テンプレート検索順序
 
@@ -191,17 +206,19 @@ while (state.running):
 ```
 output/
 prompts/
+docs-snapshot/
 logs/
 queue/
-proxy-port
-docs-snapshot/
-scripts/
+conductors/
+master.surface
 task-state.json
-*.log
+tasks/*.status.json
 ```
+
+`output/`, `prompts/`, `queue/` はタスク中心フォルダ集約への移行で実体としては未使用だが、過去バージョンとの互換のため引き続き ignore に列挙されている。
 
 追跡するもの:
 - `team.json` — チーム構成
-- `tasks/` — タスクファイル
+- `tasks/` — タスクディレクトリ集約（`TNNN-slug/task.md` ＋ `runs/<taskRunId>/`）
 - `specs/` — 要件・設計ドキュメント
 - `artifacts/` — 知見の記録

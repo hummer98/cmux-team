@@ -8,9 +8,9 @@
 
 ### Task 1.1: Repository scaffolding — 完了
 - ディレクトリ構造作成
-- `skills/cmux-team/SKILL.md`, `skills/cmux-agent-role/SKILL.md`
-- `commands/*.md`（全5コマンド: master, team-spec, team-task, team-archive, artifact）
-- `skills/cmux-team/templates/`（全13テンプレート）
+- `skills/cmux-team/SKILL.md`, `skills/cmux-agent-role/SKILL.md`, `skills/dockeeper/SKILL.md`
+- `commands/*.md`（全6コマンド: master, team-spec, team-task, team-archive, artifact, docs-sync）
+- `skills/cmux-team/templates/`（全14テンプレート）
 - `.gitignore`, `LICENSE` (MIT), `README.md`, `README.ja.md`
 - `.claude-plugin/plugin.json`
 - `package.json`（npm パッケージ）
@@ -95,7 +95,7 @@
 ## Phase 5: Templates & Polish — 完了
 
 ### Task 5.1: Agent prompt templates — 完了
-- 全13テンプレート実装
+- 全14テンプレート実装
 - 旧仕様（`cmux wait-for -S`, `cmux set-status`）からの移行完了
 - Conductor テンプレート3種（フル/タスク/ロール）追加
 - Master テンプレート追加
@@ -139,10 +139,11 @@
 - デバッグエンドポイント
 
 ### Task 6.6: タスク状態管理 — 完了
-- `task-state.json` による集約管理（draft/ready/in_progress/closed/archived）
-- フラット `tasks/` 構造（旧 `open/closed/` サブディレクトリ廃止）
+- `task-state.json` による集約管理（draft/ready/assigned/closed/aborted/deleted/archived）
+- タスク中心フォルダ集約（`tasks/TNNN-slug/task.md` ＋ `runs/<taskRunId>/` にプロンプト・成果物を集約）
 - 依存関係解決（`depends_on` フィールド）
 - 優先度ソート（high/medium/low）
+- `base_branch`, `run_after_all` 属性のサポート
 
 ### Task 6.7: トレースDB — 完了
 - SQLite FTS5 データベース（`trace-store.ts`）
@@ -158,6 +159,9 @@
 ### Task 6.9: 追加 CLI サブコマンド — 完了
 - `conductor` — Conductor 情報表示
 - `spawn-master` — Master surface 起動
+- `spawn-conductor` — 単一 Conductor の起動・登録
+- `abort-task` — 実行中タスクの中止 + worktree 削除 + Conductor 再起動 + journal 記録
+- `delete-task` — draft/ready タスクの削除 + journal 記録
 
 ### Task 6.10: ユニットテスト — 完了
 - `daemon.test.ts`, `proxy.test.ts`, `queue.test.ts`, `task.test.ts`
@@ -169,9 +173,53 @@
 
 ---
 
-## 追加改善（Phase 7 以降）
+## 追加改善（Phase 7 以降）— 完了済み
 
-以下は今後の改善候補であり、現時点では未実装:
+T082〜T116 で実施された主要改善:
+
+### スキル / コマンド追加
+- **dockeeper スキル + `/docs-sync` コマンド** — `docs/spec/` を実装現状に同期するスキルとスラッシュコマンドを新設
+
+### タスク管理
+- **タスク中心フォルダ集約（T102）** — `.team/tasks/TNNN-slug/runs/<taskRunId>/` にプロンプト・plan.md・Agent 出力を集約
+- **`delete-task` 追加 + `abort-task` の Journal 対応（T109）** — タスクの削除・中止と journal 記録
+- **`base_branch` + Nerd Font ブランチアイコン（T081）** — タスクごとのマージ先ブランチ指定
+- **`--depends-on` オプション（T083）** — タスク依存関係の指定
+- **planner の plan.md を `OUTPUT_DIR` 配下へ移動（T107）** — worktree 間の衝突防止
+
+### Conductor / Manager
+- **workspace 分離** — daemon が呼び出し元 workspace を記録し、別ワークスペース surface との混同を防止
+- **worktree への `.claude/settings.local.json` コピー（T116）** — サブエージェントのローカル設定統一
+- **Conductor 起動時 `--settings` hook 注入（T089/T092）** — `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー hook を無効化し、Manager 生成の settings を `--settings` で渡す
+- **Conductor `starting` 状態のバグ修正（T114）** — `CONDUCTOR_REGISTERED` 送信順序と SESSION_* ハンドラを修正
+- **`close-task` で `CONDUCTOR_DONE` 送信（T106）** — close 後の Conductor stuck 防止
+- **メモリリーク修正（T113）** — interval 重複・`fs.watch` 未クローズ・`drainAndLog` 未 catch を修正
+- **daemon auto-restart 後の Master proxy 再接続（T115）** — proxy ポート変化を検出して Master を自動再起動
+- **`task_completed` 二重記録防止（T085）** — CONDUCTOR_DONE ハンドラのステータスガード
+- **`SESSION_CLEAR` メッセージ追加（T084）** — `/clear` 時の disconnected 回復
+
+### TUI ダッシュボード
+- **bootPhase 早期表示（T080）** — プロキシ起動直後から TUI を表示
+- **OSC 8 ハイパーリンク（T093）** — GitHub issue リンクをクリック可能に
+- **行クリック可能（T094）** — Tasks 行全体を `ui.button` でラップ
+- **ヘッダー RUNNING 削除 + バージョン移動（T095）**
+- **5件制限解除（T096）** — `maxItems` ロジック撤廃
+- **createdAt 降順 + open 上位（T108）**
+- **Journal/Log 逆順表示 + スクロール追従改善（T100）**
+- **Tasks タブ Enter でフルスクリーン表示（T103）** — glow ビューワー
+- **`assignedAt` + 経過時間表示（T110）** — running は経過、closed/aborted は総実行時間
+- **5h/7d unified 使用率表示（T076/T101）** — TPM → unified ヘッダー記録、色分け（T105）
+- **Nerd Font アイコン + カーソル + フッター（T082/T088）**
+- **Master idle スピナー（T097）**
+- **proxy ポート表示 / Tundefined 防御（T087）**
+
+### CLI ヘルプ / ロギング
+- **daemon 起動時 `console.log` → `log()` 置換（T090）**
+- **`create-task --help` の `--run-after-all` 説明（T098）**
+
+---
+
+## 未実装の改善候補
 
 - レート制限のインテリジェント制御（プロキシでの自動スロットリング）
 - Conductor 台数の動的スケーリング

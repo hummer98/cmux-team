@@ -32,6 +32,8 @@ Task: <タスク内容>
 Output: .team/output/<role-id>.md
 ```
 
+`Output:` 行の表記は固定だが、実際の出力先は Conductor が spawn 時に展開する `OUTPUT_DIR` に依存する。タスク中心フォルダ集約（`.team/tasks/TNNN-slug/runs/<taskRunId>/`）が導入されたため、現行ではこのタスク実行ディレクトリ配下に成果物が書かれる。
+
 **完了したら停止するだけ。報告は不要。上位が監視する。**
 
 ### 2. 出力プロトコル
@@ -68,6 +70,10 @@ Output: .team/output/<role-id>.md
 ```bash
 # タスク作成は CLI で行う（ID 自動採番・task-state.json 更新を一括実行）
 cmux-team create-task --title "タイトル" --body "詳細"
+
+# 依存関係や別ブランチ向けの応用例
+cmux-team create-task --title "実装" --depends-on "081,082" --status ready
+cmux-team create-task --title "hotfix" --base-branch develop --status ready
 ```
 
 ### 5. 他エージェントとの連携

@@ -1,7 +1,7 @@
 # Seed: Agent Prompt Templates
 
-テンプレートは `skills/cmux-team/templates/` に配置。全13個（うち planner, design-reviewer, inspector は4フェーズフロー用）。
-Conductor（または daemon）が spawn 時に変数を置換し `.team/prompts/` に書き出す。
+テンプレートは `skills/cmux-team/templates/` に配置。全14個（うち planner, design-reviewer, implementer, inspector は4フェーズフロー用）。
+Conductor（または daemon）が spawn 時に変数を置換し、タスク中心フォルダ集約により `.team/tasks/TNNN-slug/runs/<taskRunId>/` 配下に書き出す。
 
 ---
 
@@ -195,11 +195,11 @@ Use Mermaid diagrams where they add clarity.
 ### 6. Decision Log（設計判断の記録テーブル）
 
 ## 出力
-1. 作業ディレクトリ内に `plan.md` を作成（git commit する）
-2. {{OUTPUT_FILE}} にも同じ内容をコピー
+1. `{{OUTPUT_DIR}}/plan.md` に計画書を作成する（worktree 内には作成しない・git commit しない）
+2. 作業ディレクトリ内には `plan.md` を作成しない（worktree 間の衝突防止）
 ```
 
-**テンプレート変数:** `{{COMMON_HEADER}}`, `{{TASK_CONTENT}}`, `{{OUTPUT_FILE}}`
+**テンプレート変数:** `{{COMMON_HEADER}}`, `{{TASK_CONTENT}}`, `{{OUTPUT_DIR}}`
 
 ---
 
@@ -403,12 +403,13 @@ Write to {{OUTPUT_FILE}}:
 | 変数 | 使用テンプレート | 説明 |
 |------|----------------|------|
 | `{{COMMON_HEADER}}` | 全ロール | common-header.md の展開結果 |
-| `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス |
+| `{{OUTPUT_FILE}}` | OUTPUT_FILE を使用するロール（planner を除く：researcher, architect, design-reviewer, implementer, inspector, dockeeper, task-manager） | 出力ファイルパス |
 | `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree パス |
 | `{{CONDUCTOR_ID}}` | conductor* | Conductor 識別子 |
-| `{{OUTPUT_DIR}}` | conductor* | 出力ディレクトリパス |
+| `{{OUTPUT_DIR}}` | conductor*, planner | 出力ディレクトリパス（planner は plan.md をここに保存） |
 | `{{TASK_CONTENT}}` | conductor-task, planner, design-reviewer, inspector | タスク定義の内容 |
 | `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
+| `{{BASE_BRANCH}}` | conductor-task | タスクの target ブランチ（未指定時は "main（デフォルト）"） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | サブ質問リスト |
 | `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |
