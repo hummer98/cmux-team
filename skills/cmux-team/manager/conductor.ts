@@ -4,8 +4,8 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, mkdir, readdir, rm, stat } from "fs/promises";
-import { join, relative } from "path";
+import { readFile, mkdir, readdir, rm, stat, copyFile } from "fs/promises";
+import { join, relative, dirname } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
@@ -246,6 +246,19 @@ export async function assignTask(
     await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
       cwd: projectRoot,
     });
+
+    // .claude/settings.local.json を worktree にコピー
+    // （untracked なので worktree に含まれないが、Agent 起動時に必要）
+    const settingsSrc = join(projectRoot, ".claude/settings.local.json");
+    if (existsSync(settingsSrc)) {
+      const settingsDst = join(worktreePath, ".claude/settings.local.json");
+      await mkdir(dirname(settingsDst), { recursive: true })
+        .then(() => copyFile(settingsSrc, settingsDst))
+        .then(() => log("settings_copied_to_worktree", `worktree=${worktreePath}`))
+        .catch(async (e: any) => {
+          await log("error", `settings copy failed: worktree=${worktreePath} ${e.message}`);
+        });
+    }
 
     // worktree ブートストラップ
     if (existsSync(join(worktreePath, "package.json"))) {
