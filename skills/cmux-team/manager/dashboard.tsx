@@ -15,6 +15,7 @@ import type { DaemonState, TaskSummary } from "./daemon";
 import type { ConductorState, RateLimitInfo } from "./schema";
 import type { AgentState } from "./schema";
 import { log } from "./logger";
+import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 
@@ -156,7 +157,7 @@ function formatUptime(startMs: number): string {
 }
 
 function utcToLocal(isoTimestamp: string): string {
-  return new Date(isoTimestamp).toLocaleTimeString("ja-JP", {
+  return new Date(isoTimestamp).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -1161,8 +1162,8 @@ export async function startDashboard(
     await app.start();
   } catch (e: any) {
     cleanup();
-    console.error(`❌ ダッシュボード起動失敗: ${e.message}`);
-    console.error("ヒント: TTY 環境で cmux-team start を実行してください");
+    console.error(t("dashboard_startup_failed", { message: e.message }));
+    console.error(t("dashboard_startup_hint"));
     return { scheduleRefresh: () => {} };
   }
 

@@ -28,6 +28,7 @@ import { promisify } from "util";
 import { mkdir, writeFile, readFile, readdir, rm, cp } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { t } from "./i18n";
 
 const execFile = promisify(execFileCb);
 
@@ -269,7 +270,7 @@ async function startDaemon(): Promise<void> {
   if (daemonReady) {
     console.log("  daemon started ✓");
   } else {
-    console.log("  WARNING: daemon 起動未確認。テストを続行します。");
+    console.log(t("e2e_daemon_not_confirmed"));
   }
 
   // 4. Master surface を team.json から取得（Master spawn + Trust 承認待ち）
@@ -280,10 +281,10 @@ async function startDaemon(): Promise<void> {
     if (masterSurface) {
       console.log(`  master surface: ${masterSurface}`);
     } else {
-      console.log("  WARNING: Master surface が見つかりません（Master spawn に失敗した可能性）");
+      console.log(t("e2e_master_not_found"));
     }
   } catch (e: any) {
-    console.log(`  WARNING: team.json 読み取り失敗: ${e.message}`);
+    console.log(t("e2e_team_json_failed", { message: e.message }));
   }
 
   console.log();
@@ -346,8 +347,8 @@ async function stopDaemon(): Promise<void> {
 async function scenarioSequential(): Promise<void> {
   const start = Date.now();
   console.log("━━━ Scenario 1: Sequential Dependencies (A→B→C) ━━━");
-  console.log("  3 つのタスクを連鎖依存で実行:");
-  console.log("  Task 1 (調査) → Task 2 (設計) → Task 3 (実装)\n");
+  console.log(t("e2e_scenario1_title"));
+  console.log(t("e2e_scenario1_tasks"));
 
   await createTaskFile("1", "research-api", {
     priority: "high",
