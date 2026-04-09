@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.30.0] - 2026-04-09
+
+### Added
+- plan.md の出力先を worktree から OUTPUT_DIR（タスクフォルダ `runs/` 配下）に変更 (T107)
+- ダッシュボード Tasks の並び順を open 上位 + createdAt 降順に変更 (T108)
+- `delete-task` コマンド追加 (T109)
+- `abort-task` の Journal 記録対応 (T109)
+- タスク時間管理: `assignedAt` 記録 + ダッシュボードに経過時間表示 (T110)
+- workspace 分離: `cmux identify` から workspace_ref を取得し、他ワークスペースの surface との混同を防止 (T116)
+
+### Fixed
+- メモリリーク修正: daemon.ts の interval 重複・fs.watch 未クローズ・proxy.ts の `drainAndLog` 未 catch (T113)
+- Conductor `starting` 状態のステート遷移バグ修正 (T114)
+- `daemon_auto_restart` 後に Master が proxy を見失う問題を修正 (T115)
+
 ## [3.29.0] - 2026-04-07
 
 ### Added
