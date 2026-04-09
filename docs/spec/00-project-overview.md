@@ -78,17 +78,20 @@ npm install -g @hummer98/cmux-team
 
 ```
 .team/
-├── tasks/              # タスクファイル（フラット構造）
-├── task-state.json     # タスク状態管理（status: draft/ready/assigned/closed）
+├── tasks/              # タスクディレクトリ集約（タスク中心構造）
+│   └── TNNN-slug/      #   タスクごとに 1 ディレクトリ
+│       ├── task.md     #     タスク本文
+│       └── runs/       #     実行ごとの作業フォルダ
+│           └── <taskRunId>/  #       プロンプト・plan.md・Agent 出力を集約
+├── task-state.json     # タスク状態管理（status: draft/ready/assigned/closed/aborted/deleted/archived）
 ├── artifacts/          # Axxx — 知見の記録（調査・設計判断・セッション要約）
-├── output/             # Conductor/Agent の出力（taskRunId 別）
 ├── conductors/         # Conductor 状態ファイル
-├── prompts/            # プロンプト（監査証跡）
 ├── specs/              # 要件・設計ドキュメント
-├── queue/              # メッセージキュー（incoming/ + processed/）
 ├── logs/               # manager.log + traces/bodies/
 ├── traces/             # SQLite トレースDB（traces.db）
 ├── sessions/           # セッション情報
 ├── proxy-port          # プロキシポート番号
 └── team.json           # チーム構成（daemon が自動更新）
 ```
+
+タスク実行に伴うプロンプト・成果物（旧 `.team/prompts/`、`.team/output/` 相当）は `tasks/TNNN-slug/runs/<taskRunId>/` 配下に集約される。Conductor／Agent の `OUTPUT_DIR` はこのディレクトリを指す。
