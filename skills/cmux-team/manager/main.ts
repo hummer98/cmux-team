@@ -9,7 +9,7 @@
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
  *   ./main.ts stop                             # graceful shutdown
- *   ./main.ts spawn-conductor [--direction <right|down>] [--surface <surface>]
+ *   ./main.ts spawn-conductor [--surface <surface>]
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s>
@@ -882,14 +882,12 @@ async function cmdStop(): Promise<void> {
 
 async function cmdSpawnConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_conductor"));
-  const direction = (getArg("direction") ?? "right") as "right" | "down";
-  if (direction !== "right" && direction !== "down") {
-    console.error("Error: --direction must be 'right' or 'down'");
-    process.exit(1);
+  let surface = getArg("surface") ?? process.env.CMUX_SURFACE;
+  if (!surface) {
+    surface = await cmux.getCallerSurface();
   }
-  const parentSurface = getArg("surface");
 
-  const result = await spawnSingleConductor(PROJECT_ROOT, direction, parentSurface);
+  const result = await spawnSingleConductor(PROJECT_ROOT, surface);
   console.log(`SURFACE=${result.surface}`);
 }
 

@@ -174,8 +174,7 @@ Usage:
   cmux-team spawn-conductor [options]
 
 Options:
-  --direction <right|down>  split direction (default: right)
-  --surface <surface>       source surface to split from (optional)
+  --surface <surface>       target surface to start Conductor on (default: $CMUX_SURFACE or current surface)
 `,
 
   help_spawn_agent: `
@@ -448,7 +447,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             show status
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-conductor [--direction <right|down>] [--surface <s>]
+  cmux-team spawn-conductor [--surface <s>]
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             list running agents
   cmux-team kill-agent --surface <surface>
@@ -619,8 +618,7 @@ Usage:
   cmux-team spawn-conductor [options]
 
 Options:
-  --direction <right|down>  split 方向（デフォルト: right）
-  --surface <surface>       split 元の surface（任意）
+  --surface <surface>       Conductor を起動する対象 surface（デフォルト: $CMUX_SURFACE または現在の surface）
 `,
 
   help_spawn_agent: `
@@ -894,7 +892,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-conductor [--direction <right|down>] [--surface <s>]
+  cmux-team spawn-conductor [--surface <s>]
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
