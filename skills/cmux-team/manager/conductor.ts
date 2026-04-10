@@ -67,11 +67,8 @@ async function getPaneIdForSurface(surface: string, workspace?: string): Promise
 
 export async function spawnSingleConductor(
   projectRoot: string,
-  direction: "right" | "down",
-  parentSurface?: string,
+  surface: string,
 ): Promise<ConductorState> {
-  const surface = await cmux.newSplit(direction, parentSurface ? { surface: parentSurface } : undefined);
-
   const num = surface.replace("surface:", "");
   const paneId = await getPaneIdForSurface(surface);
 
