@@ -3,7 +3,7 @@
  */
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
-import { existsSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 import { readFile, mkdir, readdir, rm, stat, copyFile } from "fs/promises";
 import { join, relative, dirname } from "path";
 import { loadTaskState } from "./task";
@@ -289,6 +289,13 @@ export async function assignTask(
         .catch(async (e: any) => {
           await log("error", `settings copy failed: worktree=${worktreePath} ${e.message}`);
         });
+    }
+
+    // .envrc を生成（source_up で親の .envrc を継承）
+    const envrcSrc = join(projectRoot, '.envrc');
+    if (existsSync(envrcSrc)) {
+      writeFileSync(join(worktreePath, '.envrc'), 'source_up\n');
+      await log("envrc_generated", `worktree=${worktreePath}`);
     }
 
     // worktree ブートストラップ
