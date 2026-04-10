@@ -5,34 +5,45 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:171",
+    "surface": "surface:34",
     "status": "running"
   },
   "manager": {
-    "pid": 44464,
+    "pid": 20559,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
-      "surface": "surface:168",
+      "surface": "surface:31",
       "status": "idle",
-      "startedAt": "2026-04-10T07:20:15.745Z",
-      "paneId": "pane:101",
+      "startedAt": "2026-04-10T14:04:57.193Z",
+      "paneId": "pane:30",
       "agents": []
     },
     {
-      "surface": "surface:169",
-      "status": "idle",
-      "startedAt": "2026-04-10T07:23:29.672Z",
-      "paneId": "pane:102",
-      "agents": []
+      "surface": "surface:32",
+      "taskRunId": "task-134-1775844735",
+      "taskId": "134",
+      "taskTitle": "リリース",
+      "status": "running",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-134-1775844735",
+      "outputDir": ".team/tasks/134-task/runs/task-134-1775844735",
+      "startedAt": "2026-04-10T18:12:19.786Z",
+      "paneId": "pane:31",
+      "sessionId": "65905bbe-a152-42c8-8e8b-75a88db22b2e",
+      "agents": [
+        {
+          "surface": "surface:96",
+          "role": "impl"
+        }
+      ]
     },
     {
-      "surface": "surface:170",
+      "surface": "surface:33",
       "status": "idle",
-      "startedAt": "2026-04-09T18:33:34.622Z",
-      "paneId": "pane:103",
+      "startedAt": "2026-04-10T17:59:46.253Z",
+      "paneId": "pane:32",
       "agents": []
     }
   ]

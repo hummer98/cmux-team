@@ -150,7 +150,15 @@ gh run watch ${RUN_ID} --exit-status && echo "✅ GitHub Actions 成功: npm pub
 
 **注意:** バックグラウンドで実行し、完了通知を待つ。ポーリングや sleep ループは不要。
 
-### 10. 完了報告
+### 10. ローカルインストール
+
+GitHub Actions の完了通知を受け取ったら、ローカルにもインストールする:
+
+```bash
+npm install -g .
+```
+
+### 11. 完了報告
 
 ```
 リリース完了: v${CURRENT} → v${NEW_VERSION}
@@ -160,4 +168,5 @@ gh run watch ${RUN_ID} --exit-status && echo "✅ GitHub Actions 成功: npm pub
 - push: origin/main
 - GitHub Actions: バックグラウンドで監視中（完了時に報告）
 - plugin: 更新済み（要セッション再起動）
+- ローカル: npm install -g . 済み
 ```

@@ -188,7 +188,9 @@ function compactElapsed(startIso: string, endIso?: string): string {
 /** リセットまでの残り時間を 1d4h / 3h12m / 45m 形式で整形（最大2単位） */
 function formatResetRemaining(resetIso: string | null): string {
   if (!resetIso) return "";
-  const resetMs = new Date(resetIso).getTime();
+  // unified ヘッダーは unix timestamp（秒）の数値文字列で返る
+  const asNum = Number(resetIso);
+  const resetMs = !isNaN(asNum) && asNum > 1e9 ? asNum * 1000 : new Date(resetIso).getTime();
   if (isNaN(resetMs)) return "";
   const sec = Math.floor((resetMs - Date.now()) / 1000);
   if (sec <= 0) return "0m";
@@ -204,16 +206,21 @@ function formatResetRemaining(resetIso: string | null): string {
   return h > 0 ? `${d}d${h}h` : `${d}d`;
 }
 
-/** 使用率のプログレスバーを1つ生成 */
-function buildUtilizationBar(label: string, utilization: number, resetIso: string | null): { text: string; color: typeof GREEN } {
+/** 使用率のプログレスバーを1グループ生成（残り時間は別パーツでグレー表示、group=true でグループ先頭マーク） */
+function buildUtilizationBar(label: string, utilization: number, resetIso: string | null): { parts: Array<{ text: string; color: typeof GREEN; group?: boolean }> } {
   const pct = Math.round(utilization * 100);
   const barWidth = 10;
   const filled = Math.round((pct / 100) * barWidth);
   const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
   const color = pct >= 90 ? RED : pct >= 70 ? YELLOW : GREEN;
+  const parts: Array<{ text: string; color: typeof GREEN; group?: boolean }> = [
+    { text: `${label}: ${pct}% ${bar}`, color, group: true },
+  ];
   const remaining = formatResetRemaining(resetIso);
-  const suffix = remaining ? ` ${remaining}` : "";
-  return { text: `${label}: ${pct}% ${bar}${suffix}`, color };
+  if (remaining) {
+    parts.push({ text: remaining, color: GRAY });
+  }
+  return { parts };
 }
 
 /** レート制限の表示文字列を生成（各パーツが個別の色を持つ） */
@@ -229,11 +236,11 @@ function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { parts: Array<
 
     if (rateLimit.unified5hUtilization != null) {
       const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization, rateLimit.unified5hReset);
-      parts.push({ text: h5.text, color: forceRed ? RED : h5.color });
+      parts.push(...h5.parts.map(p => ({ text: p.text, color: forceRed && p.color !== GRAY ? RED : p.color })));
     }
     if (rateLimit.unified7dUtilization != null) {
       const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization, rateLimit.unified7dReset);
-      parts.push({ text: d7.text, color: forceRed ? RED : d7.color });
+      parts.push(...d7.parts.map(p => ({ text: p.text, color: forceRed && p.color !== GRAY ? RED : p.color })));
     }
 
     return { parts };
@@ -873,7 +880,7 @@ export async function startDashboard(
           const rl = buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
-          const rightText = rl.parts.map(p => p.text).join("  ");
+          const rightText = rl.parts.map((p: any, i: number) => (i > 0 && p.group ? "  " : "") + p.text).join("");
           const fill = "─".repeat(Math.max(1, 80 - left.length - rightText.length));
 
           // スロットリング中: headerSubtitle 部分を赤色で表示
@@ -892,8 +899,8 @@ export async function startDashboard(
 
           return ui.row({ gap: 0 }, [
             ui.text(`${left} ${fill} `, { dim: true }),
-            ...rl.parts.flatMap((p, i) => [
-              ...(i > 0 ? [ui.text("  ", { dim: true })] : []),
+            ...rl.parts.flatMap((p: any, i: number) => [
+              ...(i > 0 && p.group ? [ui.text("  ", { dim: true })] : []),
               ui.text(p.text, { style: { fg: p.color } }),
             ]),
           ]);

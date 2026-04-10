@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.36.0] - 2026-04-11
+
+### Added
+- Conductor 起動時に `--session-id` を指定してセッションを resume 可能に
+- `update-task` に `--depends-on` オプションを追加し、タスク間の依存関係を設定可能に
+- `artifacts add` コマンドを追加。既存ファイルをファイル名指定でアーティファクトとして登録可能に
+- `cmux-team start` 時にワークスペース名を起動フォルダ名に自動設定
+- `cmux-team resume` で restart 時に Conductor セッションを resume で再開
+
+### Changed
+- 5h レート制限のスロットリング閾値を 95% から 90% に変更し、より早い段階で新規タスク割り当てを一時停止
+- Conductor/Agent spawn 時に `CMUX_CLAUDE_HOOKS_DISABLED=1` を設定し、hooks による干渉を防止
+
 ## [3.35.0] - 2026-04-10
 
 ### Added
