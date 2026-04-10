@@ -961,6 +961,8 @@ async function cmdSpawnAgent(): Promise<void> {
   if (worktreePath) {
     await cmux.send(surface, `cd ${worktreePath}\n`);
     await sleep(500);
+    await cmux.send(surface, `direnv allow 2>/dev/null\n`);
+    await sleep(500);
   }
 
   // Claude Code 起動
