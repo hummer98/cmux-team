@@ -109,7 +109,7 @@ skills/cmux-team/manager/
 | `send <TYPE>` | メッセージ投入（TASK_CREATED, CONDUCTOR_DONE, SHUTDOWN 等） |
 | `status` | daemon ステータス表示（conductor、タスク数、ログ末尾） |
 | `stop` | グレースフルシャットダウン |
-| `spawn-conductor` | 単一 Conductor の起動・登録（`--direction right|down`, `--surface`） |
+| `spawn-conductor` | 単一 Conductor の起動・登録 |
 | `spawn-agent` | Agent タブ作成 + Claude 起動 + プロキシ設定 + Trust 承認 |
 | `agents` | 稼働中エージェント一覧 |
 | `kill-agent` | Agent surface close + AGENT_DONE メッセージ |

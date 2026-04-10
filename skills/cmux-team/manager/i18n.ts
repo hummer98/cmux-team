@@ -168,13 +168,12 @@ Notes:
 `,
 
   help_spawn_conductor: `
-cmux-team spawn-conductor -- launch and register a new Conductor
+cmux-team spawn-conductor -- launch and register a Conductor on the current surface
 
 Usage:
-  cmux-team spawn-conductor [options]
+  cmux-team spawn-conductor
 
-Options:
-  --surface <surface>       target surface to start Conductor on (default: $CMUX_SURFACE or current surface)
+The Conductor is started on the current surface ($CMUX_SURFACE or caller surface).
 `,
 
   help_spawn_agent: `
@@ -447,7 +446,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             show status
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-conductor [--surface <s>]
+  cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             list running agents
   cmux-team kill-agent --surface <surface>
@@ -612,13 +611,12 @@ Notes:
 `,
 
   help_spawn_conductor: `
-cmux-team spawn-conductor -- 新しい Conductor を起動・登録
+cmux-team spawn-conductor -- 現在の surface で Conductor を起動・登録
 
 Usage:
-  cmux-team spawn-conductor [options]
+  cmux-team spawn-conductor
 
-Options:
-  --surface <surface>       Conductor を起動する対象 surface（デフォルト: $CMUX_SURFACE または現在の surface）
+現在の surface（$CMUX_SURFACE または呼び出し元 surface）で Conductor を起動します。
 `,
 
   help_spawn_agent: `
@@ -892,7 +890,7 @@ Usage:
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
   cmux-team stop                               graceful shutdown
-  cmux-team spawn-conductor [--surface <s>]
+  cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
