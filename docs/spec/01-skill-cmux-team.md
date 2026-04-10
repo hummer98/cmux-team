@@ -74,7 +74,7 @@ description: >
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body`, `--depends-on`, `--base-branch`, `--run-after-all` 任意） |
-| `cmux-team update-task` | タスク状態更新（`--task-id` 必須、`--status` / `--title` / `--body` のいずれか必須） |
+| `cmux-team update-task` | タスク状態更新（`--task-id` 必須、`--status` / `--title` / `--body` / `--depends-on` のいずれか必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal`, `--force` 任意。close 後 `CONDUCTOR_DONE` を送信） |
 | `cmux-team abort-task` | 実行中タスクの中止（`--task-id` 必須、`--journal` 任意）。Conductor 停止 → worktree 削除 → `aborted` に遷移 → Conductor を再起動 |
 | `cmux-team delete-task` | draft/ready タスクの削除（`--task-id` 必須、`--journal` 任意）。`assigned` のタスクは `abort-task` を使う |
@@ -82,6 +82,9 @@ description: >
 | `cmux-team conductor` | Conductor 情報表示 |
 | `cmux-team spawn-master` | Master surface 起動 |
 | `cmux-team artifacts` | アーティファクト一覧・検索 |
+| `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
+| `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
+| `cmux-team resume` | assigned タスクの Conductor セッション再開（`<task-id>` positional 引数必須。`claude --resume` で再開） |
 
 ### 2. トレーサビリティ
 
@@ -119,6 +122,8 @@ cmux-team trace --limit 50          # 結果数制限（デフォルト20）
 | `CMUX_WORKSPACE_ID` | 現在のワークスペースID |
 | `CMUX_SURFACE_ID` | 現在のサーフェスID |
 | `CMUX_SURFACE` | cmux-team が設定。`surface:N` 形式。これが設定されていれば cmux-team 管理下 |
+| `CMUX_CLAUDE_HOOKS_DISABLED` | `1` に設定すると cmux ラッパーの hook を無効化。Conductor・Agent・Master 起動時に自動設定 |
+| `CMUX_TEAM_MD_VIEWER` | `artifacts open` で使用する Markdown ビューアのコマンド名。未設定時は `mo` → `cat` にフォールバック |
 
 **workspace 分離（重要）:**
 
