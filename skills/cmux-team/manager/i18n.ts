@@ -268,12 +268,14 @@ Options:
   --status <status>       new status (optional)
   --title <title>         new title (optional)
   --body <text>           new body (optional)
+  --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
 
-  * At least one of --status, --title, or --body is required
+  * At least one of --status, --title, --body, or --depends-on is required
 
 Examples:
   cmux-team update-task --task-id 035 --status ready
   cmux-team update-task --task-id 035 --title "New title" --body "New description"
+  cmux-team update-task --task-id 035 --depends-on "081,082"
 
 Notes:
   - Tasks in assigned (running) state cannot be updated
@@ -724,12 +726,14 @@ Options:
   --status <status>       新しいステータス（任意）
   --title <title>         新しいタイトル（任意）
   --body <text>           新しい本文（任意）
+  --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
 
-  ※ --status, --title, --body のうち少なくとも1つが必要
+  ※ --status, --title, --body, --depends-on のうち少なくとも1つが必要
 
 Examples:
   cmux-team update-task --task-id 035 --status ready
   cmux-team update-task --task-id 035 --title "新タイトル" --body "新しい説明"
+  cmux-team update-task --task-id 035 --depends-on "081,082"
 
 Notes:
   - assigned（実行中）のタスクは更新できません
