@@ -3,7 +3,7 @@
  *
  * 既存の dashboard.tsx (Ink ベース) を Rezi TUI フレームワークで書き直し。
  * Ink版と同等の情報量・レイアウトを実現。
- * 上部: ヘッダー（ステータス・PID・conductors・tasks）
+ * 上部: ヘッダー（ステータス・conductors・tasks）
  * 中部: Master / Conductors / Tasks パネル
  * 下部: journal / log タブ切り替え（残りスペースを全て使う）
  */
@@ -184,14 +184,35 @@ function compactElapsed(startIso: string, endIso?: string): string {
   return m > 0 ? `${h}h${m}m` : `${h}h`;
 }
 
+/** リセットまでの残り時間を 1d4h / 3h12m / 45m 形式で整形（最大2単位） */
+function formatResetRemaining(resetIso: string | null): string {
+  if (!resetIso) return "";
+  const resetMs = new Date(resetIso).getTime();
+  if (isNaN(resetMs)) return "";
+  const sec = Math.floor((resetMs - Date.now()) / 1000);
+  if (sec <= 0) return "0m";
+  if (sec < 60) return "<1m";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  }
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  return h > 0 ? `${d}d${h}h` : `${d}d`;
+}
+
 /** 使用率のプログレスバーを1つ生成 */
-function buildUtilizationBar(label: string, utilization: number): { text: string; color: typeof GREEN } {
+function buildUtilizationBar(label: string, utilization: number, resetIso: string | null): { text: string; color: typeof GREEN } {
   const pct = Math.round(utilization * 100);
   const barWidth = 10;
   const filled = Math.round((pct / 100) * barWidth);
   const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
   const color = pct >= 90 ? RED : pct >= 70 ? YELLOW : GREEN;
-  return { text: `${label}: ${pct}% ${bar}`, color };
+  const remaining = formatResetRemaining(resetIso);
+  const suffix = remaining ? ` ${remaining}` : "";
+  return { text: `${label}: ${pct}% ${bar}${suffix}`, color };
 }
 
 /** レート制限の表示文字列を生成（各パーツが個別の色を持つ） */
@@ -206,11 +227,11 @@ function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { parts: Array<
     const forceRed = rateLimit.unifiedStatus === "rate_limited";
 
     if (rateLimit.unified5hUtilization != null) {
-      const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization);
+      const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization, rateLimit.unified5hReset);
       parts.push({ text: h5.text, color: forceRed ? RED : h5.color });
     }
     if (rateLimit.unified7dUtilization != null) {
-      const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization);
+      const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization, rateLimit.unified7dReset);
       parts.push({ text: d7.text, color: forceRed ? RED : d7.color });
     }
 
@@ -800,14 +821,10 @@ export async function startDashboard(
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
-    // レスポンシブヘッダー（Ink版と同等のロジック）
-    // 基本: cmux-team [STOPPED|STARTING|vX.Y.Z] PID XXXX
-    // cols >= 65: + PID XXXX
-    // cols >= 75: + poll Ns
-    // cols >= 85: + N ready (pendingTasks > 0)
+    // レスポンシブヘッダー
+    // 基本: cmux-team [STOPPED|STARTING|vX.Y.Z]
     const headerParts = [
       !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : (state.version ? `v${state.version}` : ""),
-      `PID ${process.pid}`,
     ].filter(Boolean);
     const headerSubtitle = headerParts.join("  ");
 

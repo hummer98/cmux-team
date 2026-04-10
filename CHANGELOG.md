@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.33.0] - 2026-04-10
+
+### Added
+- タスク作成後の即時反応: `create-task --status ready` 実行時に daemon が次の tick を待たず即座にタスクを検出・割り当て開始 (T120)
+- ダッシュボードのレート制限表示にリセットまでの残り時間を追加（`5h: 42% ████░░░░░░ 1h23m` 形式）
+
+### Changed
+- ダッシュボードヘッダーから PID 表示を削除し、表示をシンプル化
+
+### Fixed
+- Conductor がサブエージェント完了待ちの間に TUI 上 idle と誤表示されるバグを修正。`validateSurface` に 3 回リトライを追加し、一時的な `cmux tree` 失敗による crashed 誤検出を防止 (T121)
+- crashed 判定時の遷移を即 idle → disconnected に変更し、5 分の猶予期間で自動復帰を可能に (T121)
+- crashed 処理の cleanup 漏れ修正: `taskRunId` / `taskTitle` / `agents` が残る問題を解消 (T121)
+
 ## [3.32.0] - 2026-04-10
 
 ### Added
