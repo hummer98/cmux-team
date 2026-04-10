@@ -526,22 +526,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           );
         }
         conductor.pid = message.pid;
-        if (message.sessionId) conductor.sessionId = message.sessionId;
         conductor.disconnectedAt = undefined;
         spawnPidWatcher(state, conductor, message.pid);
-
-        // sessionId を task-state.json に記録（resume 用）
-        if (message.sessionId && conductor.taskId) {
-          const ts = await loadTaskState(state.projectRoot);
-          if (ts[conductor.taskId] && ts[conductor.taskId].status === "assigned") {
-            ts[conductor.taskId] = {
-              ...ts[conductor.taskId],
-              sessionId: message.sessionId,
-            };
-            await saveTaskState(state.projectRoot, ts);
-            await log("session_id_saved", `task_id=${conductor.taskId} session_id=${message.sessionId}`);
-          }
-        }
 
         await log(
           "session_started",
@@ -582,6 +568,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             "session_ended_ignored",
             `event_surface=${message.surface} current_surface=${conductor.surface}`
           );
+          break;
+        }
+        // conductor が running 状態の場合、/exit + restart の過渡期。
+        // PID watcher は assignTask で既にクリアされており、新プロセスの
+        // SESSION_STARTED で再設定される。
+        if (conductor.status === "running") {
+          await log("session_ended_skipped", `surface=${message.surface} reason=conductor_running`);
           break;
         }
         conductor.status = "disconnected";
@@ -804,6 +797,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       worktreePath: updated.worktreePath,
       taskRunId: updated.taskRunId,
       conductorSlot: updated.surface,
+      sessionId: updated.sessionId,
     };
     await saveTaskState(state.projectRoot, ts);
   }

@@ -342,23 +342,29 @@ export async function assignTask(
       throw new AssignTaskError("task", `prompt generation failed: ${e.message}`, e);
     }
 
-    // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
-    // /clear + Enter でセッションリセット
+    // --- 4. Claude プロセスを再起動（--session-id 付き） ---
+    const sessionId = crypto.randomUUID();
+
+    // PID watcher をクリア（/exit 後の PID 消失で誤って disconnected にしない）
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+
     try {
-      await cmux.send(conductor.surface, "/clear");
+      // 現在の Claude セッションを終了
+      await cmux.send(conductor.surface, "/exit");
       await sleep(500);
       await cmux.sendKey(conductor.surface, "return");
-      await sleep(2000);
+      await sleep(2000); // Claude 終了 + cmdConductor 終了 + shell 復帰を待つ
 
-      // 新しいプロンプトを送信
+      // 新しい Claude を --session-id 付きで起動
       await cmux.send(
         conductor.surface,
-        `${promptFile} を読んで指示に従って作業してください。`
+        `cmux-team conductor ${conductor.surface} --session-id ${sessionId} --task-prompt ${promptFile}\n`
       );
-      await sleep(500);
-      await cmux.sendKey(conductor.surface, "return");
     } catch (e: any) {
-      throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
+      throw new AssignTaskError("conductor", `conductor restart failed: ${e.message}`, e);
     }
 
     // --- 5. タブ名更新（失敗しても task は継続）---
@@ -381,6 +387,7 @@ export async function assignTask(
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
     conductor.status = "running";
+    conductor.sessionId = sessionId;
 
     await log(
       "conductor_started",
@@ -470,6 +477,7 @@ export async function resetConductor(
     // disconnected 状態から reset される経路（forceCloseDisconnectedConductor 等）で
     // 古い disconnectedAt が残ることを防ぐ (Minor 3)
     conductor.disconnectedAt = undefined;
+    conductor.sessionId = undefined;
 
     await log("conductor_reset", `surface=${conductor.surface}`);
   } catch (e: any) {
