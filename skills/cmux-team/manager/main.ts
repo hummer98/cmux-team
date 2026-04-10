@@ -410,6 +410,66 @@ async function cmdStart(): Promise<void> {
   await log("boot_completed");
   scheduleRefresh();
 
+  // --- assigned タスクの resume ---
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  let taskStateModified = false;
+  for (const [taskId, ts] of Object.entries(taskState)) {
+    if (ts.status !== "assigned") continue;
+
+    const canResume = ts.sessionId
+      && ts.worktreePath && existsSync(ts.worktreePath)
+      && ts.taskRunId;
+
+    if (!canResume) {
+      // resume 不可 → ready に戻す（次の scanTasks で再割り当て）
+      taskState[taskId] = { ...ts, status: "ready" };
+      taskStateModified = true;
+      await log("resume_fallback_to_ready", `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"}`);
+      continue;
+    }
+
+    // idle Conductor を探す
+    const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
+    if (!idleConductor) {
+      await log("resume_no_idle_conductor", `task_id=${taskId}`);
+      continue;
+    }
+
+    // ConductorState を復元
+    idleConductor.taskRunId = ts.taskRunId;
+    idleConductor.taskId = taskId;
+    idleConductor.worktreePath = ts.worktreePath;
+    idleConductor.status = "running";
+    idleConductor.startedAt = new Date().toISOString();
+    idleConductor.agents = [];
+
+    // タスクタイトルを取得（task ファイルから）
+    const taskFile = await findTaskFile(taskId);
+    if (taskFile) {
+      try {
+        const content = await readFile(taskFile, "utf-8");
+        idleConductor.taskTitle = content.match(/^title:\s*(.+)/m)?.[1]?.trim();
+      } catch {}
+    }
+
+    // タブ名更新
+    const num = idleConductor.surface.replace("surface:", "");
+    const shortTitle = (idleConductor.taskTitle ?? "").slice(0, 30);
+    await cmux.renameTab(idleConductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`).catch(() => {});
+
+    // resume コマンドを Conductor ペインに送信
+    await cmux.send(idleConductor.surface, `export CMUX_SURFACE=${idleConductor.surface}\n`);
+    await new Promise(r => setTimeout(r, 500));
+    await cmux.send(idleConductor.surface, `cmux-team resume ${taskId}\n`);
+
+    await log("task_resumed", `task_id=${taskId} session_id=${ts.sessionId} surface=${idleConductor.surface}`);
+  }
+  if (taskStateModified) {
+    await saveTaskState(PROJECT_ROOT, taskState);
+  }
+
+  scheduleRefresh();
+
   // メインループ
   const NPM_CHECK_INTERVAL = 300_000; // 5分
   while (state.running) {
@@ -680,37 +740,12 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
 }
 
 /**
- * cmux-team conductor <slot-id>
- * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ * conductor-settings.json を生成する共通ヘルパー。
+ * cmdConductor と cmdResume の両方から使用される。
+ * @returns 生成したファイルの絶対パス
  */
-async function cmdConductor(): Promise<void> {
-  if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
-  const slotId = args[1];
-  if (!slotId) {
-    console.error("Usage: cmux-team conductor <slot-id>");
-    process.exit(1);
-  }
-
-  // ロールプロンプトファイル生成
-  const { generateConductorRolePrompt } = await import("./template");
-  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT);
-
-  // 環境変数を設定
-  process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CONDUCTOR_ID = slotId;
-  process.env.CMUX_NO_RENAME_TAB = "1";
-  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
-  const proxyPort = await resolveProxyPort();
-  if (proxyPort) {
-    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
-  }
-
-  // モデル解決
-  const config = await loadConfig();
-  const model = getModelForRole(config, "conductor", getArg("model"));
-
-  // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
-  const conductorSettingsPath = join(PROJECT_ROOT, `.team/prompts/${slotId}-settings.json`);
+function generateConductorSettings(projectRoot: string, slotId: string): string {
+  const conductorSettingsPath = join(projectRoot, `.team/prompts/${slotId}-settings.json`);
   const conductorSettings = {
     hooks: {
       SessionStart: [
@@ -808,8 +843,43 @@ async function cmdConductor(): Promise<void> {
       ],
     },
   };
-  try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
+  try { mkdirSync(join(projectRoot, ".team/prompts"), { recursive: true }); } catch {}
   writeFileSync(conductorSettingsPath, JSON.stringify(conductorSettings, null, 2));
+  return conductorSettingsPath;
+}
+
+/**
+ * cmux-team conductor <slot-id>
+ * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ */
+async function cmdConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
+  const slotId = args[1];
+  if (!slotId) {
+    console.error("Usage: cmux-team conductor <slot-id>");
+    process.exit(1);
+  }
+
+  // ロールプロンプトファイル生成
+  const { generateConductorRolePrompt } = await import("./template");
+  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT);
+
+  // 環境変数を設定
+  process.env.PROJECT_ROOT = PROJECT_ROOT;
+  process.env.CONDUCTOR_ID = slotId;
+  process.env.CMUX_NO_RENAME_TAB = "1";
+  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
+  const proxyPort = await resolveProxyPort();
+  if (proxyPort) {
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
+  }
+
+  // モデル解決
+  const config = await loadConfig();
+  const model = getModelForRole(config, "conductor", getArg("model"));
+
+  // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, slotId);
 
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
@@ -827,6 +897,74 @@ async function cmdConductor(): Promise<void> {
     });
   } catch (e: any) {
     // claude の終了コードをそのまま返す
+    process.exit(e.status ?? 1);
+  }
+}
+
+/**
+ * cmux-team resume <task-id>
+ * assigned タスクの Conductor セッションを claude --resume で再開する。
+ */
+async function cmdResume(): Promise<void> {
+  if (hasHelpFlag()) showHelp("Usage: cmux-team resume <task-id>");
+  const taskId = args[1];
+  if (!taskId) {
+    console.error("Usage: cmux-team resume <task-id>");
+    process.exit(1);
+  }
+
+  // task-state.json から resume 情報を取得
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  const ts = taskState[taskId];
+  if (!ts) {
+    console.error(`Task ${taskId} not found in task-state.json`);
+    process.exit(1);
+  }
+  if (ts.status !== "assigned") {
+    console.error(`Task ${taskId} is not assigned (status: ${ts.status})`);
+    process.exit(1);
+  }
+  if (!ts.sessionId) {
+    console.error(`Task ${taskId} has no sessionId — cannot resume`);
+    process.exit(1);
+  }
+  if (!ts.worktreePath || !existsSync(ts.worktreePath)) {
+    console.error(`Task ${taskId} worktree not found: ${ts.worktreePath}`);
+    process.exit(1);
+  }
+
+  // 環境変数を設定（cmdConductor と同等）
+  process.env.PROJECT_ROOT = PROJECT_ROOT;
+  process.env.CONDUCTOR_ID = process.env.CMUX_SURFACE ?? "";
+  process.env.CMUX_NO_RENAME_TAB = "1";
+  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
+  const proxyPort = await resolveProxyPort();
+  if (proxyPort) {
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
+  }
+
+  // モデル解決
+  const config = await loadConfig();
+  const model = getModelForRole(config, "conductor", getArg("model"));
+
+  // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
+  const slotId = process.env.CMUX_SURFACE ?? "unknown";
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, slotId);
+
+  // claude --resume で再開
+  const { execFileSync } = require("child_process");
+  try {
+    execFileSync("claude", [
+      "--resume", ts.sessionId,
+      "--dangerously-skip-permissions",
+      "--settings", conductorSettingsPath,
+      "--model", model,
+    ], {
+      stdio: "inherit",
+      env: process.env,
+      cwd: ts.worktreePath,
+    });
+  } catch (e: any) {
     process.exit(e.status ?? 1);
   }
 }
@@ -1753,6 +1891,9 @@ switch (command) {
     break;
   case "conductor":
     await cmdConductor();
+    break;
+  case "resume":
+    await cmdResume();
     break;
   case "spawn-master":
     await cmdLaunchMaster();

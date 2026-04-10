@@ -27,6 +27,11 @@ export interface TaskState {
   abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
   deletedAt?: string; // ISO 8601 — delete 時のタイムスタンプ
   journal?: string;   // 完了時/中止時/削除時のサマリー
+  // resume 用情報（assignTask 時に記録）
+  worktreePath?: string;    // git worktree の絶対パス
+  taskRunId?: string;       // task-NNN-TIMESTAMP 形式の実行 ID
+  conductorSlot?: string;   // Conductor の surface ID（例: "surface:5"）
+  sessionId?: string;       // Claude セッション ID（SESSION_STARTED 後に記録）
 }
 
 export type TaskStateMap = Record<string, TaskState>;
