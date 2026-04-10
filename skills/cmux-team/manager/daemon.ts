@@ -58,6 +58,10 @@ export interface DaemonState {
   proxyPort: number | null;
   /** fs.watch からの即時 tick 要求を通知する resolve 関数 */
   wakeup: (() => void) | null;
+  /** tick 実行中に届いた wakeup 要求を記録するフラグ */
+  wakeupPending: boolean;
+  /** fs.watch の async iterator を決定論的に停止するための AbortController */
+  fileWatcherAbort: AbortController | null;
   /** Master PID ウォッチャーの interval */
   masterPidWatcherInterval?: ReturnType<typeof setInterval>;
   /** proxy ポートが前回起動時から変化したか（Master 再起動トリガー） */
@@ -100,6 +104,8 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     rateLimit: null,
     proxyPort: null,
     wakeup: null,
+    wakeupPending: false,
+    fileWatcherAbort: null,
     proxyPortChanged: false,
     workspace: null,
   };
@@ -143,40 +149,91 @@ export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise
   return null;
 }
 
-/** .team/tasks/ を fs.watch で監視し、変更時に wakeup を呼ぶ */
+/**
+ * .team/tasks/ を再帰監視し、.team 直下の task-state.json も別 watcher で監視。
+ * 変更検出時は 50ms debounce で requestWakeup を呼ぶ。
+ * 停止は state.fileWatcherAbort 経由（AbortController で for-await を決定論的に終わらせる）。
+ */
 export function initFileWatcher(state: DaemonState): void {
-  const dirs = [
-    join(state.projectRoot, ".team/tasks"),
+  const ac = new AbortController();
+  state.fileWatcherAbort = ac;
+
+  // 再帰: .team/tasks/ は NNN-slug/task.md の作成まで拾う
+  // 非再帰: .team 直下で task-state.json のみフィルタして拾う（.team/output/ 等の高頻度書き込みを除外）
+  const targets: { dir: string; recursive: boolean }[] = [
+    { dir: join(state.projectRoot, ".team/tasks"), recursive: true },
+    { dir: join(state.projectRoot, ".team"), recursive: false },
   ];
-  for (const dir of dirs) {
+
+  // 50ms debounce: saveTaskState の writeFile→rename 間隔は通常 5-10ms なので
+  // .tmp と task-state.json のイベントは十分同一バッチに収まる。
+  // 受け入れ条件 200ms 以内の内訳: debounce 50ms + tick 数十-100ms + refresh 100ms。
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const schedule = () => {
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      if (state.running) requestWakeup(state);
+    }, 50);
+  };
+
+  for (const { dir, recursive } of targets) {
     if (!existsSync(dir)) continue;
     (async () => {
-      const watcher = watch(dir);
+      // AbortSignal を渡して ac.abort() で for-await を決定論的に抜けさせる
+      const watcher = watch(dir, { recursive, signal: ac.signal });
       try {
-        for await (const _event of watcher) {
+        for await (const event of watcher) {
           if (!state.running) break;
-          state.wakeup?.();
+          // .team 直下の watcher は task-state.json のみトリガ対象に絞る
+          if (!recursive) {
+            const name = event.filename ?? "";
+            if (name !== "task-state.json" && name !== "task-state.json.tmp") continue;
+          }
+          schedule();
         }
       } catch (e: any) {
-        // ウォッチャーが壊れても daemon は停止しない（ポーリングで補完）
-        log("error", `file watcher failed: dir=${dir} ${e.message}`);
+        // AbortController で停止した場合は AbortError が投げられる。正常終了として扱う
+        if (e?.name === "AbortError") return;
+        log("file_watch_failed", `dir=${dir} ${e.message}`).catch(() => {});
       } finally {
-        (watcher as any).close();
+        // 冪等な後処理: 既に close 済みでも問題ない
+        try { (watcher as any).close?.(); } catch {}
       }
     })();
   }
 }
 
+/**
+ * 即時 tick 要求を発行する統一 API。
+ * tick 実行中（sleep 未突入）でも wakeupPending に記録されるので取りこぼさない。
+ * sleep 中なら state.wakeup?.() が resolve を呼び即座に起床する。
+ */
+export function requestWakeup(state: DaemonState): void {
+  state.wakeupPending = true;
+  state.wakeup?.();
+}
+
 /** pollInterval まで待つが、wakeup が呼ばれたら即座に返る */
 export function sleepUntilWakeup(state: DaemonState): Promise<void> {
   return new Promise((resolve) => {
+    // tick 中に requestWakeup で立ったフラグをここで消化する
+    if (state.wakeupPending) {
+      state.wakeupPending = false;
+      // 不変条件「sleep 関数完了時点で state.wakeup は常に null」を維持
+      state.wakeup = null;
+      resolve();
+      return;
+    }
     const timer = setTimeout(() => {
       state.wakeup = null;
+      state.wakeupPending = false;
       resolve();
     }, state.pollInterval);
     state.wakeup = () => {
       clearTimeout(timer);
       state.wakeup = null;
+      state.wakeupPending = false;
       resolve();
     };
   });
@@ -392,7 +449,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       await log("task_received", `task_id=${message.taskId}${title ? ` title=${title}` : ""}`);
       // wakeup で即時 tick を発火
-      state.wakeup?.();
+      requestWakeup(state);
       break;
     }
 
