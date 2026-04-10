@@ -14,7 +14,7 @@
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s>
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
- *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
+ *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
@@ -1288,9 +1288,10 @@ async function cmdUpdateTask(): Promise<void> {
   const newStatus = getArg("status");
   const body = getArg("body");
   const title = getArg("title");
+  const dependsOn = getArg("depends-on");
 
-  if (newStatus === undefined && body === undefined && title === undefined) {
-    console.error("Error: at least one of --status, --body, or --title is required");
+  if (newStatus === undefined && body === undefined && title === undefined && dependsOn === undefined) {
+    console.error("Error: at least one of --status, --body, --title, or --depends-on is required");
     process.exit(1);
   }
 
@@ -1318,6 +1319,24 @@ async function cmdUpdateTask(): Promise<void> {
     const content = await readFile(taskFile, "utf-8");
     const updated = content.replace(/^title:\s*.+$/m, `title: ${title}`);
     await writeFile(taskFile, updated);
+  }
+
+  // --depends-on: frontmatter 内の depends_on 行を更新（なければ追加）
+  if (dependsOn !== undefined) {
+    const depsArray = dependsOn
+      ? dependsOn.split(",").map(s => s.trim()).filter(Boolean)
+      : [];
+    const depsValue = depsArray.length > 0 ? `[${depsArray.join(", ")}]` : "[]";
+    let content = await readFile(taskFile, "utf-8");
+    if (content.match(/^depends_on:\s*.+$/m)) {
+      // 既存の depends_on 行を更新
+      content = content.replace(/^depends_on:\s*.+$/m, `depends_on: ${depsValue}`);
+    } else {
+      // depends_on 行がなければ、frontmatter の最後の --- 前に追加
+      const fmEnd = content.indexOf("---", content.indexOf("---") + 3);
+      content = content.slice(0, fmEnd) + `depends_on: ${depsValue}\n` + content.slice(fmEnd);
+    }
+    await writeFile(taskFile, content);
   }
 
   // --body: frontmatter 以降の本文を差し替え
@@ -1348,6 +1367,7 @@ async function cmdUpdateTask(): Promise<void> {
   if (newStatus !== undefined) parts.push(`status=${newStatus}`);
   if (title !== undefined) parts.push("title updated");
   if (body !== undefined) parts.push("body updated");
+  if (dependsOn !== undefined) parts.push("depends_on updated");
   console.log(`OK updated ${taskId} ${parts.join(", ")}`);
 }
 
