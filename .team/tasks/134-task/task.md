@@ -2,7 +2,7 @@
 id: 134
 title: リリース
 priority: medium
-depends_on: [131, 132, 133, 135, 136]
+depends_on: [131, 132, 133, 135, 136, 137]
 created_at: 2026-04-10T14:13:53.733Z
 ---
 
