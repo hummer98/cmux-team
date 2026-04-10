@@ -33,7 +33,7 @@ import { start as startProxy } from "./proxy";
 import { spawnSingleConductor } from "./conductor";
 import { initDB, searchTraces, getTrace } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
-import { loadArtifacts, searchArtifacts, validateArtifact } from "./artifact";
+import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import type { QueueMessage } from "./schema";
 
@@ -1759,6 +1759,31 @@ async function cmdArtifacts(): Promise<void> {
     if (!hasError) {
       console.log(`All ${artifacts.length} artifacts valid`);
     }
+    return;
+  }
+
+  // cmux-team artifacts add <file>
+  if (subCmd === "add") {
+    const filePath = args[2];
+    if (!filePath) {
+      console.error(t("artifact_add_file_required"));
+      process.exit(1);
+    }
+    const absPath = filePath.startsWith("/") ? filePath : join(process.cwd(), filePath);
+    if (!existsSync(absPath)) {
+      console.error(t("artifact_add_file_not_found", { path: filePath }));
+      process.exit(1);
+    }
+    const tagsRaw = getArg("tags");
+    const result = await addArtifact({
+      projectRoot: PROJECT_ROOT,
+      srcPath: absPath,
+      type: getArg("type"),
+      title: getArg("title"),
+      task: getArg("task"),
+      tags: tagsRaw ? tagsRaw.split(",").map(s => s.trim()) : undefined,
+    });
+    console.log(t("artifact_added", { id: result.id, path: result.destPath }));
     return;
   }
 
