@@ -36,7 +36,7 @@ npm install -g @hummer98/cmux-team
 - **SessionStart**: cmux 環境外での起動時にタブ名をリネーム
 - **PreToolUse (Write|Edit)**: `team.json` と `task-state.json` への直接編集をブロック（daemon 管理ファイルの保護）
 
-Conductor 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。
+Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。Agent spawn 時は `spawn-agent` CLI 内で、Master 起動時は `spawn-master` CLI 内でそれぞれ設定される。
 
 ---
 
@@ -114,14 +114,15 @@ skills/cmux-team/manager/
 | `agents` | 稼働中エージェント一覧 |
 | `kill-agent` | Agent surface close + AGENT_DONE メッセージ |
 | `create-task` | タスクファイル作成 + task-state.json 初期エントリー（`--depends-on`, `--base-branch`, `--run-after-all` をサポート） |
-| `update-task` | タスク更新（`--status` / `--title` / `--body`、draft → ready で TASK_CREATED トリガー） |
+| `update-task` | タスク更新（`--status` / `--title` / `--body` / `--depends-on`、draft → ready で TASK_CREATED トリガー） |
 | `close-task` | タスクを closed にマーク + journal 保存 + CONDUCTOR_DONE 送信（`--force` で実行中も強制クローズ可能） |
 | `abort-task` | 実行中タスクの中止（sub-agent 停止 → Conductor 停止 → worktree 削除 → `aborted` 遷移 → Conductor 再起動） |
 | `delete-task` | draft/ready タスクの削除（`deleted` 遷移、journal 記録）。`assigned` のタスクは `abort-task` を使う |
 | `trace` | トレースDB 検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `conductor` | Conductor 情報表示 |
 | `spawn-master` | Master surface 起動 |
-| `artifacts` | アーティファクト一覧・検索 |
+| `artifacts` | アーティファクト一覧・検索・追加（`add`）・表示（`show`）・Markdown ビューア（`open`） |
+| `resume` | assigned タスクの Conductor セッションを `claude --resume` で再開 |
 
 ### メインループ
 
@@ -131,13 +132,42 @@ while (state.running):
   2. scanTasks()             # ready タスクを検出 → idle Conductor に割り当て
   3. monitorConductors()     # done マーカー検出、クラッシュ検出
   4. updateTeamJson()        # team.json を最新状態に同期
-  5. sleep(pollInterval)     # デフォルト10秒
+  5. updateSidebarStatus()   # cmux サイドバーにステータスを反映
+  6. sleep(pollInterval)     # デフォルト10秒
 ```
 
 ファイルシステム監視（tasks/）と HTTP メッセージ通知により変更検出時は即時 tick を実行。
 ソースファイル mtime 監視によりコード変更時は自動再起動（exit code 42）。auto-restart 後に proxy ポートが変わった場合は Master を自動再接続する。
 
-daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、`cmux tree` / `validateSurface` には常に workspace を渡して別ワークスペースの surface ID と混同しないようにする。Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。
+daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、`cmux tree` / `validateSurface` には常に workspace を渡して別ワークスペースの surface ID と混同しないようにする。起動時にワークスペース名を `basename(PROJECT_ROOT)`（起動フォルダ名）に自動設定する（`cmux rename-workspace`）。
+
+Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。また、プロジェクトルートに `.envrc` が存在する場合、worktree 内に `source_up` の `.envrc` を自動生成し、direnv による OAuth トークン等の環境変数を worktree に継承する。
+
+#### assigned タスクの resume
+
+daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned` のタスクを検出し、以下の条件を満たす場合は idle Conductor に割り当てて `cmux-team resume <task-id>` で再開する:
+
+1. `sessionId` が記録されている
+2. `worktreePath` が存在する
+3. `taskRunId` が記録されている
+
+条件を満たさない場合は `ready` に戻して通常の再割り当てにフォールバックする。既に同じタスクを実行中の Conductor がいる場合はスキップ（多重実行防止）。
+
+`resume` コマンドは `claude --resume <sessionId>` でセッションを再開する。設定は `cmdConductor` と同等（`--dangerously-skip-permissions`, `--settings`, `--model`）。作業ディレクトリは `worktreePath` を使用。
+
+#### サイドバーステータスのリアルタイム更新
+
+メインループの各 tick で `cmux set-status` / `cmux clear-status` を通じてサイドバーにステータスを表示する。差分抑制（前回値と同一なら API 呼び出しスキップ）を行う。
+
+| カテゴリ | 条件 | 表示 | アイコン | 色 |
+|---------|------|------|---------|-----|
+| error | disconnected Conductor あり | `! attention` | exclamationmark.triangle | 赤 |
+| throttled | 5h utilization ≥ 90% or rate_limited | `⏸ reset Xm` | pause.circle.fill | 赤 |
+| running | Conductor 稼働中 | `N running` (+pending) | bolt.fill | 青 |
+| done | 全タスク完了（直前が idle/done 以外） | `done` | checkmark.circle.fill | 緑 |
+| idle | デフォルト | `idle` | pause.circle.fill | グレー |
+
+daemon 停止時に `cmux clear-status` でクリアする。
 
 ### プロキシサーバー
 
@@ -150,6 +180,10 @@ daemon は起動時に呼び出し元の workspace を `state.workspace` に記�
 - レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
 - デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`
 
+#### 5h レート制限スロットリング
+
+5h unified utilization が閾値（`THROTTLE_5H_THRESHOLD = 0.90`、90%）以上になると、`scanTasks()` で新規タスクの Conductor への割り当てを一時停止する。既に実行中のタスクは影響を受けない。TUI ダッシュボードにもスロットリング状態とリセット残り時間を表示する。
+
 ### TUI ダッシュボード
 
 - React + ink ベースのフルスクリーン TUI
@@ -157,6 +191,7 @@ daemon は起動時に呼び出し元の workspace を `state.workspace` に記�
 - 起動時は `bootPhase` を導入してプロキシ起動直後から TUI を表示
 - キーボードショートカット: `r` = リロード、`q` = 終了、Tasks タブで Enter = タスクドキュメントをフルスクリーン表示
 - フォーカスシステム / カーソル / フッターを備え、Tasks 行はクリック可能（行全体がボタン）
+- 5h レート制限スロットリング時にダッシュボードにリセット残り時間を表示
 - Tasks の並び順は open 上位 + createdAt 降順、5件制限は撤廃
 - Tasks に `assignedAt` を記録し、running は経過時間、closed/aborted は総実行時間を表示
 - ブランチアイコン・GitHub issue リンク（OSC 8 ハイパーリンク）・Nerd Font アイコンを表示
@@ -171,6 +206,21 @@ daemon は起動時に呼び出し元の workspace を `state.workspace` に記�
 - メッセージ種別: `TASK_CREATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_CLEAR`, `SHUTDOWN`
 - Zod バリデーション（不正メッセージはスキップ）
 - `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
+
+`SESSION_CLEAR` は Conductor が `/clear` を実行したときに送信される。Conductor が `running` 状態のときに `SESSION_CLEAR` を受信すると、ユーザーの手動 `/clear` とみなしてタスクを `aborted` に遷移させ、Conductor を idle にリセットする（`forceCloseDisconnectedConductor` と同パターン）。`idle` 状態の場合は何もしない（TUI チラつき防止）。
+
+### タスク状態の拡張フィールド（resume 用）
+
+`task-state.json` の各タスクエントリに、タスク割り当て時（`assignTask`）に以下のフィールドが記録される:
+
+| フィールド | 説明 |
+|-----------|------|
+| `worktreePath` | git worktree の絶対パス |
+| `taskRunId` | タスク実行 ID（`task-NNN-TIMESTAMP` 形式） |
+| `conductorSlot` | Conductor の surface ID（例: `"surface:5"`） |
+| `sessionId` | Conductor の Claude セッション ID |
+
+これらは daemon 再起動時の resume ロジックで使用される。`sessionId` は Conductor 初回起動時に `crypto.randomUUID()` で発行され、タスク割り当てやリセットで変更されない（常駐セッションのため）。
 
 ### テンプレート検索順序
 
