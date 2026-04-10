@@ -944,27 +944,32 @@ async function cmdSpawnAgent(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "agent", getArg("model"));
 
-  // 環境変数を export（Conductor のシェルセッションに永続化し子プロセスに自動継承）
-  const exports: string[] = [
-    `export ROLE=${role}`,
-    `export PROJECT_ROOT=${PROJECT_ROOT}`,
-    `export CMUX_SURFACE=${surface}`,
-    `export CMUX_NO_RENAME_TAB=1`,
+  // 環境変数をシェルに焼き付け
+  const exportVars = [
+    `ROLE=${role}`,
+    `PROJECT_ROOT=${PROJECT_ROOT}`,
+    `CMUX_SURFACE=${surface}`,
+    `CMUX_NO_RENAME_TAB=1`,
   ];
   if (proxyPort) {
-    exports.push(`export ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+    exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+  }
+  await cmux.send(surface, `export ${exportVars.join(" ")}\n`);
+  await sleep(500);
+
+  // worktree ディレクトリに移動
+  if (worktreePath) {
+    await cmux.send(surface, `cd ${worktreePath}\n`);
+    await sleep(500);
   }
 
-  const cdPrefix = worktreePath ? `cd ${worktreePath} && ` : "";
+  // Claude Code 起動
   const modelFlag = `--model ${model}`;
-
   let claudeCmd: string;
   if (promptFile) {
-    // --bare は OAuth 認証（Claude Max）をスキップするため使用しない
-    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${modelFlag} '${promptFile} を読んで指示に従ってください。'`;
+    claudeCmd = `claude --dangerously-skip-permissions ${modelFlag} '${promptFile} を読んで指示に従ってください。'`;
   } else {
-    // 後方互換: --prompt でインライン渡し
-    claudeCmd = `${cdPrefix}${exports.join(" && ")} && claude --dangerously-skip-permissions ${modelFlag} '${prompt}'`;
+    claudeCmd = `claude --dangerously-skip-permissions ${modelFlag} '${prompt}'`;
   }
   await cmux.send(surface, claudeCmd + "\n");
 
@@ -1361,7 +1366,9 @@ async function cmdAbortTask(): Promise<void> {
 
   // 8. Conductor を再起動（新しいセッション）
   const slotId = conductor.surface.replace("surface:", "");
-  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} && cmux-team conductor ${slotId}\n`);
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
+  await sleep(500);
+  await cmux.send(conductor.surface, `cmux-team conductor ${slotId}\n`);
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
