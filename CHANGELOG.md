@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.37.0] - 2026-04-11
+
+### Added
+- Manager daemon がサイドバーステータス（idle / running / error 等6状態）をリアルタイム更新
+
+### Fixed
+- タスク割り当て時に Conductor セッションが `/exit` で毎回破棄される問題を修正。`/clear` 方式に戻し、常駐セッションを維持するように変更
+- session-id を初回起動時に発行し、Conductor のライフタイム中維持するように修正
+
 ## [3.36.0] - 2026-04-11
 
 ### Added

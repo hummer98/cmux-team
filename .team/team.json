@@ -9,7 +9,7 @@
     "status": "running"
   },
   "manager": {
-    "pid": 20559,
+    "pid": 88129,
     "type": "typescript",
     "status": "running"
   },
@@ -17,27 +17,20 @@
     {
       "surface": "surface:31",
       "status": "idle",
-      "startedAt": "2026-04-10T14:04:57.193Z",
+      "startedAt": "2026-04-10T19:22:14.795Z",
       "paneId": "pane:30",
       "agents": []
     },
     {
       "surface": "surface:32",
-      "taskRunId": "task-134-1775844735",
-      "taskId": "134",
-      "taskTitle": "リリース",
+      "taskRunId": "task-137-1775846004",
+      "taskId": "137",
+      "taskTitle": "Manager がサイドバーステータスをリアルタイム更新する",
       "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-134-1775844735",
-      "outputDir": ".team/tasks/134-task/runs/task-134-1775844735",
-      "startedAt": "2026-04-10T18:12:19.786Z",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-137-1775846004",
+      "startedAt": "2026-04-10T19:12:47.458Z",
       "paneId": "pane:31",
-      "sessionId": "65905bbe-a152-42c8-8e8b-75a88db22b2e",
-      "agents": [
-        {
-          "surface": "surface:96",
-          "role": "impl"
-        }
-      ]
+      "agents": []
     },
     {
       "surface": "surface:33",
