@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.32.0] - 2026-04-10
+
+### Added
+- i18n 対応: `CMUX_TEAM_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` の優先順でロケールを検出し、CLI メッセージ・help テキストを EN/JA で自動切り替え
+- `cmux-team start` に preflight チェックを追加。git リポジトリ確認、claude/bun コマンド存在確認、書込権限検証を一括実施し、失敗項目をまとめて表示
+
+### Changed
+- `assignTask` のエラー影響範囲を分離。worktree 作成失敗などの task 起因エラーでは Conductor を idle のまま維持し、cmux 送信失敗などの conductor 起因エラーのみ disconnected 扱いに変更 (T117)
+- `docs/spec/` を T082〜T116 の実装変更に同期（delete-task/abort-task Journal、4 フェーズフロー、proxy/trace 現状化ほか） (T118)
+
 ## [3.31.0] - 2026-04-09
 
 ### Added
