@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.34.0] - 2026-04-10
+
+### Changed
+- Agent/Conductor 起動時の環境変数をワンライナー export からシェルへの焼き付け方式に変更。プロセス死亡時も環境変数が維持される (T122)
+- worktree 作成後に `direnv allow` を自動実行し、`.envrc` の OAuth トークンが worktree 内でも自動的に利用可能に (T122)
+
 ## [3.33.0] - 2026-04-10
 
 ### Added
