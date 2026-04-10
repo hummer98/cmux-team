@@ -9,19 +9,15 @@
     "status": "running"
   },
   "manager": {
-    "pid": 84006,
+    "pid": 21354,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
       "surface": "surface:168",
-      "taskRunId": "task-121-1775792195",
-      "taskTitle": "conductor_crashed 誤検出バグの再発確認と確実な修正",
       "status": "idle",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-121-1775792195",
-      "outputDir": ".team/tasks/121-conductor-crashed/runs/task-121-1775792195",
-      "startedAt": "2026-04-10T03:36:40.489Z",
+      "startedAt": "2026-04-10T06:19:53.019Z",
       "paneId": "pane:101",
       "agents": []
     },
