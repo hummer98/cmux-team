@@ -5,38 +5,37 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:34",
+    "surface": "surface:128",
     "status": "running"
   },
   "manager": {
-    "pid": 88129,
+    "pid": 73578,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
-      "surface": "surface:31",
+      "surface": "surface:125",
       "status": "idle",
-      "startedAt": "2026-04-10T19:22:14.795Z",
-      "paneId": "pane:30",
+      "startedAt": "2026-04-10T20:22:10.333Z",
+      "paneId": "pane:55",
+      "sessionId": "9277430a-c720-4a1d-8820-fbe854223967",
       "agents": []
     },
     {
-      "surface": "surface:32",
-      "taskRunId": "task-137-1775846004",
-      "taskId": "137",
-      "taskTitle": "Manager がサイドバーステータスをリアルタイム更新する",
-      "status": "running",
-      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-137-1775846004",
-      "startedAt": "2026-04-10T19:12:47.458Z",
-      "paneId": "pane:31",
+      "surface": "surface:126",
+      "status": "idle",
+      "startedAt": "2026-04-10T19:50:04.706Z",
+      "paneId": "pane:56",
+      "sessionId": "f76aca94-0050-4f63-8679-2ab48f215b05",
       "agents": []
     },
     {
-      "surface": "surface:33",
+      "surface": "surface:127",
       "status": "idle",
-      "startedAt": "2026-04-10T17:59:46.253Z",
-      "paneId": "pane:32",
+      "startedAt": "2026-04-10T19:50:06.160Z",
+      "paneId": "pane:57",
+      "sessionId": "7fca2100-e34b-4bc5-ba4d-26136506a087",
       "agents": []
     }
   ]
