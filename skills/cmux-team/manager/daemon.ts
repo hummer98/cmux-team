@@ -455,12 +455,27 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "CONDUCTOR_DONE": {
       const conductor = findConductor(state, message.surface);
-      if (!conductor || conductor.status !== "running") {
+      if (!conductor) {
         await log(
           "conductor_done_ignored",
-          `surface=${message.surface} status=${conductor?.status ?? "not_found"} taskId=${conductor?.taskId} reason=not_running`
+          `surface=${message.surface} reason=not_found`
         );
         break;
+      }
+      // running 以外でも taskRunId が残っていれば late cleanup を実行する
+      // (crashed → disconnected 誤検出からの救済パス)
+      if (conductor.status !== "running" && !conductor.taskRunId) {
+        await log(
+          "conductor_done_ignored",
+          `surface=${message.surface} status=${conductor.status} reason=no_task`
+        );
+        break;
+      }
+      if (conductor.status !== "running") {
+        await log(
+          "conductor_done_late_cleanup",
+          `surface=${message.surface} status=${conductor.status} taskRunId=${conductor.taskRunId}`
+        );
       }
       const isSuccess = message.success !== false;
       await log(
@@ -614,12 +629,27 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
-        conductor.disconnectedAt = undefined;  // alive の証拠
+        conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
         if (message.pid) conductor.pid = message.pid;
-        if (conductor.status === "disconnected" || conductor.status === "starting") {
-          const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
+        if (conductor.status === "disconnected") {
+          if (conductor.taskRunId) {
+            // タスク実行中だった Conductor が復活 → running に戻すだけ。
+            // cleanup は C-1 (CONDUCTOR_DONE) か C-2 (disconnect_timeout) が担う。
+            // ここで resetConductor を呼ぶと、生存中の Conductor の worktree を誤削除する
+            // (Stop hook はターン境界ごとに発火するため、タスク実行中でも SESSION_IDLE は来る)
+            conductor.status = "running";
+            await log(
+              "conductor_recovered",
+              `surface=${message.surface} via=SESSION_IDLE new_status=running taskRunId=${conductor.taskRunId}`
+            );
+          } else {
+            // taskRunId なし → 通常復帰 (idle)
+            conductor.status = "idle";
+            await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE`);
+          }
+        } else if (conductor.status === "starting") {
           conductor.status = "idle";
-          await log(event, `surface=${message.surface} via=SESSION_IDLE`);
+          await log("conductor_ready", `surface=${message.surface} via=SESSION_IDLE`);
         }
         await log(
           "session_idle",
@@ -827,8 +857,27 @@ function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
 
 /** starting 状態のタイムアウト（秒） */
 const STARTING_TIMEOUT_SEC = 60;
+/** disconnected 状態のタイムアウト（秒） — 超過で forced cleanup */
+const DISCONNECT_TIMEOUT_SEC =
+  Number(process.env.CMUX_TEAM_DISCONNECT_TIMEOUT_SEC) || 300;  // 5 分
 
-async function monitorConductors(state: DaemonState): Promise<void> {
+export async function monitorConductors(state: DaemonState): Promise<void> {
+  // tick 冒頭で tree() を 1 回だけ呼び、結果をキャッシュする (Major 1)
+  //   成功時: surface 判定は treeOutput.includes(surface) で行う
+  //   失敗時: リトライ付き validateSurface にフォールバック
+  let treeOutput: string | null = null;
+  try {
+    treeOutput = await cmux.tree(state.workspace ?? undefined);
+  } catch (e: any) {
+    await log("monitor_tree_failed", `last_error=${e.message}`);
+    treeOutput = null;
+  }
+
+  const surfaceAlive = async (surface: string): Promise<boolean> => {
+    if (treeOutput !== null) return treeOutput.includes(surface);
+    return cmux.validateSurface(surface, state.workspace ?? undefined);
+  };
+
   for (const [surface, conductor] of state.conductors) {
     // starting: タイムアウトチェックのみ
     if (conductor.status === "starting") {
@@ -843,29 +892,43 @@ async function monitorConductors(state: DaemonState): Promise<void> {
       }
       continue;
     }
-    if (conductor.status === "idle" || conductor.status === "disconnected") continue;
 
-    const status = await checkConductorStatus(conductor, state.workspace ?? undefined);
-
-    switch (status) {
-      case "running":
-        break;
-      case "crashed":
-        await log(
-          "conductor_crashed",
-          `surface=${surface}`
-        );
-        // persistent Conductor がクラッシュ → idle に戻す
-        conductor.status = "idle";
-        conductor.taskId = undefined;
-        break;
+    // disconnected: timeout チェック → forced cleanup。継続チェックはしない
+    if (conductor.status === "disconnected") {
+      if (conductor.disconnectedAt) {
+        const elapsed = (Date.now() - new Date(conductor.disconnectedAt).getTime()) / 1000;
+        if (elapsed > DISCONNECT_TIMEOUT_SEC) {
+          await log(
+            "conductor_disconnect_timeout",
+            `surface=${surface} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
+          );
+          await forceCloseDisconnectedConductor(state, conductor);
+        }
+      }
+      continue;
     }
 
-    // Agent surface の生存チェック（pull型防御）
-    // kill-agent 以外のルート（tmux quit 等）で surface が消失した場合に対応
+    // idle: 何もしない
+    if (conductor.status === "idle") continue;
+
+    // running: Conductor surface の生存確認
+    const alive = await surfaceAlive(conductor.surface);
+    if (!alive) {
+      await log(
+        "conductor_disconnected",
+        `surface=${surface} reason=validate_surface_failed kind=crashed taskRunId=${conductor.taskRunId ?? "-"}`
+      );
+      conductor.status = "disconnected";
+      conductor.disconnectedAt = new Date().toISOString();
+      // taskRunId / taskTitle / worktreePath / outputDir / agents は意図的に保持
+      // 復活時 (SESSION_ACTIVE/IDLE) または timeout 時 (C-2) に cleanup 判断
+      continue;
+    }
+
+    // Agent surface の生存チェック — tree キャッシュを使う (Major 1)
     for (let i = conductor.agents.length - 1; i >= 0; i--) {
       const agent = conductor.agents[i]!;
-      if (!(await cmux.validateSurface(agent.surface, state.workspace ?? undefined))) {
+      if (!(await surfaceAlive(agent.surface))) {
         conductor.agents.splice(i, 1);
         await log(
           "agent_done",
@@ -874,6 +937,59 @@ async function monitorConductors(state: DaemonState): Promise<void> {
       }
     }
   }
+}
+
+/**
+ * disconnected timeout で Conductor の強制クローズ + タスク abort を行う。
+ * CLAUDE.md「異常検知時のリカバリーは人間に委ねる」に従い、reopen はしない。
+ */
+async function forceCloseDisconnectedConductor(
+  state: DaemonState,
+  conductor: ConductorState
+): Promise<void> {
+  const taskId = conductor.taskId;
+  const taskRunId = conductor.taskRunId;
+
+  // 1. task-state.json に aborted を記録
+  if (taskId) {
+    try {
+      const ts = await loadTaskState(state.projectRoot);
+      const current = ts[taskId];
+      // 既に closed/aborted/deleted 済みならスキップ（冪等）
+      if (
+        current?.status !== "closed" &&
+        current?.status !== "aborted" &&
+        current?.status !== "deleted"
+      ) {
+        const journal = `disconnect_timeout: surface=${conductor.surface} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
+        ts[taskId] = {
+          ...current,
+          status: "aborted",
+          abortedAt: new Date().toISOString(),
+          journal,
+        };
+        await saveTaskState(state.projectRoot, ts);
+        await log(
+          "task_aborted",
+          `task_id=${taskId} reason=disconnect_timeout journal_summary=${journal}`
+        );
+      }
+    } catch (e: any) {
+      await log(
+        "error",
+        `forceCloseDisconnectedConductor task-state update failed: task_id=${taskId} ${e.message}`
+      );
+    }
+  }
+
+  // 2. pidWatcherInterval をクリア (Minor 4)
+  if (conductor.pidWatcherInterval) {
+    clearInterval(conductor.pidWatcherInterval);
+    conductor.pidWatcherInterval = undefined;
+  }
+
+  // 3. resetConductor で worktree/branch/タブ名をクリーンアップ
+  await resetConductor(conductor, state.projectRoot);
 }
 
 async function handleConductorDone(
