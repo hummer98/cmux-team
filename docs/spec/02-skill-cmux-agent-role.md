@@ -36,6 +36,8 @@ Output: .team/output/<role-id>.md
 
 **完了したら停止するだけ。報告は不要。上位が監視する。**
 
+**環境変数:** Agent は `CMUX_CLAUDE_HOOKS_DISABLED=1` が設定された状態で起動される。これにより cmux ラッパーの hook（Plugin hooks）が無効化され、Manager が生成する `conductor-settings.json` の hook のみが適用される。
+
 ### 2. 出力プロトコル
 
 すべての成果物は指定された出力ファイルに書き込む:
