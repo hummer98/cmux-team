@@ -757,7 +757,7 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
           matcher: "startup",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --session-id \"${SESSION_ID:-}\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -882,19 +882,34 @@ async function cmdConductor(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "conductor", getArg("model"));
 
+  // 新規: オプション解析
+  const sessionId = getArg("session-id");
+  const taskPromptFile = getArg("task-prompt");
+
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
   const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, slotId);
+
+  // claude コマンド引数を組み立て
+  const claudeArgs = [
+    "--dangerously-skip-permissions",
+    "--settings", conductorSettingsPath,
+    "--model", model,
+    "--append-system-prompt-file", rolePromptFile,
+  ];
+  if (sessionId) {
+    claudeArgs.push("--session-id", sessionId);
+  }
+
+  // 初期プロンプトを決定
+  const initialPrompt = taskPromptFile
+    ? `${taskPromptFile} を読んで指示に従って作業してください。`
+    : t("conductor_wait_prompt");
+  claudeArgs.push(initialPrompt);
 
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
   try {
-    execFileSync("claude", [
-      "--dangerously-skip-permissions",
-      "--settings", conductorSettingsPath,
-      "--model", model,
-      "--append-system-prompt-file", rolePromptFile,
-      t("conductor_wait_prompt"),
-    ], {
+    execFileSync("claude", claudeArgs, {
       stdio: "inherit",
       env: process.env,
       cwd: PROJECT_ROOT,
