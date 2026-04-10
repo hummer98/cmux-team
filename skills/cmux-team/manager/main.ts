@@ -1859,6 +1859,41 @@ async function cmdArtifacts(): Promise<void> {
     return;
   }
 
+  // cmux-team artifacts open <id>
+  if (subCmd === "open") {
+    const rawId = args[2];
+    if (!rawId) {
+      console.error(t("artifact_id_required_open"));
+      process.exit(1);
+    }
+    const normalizedId = rawId.startsWith("A") ? rawId : `A${rawId.padStart(3, "0")}`;
+    const artifacts = await loadArtifacts(PROJECT_ROOT);
+    const found = artifacts.find((a) => a.id === normalizedId || a.id === rawId);
+    if (!found) {
+      console.error(t("artifact_not_found", { id: rawId }));
+      process.exit(1);
+    }
+
+    // ビューア決定: CMUX_TEAM_MD_VIEWER → mo → cat
+    const envViewer = process.env.CMUX_TEAM_MD_VIEWER;
+    let viewer: string;
+    if (envViewer) {
+      viewer = envViewer;
+    } else if (Bun.which("mo")) {
+      viewer = "mo";
+    } else {
+      viewer = "cat";
+    }
+
+    const proc = Bun.spawn([viewer, found.filePath], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    await proc.exited;
+    return;
+  }
+
   // cmux-team artifacts search <query>
   if (subCmd === "search") {
     const query = args[2];
