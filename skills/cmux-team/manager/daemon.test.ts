@@ -347,7 +347,7 @@ describe("エラーハンドリング", () => {
 
 // --- scanTasks 統合テスト (assignTask エラー分離) ---
 
-import { scanTasks, createDaemon } from "./daemon";
+import { scanTasks, createDaemon, requestWakeup, sleepUntilWakeup, initFileWatcher } from "./daemon";
 import type { DaemonState } from "./daemon";
 import type { ConductorState } from "./schema";
 
@@ -390,5 +390,177 @@ describe("scanTasks: assignTask エラー分離", () => {
     const ts = await loadTaskState(testDir);
     // タスクは ready のまま
     expect(ts["101"]?.status).toBe("ready");
+  });
+});
+
+// --- requestWakeup / sleepUntilWakeup 単体テスト ---
+
+describe("requestWakeup と sleepUntilWakeup", () => {
+  test("tick 中に requestWakeup → 次の sleep は即 resolve", async () => {
+    const state = await createDaemon(testDir);
+    state.pollInterval = 10_000; // 10 秒（即 resolve を検証するため十分長く）
+
+    // tick 中相当: state.wakeup は null、wakeupPending を立てる
+    expect(state.wakeup).toBeNull();
+    requestWakeup(state);
+    expect(state.wakeupPending).toBe(true);
+
+    const t0 = Date.now();
+    await sleepUntilWakeup(state);
+    const elapsed = Date.now() - t0;
+
+    expect(elapsed).toBeLessThan(50);
+    expect(state.wakeupPending).toBe(false);
+    expect(state.wakeup).toBeNull();
+  });
+
+  test("sleep 中に requestWakeup → 即 resolve", async () => {
+    const state = await createDaemon(testDir);
+    state.pollInterval = 10_000;
+
+    const sleepPromise = sleepUntilWakeup(state);
+    // マイクロタスク 1 回で state.wakeup がセットされていること
+    await Promise.resolve();
+    expect(state.wakeup).not.toBeNull();
+
+    requestWakeup(state);
+    const t0 = Date.now();
+    await sleepPromise;
+    const elapsed = Date.now() - t0;
+
+    expect(elapsed).toBeLessThan(50);
+    expect(state.wakeupPending).toBe(false);
+    expect(state.wakeup).toBeNull();
+  });
+
+  test("setTimeout 満了で resolve", async () => {
+    const state = await createDaemon(testDir);
+    state.pollInterval = 50;
+
+    const t0 = Date.now();
+    await sleepUntilWakeup(state);
+    const elapsed = Date.now() - t0;
+
+    expect(elapsed).toBeGreaterThanOrEqual(45);
+    expect(state.wakeup).toBeNull();
+    expect(state.wakeupPending).toBe(false);
+  });
+
+  test("sleep 中の連続 requestWakeup で timer がリークしない", async () => {
+    const state = await createDaemon(testDir);
+    state.pollInterval = 10_000;
+
+    const sleepPromise = sleepUntilWakeup(state);
+    await Promise.resolve();
+    // 1 回目で resolve、2 回目は state.wakeup が null なので noop だが wakeupPending が立つ
+    requestWakeup(state);
+    requestWakeup(state);
+    await sleepPromise;
+
+    // 2 回目の requestWakeup で wakeupPending が立ったので、次の sleep も即 resolve する
+    const t0 = Date.now();
+    await sleepUntilWakeup(state);
+    const elapsed = Date.now() - t0;
+
+    expect(elapsed).toBeLessThan(50);
+    expect(state.wakeupPending).toBe(false);
+    expect(state.wakeup).toBeNull();
+  });
+
+  test("tick ループ相当: 複数回の割り込みを全て消化する", async () => {
+    const state = await createDaemon(testDir);
+    state.pollInterval = 1_000; // タイムアウト保険
+
+    const t0 = Date.now();
+    for (let i = 0; i < 5; i++) {
+      // tick に相当する同期処理（state.wakeup は null のまま）
+      requestWakeup(state);
+      await sleepUntilWakeup(state);
+    }
+    const elapsed = Date.now() - t0;
+
+    // 5 ループが pollInterval に達せず合計 100ms 未満で完了すること
+    expect(elapsed).toBeLessThan(100);
+    expect(state.wakeupPending).toBe(false);
+    expect(state.wakeup).toBeNull();
+  });
+});
+
+// --- initFileWatcher 統合テスト ---
+
+describe("initFileWatcher", () => {
+  let watcherState: DaemonState | null = null;
+
+  afterEach(() => {
+    if (watcherState) {
+      watcherState.fileWatcherAbort?.abort();
+      watcherState.fileWatcherAbort = null;
+      watcherState.running = false;
+      watcherState = null;
+    }
+  });
+
+  test("サブディレクトリ task.md 作成で wakeup 発火", async () => {
+    const state = await createDaemon(testDir);
+    watcherState = state;
+    initFileWatcher(state);
+    // watcher 起動を待つ
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(state.wakeupPending).toBe(false);
+
+    // .team/tasks/999-foo/task.md を作成
+    const subDir = join(testDir, ".team/tasks/999-foo");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "task.md"), "---\nid: 999\ntitle: foo\n---\n");
+
+    // 300ms 以内に wakeupPending が立つこと
+    let triggered = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      if (state.wakeupPending) {
+        triggered = true;
+        break;
+      }
+    }
+    expect(triggered).toBe(true);
+  });
+
+  test("task-state.json 更新で wakeup 発火", async () => {
+    const state = await createDaemon(testDir);
+    watcherState = state;
+    initFileWatcher(state);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(state.wakeupPending).toBe(false);
+
+    // saveTaskState で task-state.json を書き込む
+    const { saveTaskState } = await import("./task");
+    await saveTaskState(testDir, { "500": { status: "ready" } });
+
+    let triggered = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      if (state.wakeupPending) {
+        triggered = true;
+        break;
+      }
+    }
+    expect(triggered).toBe(true);
+  });
+
+  test(".team/output/ の変更では wakeup 発火しない", async () => {
+    const state = await createDaemon(testDir);
+    watcherState = state;
+    initFileWatcher(state);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(state.wakeupPending).toBe(false);
+
+    await writeFile(join(testDir, ".team/output/foo.txt"), "dummy");
+
+    // 1000ms 待っても wakeupPending が false のままであること
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(state.wakeupPending).toBe(false);
   });
 });
