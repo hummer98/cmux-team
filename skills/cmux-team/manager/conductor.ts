@@ -93,11 +93,11 @@ export async function spawnSingleConductor(
     await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
   }
 
+  // 環境変数をシェルに焼き付け
+  await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+  await sleep(500);
   // Claude 起動
-  await cmux.send(
-    surface,
-    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-  );
+  await cmux.send(surface, `cmux-team conductor ${surface}\n`);
   await cmux.renameTab(surface, `[${num}] ♦ idle`);
 
   return {
@@ -167,11 +167,11 @@ export async function launchConductorOnSurface(
     await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
   }
 
+  // 環境変数をシェルに焼き付け
+  await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+  await sleep(500);
   // Claude 起動
-  await cmux.send(
-    surface,
-    `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-  );
+  await cmux.send(surface, `cmux-team conductor ${surface}\n`);
 
   // タブ名設定
   const num = surface.replace("surface:", "");
@@ -299,6 +299,16 @@ export async function assignTask(
       await execFile("npm", ["install"], { cwd: worktreePath }).catch(async (e: any) => {
         await log("error", `npm install failed in worktree: path=${worktreePath} ${e.message}`);
       });
+    }
+
+    // direnv allow（.envrc が存在する場合のみ）
+    if (existsSync(join(worktreePath, ".envrc"))) {
+      try {
+        await execFile("direnv", ["allow"], { cwd: worktreePath });
+        await log("direnv_allowed", `worktree=${worktreePath}`);
+      } catch (e: any) {
+        await log("error", `direnv allow failed: worktree=${worktreePath} ${e.message}`);
+      }
     }
 
     // --- 3. Conductor プロンプト生成 ---
@@ -525,11 +535,11 @@ export async function spawnConductor(
       paneId,
     };
 
+    // 環境変数をシェルに焼き付け
+    await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+    await sleep(500);
     // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
-    await cmux.send(
-      surface,
-      `export CMUX_SURFACE=${surface} && cmux-team conductor ${surface}\n`
-    );
+    await cmux.send(surface, `cmux-team conductor ${surface}\n`);
 
     try {
       return await assignTask(conductor, taskId, projectRoot);
