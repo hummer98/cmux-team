@@ -165,7 +165,7 @@ export async function launchConductorOnSurface(
   }
 
   // 環境変数をシェルに焼き付け
-  await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+  await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
   // Claude 起動
   await cmux.send(surface, `cmux-team conductor ${surface}\n`);
@@ -540,7 +540,7 @@ export async function spawnConductor(
     };
 
     // 環境変数をシェルに焼き付け
-    await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+    await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
     await sleep(500);
     // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(surface, `cmux-team conductor ${surface}\n`);
