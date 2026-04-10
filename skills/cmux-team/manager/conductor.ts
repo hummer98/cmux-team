@@ -453,6 +453,9 @@ export async function resetConductor(
     conductor.worktreePath = undefined;
     conductor.outputDir = undefined;
     conductor.agents = [];
+    // disconnected 状態から reset される経路（forceCloseDisconnectedConductor 等）で
+    // 古い disconnectedAt が残ることを防ぐ (Minor 3)
+    conductor.disconnectedAt = undefined;
 
     await log("conductor_reset", `surface=${conductor.surface}`);
   } catch (e: any) {
