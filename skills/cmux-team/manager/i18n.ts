@@ -36,6 +36,8 @@ const en = {
   no_artifacts: "No artifacts found.",
   artifact_id_required:
     "Error: artifact ID is required\nUsage: cmux-team artifacts show <id>",
+  artifact_id_required_open:
+    "Error: artifact ID is required\nUsage: cmux-team artifacts open <id>",
   search_query_required:
     "Error: search query is required\nUsage: cmux-team artifacts search <query>",
   artifact_add_file_required:
@@ -429,6 +431,7 @@ Subcommands:
   (none)                  list artifacts (default)
   add <file>             add a file as an artifact
   show <id>              show artifact content
+  open <id>              open artifact in markdown viewer
   search <query>         full-text search artifacts
 
 Options:
@@ -446,6 +449,7 @@ Examples:
   cmux-team artifacts add ./research-notes.md
   cmux-team artifacts add ./design.md --type decision --title "Auth method selection"
   cmux-team artifacts show A001
+  cmux-team artifacts open A001
   cmux-team artifacts search "authentication"
   cmux-team artifacts --type research --task T038
   cmux-team artifacts --validate
@@ -477,6 +481,7 @@ Usage:
   cmux-team artifacts                              list artifacts
   cmux-team artifacts add <file>                   add a file as an artifact
   cmux-team artifacts show <id>                    show artifact
+  cmux-team artifacts open <id>                    open in markdown viewer
   cmux-team artifacts search <query>               full-text search
   cmux-team artifacts --validate                   validate frontmatter
 
@@ -494,6 +499,8 @@ const ja: typeof en = {
   no_artifacts: "アーティファクトが見つかりません",
   artifact_id_required:
     "Error: アーティファクト ID を指定してください\nUsage: cmux-team artifacts show <id>",
+  artifact_id_required_open:
+    "Error: アーティファクト ID を指定してください\nUsage: cmux-team artifacts open <id>",
   search_query_required:
     "Error: 検索クエリを指定してください\nUsage: cmux-team artifacts search <query>",
   artifact_add_file_required:
@@ -887,6 +894,7 @@ Subcommands:
   (なし)                  アーティファクト一覧表示（デフォルト）
   add <file>             ファイルをアーティファクトとして追加
   show <id>              アーティファクトの内容を表示
+  open <id>              Markdown ビューアでアーティファクトを開く
   search <query>         アーティファクトを全文検索
 
 Options:
@@ -904,6 +912,7 @@ Examples:
   cmux-team artifacts add ./research-notes.md
   cmux-team artifacts add ./design.md --type decision --title "認証方式の選定"
   cmux-team artifacts show A001
+  cmux-team artifacts open A001
   cmux-team artifacts search "認証"
   cmux-team artifacts --type research --task T038
   cmux-team artifacts --validate
@@ -935,6 +944,7 @@ Usage:
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts add <file>                   ファイルをアーティファクトとして追加
   cmux-team artifacts show <id>                    アーティファクト表示
+  cmux-team artifacts open <id>                    Markdown ビューアで開く
   cmux-team artifacts search <query>               全文検索
   cmux-team artifacts --validate                   フロントマター検証
 
