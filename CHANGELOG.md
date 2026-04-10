@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.38.0] - 2026-04-11
+
+### Added
+- `artifacts open` サブコマンドを追加。アーティファクトを Markdown ビューア（`mo`）で表示可能に。環境変数 `CMUX_TEAM_MD_VIEWER` でビューアをカスタマイズ可能
+
+### Fixed
+- Master spawn 時に `CMUX_CLAUDE_HOOKS_DISABLED=1` が未設定のため cmux 通知が大量発生する問題を修正
+- running 状態の Conductor に手動 `/clear` を送信してもステータスがリセットされない問題を修正。abort + idle リセットが正しく動作するように
+- `resume` で実行中タスクの多重起動を防止
+
 ## [3.37.0] - 2026-04-11
 
 ### Added
