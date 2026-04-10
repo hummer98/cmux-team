@@ -5,34 +5,42 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:12",
+    "surface": "surface:171",
     "status": "running"
   },
   "manager": {
-    "pid": 92010,
+    "pid": 84006,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
-      "surface": "surface:9",
+      "surface": "surface:168",
+      "taskRunId": "task-121-1775792195",
+      "taskTitle": "conductor_crashed 誤検出バグの再発確認と確実な修正",
       "status": "idle",
-      "startedAt": "2026-04-07T09:17:50.187Z",
-      "paneId": "pane:8",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-121-1775792195",
+      "outputDir": ".team/tasks/121-conductor-crashed/runs/task-121-1775792195",
+      "startedAt": "2026-04-10T03:36:40.489Z",
+      "paneId": "pane:101",
       "agents": []
     },
     {
-      "surface": "surface:10",
+      "surface": "surface:169",
+      "taskRunId": "task-120-1775789959",
+      "taskTitle": "create-task 直後に daemon が即時反応するようにする（tick 待ちの体験改善）",
       "status": "idle",
-      "startedAt": "2026-04-06T20:38:32.574Z",
-      "paneId": "pane:9",
+      "worktreePath": "/Users/yamamoto/git/cmux-team/.worktrees/task-120-1775789959",
+      "outputDir": ".team/tasks/120-create-task-daemon-tick/runs/task-120-1775789959",
+      "startedAt": "2026-04-10T02:59:24.941Z",
+      "paneId": "pane:102",
       "agents": []
     },
     {
-      "surface": "surface:11",
+      "surface": "surface:170",
       "status": "idle",
-      "startedAt": "2026-04-06T20:38:33.083Z",
-      "paneId": "pane:10",
+      "startedAt": "2026-04-09T18:33:34.622Z",
+      "paneId": "pane:103",
       "agents": []
     }
   ]
