@@ -21,7 +21,7 @@
  *   ./main.ts delete-task --task-id <id> [--journal <text>]
  */
 
-import { join, dirname } from "path";
+import { join, dirname, basename } from "path";
 import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
@@ -391,6 +391,10 @@ async function cmdStart(): Promise<void> {
     const num = daemonSurface.replace("surface:", "");
     await cmux.renameTab(daemonSurface, `[${num}] Manager`);
   }
+
+  // ワークスペース名を起動フォルダ名に設定
+  const folderName = basename(PROJECT_ROOT);
+  await cmux.renameWorkspace(folderName, state.workspace);
 
   // Conductor スロット作成
   state.bootPhase = "conductors";

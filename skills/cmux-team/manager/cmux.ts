@@ -86,6 +86,13 @@ export async function renameTab(
   );
 }
 
+export async function renameWorkspace(title: string, workspace?: string): Promise<void> {
+  const args = ["rename-workspace"];
+  if (workspace) args.push("--workspace", workspace);
+  args.push(title);
+  await execFile("cmux", args).catch(() => {});
+}
+
 /** tree 呼び出しのタイムアウト（ミリ秒） */
 const TREE_TIMEOUT_MS = 5_000;
 
