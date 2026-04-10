@@ -166,6 +166,35 @@ export async function getCallerSurface(): Promise<string> {
   return surface;
 }
 
+export async function setStatus(
+  key: string,
+  value: string,
+  icon: string,
+  color: string,
+  workspace?: string,
+): Promise<void> {
+  const args = ["set-status", key, value, "--icon", icon, "--color", color];
+  if (workspace) args.push("--workspace", workspace);
+  try {
+    await execFile("cmux", args);
+  } catch (e: any) {
+    await log("error", `setStatus failed: key=${key} value=${value} ${e.message}`);
+  }
+}
+
+export async function clearStatus(
+  key: string,
+  workspace?: string,
+): Promise<void> {
+  const args = ["clear-status", key];
+  if (workspace) args.push("--workspace", workspace);
+  try {
+    await execFile("cmux", args);
+  } catch {
+    // 冪等な後処理のため、失敗は握りつぶす
+  }
+}
+
 export async function getCallerWorkspace(): Promise<string | undefined> {
   try {
     const { stdout } = await execFile("cmux", ["identify"]);
