@@ -347,7 +347,7 @@ describe("エラーハンドリング", () => {
 
 // --- scanTasks 統合テスト (assignTask エラー分離) ---
 
-import { scanTasks, createDaemon, requestWakeup, sleepUntilWakeup, initFileWatcher } from "./daemon";
+import { scanTasks, createDaemon, requestWakeup, sleepUntilWakeup, initFileWatcher, handleMessage, monitorConductors } from "./daemon";
 import type { DaemonState } from "./daemon";
 import type { ConductorState } from "./schema";
 
@@ -562,5 +562,266 @@ describe("initFileWatcher", () => {
     // 1000ms 待っても wakeupPending が false のままであること
     await new Promise((r) => setTimeout(r, 1000));
     expect(state.wakeupPending).toBe(false);
+  });
+});
+
+// --- crashed → disconnected 遷移とリカバリ (T119/T121) ---
+
+// PATH 差し替え用ヘルパー（fake cmux スクリプト）
+let fakeBinDir: string;
+let origPath: string | undefined;
+
+async function setupFakeCmux(): Promise<void> {
+  fakeBinDir = join(testDir, "fake-bin");
+  await mkdir(fakeBinDir, { recursive: true });
+  origPath = process.env.PATH;
+  process.env.PATH = `${fakeBinDir}:${origPath}`;
+}
+
+async function teardownFakeCmux(): Promise<void> {
+  if (origPath !== undefined) {
+    process.env.PATH = origPath;
+  }
+}
+
+async function writeFakeCmux(script: string): Promise<void> {
+  const { chmod } = await import("fs/promises");
+  const path = join(fakeBinDir, "cmux");
+  await writeFile(path, `#!/bin/sh\n${script}\n`);
+  await chmod(path, 0o755);
+}
+
+describe("crashed → disconnected 遷移 (T121)", () => {
+  // 各テストで fake cmux を設定・解除する
+  // (resetConductor / monitorConductors が cmux コマンドを呼ぶため)
+  beforeEach(async () => {
+    await setupFakeCmux();
+    // デフォルト: tree 成功（ただし surface なし）、他コマンドは成功して何もしない
+    await writeFakeCmux(`
+      case "$1" in
+        tree) printf "pane:1\\n" ;;
+        *) exit 0 ;;
+      esac
+    `);
+  });
+
+  afterEach(async () => {
+    await teardownFakeCmux();
+  });
+
+  test("1. running で tree が常に失敗 → disconnected + taskRunId 保持", async () => {
+    // tree を常に失敗させる（リトライ 3 回全てでエラー）
+    await writeFakeCmux(`echo "tree error" >&2; exit 1`);
+
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-010-1712345678",
+      taskId: "010",
+      taskTitle: "journal-generator",
+      worktreePath: join(testDir, ".worktrees/task-010-1712345678"),
+      outputDir: ".team/output/task-010-1712345678",
+      agents: [],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    expect(conductor.status).toBe("disconnected");
+    expect(conductor.disconnectedAt).toBeDefined();
+    // taskRunId 等は保持される（意図的に残す設計）
+    expect(conductor.taskRunId).toBe("task-010-1712345678");
+    expect(conductor.taskId).toBe("010");
+    expect(conductor.worktreePath).toBe(join(testDir, ".worktrees/task-010-1712345678"));
+    // ログは logger.ts のモジュールキャッシュにより testDir 外に書かれるため、
+    // ファイル検証ではなく状態遷移の assert で conductor_disconnected + kind=crashed を検証。
+    // (conductor_disconnected は status === "disconnected" と同値)
+  });
+
+  test("2. disconnected + CONDUCTOR_DONE で late cleanup が走る", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      taskRunId: "task-010-1712345678",
+      taskId: "010",
+      taskTitle: "journal-generator",
+      // worktreePath は存在しないパスを指定する。
+      // resetConductor は existsSync ガード (conductor.ts:425) で worktree remove を
+      // スキップするため、実ファイルシステムに worktree が無くてもテストは成功する (Minor 7)。
+      worktreePath: join(testDir, ".worktrees/task-010-nothing"),
+      outputDir: ".team/output/task-010",
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_DONE",
+      surface: "surface:71",
+      success: true,
+      timestamp: new Date().toISOString(),
+    });
+
+    // late cleanup 経路に入り、resetConductor で status=idle にリセット
+    expect(conductor.status).toBe("idle");
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.taskId).toBeUndefined();
+    expect(conductor.worktreePath).toBeUndefined();
+    // Minor 3: resetConductor で disconnectedAt もクリアされる
+    expect(conductor.disconnectedAt).toBeUndefined();
+  });
+
+  test("2b. disconnected + taskRunId なし + CONDUCTOR_DONE は no_task で ignore", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "disconnected",
+      // taskRunId なし
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_DONE",
+      surface: "surface:71",
+      success: true,
+      timestamp: new Date().toISOString(),
+    });
+
+    // no_task ignore → 状態変更なし
+    expect(conductor.status).toBe("disconnected");
+  });
+
+  test("3. disconnect timeout で forced close + journal + aborted", async () => {
+    // git init で worktree 操作を有効化
+    const { execFile: ef } = await import("child_process");
+    const { promisify } = await import("util");
+    await promisify(ef)("git", ["init", "-q"], { cwd: testDir });
+
+    // テストタスクを作成
+    await createTask("10", "journal-generator");
+    // task-state に assigned を明示
+    const { loadTaskState: loadTS, saveTaskState: saveTS } = await import("./task");
+    const ts = await loadTS(testDir);
+    ts["10"] = { status: "assigned", assignedAt: new Date().toISOString() };
+    await saveTS(testDir, ts);
+
+    const state = await createDaemon(testDir);
+    const oldDisconnectedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();  // 10 分前
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      disconnectedAt: oldDisconnectedAt,
+      taskRunId: "task-010-1712345678",
+      taskId: "10",
+      taskTitle: "journal-generator",
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    // timeout 判定 → forced close
+    expect(conductor.status).toBe("idle");
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.disconnectedAt).toBeUndefined();  // Minor 3
+
+    // task-state が aborted になっている
+    const tsAfter = await loadTS(testDir);
+    expect(tsAfter["10"]?.status).toBe("aborted");
+    expect(tsAfter["10"]?.journal).toContain("disconnect_timeout");
+    expect(tsAfter["10"]?.abortedAt).toBeDefined();
+
+    // ログは logger.ts のモジュールキャッシュにより testDir 外に書かれるため、
+    // conductor_disconnect_timeout + task_aborted は状態遷移 (status/abortedAt) で検証。
+  });
+
+  test("3b. disconnect timeout 未到達ならスキップ", async () => {
+    const state = await createDaemon(testDir);
+    const recentDisconnectedAt = new Date(Date.now() - 10_000).toISOString();  // 10 秒前
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: recentDisconnectedAt,
+      taskRunId: "task-010-x",
+      taskId: "10",
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    // まだ disconnected のまま
+    expect(conductor.status).toBe("disconnected");
+    expect(conductor.taskRunId).toBe("task-010-x");
+  });
+
+  test("4. SESSION_IDLE で disconnected + taskRunId 残存時は cleanup せず running に復帰", async () => {
+    // Critical 1 反映: SESSION_IDLE はターン境界ごとに発火するため、
+    //   disconnected + taskRunId 復帰時に resetConductor を呼ぶと生存中の Conductor の
+    //   worktree を誤削除するリスクがある。
+    //   新設計では「running に戻すだけ、cleanup はせず、taskRunId を保持する」ことを検証。
+    const state = await createDaemon(testDir);
+    const worktreePath = join(testDir, ".worktrees/task-010-y");
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      taskRunId: "task-010-y",
+      taskId: "10",
+      taskTitle: "t",
+      worktreePath,
+      outputDir: ".team/output/task-010-y",
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: "surface:71",
+      timestamp: new Date().toISOString(),
+    });
+
+    // status は running に戻る（cleanup されない）
+    expect(conductor.status).toBe("running");
+    // taskRunId / taskId / worktreePath は保持される
+    expect(conductor.taskRunId).toBe("task-010-y");
+    expect(conductor.taskId).toBe("10");
+    expect(conductor.worktreePath).toBe(worktreePath);
+    // alive の証拠として disconnectedAt はクリアされる
+    expect(conductor.disconnectedAt).toBeUndefined();
+
+    // ログは logger.ts のモジュールキャッシュにより testDir 外に書かれるため、
+    // conductor_recovered + via=SESSION_IDLE + new_status=running は
+    // status === "running" + taskRunId 保持で検証。
+  });
+
+  test("4b. SESSION_IDLE で disconnected + taskRunId なしは通常 recovery (idle)", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:71",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: "surface:71",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("idle");
   });
 });
