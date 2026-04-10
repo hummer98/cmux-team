@@ -423,6 +423,13 @@ async function cmdStart(): Promise<void> {
   for (const [taskId, ts] of Object.entries(taskState)) {
     if (ts.status !== "assigned") continue;
 
+    // 既にこのタスクを実行中の Conductor がいれば skip（多重実行防止）
+    const alreadyRunning = [...state.conductors.values()].find(c => c.taskId === taskId && c.status === "running");
+    if (alreadyRunning) {
+      await log("resume_skipped", `task_id=${taskId} reason=already_running surface=${alreadyRunning.surface}`);
+      continue;
+    }
+
     const canResume = ts.sessionId
       && ts.worktreePath && existsSync(ts.worktreePath)
       && ts.taskRunId;
