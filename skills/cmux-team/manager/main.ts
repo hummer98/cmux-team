@@ -1760,66 +1760,78 @@ async function cmdDeleteTask(): Promise<void> {
   console.log(`OK deleted ${taskId}`);
 }
 
-async function cmdTrace(): Promise<void> {
-  if (hasHelpFlag()) showHelp(t("help_trace"));
+async function cmdTraceTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_trace_task"));
+
+  // task-id は第1引数（args[1]）から取得
+  const taskId = args[1];
+  if (!taskId) {
+    console.error("Error: task ID is required");
+    console.error("Usage: cmux-team trace-task <task-id>");
+    process.exit(1);
+  }
+
+  // タスクタイトルを取得
+  const { tasks, taskState } = await loadTasks(PROJECT_ROOT);
+  const taskMeta = tasks.find(t => t.id === taskId);
+  const title = taskMeta?.title ?? "(unknown)";
+
+  // task-state.json から taskRunId と worktreePath を取得
+  const state = taskState[taskId];
+  const taskRunId = state?.taskRunId ?? "-";
+  const worktreePath = state?.worktreePath;
+
+  console.log(`Task T${taskId}: ${title}`);
+  console.log(`Run: ${taskRunId}`);
+  if (worktreePath) {
+    const rel = worktreePath.startsWith(PROJECT_ROOT)
+      ? worktreePath.slice(PROJECT_ROOT.length + 1)
+      : worktreePath;
+    console.log(`Worktree: ${rel}`);
+  }
+  console.log();
+
+  // DB からセッション取得
   const db = initDB(PROJECT_ROOT);
-  const taskId = getArg("task");
-  const sessionId = getArg("session");
-  const limit = getArg("limit");
+  const sessions = getSessionsForTask(db, taskId);
+  db.close();
 
-  if (taskId) {
-    // タスク別セッション表示（ツリー形式）
-    const sessions = getSessionsForTask(db, taskId);
-    if (sessions.length === 0) {
-      console.log(`No sessions found for task ${taskId}`);
-      db.close();
-      return;
-    }
+  if (sessions.length === 0) {
+    console.log("No sessions found.");
+    return;
+  }
 
-    console.log(`Task ${taskId} sessions:`);
-    for (const s of sessions) {
-      const indent = s.role === "conductor" ? "  " : "      ";
-      const label = s.role === "conductor" ? "conductor" : "agent";
-      const sessionStr = s.session_id ? `session=${s.session_id.slice(0, 8)}` : "";
-      const surfaceStr = s.surface ? `surface=${s.surface}` : "";
-      const eventStr = `event=${s.event}`;
-      console.log(`${indent}${label}: ${sessionStr} role=${s.role ?? "-"} ${surfaceStr} ${eventStr}`);
+  console.log("Sessions:");
+  for (const s of sessions) {
+    const role = (s.role ?? "-").padEnd(12);
+    const sid = s.session_id ? s.session_id.slice(0, 8) : "--------";
+    const surface = s.surface ? `surface:${s.surface.replace("surface:", "")}` : "-";
 
-      // JSONL パスの導出・表示
-      if (s.worktree_path && s.session_id) {
-        const jsonlDir = deriveJsonlDir(s.worktree_path);
-        const jsonlPath = join(jsonlDir, `${s.session_id}.jsonl`);
-        if (existsSync(jsonlPath)) {
-          console.log(`${indent}  jsonl: ${jsonlPath}`);
+    // JSONL パス導出と行数カウント
+    let jsonlPath = "-";
+    let lineCount = "-";
+    if (s.worktree_path && s.session_id) {
+      const jsonlDir = deriveJsonlDir(s.worktree_path);
+      const fullPath = join(jsonlDir, `${s.session_id}.jsonl`);
+      if (existsSync(fullPath)) {
+        jsonlPath = fullPath.replace(process.env.HOME ?? "~", "~");
+        try {
+          const content = await readFile(fullPath, "utf-8");
+          const lines = content.split("\n").filter(l => l.trim()).length;
+          lineCount = `${lines} lines`;
+        } catch {
+          lineCount = "? lines";
         }
       }
     }
-  } else {
-    // 全セッション一覧
-    const sessions = getTaskSessions(db, {
-      sessionId,
-      limit: limit ? Number(limit) : 20,
-    });
 
-    if (sessions.length === 0) {
-      console.log("No sessions found");
-      db.close();
-      return;
-    }
-
-    console.log(`${"ID".padStart(4)}  ${"TIME".padEnd(19)}  ${"TASK".padEnd(6)}  ${"RUN".padEnd(24)}  ${"ROLE".padEnd(12)}  ${"EVENT".padEnd(10)}  SURFACE`);
-    console.log("\u2500".repeat(100));
-    for (const s of sessions) {
-      const time = s.timestamp?.slice(0, 19) || "";
-      const task = s.task_id.padEnd(6);
-      const run = (s.task_run_id ?? "-").padEnd(24);
-      const role = (s.role ?? "-").padEnd(12);
-      const event = s.event.padEnd(10);
-      const surface = s.surface ?? "-";
-      console.log(`${String(s.id).padStart(4)}  ${time}  ${task}  ${run}  ${role}  ${event}  ${surface}`);
-    }
+    console.log(`  ${role} ${sid}  ${surface.padEnd(12)}  ${lineCount.padEnd(10)}  ${jsonlPath}`);
   }
-  db.close();
+
+  // --summary スタブ
+  if (getArg("summary") !== undefined || args.includes("--summary")) {
+    console.log("\n(summary mode is not yet implemented)");
+  }
 }
 
 function deriveJsonlDir(worktreePath: string): string {
@@ -2045,8 +2057,8 @@ switch (command) {
   case "delete-task":
     await cmdDeleteTask();
     break;
-  case "trace":
-    await cmdTrace();
+  case "trace-task":
+    await cmdTraceTask();
     break;
   case "conductor":
     await cmdConductor();

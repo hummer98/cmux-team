@@ -367,25 +367,18 @@ Notes:
   - A record remains in the journal
 `,
 
-  help_trace: `
-cmux-team trace -- search and display API traces
+  help_trace_task: `
+cmux-team trace-task -- display session history for a task
 
 Usage:
-  cmux-team trace [options]
+  cmux-team trace-task <task-id> [options]
 
 Options:
-  --task <id>             filter by task ID (optional)
-  --conductor <surface>   filter by Conductor surface (optional)
-  --role <role>           filter by role name (optional)
-  --search <query>        FTS5 full-text search (optional)
-  --show <id>             show details for a trace ID (optional)
-  --limit <N>             number of results to show (optional, default 20)
+  --summary              show summary mode (stub for future)
 
 Examples:
-  cmux-team trace --task 035
-  cmux-team trace --search "error"
-  cmux-team trace --show 42
-  cmux-team trace --role researcher --limit 50
+  cmux-team trace-task 141
+  cmux-team trace-task 141 --summary
 `,
 
   help_conductor: `
@@ -473,9 +466,7 @@ Usage:
   cmux-team abort-task --task-id <id> [--journal <text>]  abort a running task
   cmux-team restart-task --task-id <id> [--journal <text>] restart a running task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
-  cmux-team trace --task <id>                  filter traces by task ID
-  cmux-team trace --search <query>             FTS5 full-text search
-  cmux-team trace --show <id>                  show trace details
+  cmux-team trace-task <task-id>              display session history for a task
   cmux-team conductor <slot-id>                launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
@@ -830,25 +821,18 @@ Notes:
   - Journal タブに記録が残ります
 `,
 
-  help_trace: `
-cmux-team trace -- API トレースの検索・表示
+  help_trace_task: `
+cmux-team trace-task -- タスクのセッション履歴を表示
 
 Usage:
-  cmux-team trace [options]
+  cmux-team trace-task <task-id> [options]
 
 Options:
-  --task <id>             タスク ID でフィルタ（任意）
-  --conductor <surface>   Conductor surface でフィルタ（任意）
-  --role <role>           ロール名でフィルタ（任意）
-  --search <query>        FTS5 全文検索（任意）
-  --show <id>             トレース ID の詳細表示（任意）
-  --limit <N>             表示件数（任意、デフォルト 20）
+  --summary              要約モード（将来拡張用スタブ）
 
 Examples:
-  cmux-team trace --task 035
-  cmux-team trace --search "エラー"
-  cmux-team trace --show 42
-  cmux-team trace --role researcher --limit 50
+  cmux-team trace-task 141
+  cmux-team trace-task 141 --summary
 `,
 
   help_conductor: `
@@ -936,9 +920,7 @@ Usage:
   cmux-team abort-task --task-id <id> [--journal <text>] 実行中タスクを中止
   cmux-team restart-task --task-id <id> [--journal <text>] 実行中タスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
-  cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
-  cmux-team trace --search <query>             FTS5 全文検索
-  cmux-team trace --show <id>                  トレース詳細表示
+  cmux-team trace-task <task-id>              タスクのセッション履歴を表示
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
