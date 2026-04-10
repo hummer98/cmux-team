@@ -159,4 +159,4 @@ export interface RateLimitInfo {
 // --- スロットリング閾値 ---
 
 /** 5h unified utilization がこの値以上なら新規タスク割り当てを停止 */
-export const THROTTLE_5H_THRESHOLD = 0.95;
+export const THROTTLE_5H_THRESHOLD = 0.90;
