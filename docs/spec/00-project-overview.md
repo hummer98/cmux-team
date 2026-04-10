@@ -83,7 +83,7 @@ npm install -g @hummer98/cmux-team
 │       ├── task.md     #     タスク本文
 │       └── runs/       #     実行ごとの作業フォルダ
 │           └── <taskRunId>/  #       プロンプト・plan.md・Agent 出力を集約
-├── task-state.json     # タスク状態管理（status: draft/ready/assigned/closed/aborted/deleted/archived）
+├── task-state.json     # タスク状態管理（status + resume 用メタデータ: sessionId, worktreePath, taskRunId, conductorSlot）
 ├── artifacts/          # Axxx — 知見の記録（調査・設計判断・セッション要約）
 ├── conductors/         # Conductor 状態ファイル
 ├── specs/              # 要件・設計ドキュメント

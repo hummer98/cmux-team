@@ -219,9 +219,40 @@ T082〜T116 で実施された主要改善:
 
 ---
 
+## Phase 8: 運用改善（T127〜T141）— 完了済み
+
+v3.35〜v3.38 で実施された主要改善:
+
+### セッション復旧・永続化
+- **worktree `.envrc` 生成（T127）** — `source_up` で親の `.envrc` を継承し、direnv 環境変数（OAuth トークン等）を worktree に引き継ぐ
+- **`resume` コマンド（T128）** — daemon 再起動時に `task-state.json` の assigned タスクを `claude --resume` で自動復旧
+- **Conductor `--session-id`（T132）** — Conductor 起動時に `crypto.randomUUID()` でセッション ID を発行し、resume 可能にする
+- **resume 多重起動防止** — 既に同一タスクを実行中の Conductor がある場合はスキップ
+
+### レート制限・スロットリング
+- **5h レート制限超過で一時停止（T133）** — 5h unified utilization が閾値以上で新規タスク割り当てを停止＋TUI 表示
+- **閾値を 95% → 90% に変更（T135）** — `THROTTLE_5H_THRESHOLD = 0.90`
+
+### CLI サブコマンド追加
+- **`artifacts add`（T131）** — 既存ファイルをアーティファクトとして登録（ID 自動採番、フロントマター自動生成）
+- **`artifacts open`（T140）** — Markdown ビューアでアーティファクトを開く（`CMUX_TEAM_MD_VIEWER` → `mo` → `cat`）
+- **`update-task --depends-on`（T136）** — タスク更新時に依存関係を変更可能
+
+### Conductor・Agent・Master 管理
+- **`CMUX_CLAUDE_HOOKS_DISABLED=1` の適用拡大（T130/T139）** — Conductor/Agent spawn 時（T130）+ spawn-master（T139）に追加
+- **ワークスペース名の自動設定（T129）** — `cmux-team start` 時に `basename(PROJECT_ROOT)` をワークスペース名に設定
+- **サイドバーステータスのリアルタイム更新（T137）** — `cmux set-status` で error/throttled/running/done/idle を表示、差分抑制付き
+- **SESSION_CLEAR で running Conductor を abort + idle リセット（T141）** — ユーザー手動 `/clear` 時にタスクを aborted に遷移
+- **/clear 方式への復帰** — タスク割り当て時の /exit + 再起動を /clear + 新プロンプト送信に戻す
+
+### タスク状態管理
+- **`task-state.json` に resume 用フィールド追加** — `worktreePath`, `taskRunId`, `conductorSlot`, `sessionId` を `assignTask` 時に記録
+
+---
+
 ## 未実装の改善候補
 
-- レート制限のインテリジェント制御（プロキシでの自動スロットリング）
+- レート制限のインテリジェント制御（5h 閾値スロットリングは実装済み、7d 制限や動的閾値調整は未実装）
 - Conductor 台数の動的スケーリング
 - Web UI ダッシュボード
 - マルチプロジェクト対応
