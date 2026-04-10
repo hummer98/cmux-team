@@ -9,7 +9,7 @@
     "status": "running"
   },
   "manager": {
-    "pid": 21354,
+    "pid": 29887,
     "type": "typescript",
     "status": "running"
   },
@@ -17,7 +17,7 @@
     {
       "surface": "surface:168",
       "status": "idle",
-      "startedAt": "2026-04-10T06:19:53.019Z",
+      "startedAt": "2026-04-10T06:58:32.929Z",
       "paneId": "pane:101",
       "agents": []
     },
