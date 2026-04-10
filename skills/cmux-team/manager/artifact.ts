@@ -1,9 +1,9 @@
 /**
  * アーティファクトファイルのパース・検索
  */
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, basename } from "path";
 
 export interface ArtifactMeta {
   id: string;
@@ -116,4 +116,103 @@ export function validateArtifact(artifact: ArtifactMeta): string[] {
     errors.push(`type "${artifact.type}" は不正（${validTypes.join(", ")} のいずれか）`);
   }
   return errors;
+}
+
+/**
+ * 次のアーティファクト ID を自動採番
+ */
+export async function nextArtifactId(projectRoot: string): Promise<string> {
+  const artifacts = await loadArtifacts(projectRoot);
+  if (artifacts.length === 0) return "A001";
+  const nums = artifacts
+    .map(a => parseInt(a.id.replace(/^A/, ""), 10))
+    .filter(n => !isNaN(n));
+  const max = Math.max(0, ...nums);
+  return `A${String(max + 1).padStart(3, "0")}`;
+}
+
+function buildFrontmatter(meta: Partial<ArtifactMeta>): string {
+  const lines = ["---"];
+  lines.push(`id: ${meta.id}`);
+  lines.push(`type: ${meta.type}`);
+  lines.push(`title: "${meta.title}"`);
+  lines.push(`created: ${meta.created}`);
+  if (meta.updated) lines.push(`updated: ${meta.updated}`);
+  lines.push(`author: ${meta.author}`);
+  if (meta.task) lines.push(`task: ${meta.task}`);
+  if (meta.tags && meta.tags.length > 0) {
+    lines.push(`tags: [${meta.tags.join(", ")}]`);
+  }
+  lines.push("---");
+  return lines.join("\n");
+}
+
+export interface AddArtifactOpts {
+  projectRoot: string;
+  srcPath: string;
+  type?: string;
+  title?: string;
+  task?: string;
+  tags?: string[];
+}
+
+/**
+ * 既存ファイルをアーティファクトとして登録
+ */
+export async function addArtifact(opts: AddArtifactOpts): Promise<{ id: string; destPath: string }> {
+  const id = await nextArtifactId(opts.projectRoot);
+  const content = await readFile(opts.srcPath, "utf-8");
+  const now = new Date().toISOString();
+
+  const srcFileName = basename(opts.srcPath);
+  const existing = parseArtifactMeta(content, srcFileName, opts.srcPath);
+
+  let meta: Partial<ArtifactMeta>;
+  let body: string;
+
+  if (existing) {
+    // フロントマターあり: 既存値をベースに CLI オプションで上書き
+    meta = {
+      id,
+      type: opts.type ?? existing.type,
+      title: opts.title ?? existing.title,
+      created: existing.created || now,
+      updated: now,
+      author: existing.author || "master",
+      task: opts.task ?? existing.task,
+      tags: opts.tags ?? existing.tags,
+    };
+    body = existing.body;
+  } else {
+    // フロントマターなし: 新規生成
+    const nameWithoutExt = srcFileName.replace(/\.[^.]+$/, "").replace(/-/g, " ");
+    meta = {
+      id,
+      type: opts.type ?? "research",
+      title: opts.title ?? nameWithoutExt,
+      created: now,
+      author: "master",
+      task: opts.task,
+      tags: opts.tags,
+    };
+    body = content.trim();
+  }
+
+  const frontmatter = buildFrontmatter(meta);
+  const output = body ? `${frontmatter}\n\n${body}\n` : `${frontmatter}\n`;
+
+  // slug: 元ファイル名から拡張子除去、既存 Axxx- prefix を除去
+  let slug = srcFileName.replace(/\.[^.]+$/, "");
+  slug = slug.replace(/^A\d{3}-/, "");
+  const destFileName = `${id}-${slug}.md`;
+
+  const artifactsDir = join(opts.projectRoot, ".team/artifacts");
+  if (!existsSync(artifactsDir)) {
+    await mkdir(artifactsDir, { recursive: true });
+  }
+
+  const destPath = join(artifactsDir, destFileName);
+  await writeFile(destPath, output, "utf-8");
+
+  return { id, destPath };
 }
