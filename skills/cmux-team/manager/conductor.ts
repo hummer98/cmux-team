@@ -10,6 +10,7 @@ import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
+import { initDB, insertTaskSession } from "./trace-store";
 import type { ConductorState } from "./schema";
 
 const execFile = promisify(execFileCb);
@@ -384,6 +385,24 @@ export async function assignTask(
       await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
     } catch (e: any) {
       await log("error", `renameTab failed: surface=${conductor.surface} ${e.message}`);
+    }
+
+    // タスク-セッション索引に記録
+    try {
+      const db = initDB(projectRoot);
+      insertTaskSession(db, {
+        timestamp: new Date().toISOString(),
+        task_id: taskId,
+        task_run_id: taskRunId,
+        session_id: conductor.sessionId!,
+        role: "conductor",
+        surface: conductor.surface,
+        worktree_path: worktreePath,
+        event: "assigned",
+      });
+      db.close();
+    } catch (e: any) {
+      log("error", `trace DB assigned insert failed: ${e?.message ?? e}`).catch(() => {});
     }
 
     // --- 6. ConductorState 更新 ---
