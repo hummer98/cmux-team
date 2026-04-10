@@ -31,7 +31,8 @@ import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { spawnSingleConductor } from "./conductor";
-import { initDB, searchTraces, getTrace } from "./trace-store";
+import { createHash } from "crypto";
+import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
@@ -1169,6 +1170,28 @@ async function cmdSpawnAgent(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
+  // タスク-セッション索引に記録
+  try {
+    const teamJson2 = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
+    const cond = teamJson2?.conductors?.find((c: any) => c.surface === conductorSurface);
+    if (cond?.taskId) {
+      const db = initDB(PROJECT_ROOT);
+      insertTaskSession(db, {
+        timestamp: new Date().toISOString(),
+        task_id: cond.taskId,
+        task_run_id: cond.taskRunId,
+        session_id: "",
+        role,
+        surface,
+        worktree_path: worktreePath,
+        event: "agent_spawned",
+      });
+      db.close();
+    }
+  } catch (e: any) {
+    log("error", `trace DB agent_spawned insert failed: ${e?.message ?? e}`).catch(() => {});
+  }
+
   // --- 7. stdout に surface を出力 ---
   console.log(`SURFACE=${surface}`);
 }
@@ -1444,6 +1467,23 @@ async function cmdCloseTask(): Promise<void> {
     });
   }
 
+  // タスク-セッション索引に記録
+  try {
+    const db = initDB(PROJECT_ROOT);
+    insertTaskSession(db, {
+      timestamp: new Date().toISOString(),
+      task_id: taskId,
+      task_run_id: conductor?.taskRunId,
+      session_id: conductor?.sessionId ?? "",
+      role: "conductor",
+      surface: conductor?.surface,
+      event: "closed",
+    });
+    db.close();
+  } catch (e: any) {
+    log("error", `trace DB closed insert failed: ${e?.message ?? e}`).catch(() => {});
+  }
+
   console.log(`OK closed ${taskId}`);
 }
 
@@ -1548,6 +1588,23 @@ async function cmdAbortTask(): Promise<void> {
   await saveTaskState(PROJECT_ROOT, taskState);
 
   await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+
+  // タスク-セッション索引に記録
+  try {
+    const db = initDB(PROJECT_ROOT);
+    insertTaskSession(db, {
+      timestamp: new Date().toISOString(),
+      task_id: taskId,
+      task_run_id: conductor?.taskRunId,
+      session_id: conductor?.sessionId ?? "",
+      role: "conductor",
+      surface: conductor?.surface,
+      event: "aborted",
+    });
+    db.close();
+  } catch (e: any) {
+    log("error", `trace DB aborted insert failed: ${e?.message ?? e}`).catch(() => {});
+  }
 
   // 7. CONDUCTOR_DONE メッセージ送信（daemon に通知）
   await postMessage({
@@ -1707,72 +1764,67 @@ async function cmdTrace(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_trace"));
   const db = initDB(PROJECT_ROOT);
   const taskId = getArg("task");
-  const conductorSurface = getArg("conductor");
-  const role = getArg("role");
-  const search = getArg("search");
-  const showId = getArg("show");
+  const sessionId = getArg("session");
   const limit = getArg("limit");
 
-  if (showId) {
-    const trace = getTrace(db, Number(showId));
-    if (!trace) {
-      console.log("Trace not found");
+  if (taskId) {
+    // タスク別セッション表示（ツリー形式）
+    const sessions = getSessionsForTask(db, taskId);
+    if (sessions.length === 0) {
+      console.log(`No sessions found for task ${taskId}`);
       db.close();
       return;
     }
-    console.log(JSON.stringify(trace, null, 2));
-    // リクエスト/レスポンス本文表示
-    if (trace.request_body_path && existsSync(trace.request_body_path)) {
-      console.log("\n--- Request Body ---");
-      const body = await readFile(trace.request_body_path, "utf-8");
-      try {
-        const parsed = JSON.parse(body);
-        console.log(`model: ${parsed.model || "unknown"}`);
-        if (parsed.messages?.length) {
-          console.log(`messages: ${parsed.messages.length}`);
-          const first = parsed.messages[0];
-          const content = typeof first.content === "string"
-            ? first.content.slice(0, 200)
-            : JSON.stringify(first.content).slice(0, 200);
-          console.log(`first: ${content}...`);
+
+    console.log(`Task ${taskId} sessions:`);
+    for (const s of sessions) {
+      const indent = s.role === "conductor" ? "  " : "      ";
+      const label = s.role === "conductor" ? "conductor" : "agent";
+      const sessionStr = s.session_id ? `session=${s.session_id.slice(0, 8)}` : "";
+      const surfaceStr = s.surface ? `surface=${s.surface}` : "";
+      const eventStr = `event=${s.event}`;
+      console.log(`${indent}${label}: ${sessionStr} role=${s.role ?? "-"} ${surfaceStr} ${eventStr}`);
+
+      // JSONL パスの導出・表示
+      if (s.worktree_path && s.session_id) {
+        const jsonlDir = deriveJsonlDir(s.worktree_path);
+        const jsonlPath = join(jsonlDir, `${s.session_id}.jsonl`);
+        if (existsSync(jsonlPath)) {
+          console.log(`${indent}  jsonl: ${jsonlPath}`);
         }
-      } catch {
-        console.log(body.slice(0, 500));
       }
     }
-    db.close();
-    return;
-  }
+  } else {
+    // 全セッション一覧
+    const sessions = getTaskSessions(db, {
+      sessionId,
+      limit: limit ? Number(limit) : 20,
+    });
 
-  const traces = searchTraces(db, {
-    taskId,
-    conductorId: conductorSurface,
-    role,
-    search,
-    limit: limit ? Number(limit) : 20,
-  });
+    if (sessions.length === 0) {
+      console.log("No sessions found");
+      db.close();
+      return;
+    }
 
-  if (traces.length === 0) {
-    console.log("No traces found");
-    db.close();
-    return;
-  }
-
-  // テーブル形式で出力
-  console.log(`${"ID".padStart(6)}  ${"TIME".padEnd(19)}  ${"TASK".padEnd(6)}  ${"ROLE".padEnd(10)}  ${"METHOD".padEnd(6)}  ${"PATH".padEnd(30)}  ${"STATUS".padEnd(6)}  ${"DUR".padEnd(8)}  BYTES`);
-  console.log("\u2500".repeat(110));
-  for (const t of traces) {
-    const time = t.timestamp?.slice(0, 19) || "";
-    const task = (t.task_id || "-").padEnd(6);
-    const r = (t.role || "-").padEnd(10);
-    const method = (t.method || "-").padEnd(6);
-    const path = (t.path || "-").padEnd(30).slice(0, 30);
-    const status = String(t.status || "-").padEnd(6);
-    const dur = t.duration_ms != null ? `${t.duration_ms}ms`.padEnd(8) : "-".padEnd(8);
-    const bytes = `${t.request_bytes || 0}\u2192${t.response_bytes || 0}`;
-    console.log(`${String(t.id).padStart(6)}  ${time}  ${task}  ${r}  ${method}  ${path}  ${status}  ${dur}  ${bytes}`);
+    console.log(`${"ID".padStart(4)}  ${"TIME".padEnd(19)}  ${"TASK".padEnd(6)}  ${"RUN".padEnd(24)}  ${"ROLE".padEnd(12)}  ${"EVENT".padEnd(10)}  SURFACE`);
+    console.log("\u2500".repeat(100));
+    for (const s of sessions) {
+      const time = s.timestamp?.slice(0, 19) || "";
+      const task = s.task_id.padEnd(6);
+      const run = (s.task_run_id ?? "-").padEnd(24);
+      const role = (s.role ?? "-").padEnd(12);
+      const event = s.event.padEnd(10);
+      const surface = s.surface ?? "-";
+      console.log(`${String(s.id).padStart(4)}  ${time}  ${task}  ${run}  ${role}  ${event}  ${surface}`);
+    }
   }
   db.close();
+}
+
+function deriveJsonlDir(worktreePath: string): string {
+  const hash = createHash("sha256").update(worktreePath).digest("hex").slice(0, 16);
+  return join(process.env.HOME ?? "~", ".claude/projects", hash);
 }
 
 function isProcessAlive(pid: number): boolean {

@@ -7,18 +7,15 @@
  */
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
-import { initDB, insertTrace } from "./trace-store";
 import { log } from "./logger";
 import { QueueMessage } from "./schema";
 import type { RateLimitInfo } from "./schema";
-import type { Database } from "bun:sqlite";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
 interface ProxyHandle {
   port: number;
   stop: () => void;
-  db: Database;
 }
 
 interface TraceEntry {
@@ -79,11 +76,6 @@ export async function start(
   await mkdir(tracesDir, { recursive: true });
 
   const traceFile = join(tracesDir, "api-trace.jsonl");
-
-  // SQLite トレースストア + bodies ディレクトリ
-  const bodiesDir = join(projectRoot, ".team/logs/traces/bodies");
-  await mkdir(bodiesDir, { recursive: true });
-  const db = initDB(projectRoot);
 
   // 前回ポートの読み取り（daemon リロード時に同じポートを再利用）
   let preferredPort = 0;
@@ -210,14 +202,6 @@ export async function start(
       const reqBody = req.body ? await req.arrayBuffer() : null;
       const requestBytes = reqBody?.byteLength ?? 0;
 
-      // リクエスト本文を bodies/ に保存
-      const traceId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      let reqBodyPath: string | undefined;
-      if (reqBody && requestBytes > 0) {
-        reqBodyPath = join(bodiesDir, `${traceId}-req.json`);
-        Bun.write(reqBodyPath, reqBody).catch(() => {});
-      }
-
       // Host ヘッダーを除外して転送（そのまま渡すと Bun が
       // Host の値を接続先に使い、プロキシ自身に接続してしまう）
       const fwdHeaders = new Headers(req.headers);
@@ -260,11 +244,6 @@ export async function start(
           conductorSurface,
           taskId,
           role,
-          db,
-          bodiesDir,
-          traceId,
-          sessionId,
-          reqBodyPath,
         }).catch((e: any) =>
           log("error", `drainAndLog failed: ${e.message}`).catch(() => {})
         );
@@ -302,32 +281,6 @@ export async function start(
       // 非同期でログ書き込み（JSONL）
       appendFile(traceFile, JSON.stringify(entry) + "\n").catch(() => {});
 
-      // レスポンス本文を bodies/ に保存 + SQLite 記録
-      let resBodyPath: string | undefined;
-      if (resBody.byteLength > 0) {
-        resBodyPath = join(bodiesDir, `${traceId}-res.json`);
-        Bun.write(resBodyPath, resBody).catch(() => {});
-      }
-      try {
-        insertTrace(db, {
-          timestamp: new Date().toISOString(),
-          task_id: taskId,
-          conductor_id: conductorSurface,
-          role,
-          session_id: sessionId,
-          method: req.method,
-          path: url.pathname,
-          status: upstreamRes.status,
-          request_bytes: requestBytes,
-          response_bytes: resBody.byteLength,
-          duration_ms: duration,
-          request_body_path: reqBodyPath,
-          response_body_path: resBodyPath,
-        });
-      } catch (e: any) {
-        log("error", `insertTrace failed: ${e.message}`).catch(() => {});
-      }
-
       return new Response(resBody, {
         status: upstreamRes.status,
         statusText: upstreamRes.statusText,
@@ -350,8 +303,7 @@ export async function start(
 
   return {
     port: server.port!,
-    stop: () => { server.stop(); db.close(); },
-    db,
+    stop: () => { server.stop(); },
   };
 }
 
@@ -368,22 +320,15 @@ async function drainAndLog(
     conductorSurface?: string;
     taskId?: string;
     role?: string;
-    db: Database;
-    bodiesDir: string;
-    traceId: string;
-    sessionId?: string;
-    reqBodyPath?: string;
   }
 ): Promise<void> {
   let responseBytes = 0;
-  const chunks: Uint8Array[] = [];
   const reader = stream.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       responseBytes += value.byteLength;
-      chunks.push(value);
     }
   } catch (e: any) {
     // クライアント切断等は無視するが、予期しないエラーは記録
@@ -409,40 +354,6 @@ async function drainAndLog(
     duration_ms: duration,
   };
 
-  // JSONL ログ（既存）
+  // JSONL ログ
   appendFile(ctx.tracesDir, JSON.stringify(entry) + "\n").catch(() => {});
-
-  // レスポンス本文を bodies/ に保存
-  let resBodyPath: string | undefined;
-  if (responseBytes > 0) {
-    resBodyPath = join(ctx.bodiesDir, `${ctx.traceId}-res.json`);
-    const merged = new Uint8Array(responseBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    Bun.write(resBodyPath, merged).catch(() => {});
-  }
-
-  // SQLite 記録
-  try {
-    insertTrace(ctx.db, {
-      timestamp: new Date().toISOString(),
-      task_id: ctx.taskId,
-      conductor_id: ctx.conductorSurface,
-      role: ctx.role,
-      session_id: ctx.sessionId,
-      method: ctx.method,
-      path: ctx.path,
-      status: ctx.status,
-      request_bytes: ctx.requestBytes,
-      response_bytes: responseBytes,
-      duration_ms: duration,
-      request_body_path: ctx.reqBodyPath,
-      response_body_path: resBodyPath,
-    });
-  } catch (e: any) {
-    log("error", `insertTrace (streaming) failed: ${e.message}`).catch(() => {});
-  }
 }
