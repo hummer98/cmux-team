@@ -675,7 +675,31 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (message.pid) conductor.pid = message.pid;
         await log(event, `surface=${message.surface} via=SESSION_CLEAR`);
       }
-      // idle/running 時は何もしない（TUI チラつき防止）
+      if (conductor && conductor.status === "running") {
+        // ユーザー手動 /clear → タスク abort + idle リセット
+        // forceCloseDisconnectedConductor と同パターン
+        const taskId = conductor.taskId;
+        if (taskId) {
+          try {
+            const ts = await loadTaskState(state.projectRoot);
+            const current = ts[taskId];
+            if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
+              const journal = `user_clear: surface=${conductor.surface} taskRunId=${conductor.taskRunId ?? "-"}`;
+              ts[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
+              await saveTaskState(state.projectRoot, ts);
+              await log("task_aborted", `task_id=${taskId} reason=user_clear`);
+            }
+          } catch (e: any) {
+            await log("error", `SESSION_CLEAR task-state update failed: task_id=${taskId} ${e.message}`);
+          }
+        }
+        if (conductor.pidWatcherInterval) {
+          clearInterval(conductor.pidWatcherInterval);
+          conductor.pidWatcherInterval = undefined;
+        }
+        await resetConductor(conductor, state.projectRoot);
+      }
+      // idle 時は何もしない（TUI チラつき防止）
       break;
     }
 
