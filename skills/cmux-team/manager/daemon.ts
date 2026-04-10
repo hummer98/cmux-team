@@ -18,6 +18,7 @@ import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
 import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
+import { THROTTLE_5H_THRESHOLD } from "./schema";
 
 export interface TaskSummary {
   id: string;
@@ -742,6 +743,17 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     baseBranch: t.baseBranch,
     filePath: t.filePath,
   }));
+
+  // === スロットリングガード ===
+  const throttled5h = (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+  if (throttled5h && allExecutable.length > 0) {
+    const util = state.rateLimit!.unified5hUtilization!;
+    const reset = state.rateLimit!.unified5hReset;
+    await log("throttled_rate_limit",
+      `5h_utilization=${(util * 100).toFixed(1)}% threshold=${THROTTLE_5H_THRESHOLD * 100}% reset=${reset ?? "unknown"} skipped_tasks=${allExecutable.length}`
+    );
+    return;
+  }
 
   for (const task of allExecutable) {
     // idle Conductor を探す
