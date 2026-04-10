@@ -365,6 +365,7 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
               outputDir: c.outputDir,
               startedAt: c.startedAt ?? new Date().toISOString(),
               paneId: c.paneId,
+              sessionId: c.sessionId,
               agents: (c.agents ?? []).map((a: any) => ({
                 surface: a.surface,
                 role: a.role,
@@ -528,6 +529,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (message.sessionId) conductor.sessionId = message.sessionId;
         conductor.disconnectedAt = undefined;
         spawnPidWatcher(state, conductor, message.pid);
+
+        // sessionId を task-state.json に記録（resume 用）
+        if (message.sessionId && conductor.taskId) {
+          const ts = await loadTaskState(state.projectRoot);
+          if (ts[conductor.taskId] && ts[conductor.taskId].status === "assigned") {
+            ts[conductor.taskId] = {
+              ...ts[conductor.taskId],
+              sessionId: message.sessionId,
+            };
+            await saveTaskState(state.projectRoot, ts);
+            await log("session_id_saved", `task_id=${conductor.taskId} session_id=${message.sessionId}`);
+          }
+        }
+
         await log(
           "session_started",
           `surface=${message.surface} pid=${message.pid}`
@@ -780,12 +795,15 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     }
 
     state.conductors.set(updated.surface, updated);
-    // task-state.json に assigned + assignedAt を記録
+    // task-state.json に assigned + assignedAt + resume 情報を記録
     const ts = await loadTaskState(state.projectRoot);
     ts[task.id] = {
       ...ts[task.id],
       status: 'assigned',
       assignedAt: new Date().toISOString(),
+      worktreePath: updated.worktreePath,
+      taskRunId: updated.taskRunId,
+      conductorSlot: updated.surface,
     };
     await saveTaskState(state.projectRoot, ts);
   }
@@ -1091,6 +1109,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       outputDir: c.outputDir,
       startedAt: c.startedAt,
       paneId: c.paneId,
+      sessionId: c.sessionId,
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,
