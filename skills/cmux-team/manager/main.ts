@@ -1088,6 +1088,7 @@ async function cmdSpawnAgent(): Promise<void> {
     `PROJECT_ROOT=${PROJECT_ROOT}`,
     `CMUX_SURFACE=${surface}`,
     `CMUX_NO_RENAME_TAB=1`,
+    `CMUX_CLAUDE_HOOKS_DISABLED=1`,
   ];
   if (proxyPort) {
     exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
