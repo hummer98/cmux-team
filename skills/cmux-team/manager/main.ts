@@ -254,6 +254,8 @@ async function cmdStart(): Promise<void> {
   // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
   const shutdown = async () => {
     state.running = false;
+    state.fileWatcherAbort?.abort();
+    state.fileWatcherAbort = null;
     await log("daemon_stopped");
     await updateTeamJson(state);
     process.exit(0);
@@ -270,6 +272,8 @@ async function cmdStart(): Promise<void> {
       await log("daemon_reload");
       await log("daemon_reload_target", latestMainTs);
       state.running = false;
+      state.fileWatcherAbort?.abort();
+      state.fileWatcherAbort = null;
       const { execFileSync } = require("child_process");
       // exit 42（auto_restart）が来た場合も再起動ループを継続する（cmux-team.js と同じ挙動）
       // これがないと proxy_reused した子 daemon が auto_restart で終了した瞬間に
@@ -348,6 +352,8 @@ async function cmdStart(): Promise<void> {
 
       await log("full_quit_completed");
       state.running = false;
+      state.fileWatcherAbort?.abort();
+      state.fileWatcherAbort = null;
       await updateTeamJson(state);
       process.exit(0);
     },
