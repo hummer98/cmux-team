@@ -110,15 +110,15 @@ function buildTitleWithLinks(
 
 /**
  * Markdown ビューアコマンドを解決する
- * 優先順: CMUX_MD_VIEWER → glow → cat
+ * 優先順: CMUX_TEAM_MD_VIEWER → mo → cat
  */
-async function resolveMarkdownViewer(): Promise<string> {
-  const envViewer = process.env.CMUX_MD_VIEWER;
+export async function resolveMarkdownViewer(): Promise<string> {
+  const envViewer = process.env.CMUX_TEAM_MD_VIEWER;
   if (envViewer) return envViewer;
 
-  // glow が利用可能か確認
-  const glowPath = Bun.which("glow");
-  if (glowPath) return "glow";
+  // mo が利用可能か確認
+  const moPath = Bun.which("mo");
+  if (moPath) return "mo";
 
   return "cat";
 }

@@ -26,7 +26,7 @@ import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
-import { startDashboard, unmountDashboard } from "./dashboard";
+import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -1874,16 +1874,7 @@ async function cmdArtifacts(): Promise<void> {
       process.exit(1);
     }
 
-    // ビューア決定: CMUX_TEAM_MD_VIEWER → mo → cat
-    const envViewer = process.env.CMUX_TEAM_MD_VIEWER;
-    let viewer: string;
-    if (envViewer) {
-      viewer = envViewer;
-    } else if (Bun.which("mo")) {
-      viewer = "mo";
-    } else {
-      viewer = "cat";
-    }
+    const viewer = await resolveMarkdownViewer();
 
     const proc = Bun.spawn([viewer, found.filePath], {
       stdin: "inherit",
