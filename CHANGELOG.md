@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.34.1] - 2026-04-10
+
+### Fixed
+- spawn-agent で worktree に cd した後に `direnv allow` が実行されず、Agent が OAuth トークンを引き継げない問題を修正 (T123)
+
 ## [3.34.0] - 2026-04-10
 
 ### Changed
