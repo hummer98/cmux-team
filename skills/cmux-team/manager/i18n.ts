@@ -38,6 +38,8 @@ const en = {
     "Error: artifact ID is required\nUsage: cmux-team artifacts show <id>",
   search_query_required:
     "Error: search query is required\nUsage: cmux-team artifacts search <query>",
+  artifact_add_file_required:
+    "Error: file path is required\nUsage: cmux-team artifacts add <file> [--type <type>] [--title <title>] [--task <id>] [--tags <tag1,tag2>]",
   dashboard_startup_hint:
     "Hint: Run 'cmux-team start' in a TTY environment",
   task_section_header: "Task",
@@ -45,6 +47,8 @@ const en = {
   // ── テンプレートメッセージ（tf() で変数展開） ────────────────────────────────
   artifact_not_found: "Artifact {id} not found",
   no_artifacts_matching: 'No artifacts matching "{query}"',
+  artifact_add_file_not_found: "Error: file not found: {path}",
+  artifact_added: "Added {id} → {path}",
   dashboard_startup_failed: "❌ Dashboard startup failed: {message}",
   abort_journal_default: "Aborted: T{id} {title}",
   restart_journal_default: "Restarted: T{id} {title}",
@@ -421,6 +425,7 @@ Usage:
 
 Subcommands:
   (none)                  list artifacts (default)
+  add <file>             add a file as an artifact
   show <id>              show artifact content
   search <query>         full-text search artifacts
 
@@ -429,9 +434,15 @@ Options:
   --task <id>             filter by related task ID (optional)
   --sort <field>          sort by: created / updated (optional, default created)
   --validate              validate frontmatter of all artifacts
+  --type <type>           (add) artifact type: research / decision / session / spec / report
+  --title <title>         (add) artifact title
+  --task <id>             (add) related task ID
+  --tags <tag1,tag2>      (add) comma-separated tags
 
 Examples:
   cmux-team artifacts
+  cmux-team artifacts add ./research-notes.md
+  cmux-team artifacts add ./design.md --type decision --title "Auth method selection"
   cmux-team artifacts show A001
   cmux-team artifacts search "authentication"
   cmux-team artifacts --type research --task T038
@@ -462,6 +473,7 @@ Usage:
   cmux-team conductor <slot-id>                launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
+  cmux-team artifacts add <file>                   add a file as an artifact
   cmux-team artifacts show <id>                    show artifact
   cmux-team artifacts search <query>               full-text search
   cmux-team artifacts --validate                   validate frontmatter
@@ -482,6 +494,8 @@ const ja: typeof en = {
     "Error: アーティファクト ID を指定してください\nUsage: cmux-team artifacts show <id>",
   search_query_required:
     "Error: 検索クエリを指定してください\nUsage: cmux-team artifacts search <query>",
+  artifact_add_file_required:
+    "Error: ファイルパスを指定してください\nUsage: cmux-team artifacts add <file> [--type <type>] [--title <title>] [--task <id>] [--tags <tag1,tag2>]",
   dashboard_startup_hint:
     "ヒント: TTY 環境で cmux-team start を実行してください",
   task_section_header: "タスク",
@@ -489,6 +503,8 @@ const ja: typeof en = {
   // ── テンプレートメッセージ ────────────────────────────────────────────────────
   artifact_not_found: "アーティファクト {id} が見つかりません",
   no_artifacts_matching: '"{query}" に一致するアーティファクトが見つかりません',
+  artifact_add_file_not_found: "Error: ファイルが見つかりません: {path}",
+  artifact_added: "追加しました {id} → {path}",
   dashboard_startup_failed: "❌ ダッシュボード起動失敗: {message}",
   abort_journal_default: "中断: T{id} {title}",
   restart_journal_default: "再実行: T{id} {title}",
@@ -865,6 +881,7 @@ Usage:
 
 Subcommands:
   (なし)                  アーティファクト一覧表示（デフォルト）
+  add <file>             ファイルをアーティファクトとして追加
   show <id>              アーティファクトの内容を表示
   search <query>         アーティファクトを全文検索
 
@@ -873,9 +890,15 @@ Options:
   --task <id>             関連タスク ID でフィルタ（任意）
   --sort <field>          ソート基準: created / updated（任意、デフォルト created）
   --validate              全アーティファクトのフロントマターを検証
+  --type <type>           (add) アーティファクトのタイプ: research / decision / session / spec / report
+  --title <title>         (add) アーティファクトのタイトル
+  --task <id>             (add) 関連タスク ID
+  --tags <tag1,tag2>      (add) カンマ区切りのタグ
 
 Examples:
   cmux-team artifacts
+  cmux-team artifacts add ./research-notes.md
+  cmux-team artifacts add ./design.md --type decision --title "認証方式の選定"
   cmux-team artifacts show A001
   cmux-team artifacts search "認証"
   cmux-team artifacts --type research --task T038
@@ -906,6 +929,7 @@ Usage:
   cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
+  cmux-team artifacts add <file>                   ファイルをアーティファクトとして追加
   cmux-team artifacts show <id>                    アーティファクト表示
   cmux-team artifacts search <query>               全文検索
   cmux-team artifacts --validate                   フロントマター検証
