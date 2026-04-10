@@ -577,17 +577,9 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           );
           break;
         }
-        // conductor が running 状態の場合、/exit + restart の過渡期。
-        // PID watcher は assignTask で既にクリアされており、新プロセスの
-        // SESSION_STARTED で再設定される。
-        if (conductor.status === "running") {
-          await log("session_ended_skipped", `surface=${message.surface} reason=conductor_running`);
-          break;
-        }
         conductor.status = "disconnected";
         conductor.disconnectedAt = message.timestamp;
         conductor.pid = undefined;
-        conductor.sessionId = undefined;
         await log(
           "session_ended",
           `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`

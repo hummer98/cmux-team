@@ -1550,11 +1550,13 @@ async function cmdAbortTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 8. Conductor を再起動（新しいセッション）
+  // 8. Conductor を再起動（新しいセッション + 新しい session-id）
   const slotId = conductor.surface.replace("surface:", "");
+  const newSessionId = crypto.randomUUID();
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor ${slotId}\n`);
+  await cmux.send(conductor.surface, `cmux-team conductor ${slotId} --session-id ${newSessionId}\n`);
+  conductor.sessionId = newSessionId;
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
@@ -1634,11 +1636,13 @@ async function cmdRestartTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 6. Conductor を再起動（新しいセッション）
+  // 6. Conductor を再起動（新しいセッション + 新しい session-id）
   const slotId = conductor.surface.replace("surface:", "");
+  const newSessionId = crypto.randomUUID();
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor ${slotId}\n`);
+  await cmux.send(conductor.surface, `cmux-team conductor ${slotId} --session-id ${newSessionId}\n`);
+  conductor.sessionId = newSessionId;
 
   // 7. TASK_CREATED 通知送信（自動再割り当て用）
   await postMessage({

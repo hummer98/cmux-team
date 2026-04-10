@@ -93,8 +93,9 @@ export async function spawnSingleConductor(
   // 環境変数をシェルに焼き付け
   await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
   await sleep(500);
-  // Claude 起動
-  await cmux.send(surface, `cmux-team conductor ${surface}\n`);
+  // Claude 起動（session-id を発行して resume 可能にする）
+  const sessionId = crypto.randomUUID();
+  await cmux.send(surface, `cmux-team conductor ${surface} --session-id ${sessionId}\n`);
   await cmux.renameTab(surface, `[${num}] ♦ idle`);
 
   return {
@@ -103,6 +104,7 @@ export async function spawnSingleConductor(
     agents: [],
     status: "starting" as const,
     paneId,
+    sessionId,
   };
 }
 
@@ -145,7 +147,7 @@ export async function launchConductorOnSurface(
   projectRoot: string,
   surface: string,
   paneId?: string,
-): Promise<void> {
+): Promise<string> {
   // CONDUCTOR_REGISTERED を HTTP API 経由で送信（Claude 起動前に登録）
   try {
     const portFile = join(projectRoot, ".team/proxy-port");
@@ -167,12 +169,15 @@ export async function launchConductorOnSurface(
   // 環境変数をシェルに焼き付け
   await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  // Claude 起動
-  await cmux.send(surface, `cmux-team conductor ${surface}\n`);
+  // Claude 起動（session-id を発行して resume 可能にする）
+  const sessionId = crypto.randomUUID();
+  await cmux.send(surface, `cmux-team conductor ${surface} --session-id ${sessionId}\n`);
 
   // タブ名設定
   const num = surface.replace("surface:", "");
   await cmux.renameTab(surface, `[${num}] ♦ idle`);
+
+  return sessionId;
 }
 
 // --- initializeConductorSlots ---
@@ -193,14 +198,22 @@ export async function initializeConductorSlots(
 
     // Phase 2: Claude 一斉起動
     await log("conductor_claude_launching", "");
+    const sessionIds = new Map<string, string>();
     for (const pane of panes) {
-      await launchConductorOnSurface(projectRoot, pane.surface, pane.paneId);
+      const sid = await launchConductorOnSurface(projectRoot, pane.surface, pane.paneId);
+      sessionIds.set(pane.surface, sid);
     }
 
     // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え、
     // state.conductors に未登録の surface を直接登録する
     for (const pane of panes) {
-      if (!conductors.has(pane.surface)) {
+      const existing = conductors.get(pane.surface);
+      if (existing) {
+        // CONDUCTOR_REGISTERED 経由で既に登録済み → sessionId を補完
+        if (!existing.sessionId) {
+          existing.sessionId = sessionIds.get(pane.surface);
+        }
+      } else {
         await log("conductor_registered_fallback", `surface=${pane.surface}`);
         conductors.set(pane.surface, {
           surface: pane.surface,
@@ -208,6 +221,7 @@ export async function initializeConductorSlots(
           status: "starting",
           startedAt: new Date().toISOString(),
           agents: [],
+          sessionId: sessionIds.get(pane.surface),
         });
       }
     }
@@ -342,29 +356,23 @@ export async function assignTask(
       throw new AssignTaskError("task", `prompt generation failed: ${e.message}`, e);
     }
 
-    // --- 4. Claude プロセスを再起動（--session-id 付き） ---
-    const sessionId = crypto.randomUUID();
-
-    // PID watcher をクリア（/exit 後の PID 消失で誤って disconnected にしない）
-    if (conductor.pidWatcherInterval) {
-      clearInterval(conductor.pidWatcherInterval);
-      conductor.pidWatcherInterval = undefined;
-    }
-
+    // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
+    // /clear + Enter でセッションリセット（Conductor は常駐セッション — /exit しない）
     try {
-      // 現在の Claude セッションを終了
-      await cmux.send(conductor.surface, "/exit");
+      await cmux.send(conductor.surface, "/clear");
       await sleep(500);
       await cmux.sendKey(conductor.surface, "return");
-      await sleep(2000); // Claude 終了 + cmdConductor 終了 + shell 復帰を待つ
+      await sleep(2000);
 
-      // 新しい Claude を --session-id 付きで起動
+      // 新しいプロンプトを送信
       await cmux.send(
         conductor.surface,
-        `cmux-team conductor ${conductor.surface} --session-id ${sessionId} --task-prompt ${promptFile}\n`
+        `${promptFile} を読んで指示に従って作業してください。`
       );
+      await sleep(500);
+      await cmux.sendKey(conductor.surface, "return");
     } catch (e: any) {
-      throw new AssignTaskError("conductor", `conductor restart failed: ${e.message}`, e);
+      throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
     }
 
     // --- 5. タブ名更新（失敗しても task は継続）---
@@ -387,7 +395,7 @@ export async function assignTask(
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
     conductor.status = "running";
-    conductor.sessionId = sessionId;
+    // sessionId は初回起動時に発行済み — タスク割り当てで変更しない
 
     await log(
       "conductor_started",
@@ -477,7 +485,7 @@ export async function resetConductor(
     // disconnected 状態から reset される経路（forceCloseDisconnectedConductor 等）で
     // 古い disconnectedAt が残ることを防ぐ (Minor 3)
     conductor.disconnectedAt = undefined;
-    conductor.sessionId = undefined;
+    // sessionId は初回起動時に発行済み — reset で消さない（常駐セッション）
 
     await log("conductor_reset", `surface=${conductor.surface}`);
   } catch (e: any) {
