@@ -1,10 +1,10 @@
 ---
 name: cmux-team-guide
 description: >
-  cmux-team のユーザーガイド・リファレンス。使い方、概念、CLI コマンド、
-  トラブルシューティングに関する質問に回答する。
-  Triggers: 「cmux-team の使い方」「タスクの作り方」「Conductor とは」
-  「チーム機能について」「cmux-team help」等の質問。
+  cmux-team のヘルプ・リファレンス（読み取り専用）。使い方の説明、概念の解説、
+  CLI コマンドリファレンス、トラブルシューティングを提供する。
+  Triggers: 「cmux-team の使い方」「〜とは」「ヘルプ」「help」「how to」等の
+  質問・解説リクエスト。操作の実行自体は cmux-team スキルが担当。
 ---
 
 # cmux-team ユーザーガイド
@@ -27,6 +27,15 @@ cmux のターミナルマルチプレクサ機能を活用し、Claude Code の
 | Agent | 実作業（実装・テスト・リサーチ等）。完了したら停止 |
 
 **設計原則:** 上位が下位を pull 型で監視（push 報告に依存しない）。各層は自分の仕事だけをする。全作業は git worktree で隔離され main は常に安全。
+
+### 作業隔離（git worktree）
+
+全てのタスクは `.worktrees/<taskRunId>/` 内で実行される。main ブランチは常に安全。
+
+- **タスク割り当て時:** worktree を自動作成
+- **成功時:** worktree 内でコミット → main にマージ → worktree 削除
+- **失敗時:** worktree 強制削除 + ブランチ削除
+- **手動クリーンアップ:** `git worktree list` で確認、`git worktree remove <path> --force` で削除
 
 ## 2. インストール・起動
 
@@ -61,6 +70,9 @@ cmux-team stop
 
 **ライフサイクル:** draft → ready → assigned → closed/aborted
 
+- `deleted`: draft/ready から `delete-task` で遷移
+- `archived`: closed から `/team-archive` で遷移
+
 ```bash
 # タスク作成（draft で作成、ready にすると Conductor に自動割り当て）
 cmux-team create-task --title "機能Xを追加" --status draft --body "説明文"
@@ -74,7 +86,7 @@ cmux-team close-task --task-id 42 --journal "完了サマリー"
 # タスク中止
 cmux-team abort-task --task-id 42 --journal "理由"
 
-# タスク再実行（中止したタスクをやり直す）
+# 実行中タスクの再実行（assigned を ready に戻す）
 cmux-team restart-task --task-id 42
 
 # タスク削除（draft/ready のみ）
@@ -98,11 +110,12 @@ cmux-team delete-task --task-id 42 --journal "理由"
 | `cmux-team update-task` | タスク更新（`--task-id`, `--status`, `--title`, `--body`, `--depends-on`） |
 | `cmux-team close-task` | タスククローズ（`--task-id`, `--journal`, `--force`） |
 | `cmux-team abort-task` | タスク中止（`--task-id`, `--journal`） |
-| `cmux-team restart-task` | タスク再実行（`--task-id`, `--journal`） |
+| `cmux-team restart-task` | 実行中タスクの再実行（assigned → ready に戻す）（`--task-id`, `--journal`） |
 | `cmux-team delete-task` | タスク削除（`--task-id`, `--journal`） |
 | `cmux-team spawn-agent` | Agent 起動（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface`） |
+| `cmux-team conductor` | Conductor 用 Claude Code を起動（内部用。`--model` でモデル指定可能） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `cmux-team artifacts` | アーティファクト管理（サブコマンド: `add`, `show`, `open`, `search`。オプション: `--validate`） |
 | `cmux-team resume` | assigned タスクの Conductor セッションを再開 |
@@ -147,14 +160,6 @@ cmux-team delete-task --task-id 42 --journal "理由"
 | `1/2/3` | タブ切り替え（Journal/Artifacts/Log） |
 | `Tab` | タブを順に切り替え |
 
-## 7. ステータス確認
-
-```bash
-cmux-team status
-```
-
-daemon の状態、Conductor 一覧と状態、タスク数、最新ログが表示される。
-
 **進捗確認の真のソース:**
 
 | 情報 | 確認方法 |
@@ -164,7 +169,7 @@ daemon の状態、Conductor 一覧と状態、タスク数、最新ログが表
 | タスク進捗 | TUI の Tasks パネル or `.team/task-state.json` |
 | 完了履歴 | TUI の Journal タブ or `.team/logs/manager.log` |
 
-## 8. Artifacts（知見の記録）
+## 7. Artifacts（知見の記録）
 
 会話中の調査結果・設計判断・セッション要約を構造化して保存する機能。
 
@@ -181,7 +186,7 @@ cmux-team artifacts add file.md  # ファイルを追加
 
 スラッシュコマンド `/artifact` でも作成・表示可能。
 
-## 9. トラブルシューティング
+## 8. トラブルシューティング
 
 | 問題 | 対処 |
 |------|------|
@@ -192,12 +197,3 @@ cmux-team artifacts add file.md  # ファイルを追加
 | Manager がクラッシュ | `cmux-team start` で再起動。assigned タスクは自動 resume |
 | TUI が固まる | `q` で TUI 終了後に `cmux-team start` で再起動 |
 | タスクが assigned のまま | `cmux-team abort-task` で中止、`cmux-team restart-task` で再実行 |
-
-## 10. git worktree（作業隔離）
-
-全てのタスクは `.worktrees/<taskRunId>/` 内で実行される。main ブランチは常に安全。
-
-- **タスク割り当て時:** worktree を自動作成
-- **成功時:** worktree 内でコミット → main にマージ → worktree 削除
-- **失敗時:** worktree 強制削除 + ブランチ削除
-- **手動クリーンアップ:** `git worktree list` で確認、`git worktree remove <path> --force` で削除
