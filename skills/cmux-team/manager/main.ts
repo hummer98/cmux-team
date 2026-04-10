@@ -1012,6 +1012,7 @@ async function cmdLaunchMaster(): Promise<void> {
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
   process.env.CMUX_NO_RENAME_TAB = "1";
+  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
   if (proxyPort) {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
