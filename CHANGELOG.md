@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.39.0] - 2026-04-11
+
+### Added
+- `cmux-team trace-task <task-id>` CLI コマンドを追加。タスクに関連する全セッション情報（Conductor・Agent）を一覧表示
+- `cmux-team-guide` スキルを追加。配布先でも cmux-team の機能・使い方・仕様に関する質問に回答可能に
+- TUI Tasks パネルで Enter キーを押すと task.md を Markdown ビューアで閲覧可能に
+
+### Changed
+- trace DB を HTTP リクエストログから タスク-セッション索引に再設計。タスクごとの全セッション（Conductor・Agent）を追跡可能に
+- `docs/spec/` を v3.35〜v3.38 の実装変更に同期
+
 ## [3.38.0] - 2026-04-11
 
 ### Added
