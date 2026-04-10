@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.35.0] - 2026-04-10
+
+### Added
+- `restart-task` サブコマンドを追加。実行中タスクの中止＋再キューを1コマンドで実行可能に (T124)
+- worktree 作成時に `source_up` の `.envrc` を自動生成し、親ディレクトリの OAuth トークンを継承 (T127)
+
+### Changed
+- `spawn-conductor` から split を除去。現在の surface で直接 Conductor を起動するように変更。`--surface`/`--direction` 引数を削除 (T125, T126)
+
 ## [3.34.1] - 2026-04-10
 
 ### Fixed
