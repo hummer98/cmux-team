@@ -47,6 +47,7 @@ const en = {
   no_artifacts_matching: 'No artifacts matching "{query}"',
   dashboard_startup_failed: "❌ Dashboard startup failed: {message}",
   abort_journal_default: "Aborted: T{id} {title}",
+  restart_journal_default: "Restarted: T{id} {title}",
   delete_journal_default: "Deleted: T{id} {title}",
 
   // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
@@ -319,6 +320,27 @@ Notes:
   - Conductor automatically restarts to idle state
 `,
 
+  help_restart_task: `
+cmux-team restart-task -- restart a running task (re-queues as ready)
+
+Usage:
+  cmux-team restart-task --task-id <id> [--journal <text>]
+
+Options:
+  --task-id <id>          task ID (required)
+  --journal <text>        restart journal (optional, default: "Restarted: T{id} {title}")
+
+Examples:
+  cmux-team restart-task --task-id 035
+  cmux-team restart-task --task-id 035 --journal "Conductor crashed, retrying"
+
+Notes:
+  - Only tasks in assigned (running) state can be restarted
+  - Performs the same cleanup as abort-task (stops agents, removes worktree)
+  - Sets status back to ready instead of aborted
+  - Sends TASK_CREATED notification for automatic re-assignment
+`,
+
   help_delete_task: `
 cmux-team delete-task -- delete a task (sets to deleted)
 
@@ -434,6 +456,7 @@ Usage:
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team abort-task --task-id <id> [--journal <text>]  abort a running task
+  cmux-team restart-task --task-id <id> [--journal <text>] restart a running task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
   cmux-team trace --task <id>                  filter traces by task ID
   cmux-team trace --search <query>             FTS5 full-text search
@@ -470,6 +493,7 @@ const ja: typeof en = {
   no_artifacts_matching: '"{query}" に一致するアーティファクトが見つかりません',
   dashboard_startup_failed: "❌ ダッシュボード起動失敗: {message}",
   abort_journal_default: "中断: T{id} {title}",
+  restart_journal_default: "再実行: T{id} {title}",
   delete_journal_default: "削除: T{id} {title}",
 
   // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
@@ -742,6 +766,27 @@ Notes:
   - Conductor は自動的に idle 状態に再起動します
 `,
 
+  help_restart_task: `
+cmux-team restart-task -- 実行中タスクを再実行（ready に戻す）
+
+Usage:
+  cmux-team restart-task --task-id <id> [--journal <text>]
+
+Options:
+  --task-id <id>          タスク ID（必須）
+  --journal <text>        再実行ジャーナル（任意、デフォルト: "再実行: T{id} {title}"）
+
+Examples:
+  cmux-team restart-task --task-id 035
+  cmux-team restart-task --task-id 035 --journal "Conductor がクラッシュしたため再実行"
+
+Notes:
+  - assigned（実行中）のタスクのみ再実行できます
+  - abort-task と同じクリーンアップを実行（エージェント停止、worktree 削除）
+  - ステータスを aborted ではなく ready に戻します
+  - TASK_CREATED 通知により自動再割り当てされます
+`,
+
   help_delete_task: `
 cmux-team delete-task -- タスクを削除（deleted）にする
 
@@ -857,6 +902,7 @@ Usage:
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team abort-task --task-id <id> [--journal <text>] 実行中タスクを中止
+  cmux-team restart-task --task-id <id> [--journal <text>] 実行中タスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace --task <id>                  トレースをタスクIDでフィルタ
   cmux-team trace --search <query>             FTS5 全文検索

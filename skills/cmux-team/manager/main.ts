@@ -17,6 +17,7 @@
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
  *   ./main.ts abort-task --task-id <id>
+ *   ./main.ts restart-task --task-id <id> [--journal <text>]
  *   ./main.ts delete-task --task-id <id> [--journal <text>]
  */
 
@@ -1261,6 +1262,47 @@ async function cmdCloseTask(): Promise<void> {
   console.log(`OK closed ${taskId}`);
 }
 
+/** assigned タスクのクリーンアップ（sub-agent close, PID kill, worktree/ブランチ削除） */
+async function cleanupAssignedTask(conductor: any): Promise<void> {
+  // Sub-agent の surface を閉じる
+  if (conductor.agents?.length > 0) {
+    for (const agent of conductor.agents) {
+      try {
+        await cmux.closeSurface(agent.surface);
+      } catch {}
+    }
+  }
+
+  // Conductor の PID を kill
+  if (conductor.pid && isProcessAlive(conductor.pid)) {
+    try {
+      process.kill(conductor.pid, "SIGTERM");
+    } catch {}
+  }
+
+  // worktree 削除
+  if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
+    try {
+      const { execFile: execFileCb } = require("child_process");
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFileCb);
+      await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
+        cwd: PROJECT_ROOT,
+      });
+    } catch {}
+    // ブランチ削除
+    if (conductor.taskRunId) {
+      const branch = `${conductor.taskRunId}/task`;
+      try {
+        const { execFile: execFileCb } = require("child_process");
+        const { promisify } = require("util");
+        const execFileAsync = promisify(execFileCb);
+        await execFileAsync("git", ["branch", "-D", branch], { cwd: PROJECT_ROOT });
+      } catch {}
+    }
+  }
+}
+
 async function cmdAbortTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_abort_task"));
   const taskId = requireArg("task-id");
@@ -1308,43 +1350,8 @@ async function cmdAbortTask(): Promise<void> {
     return;
   }
 
-  // 3. Sub-agent の surface を閉じる
-  if (conductor.agents?.length > 0) {
-    for (const agent of conductor.agents) {
-      try {
-        await cmux.closeSurface(agent.surface);
-      } catch {}
-    }
-  }
-
-  // 4. Conductor の PID を kill
-  if (conductor.pid && isProcessAlive(conductor.pid)) {
-    try {
-      process.kill(conductor.pid, "SIGTERM");
-    } catch {}
-  }
-
-  // 5. worktree 削除
-  if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
-    try {
-      const { execFile: execFileCb } = require("child_process");
-      const { promisify } = require("util");
-      const execFileAsync = promisify(execFileCb);
-      await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
-        cwd: PROJECT_ROOT,
-      });
-    } catch {}
-    // ブランチ削除
-    if (conductor.taskRunId) {
-      const branch = `${conductor.taskRunId}/task`;
-      try {
-        const { execFile: execFileCb } = require("child_process");
-        const { promisify } = require("util");
-        const execFileAsync = promisify(execFileCb);
-        await execFileAsync("git", ["branch", "-D", branch], { cwd: PROJECT_ROOT });
-      } catch {}
-    }
-  }
+  // 3〜5. クリーンアップ（sub-agent close, PID kill, worktree 削除）
+  await cleanupAssignedTask(conductor);
 
   // 6. タスク状態を aborted に変更
   taskState[taskId] = {
@@ -1373,6 +1380,98 @@ async function cmdAbortTask(): Promise<void> {
   await cmux.send(conductor.surface, `cmux-team conductor ${slotId}\n`);
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
+}
+
+async function cmdRestartTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_restart_task"));
+  const taskId = requireArg("task-id");
+  const journalArg = getArg("journal");
+
+  // タスクタイトル取得（journal デフォルト生成用）
+  const taskFile = await findTaskFile(taskId);
+  let title = "";
+  if (taskFile) {
+    const taskContent = await readFile(taskFile, "utf-8");
+    title = taskContent.match(/^title:\s*["']?(.+?)["']?\s*$/m)?.[1] ?? "";
+  }
+  const journal = journalArg ?? t("restart_journal_default", { id: taskId, title }).replace(/\s+$/, "");
+
+  // 1. タスク状態を確認
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskState[taskId]?.status;
+  if (currentStatus !== "assigned") {
+    console.error(`Error: task ${taskId} is not assigned (current status: ${currentStatus ?? "unknown"}). Only assigned tasks can be restarted.`);
+    process.exit(1);
+  }
+
+  // 2. team.json から該当 Conductor を特定
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  let teamJson: any;
+  try {
+    teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  } catch {
+    console.error("Error: team.json not found or unreadable");
+    process.exit(1);
+  }
+  const conductor = teamJson.conductors?.find((c: any) => c.taskId === taskId);
+  if (!conductor) {
+    // Conductor が見つからない場合: status を ready に戻して TASK_CREATED 通知
+    taskState[taskId] = {
+      ...taskState[taskId],
+      status: "ready",
+      journal: `[restart] ${journal}`,
+    };
+    delete taskState[taskId].assignedAt;
+    await saveTaskState(PROJECT_ROOT, taskState);
+    await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal} no_conductor=true`);
+    await postMessage({
+      type: "TASK_CREATED",
+      taskId,
+      taskFile: taskFile ?? "",
+      timestamp: new Date().toISOString(),
+    });
+    console.log(`OK restarted ${taskId} (no conductor found, re-queued as ready)`);
+    return;
+  }
+
+  // 3. クリーンアップ（sub-agent close, PID kill, worktree 削除）
+  await cleanupAssignedTask(conductor);
+
+  // 4. タスク状態を ready に変更
+  taskState[taskId] = {
+    ...taskState[taskId],
+    status: "ready",
+    journal: `[restart] ${journal}`,
+  };
+  delete taskState[taskId].assignedAt;
+  await saveTaskState(PROJECT_ROOT, taskState);
+
+  await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+
+  // 5. CONDUCTOR_DONE メッセージ送信（daemon に通知）
+  await postMessage({
+    type: "CONDUCTOR_DONE",
+    surface: conductor.surface,
+    success: false,
+    reason: "restarted",
+    timestamp: new Date().toISOString(),
+  });
+
+  // 6. Conductor を再起動（新しいセッション）
+  const slotId = conductor.surface.replace("surface:", "");
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
+  await sleep(500);
+  await cmux.send(conductor.surface, `cmux-team conductor ${slotId}\n`);
+
+  // 7. TASK_CREATED 通知送信（自動再割り当て用）
+  await postMessage({
+    type: "TASK_CREATED",
+    taskId,
+    taskFile: taskFile ?? "",
+    timestamp: new Date().toISOString(),
+  });
+
+  console.log(`OK restarted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
 
 async function cmdDeleteTask(): Promise<void> {
@@ -1647,6 +1746,9 @@ switch (command) {
     break;
   case "abort-task":
     await cmdAbortTask();
+    break;
+  case "restart-task":
+    await cmdRestartTask();
     break;
   case "delete-task":
     await cmdDeleteTask();
