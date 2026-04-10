@@ -14,6 +14,7 @@ import { join } from "path";
 import type { DaemonState, TaskSummary } from "./daemon";
 import type { ConductorState, RateLimitInfo } from "./schema";
 import type { AgentState } from "./schema";
+import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
 import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
@@ -822,11 +823,27 @@ export async function startDashboard(
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
-    // 基本: cmux-team [STOPPED|STARTING|vX.Y.Z]
+    // スロットリング判定
+    const isThrottled = (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+
     const headerParts = [
-      !daemon.running ? "STOPPED" : daemon.bootPhase !== "ready" ? "STARTING" : (state.version ? `v${state.version}` : ""),
+      !daemon.running ? "STOPPED"
+        : daemon.bootPhase !== "ready" ? "STARTING"
+        : isThrottled ? null
+        : (state.version ? `v${state.version}` : ""),
     ].filter(Boolean);
-    const headerSubtitle = headerParts.join("  ");
+
+    // スロットリング表示テキスト
+    let throttleLabel = "";
+    if (isThrottled && daemon.running && daemon.bootPhase === "ready") {
+      const util = daemon.rateLimit!.unified5hUtilization!;
+      const pct = Math.round(util * 100);
+      const remaining = formatResetRemaining(daemon.rateLimit!.unified5hReset);
+      const resetPart = remaining ? ` → reset ${remaining}` : "";
+      throttleLabel = `⏸ THROTTLED (5h: ${pct}%${resetPart})`;
+    }
+
+    const headerSubtitle = throttleLabel || headerParts.join("  ");
 
     // タスク一覧（カーソル選択 + スクロール対応）
     const totalTasks = daemon.taskList.length;
@@ -858,6 +875,21 @@ export async function startDashboard(
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
           const rightText = rl.parts.map(p => p.text).join("  ");
           const fill = "─".repeat(Math.max(1, 80 - left.length - rightText.length));
+
+          // スロットリング中: headerSubtitle 部分を赤色で表示
+          if (isThrottled && throttleLabel) {
+            const prefix = "─ cmux-team ";
+            return ui.row({ gap: 0 }, [
+              ui.text(prefix, { dim: true }),
+              ui.text(`${throttleLabel}${portLabel}`, { style: { fg: RED } }),
+              ui.text(` ${fill} `, { dim: true }),
+              ...rl.parts.flatMap((p, i) => [
+                ...(i > 0 ? [ui.text("  ", { dim: true })] : []),
+                ui.text(p.text, { style: { fg: p.color } }),
+              ]),
+            ]);
+          }
+
           return ui.row({ gap: 0 }, [
             ui.text(`${left} ${fill} `, { dim: true }),
             ...rl.parts.flatMap((p, i) => [
