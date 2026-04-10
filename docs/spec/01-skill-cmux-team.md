@@ -69,7 +69,7 @@ description: >
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send TODO` | TODO 通知（`--content` 必須） |
 | `cmux-team send SHUTDOWN` | シャットダウン通知 |
-| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録（`--direction right|down`, `--surface`） |
+| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
