@@ -25,7 +25,7 @@ import { join, dirname, basename } from "path";
 import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
 import { startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import * as cmux from "./cmux";
@@ -257,6 +257,9 @@ async function cmdStart(): Promise<void> {
     state.running = false;
     state.fileWatcherAbort?.abort();
     state.fileWatcherAbort = null;
+    if (state.workspace) {
+      await cmux.clearStatus("claude_code", state.workspace);
+    }
     await log("daemon_stopped");
     await updateTeamJson(state);
     process.exit(0);
@@ -480,6 +483,7 @@ async function cmdStart(): Promise<void> {
     try {
       await tick(state);
       await updateTeamJson(state);
+      await updateSidebarStatus(state);
       scheduleRefresh(); // state 変更を TUI に反映（debounce 付き）
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);

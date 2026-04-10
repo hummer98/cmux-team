@@ -69,6 +69,10 @@ export interface DaemonState {
   proxyPortChanged: boolean;
   /** daemon が稼働しているワークスペース（他 workspace の surface との混同を防ぐ） */
   workspace: string | null;
+  /** サイドバーステータスの前回表示値（差分抑制用） */
+  lastSidebarStatus: string | null;
+  /** サイドバーステータスの前回カテゴリ（遷移判定用） */
+  lastSidebarCategory: string | null;
 }
 
 /** surface または taskRunId で Conductor を検索 */
@@ -109,6 +113,8 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     fileWatcherAbort: null,
     proxyPortChanged: false,
     workspace: null,
+    lastSidebarStatus: null,
+    lastSidebarCategory: null,
   };
 }
 
@@ -1129,4 +1135,117 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
   } catch (e: any) {
     await log("error", `updateTeamJson failed: ${e.message}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// サイドバーステータス更新
+// ---------------------------------------------------------------------------
+
+const SIDEBAR_STATUS_KEY = "claude_code";
+
+type SidebarStatus = {
+  label: string;
+  icon: string;
+  color: string;
+  category: "error" | "throttled" | "running" | "running_pending" | "done" | "idle";
+};
+
+/** dashboard.tsx からコピー — daemon.ts が React/Ink モジュールに依存しないようにする */
+function formatResetRemaining(resetIso: string | null): string {
+  if (!resetIso) return "";
+  const asNum = Number(resetIso);
+  const resetMs = !isNaN(asNum) && asNum > 1e9 ? asNum * 1000 : new Date(resetIso).getTime();
+  if (isNaN(resetMs)) return "";
+  const sec = Math.floor((resetMs - Date.now()) / 1000);
+  if (sec <= 0) return "0m";
+  if (sec < 60) return "<1m";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  }
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  return h > 0 ? `${d}d${h}h` : `${d}d`;
+}
+
+function computeSidebarStatus(
+  state: Pick<DaemonState, "conductors" | "rateLimit" | "pendingTasks" | "openTasks">,
+  prevCategory: string | null,
+): SidebarStatus {
+  const conductors = [...state.conductors.values()];
+  const runningCount = conductors.filter(c => c.status === "running").length;
+  const hasDisconnected = conductors.some(c => c.status === "disconnected");
+
+  // 1. エラー/要対応
+  if (hasDisconnected) {
+    return {
+      label: "! attention",
+      icon: "exclamationmark.triangle",
+      color: "#FF3B30",
+      category: "error",
+    };
+  }
+
+  // 2. スロットリング
+  const throttled = (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
+    || state.rateLimit?.unifiedStatus === "rate_limited";
+  if (throttled) {
+    const remaining = formatResetRemaining(state.rateLimit?.unified5hReset ?? null);
+    return {
+      label: remaining ? `⏸ reset ${remaining}` : "⏸ throttled",
+      icon: "pause.circle.fill",
+      color: "#FF3B30",
+      category: "throttled",
+    };
+  }
+
+  // 3-4. タスク実行中
+  if (runningCount > 0) {
+    const label = state.pendingTasks > 0
+      ? `${runningCount} running +${state.pendingTasks}`
+      : `${runningCount} running`;
+    return {
+      label,
+      icon: "bolt.fill",
+      color: "#4C8DFF",
+      category: state.pendingTasks > 0 ? "running_pending" : "running",
+    };
+  }
+
+  // 5. 全タスク完了（直前が idle/done 以外の場合のみ）
+  if (state.openTasks === 0
+    && prevCategory !== null
+    && prevCategory !== "idle"
+    && prevCategory !== "done") {
+    return {
+      label: "done",
+      icon: "checkmark.circle.fill",
+      color: "#34C759",
+      category: "done",
+    };
+  }
+
+  // 6. アイドル（デフォルト）
+  return {
+    label: "idle",
+    icon: "pause.circle.fill",
+    color: "#8E8E93",
+    category: "idle",
+  };
+}
+
+export async function updateSidebarStatus(state: DaemonState): Promise<void> {
+  if (!state.workspace) return;
+
+  const status = computeSidebarStatus(state, state.lastSidebarCategory);
+
+  // 差分抑制: 前回と同じ値なら cmux 呼び出しをスキップ
+  const statusKey = `${status.label}|${status.icon}|${status.color}`;
+  if (statusKey === state.lastSidebarStatus) return;
+  state.lastSidebarStatus = statusKey;
+  state.lastSidebarCategory = status.category;
+
+  await cmux.setStatus(SIDEBAR_STATUS_KEY, status.label, status.icon, status.color, state.workspace);
 }
