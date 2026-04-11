@@ -268,7 +268,8 @@ describe("テンプレート生成", () => {
     );
 
     const content = await readFile(promptFile, "utf-8");
-    expect(content).toContain("タスク割り当て");
+    // i18n: ja なら "タスク割り当て"、en なら "Task Assignment"
+    expect(content.includes("タスク割り当て") || content.includes("Task Assignment")).toBe(true);
     expect(content).toContain("テストタスクの内容");
     expect(content).toContain("/tmp/worktree");
   });
