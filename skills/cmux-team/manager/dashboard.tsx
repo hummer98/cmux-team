@@ -741,7 +741,8 @@ function buildLogRows(lines: string[]) {
 
 /**
  * 選択中の artifact を外部ビューアで開く
- * TUI を一時停止し、ビューア終了後に復帰する
+ * mo ビューア: TUI を停止せずバックグラウンドで起動し cmux browser open で表示
+ * cat フォールバック: TUI を一時停止し、終了後に復帰する
  */
 async function openArtifactInViewer(
   app: NodeApp<AppState>,
@@ -750,36 +751,30 @@ async function openArtifactInViewer(
 ): Promise<void> {
   const viewer = await resolveMarkdownViewer();
 
-  // TUI 停止中は app.update を呼ばない
+  if (viewer === "mo") {
+    // mo はバックグラウンドで起動（TUI を停止しない）
+    Bun.spawn(["mo", filePath], { stdio: ["ignore", "ignore", "ignore"] });
+    await Bun.sleep(500);
+    Bun.spawn(["cmux", "browser", "open", "http://localhost:6275"], { stdio: ["ignore", "ignore", "ignore"] });
+    return;
+  }
+
+  // cat フォールバック: TUI を一時停止して実行
   dashboardActive = false;
   if (spinnerInterval) { clearInterval(spinnerInterval); spinnerInterval = null; }
-
-  // TUI を停止
   await app.stop();
 
   try {
-    // ビューアをサブプロセスとして実行（TTY を引き継ぐ）
-    const proc = Bun.spawn([viewer, filePath], {
+    const proc = Bun.spawn(["cat", filePath], {
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
     });
     await proc.exited;
-  } catch {
-    // ビューアが見つからない等のエラー → cat にフォールバック
-    try {
-      const fallback = Bun.spawn(["cat", filePath], {
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      });
-      await fallback.exited;
-    } catch {}
-  } finally {
-    // TUI を再開（ビューア・フォールバック両方が失敗しても確実に復帰）
-    await app.start();
-    onResumed();
-  }
+  } catch {}
+
+  await app.start();
+  onResumed();
 }
 
 // --- アプリインスタンス管理 ---
