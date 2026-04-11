@@ -744,6 +744,31 @@ function buildLogRows(lines: string[]) {
  * mo ビューア: TUI を停止せずバックグラウンドで起動し cmux browser open で表示
  * cat フォールバック: TUI を一時停止し、終了後に復帰する
  */
+/** 既存のブラウザ surface を検索して ref を返す（なければ null） */
+async function findExistingBrowserSurface(): Promise<string | null> {
+  const workspace = process.env.CMUX_WORKSPACE_ID;
+  const args = ["cmux", "tree", "--json"];
+  if (workspace) args.push("--workspace", workspace);
+
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "ignore" });
+  const output = await new Response(proc.stdout).text();
+  await proc.exited;
+
+  try {
+    const tree = JSON.parse(output);
+    for (const w of tree.windows ?? []) {
+      for (const ws of w.workspaces ?? []) {
+        for (const p of ws.panes ?? []) {
+          for (const s of p.surfaces ?? []) {
+            if (s.type === "browser") return s.ref;
+          }
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function openArtifactInViewer(
   app: NodeApp<AppState>,
   filePath: string,
@@ -766,7 +791,13 @@ async function openArtifactInViewer(
       }
     } catch {}
 
-    Bun.spawn(["cmux", "browser", "open", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
+    // 既存ブラウザ surface を再利用（なければ新規作成）
+    const browserSurface = await findExistingBrowserSurface();
+    if (browserSurface) {
+      Bun.spawn(["cmux", "browser", browserSurface, "goto", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
+    } else {
+      Bun.spawn(["cmux", "browser", "open", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
+    }
     return;
   }
 
