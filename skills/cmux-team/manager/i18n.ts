@@ -56,6 +56,14 @@ const en = {
   restart_journal_default: "Restarted: T{id} {title}",
   delete_journal_default: "Deleted: T{id} {title}",
 
+  // ── テンプレートエラーメッセージ ──────────────────────────────────────────────
+  template_dir_not_found:
+    "Template directory not found. Please run: npm install -g @hummer98/cmux-team",
+  conductor_role_template_not_found:
+    "Conductor role template not found. Please run: npm install -g @hummer98/cmux-team",
+  conductor_task_template_not_found:
+    "Conductor task template not found. Please run: npm install -g @hummer98/cmux-team",
+
   // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
   conductor_wait_prompt:
     "You are a Conductor slot. Wait at the ❯ prompt without doing anything until the Manager assigns a task via /clear + prompt. Do NOT search, read, or execute any tasks.",
@@ -530,6 +538,14 @@ const ja: typeof en = {
   abort_journal_default: "中断: T{id} {title}",
   restart_journal_default: "再実行: T{id} {title}",
   delete_journal_default: "削除: T{id} {title}",
+
+  // ── テンプレートエラーメッセージ ──────────────────────────────────────────────
+  template_dir_not_found:
+    "Template directory not found. npm install -g @hummer98/cmux-team を実行してください",
+  conductor_role_template_not_found:
+    "Conductor role template not found. npm install -g @hummer98/cmux-team を実行してください",
+  conductor_task_template_not_found:
+    "Conductor task template not found. npm install -g @hummer98/cmux-team を実行してください",
 
   // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
   conductor_wait_prompt:
