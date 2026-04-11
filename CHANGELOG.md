@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.39.1] - 2026-04-11
+
+### Changed
+- Conductor の hooks から cmux 自動通知（`cmux claude-hook notification/stop/session-start` 等）を全削除。通知制御は Manager 側で行う方針に統一
+
 ## [3.39.0] - 2026-04-11
 
 ### Added
