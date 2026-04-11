@@ -30,7 +30,7 @@ import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashb
 import { log } from "./logger";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
-import { spawnSingleConductor } from "./conductor";
+import { launchConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
@@ -616,12 +616,21 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "CONDUCTOR_SESSION":
+      message = {
+        type: "CONDUCTOR_SESSION",
+        surface: requireArg("surface"),
+        sessionId: requireArg("session-id"),
+        timestamp: now,
+      };
+      break;
+
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -840,8 +849,27 @@ async function cmdConductor(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "conductor", getArg("model"));
 
-  // 新規: オプション解析
-  const sessionId = getArg("session-id");
+  // sessionId を自己生成し daemon に通知
+  const sessionId = crypto.randomUUID();
+  try {
+    const portFile = join(PROJECT_ROOT, ".team/proxy-port");
+    if (existsSync(portFile)) {
+      const port = (await readFile(portFile, "utf-8")).trim();
+      await fetch(`http://localhost:${port}/api/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "CONDUCTOR_SESSION",
+          surface,
+          sessionId,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    }
+  } catch {
+    // daemon 未起動時は無視（Claude 起動は続行）
+  }
+
   const taskPromptFile = getArg("task-prompt");
 
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
@@ -854,9 +882,7 @@ async function cmdConductor(): Promise<void> {
     "--model", model,
     "--append-system-prompt-file", rolePromptFile,
   ];
-  if (sessionId) {
-    claudeArgs.push("--session-id", sessionId);
-  }
+  claudeArgs.push("--session-id", sessionId);
 
   // 初期プロンプトを決定
   const initialPrompt = taskPromptFile
@@ -1004,8 +1030,8 @@ async function cmdSpawnConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_conductor"));
   const surface = process.env.CMUX_SURFACE ?? await cmux.getCallerSurface();
 
-  const result = await spawnSingleConductor(PROJECT_ROOT, surface);
-  console.log(`SURFACE=${result.surface}`);
+  await launchConductor(PROJECT_ROOT, surface);
+  console.log(`SURFACE=${surface}`);
 }
 
 async function cmdSpawnAgent(): Promise<void> {
@@ -1565,12 +1591,10 @@ async function cmdAbortTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 8. Conductor を再起動（新しいセッション + 新しい session-id）
-  const newSessionId = crypto.randomUUID();
-  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
+  // 8. Conductor を再起動（session-id は cmdConductor が自己生成して daemon に通知する）
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor --session-id ${newSessionId}\n`);
-  conductor.sessionId = newSessionId;
+  await cmux.send(conductor.surface, `cmux-team conductor\n`);
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
@@ -1650,12 +1674,10 @@ async function cmdRestartTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 6. Conductor を再起動（新しいセッション + 新しい session-id）
-  const newSessionId = crypto.randomUUID();
-  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
+  // 6. Conductor を再起動（session-id は cmdConductor が自己生成して daemon に通知する）
+  await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor --session-id ${newSessionId}\n`);
-  conductor.sessionId = newSessionId;
+  await cmux.send(conductor.surface, `cmux-team conductor\n`);
 
   // 7. TASK_CREATED 通知送信（自動再割り当て用）
   await postMessage({
