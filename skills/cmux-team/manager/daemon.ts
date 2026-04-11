@@ -259,14 +259,29 @@ export async function initInfra(state: DaemonState): Promise<void> {
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
-      "output/\nprompts/\ndocs-snapshot/\nlogs/\nqueue/\nconductors/\nmaster.surface\ntask-state.json\ntasks/*.status.json\n"
+      [
+        "# セッション固有（追跡不要）",
+        "team.json",
+        "master.surface",
+        "proxy-port",
+        "logs/",
+        "output/",
+        "prompts/",
+        "queue/",
+        "traces/",
+        "sessions/",
+        "conductors/",
+        "docs-snapshot/",
+        "e2e-results/",
+        "",
+        "# 追跡すべき（上記以外）",
+        "# tasks/        — タスク定義・runs の成果物",
+        "# artifacts/    — 知見の記録",
+        "# specs/        — 要件・設計",
+        "# task-state.json — タスク状態（resume に必要）",
+        "",
+      ].join("\n")
     );
-  } else {
-    // 既存 .gitignore に tasks/*.status.json がなければ追記
-    const content = await readFile(gitignore, "utf-8");
-    if (!content.includes("tasks/*.status.json")) {
-      await writeFile(gitignore, content.trimEnd() + "\ntasks/*.status.json\n");
-    }
   }
 
   // config.json（デフォルト生成）
