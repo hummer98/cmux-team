@@ -448,6 +448,26 @@ Examples:
   cmux-team artifacts --validate
 `,
 
+  help_await_task: `
+cmux-team await-task -- wait for a task to complete (closed/aborted)
+
+Usage:
+  cmux-team await-task --task-id <id> [options]
+
+Options:
+  --task-id <id>          task ID (required, comma-separated for multiple: 108,109)
+  --timeout <seconds>     timeout in seconds (default: 3600)
+
+On completion:
+  - closed: prints summary.md to stdout, exits 0
+  - aborted: prints abort reason to stderr, exits 1
+  - timeout: prints timeout message to stderr, exits 2
+
+Examples:
+  cmux-team await-task --task-id 108
+  cmux-team await-task --task-id 108,109 --timeout 7200
+`,
+
   help_main: `cmux-team — multi-agent development orchestration
 
 Usage:
@@ -463,6 +483,7 @@ Usage:
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
+  cmux-team await-task --task-id <id> [--timeout <sec>]    wait for task completion
   cmux-team abort-task --task-id <id> [--journal <text>]  abort a running task
   cmux-team restart-task --task-id <id> [--journal <text>] restart a running task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
@@ -902,6 +923,26 @@ Examples:
   cmux-team artifacts --validate
 `,
 
+  help_await_task: `
+cmux-team await-task -- タスクの完了（closed/aborted）を待機する
+
+Usage:
+  cmux-team await-task --task-id <id> [options]
+
+Options:
+  --task-id <id>          タスク ID（必須、カンマ区切りで複数指定可: 108,109）
+  --timeout <seconds>     タイムアウト秒数（デフォルト: 3600）
+
+完了時の挙動:
+  - closed: summary.md を stdout に出力して exit 0
+  - aborted: abort 理由を stderr に出力して exit 1
+  - timeout: タイムアウトメッセージを stderr に出力して exit 2
+
+Examples:
+  cmux-team await-task --task-id 108
+  cmux-team await-task --task-id 108,109 --timeout 7200
+`,
+
   help_main: `cmux-team — マルチエージェント開発オーケストレーション
 
 Usage:
@@ -917,6 +958,7 @@ Usage:
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
+  cmux-team await-task --task-id <id> [--timeout <sec>]    タスク完了待ち
   cmux-team abort-task --task-id <id> [--journal <text>] 実行中タスクを中止
   cmux-team restart-task --task-id <id> [--journal <text>] 実行中タスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
