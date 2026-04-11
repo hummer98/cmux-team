@@ -138,6 +138,16 @@ cmux-team status --log 20
 
 `cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
 
+### タスク完了待ち
+
+バックグラウンドでタスクの完了を待つ場合:
+
+```bash
+# Claude Code の Bash run_in_background で起動
+cmux-team await-task --task-id 108
+# → 完了時に summary.md が stdout に出力される
+```
+
 ## 8. トレース検索
 
 過去の API リクエスト履歴を検索できる:

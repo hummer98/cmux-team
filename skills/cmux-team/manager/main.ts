@@ -16,13 +16,14 @@
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
+ *   ./main.ts await-task --task-id <id> [--timeout <sec>]  # タスク完了待ち
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
  *   ./main.ts delete-task --task-id <id> [--journal <text>]
  */
 
 import { join, dirname, basename } from "path";
-import { existsSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
@@ -1507,6 +1508,133 @@ async function cmdCloseTask(): Promise<void> {
   console.log(`OK closed ${taskId}`);
 }
 
+async function cmdAwaitTask(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_await_task"));
+
+  const taskIdRaw = requireArg("task-id");
+  const timeoutSec = parseInt(getArg("timeout") ?? "3600", 10);
+
+  // カンマ区切りで複数タスク ID をサポート
+  const taskIds = taskIdRaw.split(",").map(s => s.trim()).filter(Boolean);
+
+  if (taskIds.length === 0) {
+    console.error("Error: --task-id requires at least one task ID");
+    process.exit(1);
+  }
+
+  // 即座に現在の状態を確認（既に closed/aborted かもしれない）
+  const initialState = await loadTaskState(PROJECT_ROOT);
+  const remaining = new Set(taskIds);
+
+  for (const id of taskIds) {
+    const st = initialState[id];
+    if (!st) {
+      console.error(`Error: task ${id} not found in task-state.json`);
+      process.exit(1);
+    }
+    if (st.status === "closed") {
+      remaining.delete(id);
+    }
+    if (st.status === "aborted") {
+      console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+      process.exit(1);
+    }
+  }
+
+  // 既に全部 closed ならすぐ結果を出力して終了
+  if (remaining.size === 0) {
+    await printSummaries(taskIds);
+    process.exit(0);
+  }
+
+  // fs.watch で task-state.json を監視
+  const taskStateFile = join(PROJECT_ROOT, ".team/task-state.json");
+  const ac = new AbortController();
+
+  // タイムアウトタイマー
+  const timer = setTimeout(() => {
+    ac.abort();
+    console.error(`Timeout: ${timeoutSec}s elapsed, tasks still pending: ${[...remaining].join(",")}`);
+    process.exit(2);
+  }, timeoutSec * 1000);
+
+  try {
+    const watcher = watch(taskStateFile, { signal: ac.signal }, async () => {
+      try {
+        const state = await loadTaskState(PROJECT_ROOT);
+        for (const id of [...remaining]) {
+          const st = state[id];
+          if (st?.status === "closed") {
+            remaining.delete(id);
+          }
+          if (st?.status === "aborted") {
+            clearTimeout(timer);
+            watcher.close();
+            console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+            process.exit(1);
+          }
+        }
+        if (remaining.size === 0) {
+          clearTimeout(timer);
+          watcher.close();
+          await printSummaries(taskIds);
+          process.exit(0);
+        }
+      } catch {
+        // JSON パースエラーなどは無視（一時ファイル書き込み中の可能性）
+      }
+    });
+  } catch (e: any) {
+    if (e?.name === "AbortError") return;
+    throw e;
+  }
+}
+
+/** タスクの summary.md を探して stdout にダンプする */
+async function printSummaries(taskIds: string[]): Promise<void> {
+  for (const id of taskIds) {
+    const taskFile = await findTaskFile(id);
+    if (!taskFile) continue;
+
+    // タスクディレクトリ形式の場合: .team/tasks/NNN-slug/runs/task-NNN-*/summary.md
+    const taskDir = taskFile.endsWith("/task.md")
+      ? dirname(taskFile)
+      : null;
+
+    if (taskDir) {
+      const runsDir = join(taskDir, "runs");
+      if (existsSync(runsDir)) {
+        const runs = await readdir(runsDir);
+        const sorted = runs.filter(r => r.startsWith(`task-${id}-`)).sort();
+        const latestRun = sorted[sorted.length - 1];
+        if (latestRun) {
+          const summaryPath = join(runsDir, latestRun, "summary.md");
+          if (existsSync(summaryPath)) {
+            const content = await readFile(summaryPath, "utf-8");
+            if (taskIds.length > 1) {
+              console.log(`\n--- Task ${id} ---`);
+            }
+            console.log(content);
+            continue;
+          }
+        }
+      }
+    }
+
+    // summary が見つからない場合は journal を出力
+    const state = await loadTaskState(PROJECT_ROOT);
+    const journal = state[id]?.journal;
+    if (journal) {
+      if (taskIds.length > 1) {
+        console.log(`\n--- Task ${id} ---`);
+      }
+      console.log(journal);
+    } else {
+      console.log(`Task ${id}: closed (no summary available)`);
+    }
+  }
+}
+
 /** assigned タスクのクリーンアップ（sub-agent close, PID kill, worktree/ブランチ削除） */
 async function cleanupAssignedTask(conductor: any): Promise<void> {
   // Sub-agent の surface を閉じる
@@ -2061,6 +2189,9 @@ switch (command) {
     break;
   case "close-task":
     await cmdCloseTask();
+    break;
+  case "await-task":
+    await cmdAwaitTask();
     break;
   case "abort-task":
     await cmdAbortTask();
