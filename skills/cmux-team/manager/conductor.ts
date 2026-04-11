@@ -96,7 +96,7 @@ export async function spawnSingleConductor(
   await sleep(500);
   // Claude 起動（session-id を発行して resume 可能にする）
   const sessionId = crypto.randomUUID();
-  await cmux.send(surface, `cmux-team conductor ${surface} --session-id ${sessionId}\n`);
+  await cmux.send(surface, `cmux-team conductor --session-id ${sessionId}\n`);
   await cmux.renameTab(surface, `[${num}] ♦ idle`);
 
   return {
@@ -172,7 +172,7 @@ export async function launchConductorOnSurface(
   await sleep(500);
   // Claude 起動（session-id を発行して resume 可能にする）
   const sessionId = crypto.randomUUID();
-  await cmux.send(surface, `cmux-team conductor ${surface} --session-id ${sessionId}\n`);
+  await cmux.send(surface, `cmux-team conductor --session-id ${sessionId}\n`);
 
   // タブ名設定
   const num = surface.replace("surface:", "");
@@ -578,7 +578,7 @@ export async function spawnConductor(
     await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
     await sleep(500);
     // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
-    await cmux.send(surface, `cmux-team conductor ${surface}\n`);
+    await cmux.send(surface, `cmux-team conductor\n`);
 
     try {
       return await assignTask(conductor, taskId, projectRoot);

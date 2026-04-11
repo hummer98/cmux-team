@@ -385,10 +385,10 @@ Examples:
 cmux-team conductor -- launch Claude Code for Conductor (internal use)
 
 Usage:
-  cmux-team conductor <slot-id> [--model <model>]
+  cmux-team conductor [--model <model>]
 
-Arguments:
-  <slot-id>     Conductor slot ID (required)
+Environment:
+  CMUX_SURFACE  Conductor surface ID (required, set by daemon)
 
 Options:
   --model <model>   model to use (default: config.models.conductor or "{model}")
@@ -467,7 +467,7 @@ Usage:
   cmux-team restart-task --task-id <id> [--journal <text>] restart a running task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
   cmux-team trace-task <task-id>              display session history for a task
-  cmux-team conductor <slot-id>                launch Conductor (auto-resolves proxy)
+  cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
   cmux-team artifacts add <file>                   add a file as an artifact
@@ -839,10 +839,10 @@ Examples:
 cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
 
 Usage:
-  cmux-team conductor <slot-id> [--model <model>]
+  cmux-team conductor [--model <model>]
 
-Arguments:
-  <slot-id>     Conductor のスロット ID（必須）
+Environment:
+  CMUX_SURFACE  Conductor の surface ID（必須、daemon が設定）
 
 Options:
   --model <model>   使用するモデル（デフォルト: config.models.conductor or "{model}"）
@@ -921,7 +921,7 @@ Usage:
   cmux-team restart-task --task-id <id> [--journal <text>] 実行中タスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace-task <task-id>              タスクのセッション履歴を表示
-  cmux-team conductor <slot-id>                Conductor 起動（proxy 自動解決）
+  cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts add <file>                   ファイルをアーティファクトとして追加
