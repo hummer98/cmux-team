@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.41.0] - 2026-04-12
+
+### Added
+- `cmux-team await-task --task-id <id>` コマンドを追加。タスク完了をノンブロッキングで待機し、完了時に summary を stdout に出力
+- エージェントプロンプトテンプレートの i18n 対応。`templates/ja/` と `templates/en/` にディレクトリ分離し、ロケールに応じて自動選択
+- `cmux-team start` 時に `.team/.gitignore` を自動生成。セッション固有ファイルを除外し追跡対象を明確化
+
+### Changed
+- Master statusline のコスト表示を open タスク数表示に置換（サブスクでは従量コスト不要）
+- mo ビューアで同一ワークスペース内の既存ブラウザを再利用。新規 split を作らず `goto` でナビゲート
+
+### Fixed
+- mo ビューアでファイル固有 URL（`?file=<id>`）を使い、対象ファイルに直接フォーカスするよう修正
+
 ## [3.40.0] - 2026-04-11
 
 ### Added
