@@ -23,6 +23,7 @@
 
 import { join, dirname, basename } from "path";
 import { existsSync, writeFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
@@ -762,7 +763,7 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
  */
 function generateConductorSettings(projectRoot: string, surface: string): string {
   const conductorSettingsPath = join(projectRoot, `.team/prompts/${surface}-settings.json`);
-  const conductorSettings = {
+  const conductorSettings: Record<string, any> = {
     hooks: {
       SessionStart: [
         {
@@ -804,6 +805,16 @@ function generateConductorSettings(projectRoot: string, surface: string): string
       ],
     },
   };
+
+  // statusline.sh が存在する場合のみ statusLine 設定を追加
+  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
+  if (existsSync(statuslineScript)) {
+    conductorSettings.statusLine = {
+      type: "command",
+      command: statuslineScript,
+    };
+  }
+
   try { mkdirSync(join(projectRoot, ".team/prompts"), { recursive: true }); } catch {}
   writeFileSync(conductorSettingsPath, JSON.stringify(conductorSettings, null, 2));
   return conductorSettingsPath;
@@ -829,6 +840,7 @@ async function cmdConductor(): Promise<void> {
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
   process.env.CONDUCTOR_ID = surface;
+  process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -918,6 +930,7 @@ async function cmdResume(): Promise<void> {
   // 環境変数を設定（cmdConductor と同等）
   process.env.PROJECT_ROOT = PROJECT_ROOT;
   process.env.CONDUCTOR_ID = surface;
+  process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -962,6 +975,7 @@ async function cmdLaunchMaster(): Promise<void> {
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
+  process.env.CMUX_ROLE = "master";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -969,6 +983,19 @@ async function cmdLaunchMaster(): Promise<void> {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   }
   await log("master_spawn_proxy", `port=${proxyPort ?? "none"}`);
+
+  // Master 用 settings.json 生成
+  const masterSettingsPath = join(PROJECT_ROOT, ".team/prompts/master-settings.json");
+  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
+  const masterSettings: Record<string, any> = {};
+  if (existsSync(statuslineScript)) {
+    masterSettings.statusLine = {
+      type: "command",
+      command: statuslineScript,
+    };
+  }
+  try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
+  writeFileSync(masterSettingsPath, JSON.stringify(masterSettings, null, 2));
 
   // モデル解決
   const config = await loadConfig();
@@ -979,6 +1006,7 @@ async function cmdLaunchMaster(): Promise<void> {
   try {
     execFileSync("claude", [
       "--dangerously-skip-permissions",
+      "--settings", masterSettingsPath,
       "--model", model,
       "--append-system-prompt-file", join(PROJECT_ROOT, ".team/prompts/master.md"),
     ], {
@@ -1060,14 +1088,42 @@ async function cmdSpawnAgent(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "agent", getArg("model"));
 
+  // team.json から taskId を取得
+  let taskId: string | undefined;
+  try {
+    const teamJson2Pre = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
+    const condPre = teamJson2Pre?.conductors?.find((c: any) => c.surface === conductorSurface);
+    taskId = condPre?.taskId;
+  } catch {}
+
+  // Agent 用 settings.json 生成
+  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
+  let agentSettingsFlag = "";
+  if (existsSync(statuslineScript)) {
+    const agentSettingsPath = join(PROJECT_ROOT, `.team/prompts/${surface}-agent-settings.json`);
+    const agentSettings = {
+      statusLine: {
+        type: "command",
+        command: statuslineScript,
+      },
+    };
+    try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
+    writeFileSync(agentSettingsPath, JSON.stringify(agentSettings, null, 2));
+    agentSettingsFlag = `--settings '${agentSettingsPath}'`;
+  }
+
   // 環境変数をシェルに焼き付け
   const exportVars = [
     `ROLE=${role}`,
+    `CMUX_ROLE=agent`,
     `PROJECT_ROOT=${PROJECT_ROOT}`,
     `CMUX_SURFACE=${surface}`,
     `CMUX_NO_RENAME_TAB=1`,
     `CMUX_CLAUDE_HOOKS_DISABLED=1`,
   ];
+  if (taskId) {
+    exportVars.push(`CMUX_TASK_ID=${taskId}`);
+  }
   if (proxyPort) {
     exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
   }
@@ -1083,12 +1139,17 @@ async function cmdSpawnAgent(): Promise<void> {
   }
 
   // Claude Code 起動
-  const modelFlag = `--model ${model}`;
+  const claudeFlags = ["--dangerously-skip-permissions"];
+  if (agentSettingsFlag) {
+    claudeFlags.push(agentSettingsFlag);
+  }
+  claudeFlags.push(`--model ${model}`);
+
   let claudeCmd: string;
   if (promptFile) {
-    claudeCmd = `claude --dangerously-skip-permissions ${modelFlag} '${promptFile} を読んで指示に従ってください。'`;
+    claudeCmd = `claude ${claudeFlags.join(" ")} '${promptFile} を読んで指示に従ってください。'`;
   } else {
-    claudeCmd = `claude --dangerously-skip-permissions ${modelFlag} '${prompt}'`;
+    claudeCmd = `claude ${claudeFlags.join(" ")} '${prompt}'`;
   }
   await cmux.send(surface, claudeCmd + "\n");
 
