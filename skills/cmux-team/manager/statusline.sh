@@ -12,8 +12,6 @@ INPUT=$(cat)
 MODEL=$(echo "$INPUT" | jq -r 'if (.model | type) == "string" then .model else .model.id // "" end')
 # context: .context_window.used_percentage or .context.used_percentage
 CTX_PCT=$(echo "$INPUT" | jq -r '(.context_window.used_percentage // .context.used_percentage // 0 | round)')
-# cost: 安定フィールド
-COST=$(echo "$INPUT" | jq -r '.cost.total_cost_usd // 0')
 # working_dir: .workspace.current_dir or .cwd or .working_dir
 WORK_DIR=$(echo "$INPUT" | jq -r '.workspace.current_dir // .cwd // .working_dir // ""')
 
@@ -73,13 +71,17 @@ CTX_COLOR=$(ctx_color "$CTX_PCT")
 case "${CMUX_ROLE:-}" in
   master)
     BRANCH=$(git_branch "$WORK_DIR")
+    OPEN_TASKS=0
+    if [[ -n "${PROJECT_ROOT:-}" ]] && [[ -f "${PROJECT_ROOT}/.team/task-state.json" ]]; then
+      OPEN_TASKS=$(jq '[to_entries[] | select(.value.status == "ready" or .value.status == "assigned")] | length' "${PROJECT_ROOT}/.team/task-state.json" 2>/dev/null || echo 0)
+    fi
     ICON=$(nf "" "♦")
     M_ICON=$(nf "" "")
     CTX_ICON=$(nf "" "ctx")
-    COST_ICON=$(nf "󰄬" "\$")
+    TASK_ICON=$(nf "󰝖" "T")
     BR_ICON=$(nf "" "")
-    printf "${C_CYAN}%s Master${C_RESET} ${C_DIM}|${C_RESET} %s %s ${C_DIM}|${C_RESET} ${CTX_COLOR}%s %s%%${C_RESET} ${C_DIM}|${C_RESET} ${C_GREEN}%s \$%s${C_RESET} ${C_DIM}|${C_RESET} %s %s" \
-      "$ICON" "$M_ICON" "$MODEL_SHORT" "$CTX_ICON" "$CTX_PCT" "$COST_ICON" "$COST" "$BR_ICON" "$BRANCH"
+    printf "${C_CYAN}%s Master${C_RESET} ${C_DIM}|${C_RESET} %s %s ${C_DIM}|${C_RESET} ${CTX_COLOR}%s %s%%${C_RESET} ${C_DIM}|${C_RESET} ${C_GREEN}%s:%s${C_RESET} ${C_DIM}|${C_RESET} %s %s" \
+      "$ICON" "$M_ICON" "$MODEL_SHORT" "$CTX_ICON" "$CTX_PCT" "$TASK_ICON" "$OPEN_TASKS" "$BR_ICON" "$BRANCH"
     ;;
 
   conductor)
