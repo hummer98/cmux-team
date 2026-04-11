@@ -760,8 +760,8 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
  * cmdConductor と cmdResume の両方から使用される。
  * @returns 生成したファイルの絶対パス
  */
-function generateConductorSettings(projectRoot: string, slotId: string): string {
-  const conductorSettingsPath = join(projectRoot, `.team/prompts/${slotId}-settings.json`);
+function generateConductorSettings(projectRoot: string, surface: string): string {
+  const conductorSettingsPath = join(projectRoot, `.team/prompts/${surface}-settings.json`);
   const conductorSettings = {
     hooks: {
       SessionStart: [
@@ -769,7 +769,7 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
           matcher: "startup",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -779,7 +779,7 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
           matcher: "",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -789,7 +789,7 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
           matcher: "clear",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_CLEAR --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_CLEAR --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -797,7 +797,7 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
           matcher: "logout|prompt_input_exit",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -810,14 +810,15 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
 }
 
 /**
- * cmux-team conductor <slot-id>
+ * cmux-team conductor
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ * CMUX_SURFACE 環境変数が必須。
  */
 async function cmdConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
-  const slotId = args[1];
-  if (!slotId) {
-    console.error("Usage: cmux-team conductor <slot-id>");
+  const surface = process.env.CMUX_SURFACE;
+  if (!surface) {
+    console.error("Error: CMUX_SURFACE environment variable is required");
     process.exit(1);
   }
 
@@ -827,7 +828,7 @@ async function cmdConductor(): Promise<void> {
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CONDUCTOR_ID = slotId;
+  process.env.CONDUCTOR_ID = surface;
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -844,7 +845,7 @@ async function cmdConductor(): Promise<void> {
   const taskPromptFile = getArg("task-prompt");
 
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, slotId);
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
   // claude コマンド引数を組み立て
   const claudeArgs = [
@@ -883,6 +884,11 @@ async function cmdConductor(): Promise<void> {
  */
 async function cmdResume(): Promise<void> {
   if (hasHelpFlag()) showHelp("Usage: cmux-team resume <task-id>");
+  const surface = process.env.CMUX_SURFACE;
+  if (!surface) {
+    console.error("Error: CMUX_SURFACE environment variable is required");
+    process.exit(1);
+  }
   const taskId = args[1];
   if (!taskId) {
     console.error("Usage: cmux-team resume <task-id>");
@@ -911,7 +917,7 @@ async function cmdResume(): Promise<void> {
 
   // 環境変数を設定（cmdConductor と同等）
   process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CONDUCTOR_ID = process.env.CMUX_SURFACE ?? "";
+  process.env.CONDUCTOR_ID = surface;
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -924,8 +930,7 @@ async function cmdResume(): Promise<void> {
   const model = getModelForRole(config, "conductor", getArg("model"));
 
   // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
-  const slotId = process.env.CMUX_SURFACE ?? "unknown";
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, slotId);
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
   // claude --resume で再開
   const { execFileSync } = require("child_process");
@@ -1561,11 +1566,10 @@ async function cmdAbortTask(): Promise<void> {
   });
 
   // 8. Conductor を再起動（新しいセッション + 新しい session-id）
-  const slotId = conductor.surface.replace("surface:", "");
   const newSessionId = crypto.randomUUID();
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor ${slotId} --session-id ${newSessionId}\n`);
+  await cmux.send(conductor.surface, `cmux-team conductor --session-id ${newSessionId}\n`);
   conductor.sessionId = newSessionId;
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
@@ -1647,11 +1651,10 @@ async function cmdRestartTask(): Promise<void> {
   });
 
   // 6. Conductor を再起動（新しいセッション + 新しい session-id）
-  const slotId = conductor.surface.replace("surface:", "");
   const newSessionId = crypto.randomUUID();
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface}\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor ${slotId} --session-id ${newSessionId}\n`);
+  await cmux.send(conductor.surface, `cmux-team conductor --session-id ${newSessionId}\n`);
   conductor.sessionId = newSessionId;
 
   // 7. TASK_CREATED 通知送信（自動再割り当て用）
