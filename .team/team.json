@@ -5,37 +5,37 @@
   "architecture": "4-tier",
   "created_at": "2026-03-24T12:00:00Z",
   "master": {
-    "surface": "surface:128",
+    "surface": "surface:248",
     "status": "running"
   },
   "manager": {
-    "pid": 67502,
+    "pid": 77904,
     "type": "typescript",
     "status": "running"
   },
   "conductors": [
     {
-      "surface": "surface:125",
+      "surface": "surface:245",
       "status": "idle",
-      "startedAt": "2026-04-10T22:26:02.507Z",
-      "paneId": "pane:55",
-      "sessionId": "9277430a-c720-4a1d-8820-fbe854223967",
+      "startedAt": "2026-04-11T13:47:54.828Z",
+      "paneId": "pane:92",
+      "sessionId": "2babe38e-eb89-4374-91df-6d2896adfee9",
       "agents": []
     },
     {
-      "surface": "surface:126",
+      "surface": "surface:246",
       "status": "idle",
-      "startedAt": "2026-04-10T22:57:23.378Z",
-      "paneId": "pane:56",
-      "sessionId": "f76aca94-0050-4f63-8679-2ab48f215b05",
+      "startedAt": "2026-04-11T13:37:20.280Z",
+      "paneId": "pane:93",
+      "sessionId": "2a8c741c-719b-4994-b51c-dc43d09bf42a",
       "agents": []
     },
     {
-      "surface": "surface:127",
+      "surface": "surface:247",
       "status": "idle",
-      "startedAt": "2026-04-10T22:44:29.084Z",
-      "paneId": "pane:57",
-      "sessionId": "7fca2100-e34b-4bc5-ba4d-26136506a087",
+      "startedAt": "2026-04-11T13:37:21.574Z",
+      "paneId": "pane:94",
+      "sessionId": "b1034894-80ef-456a-95c4-b3d76e6ef1e3",
       "agents": []
     }
   ]
