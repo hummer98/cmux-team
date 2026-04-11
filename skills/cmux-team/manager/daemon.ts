@@ -558,6 +558,23 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "CONDUCTOR_SESSION": {
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        conductor.sessionId = message.sessionId;
+        await log(
+          "conductor_session",
+          `surface=${message.surface} session_id=${message.sessionId}`
+        );
+      } else {
+        await log(
+          "conductor_session_ignored",
+          `surface=${message.surface} reason=conductor_not_found`
+        );
+      }
+      break;
+    }
+
     case "SESSION_ENDED": {
       // Master surface チェック
       if (message.surface === state.masterSurface) {
@@ -861,7 +878,8 @@ function spawnPidWatcher(
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
         conductor.pid = undefined;
-        conductor.sessionId = undefined;
+        // sessionId は保持する（resume で必要）。
+        // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
         await log(
           "session_ended",
           `surface=${conductor.surface} pid=${pid} status=disconnected reason=pid_watcher`

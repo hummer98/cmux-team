@@ -64,16 +64,26 @@ async function getPaneIdForSurface(surface: string, workspace?: string): Promise
   return undefined;
 }
 
-// --- spawnSingleConductor ---
+// --- launchConductor ---
 
-export async function spawnSingleConductor(
+/**
+ * 指定 surface 上で Conductor Claude セッションを起動する。
+ * - CONDUCTOR_REGISTERED を HTTP API 経由で daemon に送信
+ * - 環境変数をシェルに焼き付け
+ * - `cmux-team conductor` を起動（session-id は cmdConductor が自己生成）
+ * - タブ名を設定
+ */
+export async function launchConductor(
   projectRoot: string,
   surface: string,
-): Promise<ConductorState> {
-  const num = surface.replace("surface:", "");
-  const paneId = await getPaneIdForSurface(surface);
+  paneId?: string,
+): Promise<void> {
+  // 0. paneId が未指定の場合（cmdSpawnConductor 経由等）、surface から解決する
+  if (!paneId) {
+    paneId = await getPaneIdForSurface(surface);
+  }
 
-  // CONDUCTOR_REGISTERED を HTTP API 経由で送信（Claude 起動前に登録）
+  // 1. CONDUCTOR_REGISTERED を HTTP API 経由で送信
   try {
     const portFile = join(projectRoot, ".team/proxy-port");
     const port = (await readFile(portFile, "utf-8")).trim();
@@ -91,22 +101,18 @@ export async function spawnSingleConductor(
     await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
   }
 
-  // 環境変数をシェルに焼き付け
-  await cmux.send(surface, `export CMUX_SURFACE=${surface}\n`);
+  // 2. 環境変数をシェルに焼き付け
+  //    CMUX_SURFACE: cmdConductor が読み取る（必須）。hook も参照する
+  //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
+  await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  // Claude 起動（session-id を発行して resume 可能にする）
-  const sessionId = crypto.randomUUID();
-  await cmux.send(surface, `cmux-team conductor --session-id ${sessionId}\n`);
-  await cmux.renameTab(surface, `[${num}] ♦ idle`);
 
-  return {
-    surface,
-    startedAt: new Date().toISOString(),
-    agents: [],
-    status: "starting" as const,
-    paneId,
-    sessionId,
-  };
+  // 3. Claude 起動（--session-id なし — cmdConductor が自己生成して daemon に通知する）
+  await cmux.send(surface, `cmux-team conductor\n`);
+
+  // 4. タブ名設定
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] ♦ idle`);
 }
 
 // --- createConductorPanes ---
@@ -139,48 +145,6 @@ export async function createConductorPanes(
   return panes;
 }
 
-// --- launchConductorOnSurface ---
-
-/**
- * 既存 pane 上で Claude を起動し CONDUCTOR_REGISTERED を送信する
- */
-export async function launchConductorOnSurface(
-  projectRoot: string,
-  surface: string,
-  paneId?: string,
-): Promise<string> {
-  // CONDUCTOR_REGISTERED を HTTP API 経由で送信（Claude 起動前に登録）
-  try {
-    const portFile = join(projectRoot, ".team/proxy-port");
-    const port = (await readFile(portFile, "utf-8")).trim();
-    await fetch(`http://localhost:${port}/api/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "CONDUCTOR_REGISTERED",
-        surface,
-        paneId: paneId ?? "",
-        timestamp: new Date().toISOString(),
-      }),
-    });
-  } catch (e: any) {
-    await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
-  }
-
-  // 環境変数をシェルに焼き付け
-  await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
-  await sleep(500);
-  // Claude 起動（session-id を発行して resume 可能にする）
-  const sessionId = crypto.randomUUID();
-  await cmux.send(surface, `cmux-team conductor --session-id ${sessionId}\n`);
-
-  // タブ名設定
-  const num = surface.replace("surface:", "");
-  await cmux.renameTab(surface, `[${num}] ♦ idle`);
-
-  return sessionId;
-}
-
 // --- initializeConductorSlots ---
 
 export async function initializeConductorSlots(
@@ -199,22 +163,13 @@ export async function initializeConductorSlots(
 
     // Phase 2: Claude 一斉起動
     await log("conductor_claude_launching", "");
-    const sessionIds = new Map<string, string>();
     for (const pane of panes) {
-      const sid = await launchConductorOnSurface(projectRoot, pane.surface, pane.paneId);
-      sessionIds.set(pane.surface, sid);
+      await launchConductor(projectRoot, pane.surface, pane.paneId);
     }
 
-    // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え、
-    // state.conductors に未登録の surface を直接登録する
+    // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え
     for (const pane of panes) {
-      const existing = conductors.get(pane.surface);
-      if (existing) {
-        // CONDUCTOR_REGISTERED 経由で既に登録済み → sessionId を補完
-        if (!existing.sessionId) {
-          existing.sessionId = sessionIds.get(pane.surface);
-        }
-      } else {
+      if (!conductors.has(pane.surface)) {
         await log("conductor_registered_fallback", `surface=${pane.surface}`);
         conductors.set(pane.surface, {
           surface: pane.surface,
@@ -222,7 +177,7 @@ export async function initializeConductorSlots(
           status: "starting",
           startedAt: new Date().toISOString(),
           agents: [],
-          sessionId: sessionIds.get(pane.surface),
+          // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
         });
       }
     }
@@ -394,7 +349,7 @@ export async function assignTask(
         timestamp: new Date().toISOString(),
         task_id: taskId,
         task_run_id: taskRunId,
-        session_id: conductor.sessionId!,
+        session_id: conductor.sessionId ?? "",
         role: "conductor",
         surface: conductor.surface,
         worktree_path: worktreePath,
@@ -550,49 +505,3 @@ export async function collectResults(
   return result;
 }
 
-// --- spawnConductor（後方互換ラッパー）---
-
-export async function spawnConductor(
-  taskId: string,
-  projectRoot: string
-): Promise<ConductorState | null> {
-  // 新しい idle Conductor を作成してタスクを割り当てる（フォールバック）
-  try {
-    const surface = await cmux.newSplit("down");
-
-    if (!(await cmux.validateSurface(surface, await cmux.getCallerWorkspace()))) {
-      await log("error", `spawnConductor: surface ${surface} validation failed`);
-      return null;
-    }
-
-    const paneId = await getPaneIdForSurface(surface);
-    const conductor: ConductorState = {
-      surface,
-      startedAt: new Date().toISOString(),
-      agents: [],
-      status: "idle",
-      paneId,
-    };
-
-    // 環境変数をシェルに焼き付け
-    await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
-    await sleep(500);
-    // cmux-team conductor ラッパー経由で起動（proxy ポートを動的解決）
-    await cmux.send(surface, `cmux-team conductor\n`);
-
-    try {
-      return await assignTask(conductor, taskId, projectRoot);
-    } catch (e) {
-      if (e instanceof AssignTaskError) {
-        // spawnConductor は戻り値 null 仕様を維持するため、ここで kind/reason を log する
-        // （daemon.scanTasks 経路とは異なり、呼び出し側には詳細情報を渡せない）
-        await log("error", `spawnConductor assignTask failed: kind=${e.kind} ${e.reason}`);
-        return null;
-      }
-      throw e;
-    }
-  } catch (e: any) {
-    await log("error", `spawnConductor failed for task ${taskId}: ${e.message}`);
-    return null;
-  }
-}
