@@ -285,10 +285,17 @@ export async function assignTask(
 
     // --- 2. git worktree 作成 ---
     try {
-      await execFile("git", ["worktree", "add", worktreePath, "-b", branch], {
+      const worktreeArgs = ["worktree", "add", worktreePath, "-b", branch];
+      if (baseBranch) {
+        worktreeArgs.push(baseBranch);  // start-point を指定
+      }
+      await execFile("git", worktreeArgs, {
         cwd: projectRoot,
       });
       worktreeCreated = true;
+      if (baseBranch) {
+        log("worktree_created", `branch=${branch} baseBranch=${baseBranch} path=${worktreePath}`);
+      }
     } catch (e: any) {
       throw new AssignTaskError("task", `git worktree add failed: ${e.message}`, e);
     }
