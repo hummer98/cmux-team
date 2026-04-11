@@ -339,23 +339,6 @@ async function cmdStart(): Promise<void> {
         await cmux.closeSurface(state.masterSurface).catch(() => {});
       }
 
-      // 4. worktree をクリーンアップ
-      for (const [, conductor] of state.conductors) {
-        if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
-          try {
-            const { execFile: execFileCb } = require("child_process");
-            const { promisify } = require("util");
-            const execFileAsync = promisify(execFileCb);
-            await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], { cwd: state.projectRoot });
-            if (conductor.taskRunId) {
-              await execFileAsync("git", ["branch", "-d", `${conductor.taskRunId}/task`], { cwd: state.projectRoot }).catch(() => {});
-            }
-          } catch (e: any) {
-            await log("error", `worktree cleanup failed: path=${conductor.worktreePath} error=${e.message}`);
-          }
-        }
-      }
-
       await log("full_quit_completed");
       state.running = false;
       state.fileWatcherAbort?.abort();
@@ -440,7 +423,7 @@ async function cmdStart(): Promise<void> {
       // resume 不可 → ready に戻す（次の scanTasks で再割り当て）
       taskState[taskId] = { ...ts, status: "ready" };
       taskStateModified = true;
-      await log("resume_fallback_to_ready", `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"}`);
+      await log("resume_fallback_to_ready", `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`);
       continue;
     }
 
