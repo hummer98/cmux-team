@@ -773,14 +773,6 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
             timeout: 5000,
           }],
         },
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook session-start",
-            timeout: 10000,
-          }],
-        },
       ],
       Stop: [
         {
@@ -789,14 +781,6 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
             type: "command",
             command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
-          }],
-        },
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook stop",
-            timeout: 10000,
           }],
         },
       ],
@@ -815,45 +799,6 @@ function generateConductorSettings(projectRoot: string, slotId: string): string 
             type: "command",
             command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE:-unknown}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             timeout: 5000,
-          }],
-        },
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook session-end",
-            timeout: 1000,
-          }],
-        },
-      ],
-      Notification: [
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook notification",
-            timeout: 10000,
-          }],
-        },
-      ],
-      UserPromptSubmit: [
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook prompt-submit",
-            timeout: 10000,
-          }],
-        },
-      ],
-      PreToolUse: [
-        {
-          matcher: "",
-          hooks: [{
-            type: "command",
-            command: "cmux claude-hook pre-tool-use",
-            timeout: 5000,
-            async: true,
           }],
         },
       ],
