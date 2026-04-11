@@ -9,7 +9,7 @@
     "status": "running"
   },
   "manager": {
-    "pid": 77904,
+    "pid": 42424,
     "type": "typescript",
     "status": "running"
   },
@@ -17,7 +17,7 @@
     {
       "surface": "surface:245",
       "status": "idle",
-      "startedAt": "2026-04-11T13:47:54.828Z",
+      "startedAt": "2026-04-11T18:00:49.057Z",
       "paneId": "pane:92",
       "sessionId": "2babe38e-eb89-4374-91df-6d2896adfee9",
       "agents": []
@@ -25,7 +25,7 @@
     {
       "surface": "surface:246",
       "status": "idle",
-      "startedAt": "2026-04-11T13:37:20.280Z",
+      "startedAt": "2026-04-11T18:12:41.260Z",
       "paneId": "pane:93",
       "sessionId": "2a8c741c-719b-4994-b51c-dc43d09bf42a",
       "agents": []
@@ -33,7 +33,7 @@
     {
       "surface": "surface:247",
       "status": "idle",
-      "startedAt": "2026-04-11T13:37:21.574Z",
+      "startedAt": "2026-04-11T18:15:05.023Z",
       "paneId": "pane:94",
       "sessionId": "b1034894-80ef-456a-95c4-b3d76e6ef1e3",
       "agents": []
