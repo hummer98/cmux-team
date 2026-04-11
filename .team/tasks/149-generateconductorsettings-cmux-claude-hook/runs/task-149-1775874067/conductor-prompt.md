@@ -1,0 +1,80 @@
+# タスク割り当て
+
+## タスク内容
+
+---
+id: 149
+title: generateConductorSettings から cmux claude-hook を全削除
+priority: high
+created_at: 2026-04-11T02:21:07.063Z
+---
+
+## タスク
+## 背景
+
+`generateConductorSettings()`（main.ts:763-865）で Conductor の settings.json を生成する際、cmux-team 独自の hooks に加えて cmux 用の hooks（`cmux claude-hook *`）を再注入している。
+
+これは T092 で `CMUX_CLAUDE_HOOKS_DISABLED=1` により cmux ラッパーを無効化した際、cmux のサイドバー表示等のために意図的に入れ直したもの。しかし通知制御は Manager 側で行う方針のため、cmux への自動通知は不要。
+
+## やること
+
+`skills/cmux-team/manager/main.ts` の `generateConductorSettings()` から以下の `cmux claude-hook` エントリをすべて削除:
+
+- L780: `cmux claude-hook session-start`（SessionStart 内の2番目のエントリ）
+- L798: `cmux claude-hook stop`（Stop 内の2番目のエントリ）
+- L822: `cmux claude-hook session-end`（SessionEnd 内の3番目のエントリ）
+- L829-837: `Notification` セクション全体
+- L839-848: `UserPromptSubmit` セクション全体（`cmux claude-hook prompt-submit`）
+- L849-859: `PreToolUse` セクション全体（`cmux claude-hook pre-tool-use`）
+
+## 残すもの
+
+cmux-team 独自の hooks は残す:
+- `cmux-team send SESSION_STARTED`（SessionStart 内）
+- `cmux-team send SESSION_IDLE`（Stop 内）
+- `cmux-team send SESSION_CLEAR`（SessionEnd 内、matcher: clear）
+- `cmux-team send SESSION_ENDED`（SessionEnd 内、matcher: logout|prompt_input_exit）
+
+## 確認ポイント
+
+- 削除後も `cmux-team send *` による daemon 通知は正常に動作すること
+- settings.json の JSON 構文が壊れていないこと
+- SessionStart / Stop / SessionEnd のセクションが空にならないこと（cmux-team send エントリが残る）
+
+
+## 作業ディレクトリ
+
+すべての作業は git worktree `/Users/yamamoto/git/cmux-team/.worktrees/task-149-1775874067` 内で行う。
+```bash
+cd /Users/yamamoto/git/cmux-team/.worktrees/task-149-1775874067
+```
+main ブランチに直接変更を加えてはならない。
+
+ブランチ名: `task-149-1775874067/task`
+
+## 作業開始前の確認（ブートストラップ）
+
+worktree は tracked files のみ含む。作業開始前に以下を確認すること:
+- `package.json` があれば `npm install` を実行
+- `.gitignore` に記載されたランタイムディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）の有無を確認し、必要なら再構築
+- `.envrc` や環境変数の設定
+
+## 出力ディレクトリ
+
+```
+/Users/yamamoto/git/cmux-team/.team/tasks/149-generateconductorsettings-cmux-claude-hook/runs/task-149-1775874067
+```
+
+結果サマリーは `/Users/yamamoto/git/cmux-team/.team/tasks/149-generateconductorsettings-cmux-claude-hook/runs/task-149-1775874067/summary.md` に書き出す。
+
+## マージ先ブランチ
+
+このタスクの成果は `main（デフォルト）` にマージすること。
+納品方法（ローカルマージ or PR）は conductor-role.md の完了時の処理に従う。
+
+## 完了通知
+
+全ての処理が完了したら、最後に:
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
+```

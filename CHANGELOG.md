@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.40.0] - 2026-04-11
+
+### Added
+- ロール別カスタムステータスバーの実装。Conductor・Agent がそれぞれの役割に応じたステータス表示を行う
+- Conductor 完了時にセッション上へ要約レポートを自動表示
+- TUI を停止せず `mo` + `cmux browser open` で Markdown を表示する方式に変更
+
+### Changed
+- Conductor 起動関数を統合し session-id を自己生成方式に変更
+- Conductor の slot-id 引数を廃止し `CMUX_SURFACE` 環境変数に統一
+
+### Fixed
+- `cmux-team stop` 時に assigned タスクの worktree まで削除してしまい、再起動時の resume が失敗する問題を修正。worktree クリーンアップを full_quit から撤廃
+- resume 失敗時のログに worktreePath・sessionId 等の詳細情報を追加
+- worktree 作成時に baseBranch を start-point として使用するよう修正
+
 ## [3.39.1] - 2026-04-11
 
 ### Changed
