@@ -90,6 +90,7 @@ description: >
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
+| `cmux-team await-task` | タスク完了待ち（`--task-id` 必須、`--timeout` 任意） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`） |
 
 ## 2. トレーサビリティ
@@ -225,3 +226,48 @@ cmux notify --title "完了" --body "ビルドが成功しました"
 # macOS 通知センター（サウンド付き）
 osascript -e 'display notification "ビルド完了" with title "Claude" sound name "Glass"'
 ```
+
+## 4. タスク完了待ち（await-task）
+
+`cmux-team await-task` はタスクの完了を `fs.watch` ベースで待機する CLI コマンド。
+`cmux-team status` のポーリングに比べて軽量・高速で、Claude Code の `Bash run_in_background` と組み合わせることで Master がブロックされずにタスク完了を待てる。
+
+### 基本的な使い方
+
+```bash
+# 単一タスクの完了を待つ
+cmux-team await-task --task-id 108
+
+# 複数タスクの完了を待つ（カンマ区切り）
+cmux-team await-task --task-id 108,109
+
+# タイムアウト指定（デフォルト: 3600秒）
+cmux-team await-task --task-id 108 --timeout 7200
+```
+
+### 終了コード
+
+| コード | 意味 | stdout/stderr |
+|--------|------|---------------|
+| 0 | 全タスク closed | summary.md の内容を stdout に出力 |
+| 1 | いずれかのタスクが aborted | abort 理由を stderr に出力 |
+| 2 | タイムアウト | 残タスク一覧を stderr に出力 |
+
+### Master での活用パターン
+
+```bash
+# バックグラウンドでタスク完了を待つ（Claude Code の Bash run_in_background）
+cmux-team await-task --task-id 108
+# → task-notification で完了が通知される + summary が読める
+
+# 「結果を見てから次を判断」するフロー
+cmux-team await-task --task-id 108
+# 完了後に summary を読んで次のアクションを決定
+```
+
+### depends-on との使い分け
+
+| 方式 | 用途 |
+|------|------|
+| `depends-on` (frontmatter) | 自動チェーン: A → B の順序保証。Manager が自動で B を発火 |
+| `await-task` (CLI) | 手動チェーン: A の結果を**見てから**次を判断するケース |
