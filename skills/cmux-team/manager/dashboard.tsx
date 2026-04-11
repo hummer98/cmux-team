@@ -752,10 +752,21 @@ async function openArtifactInViewer(
   const viewer = await resolveMarkdownViewer();
 
   if (viewer === "mo") {
-    // mo はバックグラウンドで起動（TUI を停止しない）
-    Bun.spawn(["mo", filePath], { stdio: ["ignore", "ignore", "ignore"] });
-    await Bun.sleep(500);
-    Bun.spawn(["cmux", "browser", "open", "http://localhost:6275"], { stdio: ["ignore", "ignore", "ignore"] });
+    // mo をバックグラウンドで起動し、--json で file-specific URL を取得
+    const moProc = Bun.spawn(["mo", filePath, "--json"], { stdout: "pipe", stderr: "ignore" });
+    const moOutput = await new Response(moProc.stdout).text();
+    await moProc.exited;
+
+    // JSON から file-specific URL を取得（フォールバック付き）
+    let viewerUrl = "http://localhost:6275";
+    try {
+      const parsed = JSON.parse(moOutput);
+      if (parsed.files?.[0]?.url) {
+        viewerUrl = parsed.files[0].url;
+      }
+    } catch {}
+
+    Bun.spawn(["cmux", "browser", "open", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
     return;
   }
 
