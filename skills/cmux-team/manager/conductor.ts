@@ -67,17 +67,38 @@ async function getPaneIdForSurface(surface: string, workspace?: string): Promise
 
 // --- launchConductor ---
 
+/** resume 復元の 1 件分 */
+export interface ResumePlanItem {
+  taskId: string;
+  taskRunId: string;
+  worktreePath: string;
+  sessionId: string;
+  taskTitle?: string;
+}
+
+/** resume 割当結果（surface と task の紐付け） */
+export interface ResumeAssignment {
+  surface: string;
+  taskId: string;
+  taskRunId: string;
+  worktreePath: string;
+  sessionId: string;
+  taskTitle?: string;
+}
+
 /**
  * 指定 surface 上で Conductor Claude セッションを起動する。
  * - CONDUCTOR_REGISTERED を HTTP API 経由で daemon に送信
  * - 環境変数をシェルに焼き付け
  * - `cmux-team conductor` を起動（session-id は cmdConductor が自己生成）
- * - タブ名を設定
+ *   または `opts.resumeTaskId` 指定時は `cmux-team resume <id>` を起動
+ * - タブ名を設定（resume 時は呼び出し元が T<id> に rename するためスキップ）
  */
 export async function launchConductor(
   projectRoot: string,
   surface: string,
   paneId?: string,
+  opts?: { resumeTaskId?: string },
 ): Promise<void> {
   // 0. paneId が未指定の場合（cmdSpawnConductor 経由等）、surface から解決する
   if (!paneId) {
@@ -103,17 +124,28 @@ export async function launchConductor(
   }
 
   // 2. 環境変数をシェルに焼き付け
-  //    CMUX_SURFACE: cmdConductor が読み取る（必須）。hook も参照する
+  //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
   await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
 
-  // 3. Claude 起動（--session-id なし — cmdConductor が自己生成して daemon に通知する）
-  await cmux.send(surface, `cmux-team conductor\n`);
+  // 3. Claude 起動
+  //    - resumeTaskId 指定時: 既存セッションを cmdResume 経由で復元
+  //    - それ以外: 通常起動（--session-id なし — cmdConductor が自己生成して daemon に通知）
+  if (opts?.resumeTaskId) {
+    await cmux.send(surface, `cmux-team resume ${opts.resumeTaskId}\n`);
+  } else {
+    await cmux.send(surface, `cmux-team conductor\n`);
+  }
 
   // 4. タブ名設定
-  const num = surface.replace("surface:", "");
-  await cmux.renameTab(surface, `[${num}] ♦ idle`);
+  //    resume 時はタブ名を呼び出し元（initializeLayout / main.ts）が
+  //    `[N] ♦ T<id> <title>` に rename するため、ここでは idle を付けず何もしない。
+  //    （二重 rename を避ける — plan/design-review で確認済み）
+  if (!opts?.resumeTaskId) {
+    const num = surface.replace("surface:", "");
+    await cmux.renameTab(surface, `[${num}] ♦ idle`);
+  }
 }
 
 // --- createConductorPanes ---
@@ -153,7 +185,9 @@ export async function initializeConductorSlots(
   conductors: Map<string, ConductorState>,
   count: number = 3,
   daemonSurface?: string,
-): Promise<void> {
+  resumePlan?: ResumePlanItem[],
+): Promise<ResumeAssignment[]> {
+  const assignments: ResumeAssignment[] = [];
   try {
     await log("conductor_slots_creating", `count=${count}`);
 
@@ -163,23 +197,57 @@ export async function initializeConductorSlots(
     await log("conductor_panes_created", `count=${panes.length}`);
 
     // Phase 2: Claude 一斉起動
+    //   resumePlan がある場合は panes の先頭から順に 1:1 で割り当てる
+    //   （resumePlan は呼び出し元で taskId 昇順 sort 済みの前提）
     await log("conductor_claude_launching", "");
-    for (const pane of panes) {
-      await launchConductor(projectRoot, pane.surface, pane.paneId);
+    for (const [i, pane] of panes.entries()) {
+      const resumeItem = resumePlan?.[i];
+      if (resumeItem) {
+        await launchConductor(projectRoot, pane.surface, pane.paneId, {
+          resumeTaskId: resumeItem.taskId,
+        });
+        assignments.push({
+          surface: pane.surface,
+          taskId: resumeItem.taskId,
+          taskRunId: resumeItem.taskRunId,
+          worktreePath: resumeItem.worktreePath,
+          sessionId: resumeItem.sessionId,
+          taskTitle: resumeItem.taskTitle,
+        });
+      } else {
+        await launchConductor(projectRoot, pane.surface, pane.paneId);
+      }
     }
 
     // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え
-    for (const pane of panes) {
+    for (const [i, pane] of panes.entries()) {
+      const resumeItem = resumePlan?.[i];
       if (!conductors.has(pane.surface)) {
         await log("conductor_registered_fallback", `surface=${pane.surface}`);
-        conductors.set(pane.surface, {
-          surface: pane.surface,
-          paneId: pane.paneId,
-          status: "starting",
-          startedAt: new Date().toISOString(),
-          agents: [],
-          // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
-        });
+        if (resumeItem) {
+          // resume 割当済みの場合は running + taskId を最初からセット
+          conductors.set(pane.surface, {
+            surface: pane.surface,
+            paneId: pane.paneId,
+            status: "running",
+            startedAt: new Date().toISOString(),
+            agents: [],
+            taskId: resumeItem.taskId,
+            taskRunId: resumeItem.taskRunId,
+            worktreePath: resumeItem.worktreePath,
+            taskTitle: resumeItem.taskTitle,
+            // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
+          });
+        } else {
+          conductors.set(pane.surface, {
+            surface: pane.surface,
+            paneId: pane.paneId,
+            status: "starting",
+            startedAt: new Date().toISOString(),
+            agents: [],
+            // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
+          });
+        }
       }
     }
 
@@ -187,6 +255,7 @@ export async function initializeConductorSlots(
   } catch (e: any) {
     await log("error", `initializeConductorSlots failed: ${e.message}`);
   }
+  return assignments;
 }
 
 // --- assignTask ---
