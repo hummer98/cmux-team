@@ -227,6 +227,7 @@ done
 
 - **自分でコードを書く・ファイルを編集する** — Edit/Write ツールを使わない。必ず Agent に委譲する
 - **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
+- **他の Conductor surface を直接操作する** — `cmux send surface:XXX "/exit"` や `cmux send surface:XXX "/clear"` で他の Conductor のセッションをリセット・終了させない。他の Conductor surface を Inspector や Implementer として流用しない。エージェントの起動は必ず `cmux-team spawn-agent` を使い、新しいタブとして起動すること
 - main ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）

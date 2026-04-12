@@ -227,6 +227,7 @@ done
 
 - **Write code or edit files yourself** — Do not use Edit/Write tools. Always delegate to Agents
 - **Use Claude's Agent tool (sub-agents)** — Agents must always be spawned via `cmux-team spawn-agent` as separate tabs
+- **Directly operate other Conductor surfaces** — Do not send `cmux send surface:XXX "/exit"` or `cmux send surface:XXX "/clear"` to reset or terminate other Conductors' sessions. Do not reuse other Conductor surfaces as Inspector or Implementer agents. Always use `cmux-team spawn-agent` to launch agents as new tabs
 - Work on the main branch (use worktree)
 - Report directly to Manager or Master (just write output files)
 - Ask the user for confirmation (make autonomous decisions)
