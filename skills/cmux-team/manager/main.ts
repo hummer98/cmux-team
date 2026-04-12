@@ -762,10 +762,41 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
  * cmdConductor と cmdResume の両方から使用される。
  * @returns 生成したファイルの絶対パス
  */
-function generateConductorSettings(projectRoot: string, surface: string): string {
+/**
+ * PreToolUse hook 用の bash スクリプト。
+ * Bash tool の command が `cmux send` / `cmux send-key` を叩こうとしていたら exit 2 で拒否する。
+ * 代替手段として `cmux-team send-agent` を stderr で案内する（2 行構成、Design Review R3）。
+ *
+ * 正規表現の設計:
+ *   - `(^|[^-[:alnum:]_])cmux[[:space:]]+(send|send-key)([[:space:]]|$)`
+ *   - `cmux-team` は `-` が前置でマッチしないため通る
+ *   - `sender` 等は `(send|send-key)` 直後の space/行末条件で除外
+ */
+const PRE_TOOL_USE_HOOK_SCRIPT = [
+  'input="$(cat)"',
+  'cmd="$(printf "%s" "$input" | grep -oE "\\"command\\"[[:space:]]*:[[:space:]]*\\"[^\\"]*\\"" | head -1 | sed -E "s/^\\"command\\"[[:space:]]*:[[:space:]]*\\"//; s/\\"$//")"',
+  'if printf "%s" "$cmd" | grep -qE "(^|[^-[:alnum:]_])cmux[[:space:]]+(send|send-key)([[:space:]]|$)"; then',
+  '  echo "cmux send / cmux send-key は Conductor から使用禁止です。" >&2',
+  '  echo "代替: cmux-team send-agent --surface <agent-surface> <message>  (自分が spawn した Agent のみ送信可)" >&2',
+  '  exit 2',
+  'fi',
+  'exit 0',
+].join("\n");
+
+export function generateConductorSettings(projectRoot: string, surface: string): string {
   const conductorSettingsPath = join(projectRoot, `.team/prompts/${surface}-settings.json`);
   const conductorSettings: Record<string, any> = {
     hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [{
+            type: "command",
+            command: `bash -c '${PRE_TOOL_USE_HOOK_SCRIPT}'`,
+            timeout: 3000,
+          }],
+        },
+      ],
       SessionStart: [
         {
           matcher: "startup",
@@ -1273,6 +1304,185 @@ async function cmdKillAgent(): Promise<void> {
   });
 
   console.log(`OK killed ${surface}`);
+}
+
+/**
+ * `cmdSendAgent` で使用する検証結果の型。
+ * reason は理由別ログ/エラーメッセージの分岐に使う。
+ */
+export type SendAgentValidationReason =
+  | "not_a_conductor"
+  | "agent_not_found"
+  | "self_send";
+
+export type SendAgentValidationResult =
+  | { ok: true }
+  | { ok: false; reason: SendAgentValidationReason };
+
+/**
+ * team.json と caller/target surface から send-agent の可否を判定する。
+ * ファイル I/O を行わないため単体テストが容易。
+ */
+export function validateSendAgentTarget(
+  teamJson: any,
+  callerSurface: string,
+  targetSurface: string,
+): SendAgentValidationResult {
+  if (callerSurface === targetSurface) {
+    return { ok: false, reason: "self_send" };
+  }
+  const conductors: any[] = teamJson?.conductors ?? [];
+  const conductor = conductors.find((c: any) => c.surface === callerSurface);
+  if (!conductor) {
+    return { ok: false, reason: "not_a_conductor" };
+  }
+  const agent = (conductor.agents ?? []).find((a: any) => a.surface === targetSurface);
+  if (!agent) {
+    return { ok: false, reason: "agent_not_found" };
+  }
+  return { ok: true };
+}
+
+/**
+ * team.json の反映ラグを吸収するため、agent_not_found の場合のみリトライする。
+ * 200ms × 最大 5 回（合計 1 秒）。他の reject 理由は恒久的なのでリトライしない。
+ */
+export async function waitForAgentRegistered(
+  teamJsonPath: string,
+  callerSurface: string,
+  targetSurface: string,
+  opts: { maxRetries?: number; intervalMs?: number } = {},
+): Promise<SendAgentValidationResult> {
+  const maxRetries = opts.maxRetries ?? 5;
+  const intervalMs = opts.intervalMs ?? 200;
+  let lastResult: SendAgentValidationResult = { ok: false, reason: "agent_not_found" };
+  for (let i = 0; i < maxRetries; i++) {
+    if (!existsSync(teamJsonPath)) {
+      // team.json が未生成: agent_not_found 扱いで retry ループに乗せる
+      lastResult = { ok: false, reason: "agent_not_found" };
+    } else {
+      try {
+        const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+        lastResult = validateSendAgentTarget(teamJson, callerSurface, targetSurface);
+      } catch {
+        lastResult = { ok: false, reason: "agent_not_found" };
+      }
+      if (lastResult.ok) return lastResult;
+      if (lastResult.reason !== "agent_not_found") return lastResult;
+    }
+    if (i < maxRetries - 1) await sleep(intervalMs);
+  }
+  return lastResult;
+}
+
+async function cmdSendAgent(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_send_agent"));
+  const targetSurface = requireArg("surface");
+
+  // メッセージは positional 引数（複数個の場合は space で join）
+  const flags = new Set(["--surface", "--no-return"]);
+  const messageParts: string[] = [];
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === undefined) continue;
+    if (a === "--surface") { i++; continue; }
+    if (flags.has(a)) continue;
+    if (a.startsWith("--")) continue;
+    messageParts.push(a);
+  }
+  const message = messageParts.join(" ");
+  if (!message) {
+    console.error("Error: <message> is required");
+    process.exit(1);
+  }
+  const noReturn = args.includes("--no-return");
+
+  // caller surface の解決
+  let callerSurface = process.env.CMUX_SURFACE;
+  if (!callerSurface) {
+    try {
+      callerSurface = await cmux.getCallerSurface();
+    } catch {
+      console.error("Error: CMUX_SURFACE が未設定で、cmux identify でも取得できません。Conductor 環境から実行してください。");
+      process.exit(1);
+    }
+  }
+
+  await log("send_agent_started", `caller=${callerSurface} target=${targetSurface}`);
+
+  // team.json の存在確認
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  if (!existsSync(teamJsonPath)) {
+    console.error("Error: .team/team.json not found. cmux-team start を実行してください。");
+    await log(
+      "send_agent_rejected",
+      `caller=${callerSurface} target=${targetSurface} reason=team_json_missing`,
+    );
+    process.exit(1);
+  }
+
+  // 自己送信は即時 reject（retry しても通らないため）
+  if (callerSurface === targetSurface) {
+    console.error(
+      `Error: 自分自身 (${callerSurface}) には送信できません。cmux-team send-agent は自分が spawn した Agent 宛のみ使用可能です。`,
+    );
+    await log(
+      "send_agent_rejected",
+      `caller=${callerSurface} target=${targetSurface} reason=self_send`,
+    );
+    process.exit(1);
+  }
+
+  // team.json 反映ラグに対する retry（agent_not_found のみ）
+  const result = await waitForAgentRegistered(teamJsonPath, callerSurface, targetSurface);
+  if (!result.ok) {
+    if (result.reason === "not_a_conductor") {
+      console.error(
+        `Error: caller surface ${callerSurface} は Conductor として登録されていません。`,
+      );
+    } else {
+      console.error(
+        `Error: surface ${targetSurface} はこの Conductor (${callerSurface}) が spawn した Agent ではありません。`,
+      );
+    }
+    await log(
+      "send_agent_rejected",
+      `caller=${callerSurface} target=${targetSurface} reason=${result.reason}`,
+    );
+    process.exit(1);
+  }
+
+  // cmux 実態の validateSurface でも確認（team.json と実態のズレ対策）
+  const workspace = await cmux.getCallerWorkspace();
+  if (!(await cmux.validateSurface(targetSurface, workspace))) {
+    console.error(`Error: surface ${targetSurface} validation failed`);
+    await log(
+      "send_agent_rejected",
+      `caller=${callerSurface} target=${targetSurface} reason=validate_surface_failed`,
+    );
+    process.exit(1);
+  }
+
+  // 送信
+  try {
+    await cmux.send(targetSurface, message, { workspace });
+    if (!noReturn) {
+      await sleep(500);
+      await cmux.sendKey(targetSurface, "return", { workspace });
+    }
+  } catch (e: any) {
+    await log(
+      "error",
+      `send-agent failed: caller=${callerSurface} target=${targetSurface} ${e?.message ?? e} stderr=${e?.stderr ?? ""}`,
+    );
+    throw e;
+  }
+
+  await log(
+    "send_agent_completed",
+    `caller=${callerSurface} target=${targetSurface} bytes=${message.length}`,
+  );
+  console.log(`OK sent to ${targetSurface}`);
 }
 
 async function cmdCreateTask(): Promise<void> {
@@ -2168,6 +2378,8 @@ async function cmdArtifacts(): Promise<void> {
 }
 
 // --- ルーティング ---
+// 単体テストから import した場合にトップレベル副作用を走らせないためのガード
+if (import.meta.main) {
 switch (command) {
   case "start":
     await cmdStart();
@@ -2192,6 +2404,9 @@ switch (command) {
     break;
   case "kill-agent":
     await cmdKillAgent();
+    break;
+  case "send-agent":
+    await cmdSendAgent();
     break;
   case "create-task":
     await cmdCreateTask();
@@ -2237,4 +2452,5 @@ switch (command) {
     console.error(`Unknown command: ${command}`);
     console.error(`Run 'cmux-team --help' for usage.`);
     process.exit(1);
+}
 }

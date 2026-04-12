@@ -237,6 +237,30 @@ Examples:
   cmux-team kill-agent --surface surface:215
 `,
 
+  help_send_agent: `
+cmux-team send-agent -- send a message to an Agent spawned by this Conductor
+
+Usage:
+  cmux-team send-agent --surface <agent-surface> [--no-return] <message>
+
+Options:
+  --surface <agent-surface>   target Agent surface (required)
+  --no-return                 skip sending Enter after the message
+  <message>                   message body (quoted)
+
+Environment:
+  CMUX_SURFACE                caller Conductor surface (falls back to cmux identify)
+
+Examples:
+  cmux-team send-agent --surface surface:382 "Please resume from plan.md section 3"
+  cmux-team send-agent --surface surface:382 --no-return "partial line"
+
+Notes:
+  - Only Agents spawned by the caller Conductor are allowed (verified via .team/team.json)
+  - Self-send (caller == target) and other Conductors' Agents are rejected
+  - Retries up to 5 × 200ms when the Agent is not yet registered in team.json
+`,
+
   help_create_task: `
 cmux-team create-task -- create a task
 
@@ -488,6 +512,7 @@ Usage:
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             list running agents
   cmux-team kill-agent --surface <surface>
+  cmux-team send-agent --surface <surface> <message>    send a message to a spawned Agent
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
@@ -717,6 +742,30 @@ Options:
 
 Examples:
   cmux-team kill-agent --surface surface:215
+`,
+
+  help_send_agent: `
+cmux-team send-agent -- この Conductor が spawn した Agent にメッセージを送る
+
+Usage:
+  cmux-team send-agent --surface <agent-surface> [--no-return] <message>
+
+Options:
+  --surface <agent-surface>   送信先 Agent の surface（必須）
+  --no-return                 送信後の Enter を抑制
+  <message>                   メッセージ本文（シェルでクォート）
+
+Environment:
+  CMUX_SURFACE                呼び出し側 Conductor の surface（未設定時は cmux identify）
+
+Examples:
+  cmux-team send-agent --surface surface:382 "plan.md の 3 節から再開してください"
+  cmux-team send-agent --surface surface:382 --no-return "途中行"
+
+Notes:
+  - 呼び出し元 Conductor が spawn した Agent のみに送信可（.team/team.json で検証）
+  - 自己送信や他 Conductor の Agent は拒否
+  - team.json 未反映の場合は 200ms × 5 回までリトライ
 `,
 
   help_create_task: `
@@ -971,6 +1020,7 @@ Usage:
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
   cmux-team kill-agent --surface <surface>
+  cmux-team send-agent --surface <surface> <message>    Agent にメッセージ送信
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
