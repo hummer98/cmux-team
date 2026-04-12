@@ -38,6 +38,7 @@ import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "
 import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
+import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import type { QueueMessage } from "./schema";
 
 // --- プロジェクトルート検出 ---
@@ -89,6 +90,7 @@ interface TeamConfig {
     conductor?: string;
     agent?: string;
   };
+  envrcHookPromptSkipped?: boolean;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -206,6 +208,11 @@ async function cmdStart(): Promise<void> {
   // インフラ準備
   await initInfra(state);
   await log("infra_ready");
+
+  // .envrc に CMUX_CLAUDE_HOOKS_DISABLED を追記するか対話確認
+  // proxy 起動・TUI 起動より前で同期実行する（Ink TUI が stdin/stdout を奪うため）
+  await ensureEnvrcHookPrompt(PROJECT_ROOT);
+
   await log(
     "daemon_started",
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
