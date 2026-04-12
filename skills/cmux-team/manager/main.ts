@@ -41,6 +41,7 @@ import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from ".
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import type { QueueMessage } from "./schema";
+import { THROTTLE_5H_THRESHOLD } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -1137,17 +1138,56 @@ async function cmdSpawnAgent(): Promise<void> {
   // --- 1. プロキシポート読み取り + 生存確認 ---
   const proxyPort = await resolveProxyPort();
 
-  // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
+  // team.json から conductor 情報を前倒しで解決（throttle ログでも taskId を参照するため）
   let worktreePath: string | undefined;
   let paneId: string | undefined;
+  let taskId: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductors: any[] = teamJson.conductors ?? [];
     const conductor = conductors.find((c: any) => c.surface === conductorSurface);
     worktreePath = conductor?.worktreePath;
     paneId = conductor?.paneId;
+    taskId = conductor?.taskId;
     if (!taskTitle) taskTitle = conductor?.taskTitle;
   } catch {}
+
+  // --- 1.5 throttle ガード ---
+  // exit 75 = BSD sysexits EX_TEMPFAIL（一時的失敗、retry 可能）
+  if (proxyPort) {
+    try {
+      const resp = await fetch(`http://127.0.0.1:${proxyPort}/rate-limit`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (resp.ok) {
+        const rl = await resp.json() as {
+          throttled: boolean;
+          unified5hReset: number | null;
+          unified5hUtilization: number | null;
+          resetRemaining: string | null;
+        };
+        if (rl.throttled) {
+          const util = rl.unified5hUtilization ?? 0;
+          console.log(`THROTTLED=true`);
+          console.log(`RESET_EPOCH=${rl.unified5hReset ?? 0}`);
+          console.log(`RESET_REMAINING=${rl.resetRemaining ?? ""}`);
+          console.log(`UTILIZATION=${(util * 100).toFixed(1)}%`);
+          console.log(`THRESHOLD=${(THROTTLE_5H_THRESHOLD * 100).toFixed(0)}%`);
+          console.log(`MESSAGE=Rate limit exceeded. Wait until RESET_EPOCH before retrying spawn-agent.`);
+          await log("spawn_agent_throttled",
+            `conductor=${conductorSurface} role=${role} task_id=${taskId ?? "-"} util=${(util * 100).toFixed(1)}% unified5hReset=${rl.unified5hReset ?? "null"}`);
+          process.exit(75);
+        }
+      } else {
+        await log("spawn_agent_ratelimit_warn", `status=${resp.status}`);
+      }
+    } catch (e: any) {
+      await log("spawn_agent_ratelimit_warn", `fetch_failed=${e?.message ?? e}`);
+      // best-effort: 続行
+    }
+  }
+
+  // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
 
   // フォールバック: cmux tree から paneId を解決
   const callerWorkspace = await cmux.getCallerWorkspace();
@@ -1173,14 +1213,6 @@ async function cmdSpawnAgent(): Promise<void> {
   // モデル解決
   const config = await loadConfig();
   const model = getModelForRole(config, "agent", getArg("model"));
-
-  // team.json から taskId を取得
-  let taskId: string | undefined;
-  try {
-    const teamJson2Pre = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
-    const condPre = teamJson2Pre?.conductors?.find((c: any) => c.surface === conductorSurface);
-    taskId = condPre?.taskId;
-  } catch {}
 
   // Agent 用 settings.json 生成
   const statuslineScript = join(homedir(), ".claude", "statusline.sh");
