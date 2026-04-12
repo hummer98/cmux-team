@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { tmpdir } from "os";
@@ -151,6 +151,55 @@ describe("ensureEnvrcHookPrompt - 対話", () => {
     const config = JSON.parse(await readFile(join(testDir, ".team/config.json"), "utf-8"));
     expect(config.envrcHookPromptSkipped).toBe(true);
     expect(config.models.master).toBe("opus");
+  });
+});
+
+describe("ensureEnvrcHookPrompt - 追記成功時の案内", () => {
+  test("Y 入力で direnv allow 手順案内が console.log に出力される", async () => {
+    await writeFile(join(testDir, ".envrc"), "source_up\n");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const r = await ensureEnvrcHookPrompt(testDir, {
+        ...baseOpts,
+        direnvPath: "/usr/bin/direnv",
+        runDirenvAllow: async () => {},
+        ask: ttyAsk("Y"),
+      });
+      expect(r.action).toBe("added");
+      const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(allOutput).toContain("CMUX_CLAUDE_HOOKS_DISABLED=1 を追記しました");
+      expect(allOutput).toContain("direnv allow");
+      expect(allOutput).toContain("cmux-team start を再実行");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("n 入力では案内は出力されない", async () => {
+    await writeFile(join(testDir, ".envrc"), "source_up\n");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const r = await ensureEnvrcHookPrompt(testDir, { ...baseOpts, ask: ttyAsk("n") });
+      expect(r.action).toBe("skipped_once");
+      const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(allOutput).not.toContain("CMUX_CLAUDE_HOOKS_DISABLED=1 を追記しました");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("N 入力でも案内は出力されない", async () => {
+    await writeFile(join(testDir, ".envrc"), "source_up\n");
+    await mkdir(join(testDir, ".team"), { recursive: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const r = await ensureEnvrcHookPrompt(testDir, { ...baseOpts, ask: ttyAsk("N") });
+      expect(r.action).toBe("silenced");
+      const allOutput = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(allOutput).not.toContain("CMUX_CLAUDE_HOOKS_DISABLED=1 を追記しました");
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
 

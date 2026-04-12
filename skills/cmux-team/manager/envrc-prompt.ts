@@ -107,6 +107,16 @@ const PROMPT_TEXT =
   "  [Y] 追記する (デフォルト)  [n] スキップ (今回のみ)  [N] 今後聞かない\n" +
   "選択 [Y/n/N]: ";
 
+const POST_ADD_REMINDER =
+  ".envrc に CMUX_CLAUDE_HOOKS_DISABLED=1 を追記しました。\n" +
+  "反映には以下の手順が必要です:\n" +
+  "\n" +
+  "  1. 現在のセッションを exit\n" +
+  "  2. シェルで: direnv allow\n" +
+  "  3. cmux-team start を再実行\n" +
+  "\n" +
+  "（direnv が未導入の場合は手動で source .envrc または環境変数設定が必要です）";
+
 export interface EnsureOptions {
   /** テスト用に askYNQuestion を差し替える */
   ask?: (prompt: string) => Promise<Answer>;
@@ -218,6 +228,7 @@ export async function ensureEnvrcHookPrompt(
     warnings.push("direnv が見つかりません — シェルを再起動するまで反映されません");
   }
 
+  console.log(POST_ADD_REMINDER);
   await log("envrc_hook_disabled_added", `direnv=${direnvAvailable}`);
   return { action: "added", warnings };
 }
