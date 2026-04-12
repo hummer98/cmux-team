@@ -1,5 +1,14 @@
 # Changelog
 
+## [未リリース]
+
+### Added
+- `cmux-team send-agent --surface <agent-surface> <message>` を追加。Conductor が自分で spawn した Agent にだけメッセージを送れる正規ルート。`.team/team.json` で呼び出し元との関係を検証し、自己送信・他 Conductor・他 Conductor の Agent は reject する。`spawn-agent` 直後の反映ラグに備えて `agent_not_found` の場合のみ 200ms × 最大 5 回リトライ (#21, #22)
+- Conductor に PreToolUse hook を追加。Bash tool 経由の `cmux send` / `cmux send-key` を実行時にブロックし、stderr に代替コマンド (`cmux-team send-agent`) を案内する（既存 Conductor は `cmux-team stop` → `start` で再起動すると反映される）(#21)
+
+### Changed
+- `conductor-role.md`（ja/en）の他 surface 直接操作禁止の記述を強化し、API エラー等で停止した Agent の回復手順として `cmux-team send-agent` の使用例を追記
+
 ## [3.42.0] - 2026-04-12
 
 ### Added
