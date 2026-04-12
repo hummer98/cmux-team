@@ -106,15 +106,63 @@ cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 作業が完了したら停止してください。
 AGENT_PROMPT
 
-# 2. Agent spawn（--prompt-file でファイルパスだけを渡す）
+# 2. Agent spawn（throttle 時 exit 75 を検知して reset まで待機 → retry）
 # 注意: --bare は OAuth 認証（Claude Max）をスキップするため使用禁止
-RESULT=$(cmux-team spawn-agent \
-  --conductor-surface $CMUX_SURFACE \
-  --role impl \
-  --task-title "<サブタスクの簡潔な説明>" \
-  --prompt-file "$PROMPT_FILE")
-AGENT_SURFACE=$(echo "$RESULT" | grep -o 'SURFACE=surface:[0-9]*' | cut -d= -f2)
-echo "Agent spawned: $AGENT_SURFACE"
+# exit 75 = BSD sysexits EX_TEMPFAIL（一時的失敗、retry 可能）
+MAX_WAIT_SEC=7200   # 最大 2 時間で諦める
+DEADLINE=$(( $(date +%s) + MAX_WAIT_SEC ))
+while true; do
+  RESULT=$(cmux-team spawn-agent \
+    --conductor-surface $CMUX_SURFACE \
+    --role impl \
+    --task-title "<サブタスクの簡潔な説明>" \
+    --prompt-file "$PROMPT_FILE")
+  EC=$?
+
+  if [ $EC -eq 75 ]; then
+    RESET=$(echo "$RESULT" | grep '^RESET_EPOCH=' | cut -d= -f2)
+    REMAINING=$(echo "$RESULT" | grep '^RESET_REMAINING=' | cut -d= -f2-)
+
+    # ガード: RESET が空 or 非整数 or 0 の場合は 60s jitter で retry
+    if [ -z "$RESET" ] || ! [ "$RESET" -gt 0 ] 2>/dev/null; then
+      echo "THROTTLED but RESET missing/invalid; retrying after ~60s"
+      sleep $(( 60 + RANDOM % 30 ))
+      if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+        echo "spawn-agent throttled beyond deadline (2h)"
+        exit 1
+      fi
+      continue
+    fi
+
+    # RESET が DEADLINE を超えている場合は即諦める
+    if [ "$RESET" -ge "$DEADLINE" ]; then
+      echo "spawn-agent reset ($RESET) beyond deadline ($DEADLINE); aborting"
+      exit 1
+    fi
+
+    echo "THROTTLED. Waiting until reset: $REMAINING (epoch $RESET)"
+    # reset まで 60 秒単位で待機（内側ループも DEADLINE 監視）
+    while [ "$(date +%s)" -lt "$RESET" ]; do
+      if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+        echo "spawn-agent throttled beyond deadline (2h)"
+        exit 1
+      fi
+      sleep 60
+    done
+    # jitter 0-30 秒（複数 Conductor の同時 reset 殺到を避ける）
+    sleep $(( RANDOM % 30 ))
+    continue
+  fi
+
+  if [ $EC -ne 0 ]; then
+    echo "spawn-agent failed (exit $EC): $RESULT"
+    exit $EC
+  fi
+
+  AGENT_SURFACE=$(echo "$RESULT" | grep -o 'SURFACE=surface:[0-9]*' | cut -d= -f2)
+  echo "Agent spawned: $AGENT_SURFACE"
+  break
+done
 ```
 
 **重要:** `--prompt` でインライン渡しも後方互換として残っているが、プロンプトが長い場合やエスケープが複雑な場合は必ず `--prompt-file` を使うこと。
