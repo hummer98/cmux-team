@@ -26,6 +26,7 @@ export const AgentSpawnedMessage = z.object({
   surface: z.string(),
   role: z.string().optional(),
   taskTitle: z.string().optional(),
+  agentType: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -114,6 +115,7 @@ export interface AgentState {
   taskTitle?: string;
   spawnedAt: string;
   sessionId?: string;
+  agentType?: string;
 }
 
 // --- Conductor 状態 ---

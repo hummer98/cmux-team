@@ -42,6 +42,7 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import type { QueueMessage } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
+import { getAdapter, DEFAULT_AGENT_TYPE, listAdapters } from "./agent-registry";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -92,6 +93,10 @@ interface TeamConfig {
     conductor?: string;
     agent?: string;
   };
+  agents?: {
+    default?: string;                    // 全エージェントのデフォルト CLI（例: "claude"）
+    roles?: Record<string, string>;      // ロール別 CLI（例: { researcher: "gemini" }）
+  };
   envrcHookPromptSkipped?: boolean;
 }
 
@@ -106,6 +111,11 @@ async function loadConfig(): Promise<TeamConfig> {
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
   return cliOverride ?? config.models?.[role] ?? DEFAULT_MODEL;
+}
+
+function getAgentTypeForRole(config: TeamConfig, role: string, cliOverride?: string): string {
+  if (cliOverride) return cliOverride;
+  return config.agents?.roles?.[role] ?? config.agents?.default ?? DEFAULT_AGENT_TYPE;
 }
 
 // --- サブコマンド ---
@@ -1209,15 +1219,28 @@ async function cmdSpawnAgent(): Promise<void> {
     process.exit(1);
   }
 
-  // --- 3. Claude Code 起動 ---
+  // --- 3. エージェント CLI 起動 ---
   // モデル解決
   const config = await loadConfig();
   const model = getModelForRole(config, "agent", getArg("model"));
 
-  // Agent 用 settings.json 生成
+  // エージェントタイプ解決: CLI flag > タスク設定 > config ロール > config デフォルト > "claude"
+  let taskAgentOverride: string | undefined;
+  if (taskId) {
+    try {
+      const { tasks } = await loadTasks(PROJECT_ROOT);
+      const task = tasks.find(t => t.id === taskId);
+      taskAgentOverride = task?.agent;
+    } catch {}
+  }
+  const agentTypeOverride = getArg("agent");
+  const agentType = getAgentTypeForRole(config, role, agentTypeOverride ?? taskAgentOverride);
+  const adapter = getAdapter(agentType);
+
+  // Agent 用 settings.json 生成（Claude 系のみ）
   const statuslineScript = join(homedir(), ".claude", "statusline.sh");
   let agentSettingsFlag = "";
-  if (existsSync(statuslineScript)) {
+  if (!adapter.skipProxyEnv && existsSync(statuslineScript)) {
     const agentSettingsPath = join(PROJECT_ROOT, `.team/prompts/${surface}-agent-settings.json`);
     const agentSettings = {
       statusLine: {
@@ -1242,7 +1265,8 @@ async function cmdSpawnAgent(): Promise<void> {
   if (taskId) {
     exportVars.push(`CMUX_TASK_ID=${taskId}`);
   }
-  if (proxyPort) {
+  // ANTHROPIC_BASE_URL は Claude 系のみ設定
+  if (proxyPort && !adapter.skipProxyEnv) {
     exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
   }
   await cmux.send(surface, `export ${exportVars.join(" ")}\n`);
@@ -1256,20 +1280,14 @@ async function cmdSpawnAgent(): Promise<void> {
     await sleep(500);
   }
 
-  // Claude Code 起動
-  const claudeFlags = ["--dangerously-skip-permissions"];
-  if (agentSettingsFlag) {
-    claudeFlags.push(agentSettingsFlag);
-  }
-  claudeFlags.push(`--model ${model}`);
-
-  let claudeCmd: string;
-  if (promptFile) {
-    claudeCmd = `claude ${claudeFlags.join(" ")} '${promptFile} を読んで指示に従ってください。'`;
-  } else {
-    claudeCmd = `claude ${claudeFlags.join(" ")} '${prompt}'`;
-  }
-  await cmux.send(surface, claudeCmd + "\n");
+  // エージェント CLI 起動（アダプタ経由）
+  const agentCmd = adapter.buildCommand({
+    prompt: promptFile ? undefined : prompt,
+    promptFile: promptFile || undefined,
+    model,
+    settingsFlag: agentSettingsFlag || undefined,
+  });
+  await cmux.send(surface, agentCmd + "\n");
 
   // --- 4. タブ名設定 ---
   const roleIcons: Record<string, string> = {
@@ -1296,6 +1314,7 @@ async function cmdSpawnAgent(): Promise<void> {
     surface,
     role,
     taskTitle,
+    agentType,
     timestamp: new Date().toISOString(),
   });
 
@@ -1562,7 +1581,16 @@ async function cmdCreateTask(): Promise<void> {
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
   const dependsOn = getArg("depends-on") || "";
+  const agent = getArg("agent") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
+
+  // agent バリデーション
+  if (agent) {
+    try { getAdapter(agent); } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
+  }
 
   // run_after_all タスクが既に存在する場合はエラー
   if (runAfterAll) {
@@ -1612,7 +1640,7 @@ async function cmdCreateTask(): Promise<void> {
   const content = `---
 id: ${newId}
 title: ${title}
-priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${depsArray.length > 0 ? `\ndepends_on: [${depsArray.join(", ")}]` : ""}
+priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${agent ? `\nagent: ${agent}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${depsArray.length > 0 ? `\ndepends_on: [${depsArray.join(", ")}]` : ""}
 created_at: ${new Date().toISOString()}
 ---
 

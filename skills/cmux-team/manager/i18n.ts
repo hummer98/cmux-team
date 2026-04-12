@@ -203,10 +203,12 @@ Options:
   --prompt-file <path>            prompt file path (mutually exclusive with --prompt, one required)
   --task-title <title>            task title (optional, used for tab name)
   --model <model>                 model to use (default: config.models.agent or "{model}")
+  --agent <type>                  agent CLI: claude / ft-claude / codex / gemini / opencode (default: from config)
 
 Examples:
   cmux-team spawn-agent --conductor-surface surface:210 --role researcher --prompt "Research the API endpoints"
   cmux-team spawn-agent --conductor-surface surface:210 --role implementer --prompt-file .team/prompts/task.md
+  cmux-team spawn-agent --conductor-surface surface:210 --role researcher --agent gemini --prompt "Investigate caching"
 
 Notes:
   - Creates an Agent as a tab within the Conductor pane
@@ -274,6 +276,7 @@ Options:
   --status <status>       initial status: draft / ready (optional, default draft)
   --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
   --base-branch <branch>  merge target branch (optional, default: none → merges to main)
+  --agent <type>          agent CLI override: claude / ft-claude / codex / gemini / opencode (optional)
   --run-after-all         run after all regular tasks complete (optional)
 
 Examples:
@@ -282,6 +285,7 @@ Examples:
   cmux-team create-task --title "Refactor" --depends-on "081,082" --status ready
   cmux-team create-task --title "hotfix" --base-branch develop --status ready
   cmux-team create-task --title "Release v3.5.0" --run-after-all --status ready
+  cmux-team create-task --title "Research competitors" --agent gemini --status ready
 
 Notes:
   - If status is ready, a TASK_CREATED message is automatically sent
@@ -710,10 +714,12 @@ Options:
   --prompt-file <path>            プロンプトファイルパス（--prompt と排他、どちらか必須）
   --task-title <title>            タスクタイトル（任意、タブ名に使用）
   --model <model>                 使用するモデル（デフォルト: config.models.agent or "{model}"）
+  --agent <type>                  エージェント CLI: claude / ft-claude / codex / gemini / opencode（デフォルト: config から）
 
 Examples:
   cmux-team spawn-agent --conductor-surface surface:210 --role researcher --prompt "調査してください"
   cmux-team spawn-agent --conductor-surface surface:210 --role implementer --prompt-file .team/prompts/task.md
+  cmux-team spawn-agent --conductor-surface surface:210 --role researcher --agent gemini --prompt "キャッシュ戦略を調査"
 
 Notes:
   - Conductor ペイン内にタブとして Agent を作成します
@@ -781,6 +787,7 @@ Options:
   --status <status>       初期ステータス: draft / ready（任意、デフォルト draft）
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
   --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
+  --agent <type>          エージェント CLI 指定: claude / ft-claude / codex / gemini / opencode（任意）
   --run-after-all         全通常タスク完了後に実行（任意）
 
 Examples:
@@ -789,6 +796,7 @@ Examples:
   cmux-team create-task --title "リファクタ" --depends-on "081,082" --status ready
   cmux-team create-task --title "hotfix" --base-branch develop --status ready
   cmux-team create-task --title "リリース v3.5.0" --run-after-all --status ready
+  cmux-team create-task --title "競合調査" --agent gemini --status ready
 
 Notes:
   - status が ready の場合、TASK_CREATED メッセージが自動送信され、
