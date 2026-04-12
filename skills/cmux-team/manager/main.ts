@@ -30,6 +30,7 @@ import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
+import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { launchConductor } from "./conductor";
@@ -1662,7 +1663,9 @@ async function cleanupAssignedTask(conductor: any): Promise<void> {
       await execFileAsync("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
         cwd: PROJECT_ROOT,
       });
-    } catch {}
+    } catch (e: any) {
+      await log("cleanup_failed", `abort-task worktree remove: path=${conductor.worktreePath} ${formatExecError(e)}`);
+    }
     // ブランチ削除
     if (conductor.taskRunId) {
       const branch = `${conductor.taskRunId}/task`;
@@ -1671,7 +1674,9 @@ async function cleanupAssignedTask(conductor: any): Promise<void> {
         const { promisify } = require("util");
         const execFileAsync = promisify(execFileCb);
         await execFileAsync("git", ["branch", "-D", branch], { cwd: PROJECT_ROOT });
-      } catch {}
+      } catch (e: any) {
+        await log("cleanup_failed", `abort-task branch delete: branch=${branch} ${formatExecError(e)}`);
+      }
     }
   }
 }
