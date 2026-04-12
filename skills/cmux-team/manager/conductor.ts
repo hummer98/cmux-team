@@ -10,6 +10,7 @@ import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
+import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
 import type { ConductorState } from "./schema";
 
@@ -252,7 +253,7 @@ export async function assignTask(
         log("worktree_created", `branch=${branch} baseBranch=${baseBranch} path=${worktreePath}`);
       }
     } catch (e: any) {
-      throw new AssignTaskError("task", `git worktree add failed: ${e.message}`, e);
+      throw new AssignTaskError("task", `git worktree add failed: ${formatExecError(e)}`, e);
     }
 
     // .claude/settings.local.json を worktree にコピー
@@ -278,7 +279,7 @@ export async function assignTask(
     // worktree ブートストラップ
     if (existsSync(join(worktreePath, "package.json"))) {
       await execFile("npm", ["install"], { cwd: worktreePath }).catch(async (e: any) => {
-        await log("error", `npm install failed in worktree: path=${worktreePath} ${e.message}`);
+        await log("error", `npm install failed in worktree: path=${worktreePath} ${formatExecError(e)}`);
       });
     }
 
@@ -288,7 +289,7 @@ export async function assignTask(
         await execFile("direnv", ["allow"], { cwd: worktreePath });
         await log("direnv_allowed", `worktree=${worktreePath}`);
       } catch (e: any) {
-        await log("error", `direnv allow failed: worktree=${worktreePath} ${e.message}`);
+        await log("error", `direnv allow failed: worktree=${worktreePath} ${formatExecError(e)}`);
       }
     }
 
@@ -390,12 +391,12 @@ export async function assignTask(
       try {
         await execFile("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectRoot });
       } catch (ce: any) {
-        await log("error", `assignTask cleanup worktree remove failed: path=${worktreePath} ${ce.message}`);
+        await log("error", `assignTask cleanup worktree remove failed: path=${worktreePath} ${formatExecError(ce)}`);
       }
       try {
         await execFile("git", ["branch", "-D", branch], { cwd: projectRoot });
       } catch (ce: any) {
-        await log("error", `assignTask cleanup branch delete failed: branch=${branch} ${ce.message}`);
+        await log("error", `assignTask cleanup branch delete failed: branch=${branch} ${formatExecError(ce)}`);
       }
     }
 
@@ -438,7 +439,7 @@ export async function resetConductor(
           cwd: projectRoot,
         });
       } catch (e: any) {
-        await log("cleanup_failed", `resetConductor worktree remove: path=${conductor.worktreePath} ${e.message}`);
+        await log("cleanup_failed", `resetConductor worktree remove: path=${conductor.worktreePath} ${formatExecError(e)}`);
       }
       // ブランチ削除（冪等: 既に削除済みでもエラーにしない）
       if (conductor.taskRunId) {
@@ -446,7 +447,7 @@ export async function resetConductor(
         try {
           await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
         } catch (e: any) {
-          await log("cleanup_failed", `resetConductor branch delete: branch=${branch} ${e.message}`);
+          await log("cleanup_failed", `resetConductor branch delete: branch=${branch} ${formatExecError(e)}`);
         }
       }
     }
