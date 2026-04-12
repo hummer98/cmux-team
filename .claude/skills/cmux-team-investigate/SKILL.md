@@ -65,8 +65,23 @@ cat "$TARGET/.team/conductors/conductor-1.json" 2>/dev/null
 
 ## Step 3: trace DB 検索
 
-> **重要**: 現行の `cmux-team trace-task` は CWD の `.team/traces/traces.db` のみを参照する
-> （`--db` オプションは存在しない）。別リポジトリの DB を読むには次のいずれかを使う。
+### trace DB の位置づけ
+
+`traces.db` は **セッション索引** であり、会話内容は持たない。
+
+```
+traces.db（インデックス）
+  └─ task_sessions: session_id, role, surface, task_id, event, worktree_path
+       ↓ session_id を使って
+Claude Code 生ログ（本体）
+  └─ ~/.claude/projects/<project-dir>/<session_id>.jsonl
+```
+
+`task_sessions` テーブルには FTS5 仮想テーブルはなく、本文検索は不可。
+
+> **注意**: `.team/logs/traces/api-trace.jsonl` はプロキシのアクセスログ（timestamp/method/path/status/bytes のみ）であり、会話内容は含まない。
+
+### DB クエリ
 
 ```bash
 # 方式 A: 対象リポジトリに cd して cmux-team trace-task を実行
@@ -74,19 +89,47 @@ cat "$TARGET/.team/conductors/conductor-1.json" 2>/dev/null
 
 # 方式 B: sqlite3 で直接 readonly 参照（ロック回避のため readonly モード）
 sqlite3 "file:$TARGET/.team/traces/traces.db?mode=ro" -readonly \
-  "SELECT timestamp, task_id, role, surface, event FROM task_sessions WHERE task_id='042' ORDER BY id ASC;"
+  "SELECT timestamp, task_id, session_id, role, surface, event FROM task_sessions WHERE task_id='042' ORDER BY id ASC;"
 
 # 方式 C: ロックが掛かっている場合は cp してから読む
 cp "$TARGET/.team/traces/traces.db" /tmp/traces-snapshot.db
 sqlite3 /tmp/traces-snapshot.db "SELECT * FROM task_sessions WHERE task_id='042';"
 ```
 
-`task_sessions` テーブルは通常テーブル + 通常 INDEX で、FTS5 仮想テーブルは持たない。
-本文の全文検索が必要な場合は body ファイルを直接 grep する:
+### session_id から生ログを参照する
+
+DB で `session_id` を取得したら、対応する Claude Code セッションファイルを直接開く。
 
 ```bash
-grep -rl "<query>" "$TARGET/.team/logs/traces/bodies/"
+# プロジェクトディレクトリ名の変換ルール: パスの / を - に置換し先頭に - を付ける
+# 例: /Users/yamamoto/git/mado → -Users-yamamoto-git-mado
+SESSION_ID="2577bcfe-2f0e-4dfa-b277-326731acb6ba"
+PROJECT_DIR="-Users-yamamoto-git-mado"   # $TARGET のパスから導出
+JSONL=~/.claude/projects/$PROJECT_DIR/$SESSION_ID.jsonl
+
+# worktree 内セッションは別ディレクトリに存在する
+# 例: /Users/yamamoto/git/mado/.worktrees/task-001-... → -Users-yamamoto-git-mado--worktrees-task-001-...
+
+# tool_use（Bash コマンド）を抽出する
+python3 - <<'EOF'
+import sys, json
+for line in open("$JSONL"):
+    obj = json.loads(line)
+    if obj.get("type") == "assistant":
+        for block in obj.get("message", {}).get("content", []):
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                inp = block.get("input", {})
+                cmd = inp.get("command", "")
+                if cmd:
+                    print(cmd[:300])
+                    print("---")
+EOF
 ```
+
+> **注意 — コンパクション後は tool_use が消える**: Claude Code はコンテキスト上限に達すると
+> 会話を圧縮する。圧縮後の JSONL は `assistant` メッセージに `text` ブロックしか残らず、
+> `tool_use` ブロックはすべて失われる。コンパクション済みかどうかは行数（数十行以下）
+> や `tool_use` count がゼロかで判断できる。
 
 ## Step 4: surface 直接参照
 
