@@ -393,11 +393,115 @@ async function cmdStart(): Promise<void> {
   const folderName = basename(PROJECT_ROOT);
   await cmux.renameWorkspace(folderName, state.workspace);
 
-  // Conductor スロット作成
+  // --- assigned タスクの resumePlan を boot 前に構築 ---
+  //   launchConductor に `{ resumeTaskId }` を渡して起動時点で
+  //   `cmux-team resume <id>` をシェルに投入する（旧実装は Claude 起動後に
+  //   チャット入力として消費されるバグがあった）。
+  const taskState = await loadTaskState(PROJECT_ROOT);
+  let taskStateModified = false;
+  const rawResumePlan: Array<{
+    taskId: string;
+    taskRunId: string;
+    worktreePath: string;
+    sessionId: string;
+    taskTitle?: string;
+  }> = [];
+
+  for (const [taskId, ts] of Object.entries(taskState)) {
+    if (ts.status !== "assigned") continue;
+
+    const canResume = ts.sessionId
+      && ts.worktreePath && existsSync(ts.worktreePath)
+      && ts.taskRunId;
+
+    if (!canResume) {
+      // resume 不可 → ready に戻す（次の scanTasks で再割り当て）
+      taskState[taskId] = { ...ts, status: "ready" };
+      taskStateModified = true;
+      await log(
+        "resume_fallback_to_ready",
+        `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`
+      );
+      continue;
+    }
+
+    rawResumePlan.push({
+      taskId,
+      taskRunId: ts.taskRunId!,
+      worktreePath: ts.worktreePath!,
+      sessionId: ts.sessionId!,
+    });
+  }
+
+  // 順序の安定化: taskId を数値として昇順 sort。これによりどの pane に
+  // どの task が割り当てられるかが task-state.json の記録順に依存しなくなる。
+  rawResumePlan.sort((a, b) => {
+    const na = parseInt(a.taskId, 10);
+    const nb = parseInt(b.taskId, 10);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return a.taskId.localeCompare(b.taskId);
+  });
+
+  // slot 数を超える場合は末尾から ready に差し戻す
+  while (rawResumePlan.length > state.maxConductors) {
+    const overflow = rawResumePlan.pop()!;
+    taskState[overflow.taskId] = { ...taskState[overflow.taskId], status: "ready" };
+    taskStateModified = true;
+    await log("resume_overflow_to_ready", `task_id=${overflow.taskId}`);
+  }
+
+  // タスクタイトルを取得（renameTab 用）
+  for (const item of rawResumePlan) {
+    const taskFile = await findTaskFile(item.taskId);
+    if (taskFile) {
+      try {
+        const content = await readFile(taskFile, "utf-8");
+        item.taskTitle = content.match(/^title:\s*(.+)/m)?.[1]?.trim();
+      } catch {}
+    }
+  }
+
+  if (rawResumePlan.length > 0) {
+    await log(
+      "resume_plan_built",
+      `count=${rawResumePlan.length} taskIds=[${rawResumePlan.map(r => r.taskId).join(",")}]`
+    );
+  }
+
+  // Conductor スロット作成（resumePlan を透過）
   state.bootPhase = "conductors";
   scheduleRefresh();
-  await initializeLayout(state, daemonSurface);
+  const resumeAssignments = await initializeLayout(state, daemonSurface, rawResumePlan);
   scheduleRefresh();
+
+  // resume 割当結果を ConductorState に反映（タブ名 + state 詳細）
+  for (const r of resumeAssignments) {
+    const c = state.conductors.get(r.surface);
+    if (!c) {
+      await log("resume_assignment_missing_conductor", `surface=${r.surface} task_id=${r.taskId}`);
+      continue;
+    }
+    c.taskId = r.taskId;
+    c.taskRunId = r.taskRunId;
+    c.worktreePath = r.worktreePath;
+    c.taskTitle = r.taskTitle;
+    c.status = "running";
+    c.startedAt = new Date().toISOString();
+    c.agents = [];
+
+    const num = c.surface.replace("surface:", "");
+    const shortTitle = (c.taskTitle ?? "").slice(0, 30);
+    await cmux.renameTab(c.surface, `[${num}] ♦ T${r.taskId} ${shortTitle}`).catch(() => {});
+
+    await log(
+      "task_resumed",
+      `task_id=${r.taskId} session_id=${r.sessionId} surface=${r.surface} (via boot)`
+    );
+  }
+
+  if (taskStateModified) {
+    await saveTaskState(PROJECT_ROOT, taskState);
+  }
 
   // Master spawn
   state.bootPhase = "master";
@@ -409,73 +513,6 @@ async function cmdStart(): Promise<void> {
   state.bootPhase = "ready";
   await updateTeamJson(state);
   await log("boot_completed");
-  scheduleRefresh();
-
-  // --- assigned タスクの resume ---
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  let taskStateModified = false;
-  for (const [taskId, ts] of Object.entries(taskState)) {
-    if (ts.status !== "assigned") continue;
-
-    // 既にこのタスクを実行中の Conductor がいれば skip（多重実行防止）
-    const alreadyRunning = [...state.conductors.values()].find(c => c.taskId === taskId && c.status === "running");
-    if (alreadyRunning) {
-      await log("resume_skipped", `task_id=${taskId} reason=already_running surface=${alreadyRunning.surface}`);
-      continue;
-    }
-
-    const canResume = ts.sessionId
-      && ts.worktreePath && existsSync(ts.worktreePath)
-      && ts.taskRunId;
-
-    if (!canResume) {
-      // resume 不可 → ready に戻す（次の scanTasks で再割り当て）
-      taskState[taskId] = { ...ts, status: "ready" };
-      taskStateModified = true;
-      await log("resume_fallback_to_ready", `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`);
-      continue;
-    }
-
-    // idle Conductor を探す
-    const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
-    if (!idleConductor) {
-      await log("resume_no_idle_conductor", `task_id=${taskId}`);
-      continue;
-    }
-
-    // ConductorState を復元
-    idleConductor.taskRunId = ts.taskRunId;
-    idleConductor.taskId = taskId;
-    idleConductor.worktreePath = ts.worktreePath;
-    idleConductor.status = "running";
-    idleConductor.startedAt = new Date().toISOString();
-    idleConductor.agents = [];
-
-    // タスクタイトルを取得（task ファイルから）
-    const taskFile = await findTaskFile(taskId);
-    if (taskFile) {
-      try {
-        const content = await readFile(taskFile, "utf-8");
-        idleConductor.taskTitle = content.match(/^title:\s*(.+)/m)?.[1]?.trim();
-      } catch {}
-    }
-
-    // タブ名更新
-    const num = idleConductor.surface.replace("surface:", "");
-    const shortTitle = (idleConductor.taskTitle ?? "").slice(0, 30);
-    await cmux.renameTab(idleConductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`).catch(() => {});
-
-    // resume コマンドを Conductor ペインに送信
-    await cmux.send(idleConductor.surface, `export CMUX_SURFACE=${idleConductor.surface}\n`);
-    await new Promise(r => setTimeout(r, 500));
-    await cmux.send(idleConductor.surface, `cmux-team resume ${taskId}\n`);
-
-    await log("task_resumed", `task_id=${taskId} session_id=${ts.sessionId} surface=${idleConductor.surface}`);
-  }
-  if (taskStateModified) {
-    await saveTaskState(PROJECT_ROOT, taskState);
-  }
-
   scheduleRefresh();
 
   // メインループ
