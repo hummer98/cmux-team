@@ -155,6 +155,20 @@ done
 - `❯` is displayed AND `esc to interrupt` is present → **Still running**
 - Surface does not exist → **Crashed**
 
+## Recovery when an Agent has stalled
+
+If an Agent has stopped due to an API error (rate limit / overloaded / network drop), send a resume prompt via `cmux-team send-agent`. `cmux send` is blocked by the PreToolUse hook and must not be used.
+
+```bash
+# Example: tell a rate-limited Agent to keep going
+cmux-team send-agent --surface $AGENT_SURFACE "continue"
+
+# Example: re-issue an explicit instruction
+cmux-team send-agent --surface $AGENT_SURFACE "resume from plan.md section 3"
+```
+
+**Validation:** `send-agent` consults `.team/team.json` and allows delivery **only to Agents spawned by this Conductor**. Self-send / other Conductors / other Conductors' Agents / non-existent surfaces are rejected. Immediately after `spawn-agent` the registration may not yet be reflected in `team.json`; the CLI retries up to 1 second (200ms × 5) for `agent_not_found`.
+
 ## Completion Procedures
 
 1. Confirm all phases are complete (GO verdict from Inspection)
@@ -227,7 +241,7 @@ done
 
 - **Write code or edit files yourself** — Do not use Edit/Write tools. Always delegate to Agents
 - **Use Claude's Agent tool (sub-agents)** — Agents must always be spawned via `cmux-team spawn-agent` as separate tabs
-- **Directly operate other Conductor surfaces** — Do not send `cmux send surface:XXX "/exit"` or `cmux send surface:XXX "/clear"` to reset or terminate other Conductors' sessions. Do not reuse other Conductor surfaces as Inspector or Implementer agents. Always use `cmux-team spawn-agent` to launch agents as new tabs
+- **Send to other surfaces directly via `cmux send` / `cmux send-key`** — Forbidden. The PreToolUse hook blocks these at runtime. Spawn Agents with `cmux-team spawn-agent`, deliver follow-up instructions with `cmux-team send-agent --surface <agent-surface> <message>`, and stop them with `cmux-team kill-agent`. Never touch other Conductor surfaces (anyone besides yourself). Reusing another Conductor as an Inspector/Implementer is also forbidden
 - Work on the main branch (use worktree)
 - Report directly to Manager or Master (just write output files)
 - Ask the user for confirmation (make autonomous decisions)

@@ -155,6 +155,20 @@ done
 - `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
 - surface が存在しない → **クラッシュ**
 
+## Agent が途中で停止した場合の回復
+
+Agent が API エラー（レート制限 / overloaded / ネットワーク断）で停止していたら、`cmux-team send-agent` で再開プロンプトを送る。`cmux send` は PreToolUse hook でブロックされるので使わないこと。
+
+```bash
+# 例: レート制限で止まった Agent に「続けてください」と送る
+cmux-team send-agent --surface $AGENT_SURFACE "続けてください"
+
+# 例: 明示的にタスクを指示しなおす
+cmux-team send-agent --surface $AGENT_SURFACE "plan.md の 3 節から再開してください"
+```
+
+**検証ルール:** `send-agent` は `.team/team.json` を参照し、**この Conductor が spawn した Agent** にのみ送信を許可する。自己送信 / 他 Conductor / 他 Conductor の Agent / 存在しない surface は reject される。`spawn-agent` 直後で team.json に未反映でも最大 1 秒（200ms × 5 回）リトライされる。
+
 ## 完了時の処理
 
 1. 全フェーズが完了したことを確認（Inspection で GO 判定済み）
@@ -227,7 +241,7 @@ done
 
 - **自分でコードを書く・ファイルを編集する** — Edit/Write ツールを使わない。必ず Agent に委譲する
 - **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
-- **他の Conductor surface を直接操作する** — `cmux send surface:XXX "/exit"` や `cmux send surface:XXX "/clear"` で他の Conductor のセッションをリセット・終了させない。他の Conductor surface を Inspector や Implementer として流用しない。エージェントの起動は必ず `cmux-team spawn-agent` を使い、新しいタブとして起動すること
+- **他の surface に `cmux send` / `cmux send-key` で直接送信する** — 禁止。PreToolUse hook で実行時にブロックされる。Agent の起動は `cmux-team spawn-agent`、Agent への追加指示は `cmux-team send-agent --surface <agent-surface> <message>`、Agent の終了は `cmux-team kill-agent` を使う。他の Conductor surface（自分以外）は一切触らない。他の Conductor を Inspector/Implementer として流用するのも禁止
 - main ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）
