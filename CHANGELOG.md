@@ -1,13 +1,18 @@
 # Changelog
 
-## [未リリース]
+## [3.43.0] - 2026-04-12
 
 ### Added
 - `cmux-team send-agent --surface <agent-surface> <message>` を追加。Conductor が自分で spawn した Agent にだけメッセージを送れる正規ルート。`.team/team.json` で呼び出し元との関係を検証し、自己送信・他 Conductor・他 Conductor の Agent は reject する。`spawn-agent` 直後の反映ラグに備えて `agent_not_found` の場合のみ 200ms × 最大 5 回リトライ (#21, #22)
 - Conductor に PreToolUse hook を追加。Bash tool 経由の `cmux send` / `cmux send-key` を実行時にブロックし、stderr に代替コマンド (`cmux-team send-agent`) を案内する（既存 Conductor は `cmux-team stop` → `start` で再起動すると反映される）(#21)
+- スロットル中のサブ Agent 起動を抑制する仕組みを追加。proxy に `/rate-limit` API を設け、throttle 検出時は `cmux-team spawn-agent` が exit 75 で終了し Conductor 側でリトライする流れに統一
 
 ### Changed
 - `conductor-role.md`（ja/en）の他 surface 直接操作禁止の記述を強化し、API エラー等で停止した Agent の回復手順として `cmux-team send-agent` の使用例を追記
+- 調査系タスクの完了時に summary.md を artifact として自動保存するステップを `conductor-role.md` に追記
+
+### Fixed
+- daemon 再起動時に assigned タスクの `cmux-team resume` コマンドが Conductor ペインのシェルではなく既に起動済みの Claude Code のチャット入力として送信され、セッション再開が行われない問題を修正
 
 ## [3.42.0] - 2026-04-12
 
