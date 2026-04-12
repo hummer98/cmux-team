@@ -4,8 +4,33 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { log } from "./logger";
+import { formatExecError } from "./exec-error";
 
 const execFile = promisify(execFileCb);
+
+type RunCmuxOpts = { timeout?: number };
+
+/**
+ * cmux コマンドの execFile ラッパー。失敗時に stderr/stdout を含む新しい Error を throw する。
+ *
+ * - 二重ラップ防止: 既に runCmux で wrap 済みの Error はそのまま再 throw する
+ * - 元の Error は `cause` および `__cmuxWrapped` チェーンで追跡可能
+ * - 元 Error の `stderr` / `stdout` プロパティも wrap 後の Error に転写する（呼び出し元が必要なら参照可能）
+ */
+async function runCmux(args: string[], opts?: RunCmuxOpts): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFile("cmux", args, opts);
+  } catch (e: any) {
+    if (e?.__cmuxWrapped) throw e;
+    const detail = formatExecError(e);
+    const wrapped: any = new Error(detail);
+    wrapped.cause = e;
+    wrapped.stderr = e?.stderr;
+    wrapped.stdout = e?.stdout;
+    wrapped.__cmuxWrapped = true;
+    throw wrapped;
+  }
+}
 
 export async function newSplit(
   direction: "left" | "right" | "up" | "down",
@@ -13,7 +38,7 @@ export async function newSplit(
 ): Promise<string> {
   const args = ["new-split", direction];
   if (opts?.surface) args.push("--surface", opts.surface);
-  const { stdout } = await execFile("cmux", args);
+  const { stdout } = await runCmux(args);
   const surface = stdout.trim().split(/\s+/)[1];
   if (!surface?.startsWith("surface:")) {
     throw new Error(`Failed to create split: ${stdout}`);
@@ -24,7 +49,7 @@ export async function newSplit(
 export async function newSurface(paneId?: string): Promise<string> {
   const args = ["new-surface"];
   if (paneId) args.push("--pane", paneId);
-  const { stdout } = await execFile("cmux", args);
+  const { stdout } = await runCmux(args);
   const surface = stdout.trim().split(/\s+/)[1];
   if (!surface?.startsWith("surface:")) {
     throw new Error(`Failed to create surface: ${stdout}`);
@@ -33,7 +58,7 @@ export async function newSurface(paneId?: string): Promise<string> {
 }
 
 export async function listPaneSurfaces(paneId: string): Promise<string[]> {
-  const { stdout } = await execFile("cmux", ["list-pane-surfaces", "--pane", paneId]);
+  const { stdout } = await runCmux(["list-pane-surfaces", "--pane", paneId]);
   return stdout.trim().split(/\s+/).filter(s => s.startsWith("surface:"));
 }
 
@@ -45,7 +70,7 @@ export async function send(
   const args = ["send"];
   if (opts?.workspace) args.push("--workspace", opts.workspace);
   args.push("--surface", surface, text);
-  await execFile("cmux", args);
+  await runCmux(args);
 }
 
 export async function sendKey(
@@ -56,7 +81,7 @@ export async function sendKey(
   const args = ["send-key"];
   if (opts?.workspace) args.push("--workspace", opts.workspace);
   args.push("--surface", surface, key);
-  await execFile("cmux", args);
+  await runCmux(args);
 }
 
 export async function readScreen(
@@ -66,13 +91,13 @@ export async function readScreen(
 ): Promise<string> {
   const args = ["read-screen", "--surface", surface, "--lines", String(lines)];
   if (opts?.workspace) args.push("--workspace", opts.workspace);
-  const { stdout } = await execFile("cmux", args, { timeout: 10_000 });
+  const { stdout } = await runCmux(args, { timeout: 10_000 });
   return stdout;
 }
 
 /** surface を閉じる。SESSION_ENDED は送信しないため、呼び出し元が必要に応じて明示的に送信すること */
 export async function closeSurface(surface: string): Promise<void> {
-  await execFile("cmux", ["close-surface", "--surface", surface]).catch(
+  await runCmux(["close-surface", "--surface", surface]).catch(
     () => {}
   );
 }
@@ -81,7 +106,7 @@ export async function renameTab(
   surface: string,
   title: string
 ): Promise<void> {
-  await execFile("cmux", ["rename-tab", "--surface", surface, title]).catch(
+  await runCmux(["rename-tab", "--surface", surface, title]).catch(
     () => {}
   );
 }
@@ -90,7 +115,7 @@ export async function renameWorkspace(title: string, workspace?: string): Promis
   const args = ["rename-workspace"];
   if (workspace) args.push("--workspace", workspace);
   args.push(title);
-  await execFile("cmux", args).catch(() => {});
+  await runCmux(args).catch(() => {});
 }
 
 /** tree 呼び出しのタイムアウト（ミリ秒） */
@@ -99,7 +124,7 @@ const TREE_TIMEOUT_MS = 5_000;
 export async function tree(workspace?: string): Promise<string> {
   const args = ["tree"];
   if (workspace) args.push("--workspace", workspace);
-  const { stdout } = await execFile("cmux", args, { timeout: TREE_TIMEOUT_MS });
+  const { stdout } = await runCmux(args, { timeout: TREE_TIMEOUT_MS });
   return stdout;
 }
 
@@ -157,7 +182,7 @@ export async function validateSurface(surface: string, workspace?: string): Prom
 }
 
 export async function getCallerSurface(): Promise<string> {
-  const { stdout } = await execFile("cmux", ["identify"]);
+  const { stdout } = await runCmux(["identify"]);
   const data = JSON.parse(stdout);
   const surface = data?.caller?.surface_ref;
   if (!surface?.startsWith("surface:")) {
@@ -176,7 +201,7 @@ export async function setStatus(
   const args = ["set-status", key, value, "--icon", icon, "--color", color];
   if (workspace) args.push("--workspace", workspace);
   try {
-    await execFile("cmux", args);
+    await runCmux(args);
   } catch (e: any) {
     await log("error", `setStatus failed: key=${key} value=${value} ${e.message}`);
   }
@@ -189,7 +214,7 @@ export async function clearStatus(
   const args = ["clear-status", key];
   if (workspace) args.push("--workspace", workspace);
   try {
-    await execFile("cmux", args);
+    await runCmux(args);
   } catch {
     // 冪等な後処理のため、失敗は握りつぶす
   }
@@ -197,7 +222,7 @@ export async function clearStatus(
 
 export async function getCallerWorkspace(): Promise<string | undefined> {
   try {
-    const { stdout } = await execFile("cmux", ["identify"]);
+    const { stdout } = await runCmux(["identify"]);
     const data = JSON.parse(stdout);
     return data?.caller?.workspace_ref;
   } catch {

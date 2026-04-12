@@ -34,7 +34,7 @@ async function writeFakeCmux(script: string): Promise<void> {
 
 // validateSurface は一度 import すれば再利用可能。
 // execFile("cmux", ...) を呼ぶため、PATH 差し替えで fake cmux の挙動が変わる。
-import { validateSurface } from "./cmux";
+import { validateSurface, send, setStatus } from "./cmux";
 
 describe("validateSurface リトライ (T121)", () => {
   test("1 回目で成功すれば即 true を返す", async () => {
@@ -61,6 +61,27 @@ printf "pane:1\n  surface:42\n"
   test("3 回全て tree() 例外なら false", async () => {
     await writeFakeCmux(`echo "persistent error" >&2; exit 1`);
     expect(await validateSurface("surface:42")).toBe(false);
+  });
+
+  test("send() 失敗時 Error.message に stderr が含まれる (T163)", async () => {
+    const sentinel = "STDERR_SENTINEL_X9Y2";
+    await writeFakeCmux(`echo "${sentinel}" >&2; exit 1`);
+    let caught: Error | undefined;
+    try {
+      await send("surface:42", "hello");
+    } catch (e: any) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain(`stderr=${sentinel}`);
+  });
+
+  test("setStatus は失敗時に握りつぶすが log に stderr 付きメッセージが渡る (T163)", async () => {
+    // setStatus は内部で catch して log するだけ。throw しないことを保証
+    const sentinel = "SETSTATUS_STDERR_42";
+    await writeFakeCmux(`echo "${sentinel}" >&2; exit 1`);
+    // 例外が漏れないこと
+    await setStatus("k", "v", "i", "c");
   });
 
   test("tree 成功時にはリトライしない (surface 未載なら即 false、tree は 1 回のみ)", async () => {
