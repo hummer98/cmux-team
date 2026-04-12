@@ -880,11 +880,7 @@ export async function startDashboard(
     // スロットリング表示テキスト
     let throttleLabel = "";
     if (isThrottled && daemon.running && daemon.bootPhase === "ready") {
-      const util = daemon.rateLimit!.unified5hUtilization!;
-      const pct = Math.round(util * 100);
-      const remaining = formatResetRemaining(daemon.rateLimit!.unified5hReset);
-      const resetPart = remaining ? ` → reset ${remaining}` : "";
-      throttleLabel = `⏸ THROTTLED (5h: ${pct}%${resetPart})`;
+      throttleLabel = "⏸ THROTTLED";
     }
 
     const headerSubtitle = throttleLabel || headerParts.join("  ");
@@ -925,7 +921,7 @@ export async function startDashboard(
             const prefix = "─ cmux-team ";
             return ui.row({ gap: 0 }, [
               ui.text(prefix, { dim: true }),
-              ui.text(`${throttleLabel}${portLabel}`, { style: { fg: RED } }),
+              ui.text(`${throttleLabel}${portLabel}`, { style: { fg: RED, blink: true } }),
               ui.text(` ${fill} `, { dim: true }),
               ...rl.parts.flatMap((p, i) => [
                 ...(i > 0 ? [ui.text("  ", { dim: true })] : []),
