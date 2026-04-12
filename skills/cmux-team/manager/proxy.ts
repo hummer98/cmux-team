@@ -8,10 +8,40 @@
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
 import { log } from "./logger";
-import { QueueMessage } from "./schema";
+import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
+
+// epoch 秒（10桁数値）または ISO 8601 文字列を受けて unix epoch 秒に正規化
+// daemon.ts:1244-1245 / dashboard.tsx:189-195 と同じロジック — 別タスク（#175 等）で整理予定
+function toEpochSec(raw: string | null): number | null {
+  if (!raw) return null;
+  const asNum = Number(raw);
+  if (!isNaN(asNum) && asNum > 1e9) return Math.floor(asNum);
+  const ms = new Date(raw).getTime();
+  return isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+// dashboard.tsx / daemon.ts からコピー — 別タスク（#175 等）で整理予定
+function formatResetRemaining(resetIso: string | null): string {
+  if (!resetIso) return "";
+  const asNum = Number(resetIso);
+  const resetMs = !isNaN(asNum) && asNum > 1e9 ? asNum * 1000 : new Date(resetIso).getTime();
+  if (isNaN(resetMs)) return "";
+  const sec = Math.floor((resetMs - Date.now()) / 1000);
+  if (sec <= 0) return "0m";
+  if (sec < 60) return "<1m";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  }
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  return h > 0 ? `${d}d${h}h` : `${d}d`;
+}
 
 interface ProxyHandle {
   port: number;
@@ -127,6 +157,43 @@ export async function start(
           if (!opts?.getState) return new Response("Not Found", { status: 404 });
           const state = opts.getState();
           return new Response(JSON.stringify(Object.fromEntries(state.conductors)), { headers: jsonHeaders });
+        }
+
+        if (url.pathname === "/rate-limit") {
+          if (!opts?.getState) {
+            // 独立 proxy モード（daemon 外）: 安全側で throttled=false を返す
+            return new Response(JSON.stringify({
+              throttled: false,
+              threshold: THROTTLE_5H_THRESHOLD,
+              unified5hUtilization: null,
+              unified5hReset: null,
+              unified7dUtilization: null,
+              unified7dReset: null,
+              unifiedStatus: null,
+              resetRemaining: null,
+            }), { headers: jsonHeaders });
+          }
+          const state = opts.getState();
+          const rl = state.rateLimit;
+          // dashboard.tsx:882 準拠: utilization >= threshold && running && bootPhase === "ready"
+          const throttled =
+            (rl?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
+            && !!state.running
+            && state.bootPhase === "ready";
+          const rawReset5h = rl?.unified5hReset ?? null;
+          const rawReset7d = rl?.unified7dReset ?? null;
+          const remaining = formatResetRemaining(rawReset5h);
+          const resetRemaining = (!remaining || remaining === "0m" || remaining === "<1m") ? null : remaining;
+          return new Response(JSON.stringify({
+            throttled,
+            threshold: THROTTLE_5H_THRESHOLD,
+            unified5hUtilization: rl?.unified5hUtilization ?? null,
+            unified5hReset: toEpochSec(rawReset5h),
+            unified7dUtilization: rl?.unified7dUtilization ?? null,
+            unified7dReset: toEpochSec(rawReset7d),
+            unifiedStatus: rl?.unifiedStatus ?? null,
+            resetRemaining,
+          }), { headers: jsonHeaders });
         }
       }
 
