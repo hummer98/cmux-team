@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.42.0] - 2026-04-12
+
+### Added
+- プロジェクト内専用の開発者スキル `cmux-team-investigate` を追加。別プロジェクト (mado, Dear 等) の `.team/` 調査フローを定義（配布対象外）
+- 初回起動時に `.envrc` へ `CMUX_CLAUDE_HOOKS_DISABLED=1` の追記を対話提案。追記後は `direnv allow` + 再起動を案内するメッセージを表示
+- `initInfra` 時に `.gitignore` / `config.json` / `team.json` の自動生成をログへ記録し追跡可能に
+- `execFile` エラー時に `stderr` / `stdout` をログへ含めるユーティリティ (`exec-error.ts`) を追加し、cmux 呼び出し経路の障害原因を追跡可能に
+
+### Changed
+- ロギングポリシーに「外部コマンド失敗時は stderr/stdout 同梱必須」ルールを追記
+- `conductor-role.md` に他 Conductor surface の直接操作禁止ルールを追記
+- `/release` 手順 4 に `marketplace.json` のバージョン更新ステップを追加
+- `cmux-team-investigate` スキルの trace DB 参照手順を現行実装に同期
+
+### Fixed
+- Bun.serve の idleTimeout が未設定 (デフォルト 10s) のため Claude API の長時間 SSE ストリーム (拡張思考等) が途中で切れ "socket connection was closed unexpectedly" が発生する問題を修正。最大値 255s まで延長
+- ダッシュボードの `THROTTLED` 表示が重複していた問題を修正し、点滅表示に変更
+- ダッシュボードでタブ軸キー操作時に `activeTab` と `focusedArea` が同期されず表示が崩れる問題を修正
+- `marketplace.json` のバージョンが実装と乖離していた問題を修正し同期
+
 ## [3.41.0] - 2026-04-12
 
 ### Added
