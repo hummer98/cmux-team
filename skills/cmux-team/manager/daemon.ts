@@ -297,6 +297,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
             conductor: "opus",
             agent: "opus",
           },
+          envrcHookPromptSkipped: false,
         },
         null,
         2
