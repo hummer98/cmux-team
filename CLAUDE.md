@@ -330,7 +330,7 @@ Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルー
 ### 必ずログすべきイベント
 
 1. **例外捕捉時**: `catch` で例外を処理する場合、最低限 `log("error", ...)` でメッセージを記録する
-2. **外部コマンド失敗時**: cmux コマンド（`send`, `sendKey`, `tree` 等）の失敗は `log("error", ...)` で記録する
+2. **外部コマンド失敗時**: cmux コマンド（`send`, `sendKey`, `tree` 等）の失敗は `log("error", ...)` で記録する。**error オブジェクトに `stderr` / `stdout` が付いている場合は必ず detail に含める**（`e.message` のみでは "Command failed: <cmd>" で終わり原因追跡が不能になる）。例: `log("error", \`tree failed: ${e.message} stderr=${e.stderr ?? ""}\`)`。
 3. **判断分岐**: 複数パスがある場合、どのパスに入ったか記録する（例: done マーカー検出方法、フォールバック発動）
 4. **状態遷移**: Conductor/Agent のステータス変化は必ず記録する（既存で実施済み）
 
