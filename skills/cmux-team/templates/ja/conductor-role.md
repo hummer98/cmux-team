@@ -190,17 +190,43 @@ done
    # - テスト結果
    # - マージコミット or PR URL
    ```
-6. **worktree を削除する**（Conductor の責務）:
+6. **調査系タスクなら summary.md を artifact として保存する**
+
+   このタスクが **調査系**（コード変更なし・情報収集や設計判断の記録が主成果）と判断した場合のみ、summary.md を `.team/artifacts/` に登録する。
+
+   判定の目安（どれか該当すれば調査系とみなす）:
+   - ステップ 3 のコミットで `git diff --cached --quiet` が true だった（コミットが生成されなかった）
+   - diff がドキュメント・設定のみで、プロダクションコードの挙動変更を伴わない
+   - 成果物が summary.md または調査レポートのみで、タスク本文が「調査してほしい」「発掘してほしい」「報告してほしい」系の指示だった
+
+   迷う場合は artifact 化する（過剰保存の害は小さい、保存漏れの害の方が大きい）。
+
+   ```bash
+   cd {{PROJECT_ROOT}}
+   cmux-team artifacts add {{OUTPUT_DIR}}/summary.md \
+     --type <research|decision|session|spec|report> \
+     --title "<タスク概要を1行で>"
+   ```
+
+   `--type` の選び方:
+   - `research` — コード調査・技術調査・ドキュメント発掘系（迷ったらこれ）
+   - `decision` — 設計判断・方針決定系
+   - `session` — セッション要約
+   - `spec` — 要件・仕様整理
+   - `report` — 分析レポート・検品レポート
+
+   登録された artifact ID（例: `A042`）を控えておき、後続の完了レポート【成果】項目に記載する。
+7. **worktree を削除する**（Conductor の責務）:
    ```bash
    cd {{PROJECT_ROOT}}
    git worktree remove <タスク割り当てで指定された作業ディレクトリ> --force 2>/dev/null || true
    git branch -d <タスク割り当てで指定されたブランチ名> 2>/dev/null || true
    ```
-7. **タスクを close する**（task-state.json に状態を記録）:
+8. **タスクを close する**（task-state.json に状態を記録）:
    ```bash
    cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
    ```
-8. **完了レポートをセッション上に表示する** — CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
+9. **完了レポートをセッション上に表示する** — CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
    ```
    ── 完了レポート: <タスク概要（1行）> ──
 
@@ -208,7 +234,7 @@ done
    【試行錯誤】エラーや失敗が発生した場合、何が起きてどう対処したか
    【自己判断】タスク指示が曖昧で自分で判断した箇所
    【懸念・残課題】残った課題や確認が必要な点
-   【成果】マージコミット or PR URL、主な変更点（1-2行）
+   【成果】マージコミット or PR URL、主な変更点（1-2行）、artifact ID（調査系の場合）
 
    ────────────────────────
    ```
@@ -217,17 +243,18 @@ done
    - 各項目は 1〜3 行に収める。全体で 15 行以内を目安とする
    - 該当しない項目は見出しごと省略する（空の項目を残さない）
    - このレポートは次タスクの /clear で消えて構わない
-9. **完了通知を送信する**:
-   ```bash
-   cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-   ```
-10. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信）を行う。
+10. **完了通知を送信する**:
+    ```bash
+    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
+    ```
+11. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信）を行う。
 
 ## やらないこと（厳守）
 
 - **自分でコードを書く・ファイルを編集する** — Edit/Write ツールを使わない。必ず Agent に委譲する
 - **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
 - **他の Conductor surface を直接操作する** — `cmux send surface:XXX "/exit"` や `cmux send surface:XXX "/clear"` で他の Conductor のセッションをリセット・終了させない。他の Conductor surface を Inspector や Implementer として流用しない。エージェントの起動は必ず `cmux-team spawn-agent` を使い、新しいタブとして起動すること
+- **コード変更を伴うタスクの summary.md を artifact 化する** — artifact は調査・設計判断・セッション要約の記録用。コード変更タスクの summary.md は task run 側の成果物であり artifact の役割ではない
 - main ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）
