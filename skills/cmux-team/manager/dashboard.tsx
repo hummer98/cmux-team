@@ -966,21 +966,21 @@ export async function startDashboard(
             label: "Journal",
             px: 1,
             style: state.activeTab === "journal" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "journal", focusedArea: "journal" })); } catch {} },
+            onPress: () => switchTab("journal"),
           }),
           ui.button({
             id: "tab-artifacts",
             label: "Artifacts",
             px: 1,
             style: state.activeTab === "artifacts" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "artifacts", focusedArea: "artifacts" })); } catch {} },
+            onPress: () => switchTab("artifacts"),
           }),
           ui.button({
             id: "tab-log",
             label: "Log",
             px: 1,
             style: state.activeTab === "log" ? { bold: true } : { dim: true },
-            onPress: () => { try { app.update((s) => ({ ...s, activeTab: "log", focusedArea: "log" })); } catch {} },
+            onPress: () => switchTab("log"),
           }),
         ]),
         ui.column({ gap: 0 },
@@ -1018,18 +1018,25 @@ export async function startDashboard(
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
               ui.kbd("Enter"), ui.text("open"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : state.focusedArea === "journal"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
               ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : state.focusedArea === "log"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
               ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : state.focusedArea === "artifacts"
@@ -1038,6 +1045,8 @@ export async function startDashboard(
               ui.kbd("Enter"), ui.text("open"),
               ui.kbd("s"), ui.text(`sort:${state.artifactSort}`),
               ui.kbd("f"), ui.text(state.artifactTypeFilter ? `type:${state.artifactTypeFilter}` : "filter"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
           : [ // global
@@ -1054,6 +1063,19 @@ export async function startDashboard(
   }
 
   app.view(buildViewWithApp);
+
+  // タブ切り替えヘルパー: activeTab と focusedArea をタブ軸で同期させる
+  type TabId = AppState["activeTab"];
+  const FOCUSED_AREA_FOR_TAB: Record<TabId, AppState["focusedArea"]> = {
+    journal: "journal",
+    artifacts: "artifacts",
+    log: "log",
+  };
+  function switchTab(tab: TabId) {
+    try {
+      app.update((s) => ({ ...s, activeTab: tab, focusedArea: FOCUSED_AREA_FOR_TAB[tab] }));
+    } catch {}
+  }
 
   // キーバインド
   app.keys({
@@ -1100,18 +1122,19 @@ export async function startDashboard(
           return s;
       }
     }),
-    "1": () => app.update((s) => ({ ...s, activeTab: "journal" })),
-    "2": () => app.update((s) => ({ ...s, activeTab: "artifacts" })),
-    "3": () => app.update((s) => ({ ...s, activeTab: "log" })),
-    Tab: () => app.update((s) => {
+    "1": () => switchTab("journal"),
+    "2": () => switchTab("artifacts"),
+    "3": () => switchTab("log"),
+    Tab: (ctx) => {
       const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log"];
-      const idx = tabs.indexOf(s.activeTab);
-      return { ...s, activeTab: tabs[(idx + 1) % tabs.length]! };
-    }),
+      const idx = tabs.indexOf(ctx.state.activeTab);
+      const next = tabs[(idx + 1) % tabs.length]!;
+      switchTab(next);
+    },
     T: () => app.update((s) => ({ ...s, focusedArea: "tasks" })),
-    J: () => app.update((s) => ({ ...s, activeTab: "journal", focusedArea: "journal" })),
-    L: () => app.update((s) => ({ ...s, activeTab: "log", focusedArea: "log" })),
-    A: () => app.update((s) => ({ ...s, activeTab: "artifacts", focusedArea: "artifacts" })),
+    J: () => switchTab("journal"),
+    L: () => switchTab("log"),
+    A: () => switchTab("artifacts"),
     // Artifacts タブ専用キー
     Enter: (ctx) => {
       const currentState = ctx.state;
