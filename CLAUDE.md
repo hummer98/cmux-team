@@ -298,6 +298,11 @@ cmux-team stop
 - テンプレートは `{{VARIABLE}}` プレースホルダーを使用
 - README.md やユーザー向けテキストは日本語
 
+### 開発者用スキル
+
+別プロジェクト（mado, Dear 等）の `.team/` 調査は `.claude/skills/cmux-team-investigate/SKILL.md` を参照。
+このスキルはこのリポジトリのワークツリー内でのみ有効で、npm publish には含まれない（配布外）。
+
 ## cmux API 使用上の注意
 
 `cmux tree` はデフォルトで**全ワークスペース**のsurfaceを返す。
