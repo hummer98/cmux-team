@@ -289,13 +289,17 @@ export async function start(
   };  // fetchHandlerInner end
 
   // 前回ポートで起動を試み、失敗時はランダムポートにフォールバック
+  // idleTimeout: Bun.serve のデフォルト 10s では Claude API の長時間 SSE ストリーム
+  // (Implementer の拡張思考など) が途中で切れるため、最大値 255s まで延長する。
+  // 個別に更に長い timeout が必要な場合は server.timeout(req, sec) で上書き可能。
+  const IDLE_TIMEOUT_SEC = 255;
   let server: ReturnType<typeof Bun.serve>;
   try {
-    server = Bun.serve({ port: preferredPort, fetch: fetchHandler, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
+    server = Bun.serve({ port: preferredPort, fetch: fetchHandler, idleTimeout: IDLE_TIMEOUT_SEC, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
   } catch (e: any) {
     if (preferredPort !== 0) {
       await log("proxy_port_fallback", `preferred=${preferredPort} error=${e.message}`);
-      server = Bun.serve({ port: 0, fetch: fetchHandler, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
+      server = Bun.serve({ port: 0, fetch: fetchHandler, idleTimeout: IDLE_TIMEOUT_SEC, development: false, error(e) { log("proxy_server_error", e.message).catch(() => {}); return new Response("Internal Server Error", { status: 500 }); } });
     } else {
       throw new Error("Failed to start proxy");
     }
