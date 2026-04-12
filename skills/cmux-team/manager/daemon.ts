@@ -12,6 +12,8 @@ import {
   assignTask,
   resetConductor,
   AssignTaskError,
+  type ResumePlanItem,
+  type ResumeAssignment,
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
@@ -370,7 +372,11 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   }
 }
 
-export async function initializeLayout(state: DaemonState, daemonSurface?: string): Promise<void> {
+export async function initializeLayout(
+  state: DaemonState,
+  daemonSurface?: string,
+  resumePlan?: ResumePlanItem[],
+): Promise<ResumeAssignment[]> {
   // team.json から既存 Conductor を復元
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
@@ -411,7 +417,18 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
             state.conductors.set(c.surface, c);
           }
           await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => c.surface).join(",")}`);
-          return;
+          // team.json 復元パスでは Claude が既に稼働中の前提。
+          // resumePlan で与えられた assigned タスクには何もしない（resume 命令は送らない）。
+          // 旧コードでは resume_skipped が出ていたため、観測性確保のため noop ログを残す。
+          if (resumePlan && resumePlan.length > 0) {
+            for (const item of resumePlan) {
+              await log(
+                "conductor_resume_noop",
+                `task_id=${item.taskId} reason=team_json_restored session_id=${item.sessionId}`
+              );
+            }
+          }
+          return [];
         }
       }
     }
@@ -421,8 +438,15 @@ export async function initializeLayout(state: DaemonState, daemonSurface?: strin
 
   // 既存なし → 新規作成
   await log("layout_creating_new_slots", `count=${state.maxConductors}`);
-  await initializeConductorSlots(state.projectRoot, state.conductors, state.maxConductors, daemonSurface);
+  const assignments = await initializeConductorSlots(
+    state.projectRoot,
+    state.conductors,
+    state.maxConductors,
+    daemonSurface,
+    resumePlan,
+  );
   // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
+  return assignments;
 }
 
 /** proxy ポートに TCP 接続して生存確認 */
