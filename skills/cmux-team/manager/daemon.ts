@@ -282,6 +282,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
         "",
       ].join("\n")
     );
+    await log("team_gitignore_created", `path=${gitignore}`);
   }
 
   // config.json（デフォルト生成）
@@ -301,6 +302,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
         2
       ) + "\n"
     );
+    await log("team_config_created", `path=${configJson}`);
   }
 
   // team.json
@@ -321,6 +323,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
         2
       ) + "\n"
     );
+    await log("team_json_created", `path=${teamJson}`);
   }
 }
 
