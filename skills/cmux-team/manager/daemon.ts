@@ -17,6 +17,7 @@ import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
+import { formatExecError } from "./exec-error";
 import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
 
@@ -1120,8 +1121,13 @@ export async function checkNpmUpdate(state: DaemonState): Promise<void> {
 
     // npm registry の最新バージョンを確認
     const latestVersion = await new Promise<string>((resolve, reject) => {
-      execFile("npm", ["view", "@hummer98/cmux-team", "version"], { timeout: 30_000 }, (err, stdout) => {
-        if (err) return reject(err);
+      execFile("npm", ["view", "@hummer98/cmux-team", "version"], { timeout: 30_000 }, (err, stdout, stderr) => {
+        if (err) {
+          // err.stderr/stdout は execFile が自動付与するが、コールバックの stderr も明示的に転写しておく
+          (err as any).stderr ??= stderr;
+          (err as any).stdout ??= stdout;
+          return reject(err);
+        }
         resolve(stdout.trim());
       });
     });
@@ -1131,18 +1137,23 @@ export async function checkNpmUpdate(state: DaemonState): Promise<void> {
       await log("npm_auto_update", `current=${currentVersion} latest=${latestVersion} installing...`);
 
       await new Promise<void>((resolve, reject) => {
-        execFile("npm", ["install", "-g", "@hummer98/cmux-team@latest"], { timeout: 120_000 }, (err) => {
-          if (err) return reject(err);
+        execFile("npm", ["install", "-g", "@hummer98/cmux-team@latest"], { timeout: 120_000 }, (err, stdout, stderr) => {
+          if (err) {
+            (err as any).stderr ??= stderr;
+            (err as any).stdout ??= stdout;
+            return reject(err);
+          }
           resolve();
         });
       });
 
+      await log("npm_self_update_completed", `current=${currentVersion} latest=${latestVersion}`);
       await log("npm_auto_update", `updated ${currentVersion} → ${latestVersion}`);
       state.running = false;
       state.restartRequested = true;
     }
   } catch (e: any) {
-    await log("npm_update_check_failed", e.message);
+    await log("npm_update_check_failed", formatExecError(e));
   }
 }
 

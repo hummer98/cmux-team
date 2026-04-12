@@ -9,6 +9,7 @@ import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
+import { sanitizeForLog } from "./exec-error";
 
 const execFile = promisify(execFileCb);
 
@@ -28,11 +29,14 @@ async function checkGitRepo(projectRoot: string): Promise<PreflightIssue | null>
   try {
     await execFile("git", ["rev-parse", "--git-dir"], { cwd: projectRoot });
     return null;
-  } catch {
+  } catch (e: any) {
+    // 失敗理由（git 未インストール、権限エラー等）を context に含めて診断容易にする
+    const stderr = sanitizeForLog(e?.stderr);
+    const context = stderr ? `${projectRoot} (stderr=${stderr})` : projectRoot;
     return {
       key: "not_git_repo",
       message: "git リポジトリではありません",
-      context: projectRoot,
+      context,
       hint:
         "解決方法:\n" +
         `  cd ${projectRoot}\n` +
