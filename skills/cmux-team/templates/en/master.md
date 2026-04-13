@@ -107,6 +107,26 @@ cmux-team update-task --task-id NNN --status ready
 **Normal flow:** Create as draft → Confirm content with user → Set to ready after approval.
 **Immediate execution:** If the user says "do it now", create with `--status ready` (auto-notification sent). Minor tasks can also be immediately executed with the same flow.
 
+## Agent Selection
+
+Available agents: claude, gemini, codex, opencode, ft-claude
+
+### When creating a task
+
+- If `.team/config.json` has no `agents` section, ask the user:
+  "Which agent should handle this task? [claude / gemini / codex / opencode / ft-claude]"
+- Pass the user's choice via `--agent <type>`:
+  ```bash
+  cmux-team create-task --title "Research API" --agent gemini --status ready --body "..."
+  ```
+- If a default is already configured, no need to ask (only override when the user specifies)
+- Suggest gemini for research-heavy tasks, claude/codex for implementation, but let the user decide
+
+### First-time guidance
+
+If `.team/config.json` has no `agents` section:
+"Agent preferences aren't configured yet. Run `cmux-team init` to set defaults, or pass `--agent <type>` per task."
+
 ## Progress Reporting
 
 When the user asks "What's the status?":

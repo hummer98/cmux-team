@@ -249,16 +249,18 @@ export function sleepUntilWakeup(state: DaemonState): Promise<void> {
   });
 }
 
-export async function initInfra(state: DaemonState): Promise<void> {
-  await log("infra_init");
-  const root = state.projectRoot;
-  await mkdir(join(root, ".team/tasks"), { recursive: true });
-  await mkdir(join(root, ".team/output"), { recursive: true });
-  await mkdir(join(root, ".team/prompts"), { recursive: true });
-  await mkdir(join(root, ".team/logs"), { recursive: true });
+/**
+ * .team/ ディレクトリとデフォルトファイルを作成する。
+ * cmdInit() と initInfra() の両方から呼ばれる。
+ */
+export async function ensureTeamDir(projectRoot: string): Promise<void> {
+  await mkdir(join(projectRoot, ".team/tasks"), { recursive: true });
+  await mkdir(join(projectRoot, ".team/output"), { recursive: true });
+  await mkdir(join(projectRoot, ".team/prompts"), { recursive: true });
+  await mkdir(join(projectRoot, ".team/logs"), { recursive: true });
 
   // .gitignore
-  const gitignore = join(root, ".team/.gitignore");
+  const gitignore = join(projectRoot, ".team/.gitignore");
   if (!existsSync(gitignore)) {
     await writeFile(
       gitignore,
@@ -289,7 +291,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   }
 
   // config.json（デフォルト生成）
-  const configJson = join(root, ".team/config.json");
+  const configJson = join(projectRoot, ".team/config.json");
   if (!existsSync(configJson)) {
     await writeFile(
       configJson,
@@ -310,7 +312,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
   }
 
   // team.json
-  const teamJson = join(root, ".team/team.json");
+  const teamJson = join(projectRoot, ".team/team.json");
   if (!existsSync(teamJson)) {
     await writeFile(
       teamJson,
@@ -329,6 +331,11 @@ export async function initInfra(state: DaemonState): Promise<void> {
     );
     await log("team_json_created", `path=${teamJson}`);
   }
+}
+
+export async function initInfra(state: DaemonState): Promise<void> {
+  await log("infra_init");
+  await ensureTeamDir(state.projectRoot);
 }
 
 export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {

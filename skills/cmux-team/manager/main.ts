@@ -3,6 +3,7 @@
  * cmux-team — マルチエージェント開発オーケストレーション
  *
  * Usage:
+ *   ./main.ts init                             # エージェント設定の初期化
  *   ./main.ts start                            # daemon 起動 + Master spawn + ダッシュボード
  *   ./main.ts send TASK_CREATED --task-id 035 --task-file ...
  *   ./main.ts send SHUTDOWN
@@ -27,7 +28,8 @@ import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
+import { createDaemon, initInfra, ensureTeamDir, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
+import { isInteractive, askChoice, askYesNo, askFreeform } from "./interactive";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -107,6 +109,11 @@ async function loadConfig(): Promise<TeamConfig> {
   } catch {
     return {};
   }
+}
+
+async function saveConfig(config: TeamConfig): Promise<void> {
+  const configPath = join(PROJECT_ROOT, ".team/config.json");
+  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n");
 }
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
@@ -191,6 +198,112 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   return undefined;
 }
 
+// --- init ---
+
+/**
+ * エージェント設定の対話プロンプトを実行し、config.json に保存する。
+ * cmdInit() と cmdStart() の初回起動時に共通で使う。
+ */
+async function runAgentConfigPrompt(): Promise<void> {
+  const adapters = listAdapters();
+
+  // デフォルトエージェント選択
+  const defaultAgent = await askChoice(
+    t("init_default_agent_prompt"),
+    adapters,
+    adapters.indexOf(DEFAULT_AGENT_TYPE),
+  );
+
+  // ロール別設定
+  const roles: Record<string, string> = {};
+  const wantRoles = await askYesNo(t("init_add_roles_prompt"));
+  if (wantRoles) {
+    while (true) {
+      const roleName = await askFreeform(t("init_role_name_prompt"));
+      if (!roleName) break;
+      const roleAgent = await askChoice(
+        t("init_role_agent_prompt"),
+        adapters,
+        adapters.indexOf(defaultAgent),
+      );
+      roles[roleName] = roleAgent;
+    }
+  }
+
+  // config.json にマージ
+  const config = await loadConfig();
+  config.agents = {
+    default: defaultAgent,
+    ...(Object.keys(roles).length > 0 ? { roles } : {}),
+  };
+  await saveConfig(config);
+
+  // サマリー表示
+  console.log(`\n${t("init_config_saved")}`);
+  console.log(t("init_agent_default", { agent: defaultAgent }));
+  for (const [role, agent] of Object.entries(roles)) {
+    console.log(t("init_agent_role", { role, agent }));
+  }
+  console.log("");
+}
+
+async function cmdInit(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_init"));
+
+  // .team/ ディレクトリ作成
+  await ensureTeamDir(PROJECT_ROOT);
+
+  const config = await loadConfig();
+
+  if (isInteractive()) {
+    // 既存設定がある場合は確認
+    if (config.agents) {
+      const reconfigure = await askYesNo(t("init_reconfigure_prompt"));
+      if (!reconfigure) {
+        console.log(t("init_config_saved"));
+        return;
+      }
+    }
+    await runAgentConfigPrompt();
+  } else {
+    // 非対話モード: --agent と --roles フラグから読み取る
+    const agentFlag = getArg("agent") || DEFAULT_AGENT_TYPE;
+    const rolesFlag = getArg("roles") || "";
+
+    // agent バリデーション
+    try { getAdapter(agentFlag); } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
+
+    const roles: Record<string, string> = {};
+    if (rolesFlag) {
+      for (const pair of rolesFlag.split(",")) {
+        const [role, agent] = pair.split("=").map(s => s.trim());
+        if (role && agent) {
+          try { getAdapter(agent); } catch (e: any) {
+            console.error(e.message);
+            process.exit(1);
+          }
+          roles[role] = agent;
+        }
+      }
+    }
+
+    config.agents = {
+      default: agentFlag,
+      ...(Object.keys(roles).length > 0 ? { roles } : {}),
+    };
+    await saveConfig(config);
+
+    console.log(t("init_config_saved"));
+    console.log(t("init_agent_default", { agent: agentFlag }));
+    for (const [role, agent] of Object.entries(roles)) {
+      console.log(t("init_agent_role", { role, agent }));
+    }
+  }
+}
+
 async function cmdStart(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_start"));
   // cmux 環境チェック
@@ -221,8 +334,14 @@ async function cmdStart(): Promise<void> {
   await initInfra(state);
   await log("infra_ready");
 
-  // .envrc に CMUX_CLAUDE_HOOKS_DISABLED を追記するか対話確認
+  // 初回起動時: agents セクションが未設定なら対話式エージェント設定
   // proxy 起動・TUI 起動より前で同期実行する（Ink TUI が stdin/stdout を奪うため）
+  const startConfig = await loadConfig();
+  if (!startConfig.agents && isInteractive()) {
+    await runAgentConfigPrompt();
+  }
+
+  // .envrc に CMUX_CLAUDE_HOOKS_DISABLED を追記するか対話確認
   await ensureEnvrcHookPrompt(PROJECT_ROOT);
 
   await log(
@@ -1581,12 +1700,27 @@ async function cmdCreateTask(): Promise<void> {
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
   const dependsOn = getArg("depends-on") || "";
-  const agent = getArg("agent") || "";
+  let resolvedAgent = getArg("agent") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
 
+  // 対話式エージェント選択（--agent 未指定 + TTY の場合）
+  if (!resolvedAgent && isInteractive()) {
+    const taskConfig = await loadConfig();
+    const configDefault = taskConfig.agents?.default || DEFAULT_AGENT_TYPE;
+    const adapters = listAdapters();
+    const defaultIdx = adapters.indexOf(configDefault);
+    resolvedAgent = await askChoice(
+      t("create_task_agent_prompt"),
+      adapters,
+      defaultIdx >= 0 ? defaultIdx : 0,
+    );
+    // config デフォルトと同じなら空にして cascade に任せる
+    if (resolvedAgent === configDefault) resolvedAgent = "";
+  }
+
   // agent バリデーション
-  if (agent) {
-    try { getAdapter(agent); } catch (e: any) {
+  if (resolvedAgent) {
+    try { getAdapter(resolvedAgent); } catch (e: any) {
       console.error(e.message);
       process.exit(1);
     }
@@ -1640,7 +1774,7 @@ async function cmdCreateTask(): Promise<void> {
   const content = `---
 id: ${newId}
 title: ${title}
-priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${agent ? `\nagent: ${agent}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${depsArray.length > 0 ? `\ndepends_on: [${depsArray.join(", ")}]` : ""}
+priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${resolvedAgent ? `\nagent: ${resolvedAgent}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${depsArray.length > 0 ? `\ndepends_on: [${depsArray.join(", ")}]` : ""}
 created_at: ${new Date().toISOString()}
 ---
 
@@ -2478,6 +2612,9 @@ async function cmdArtifacts(): Promise<void> {
 // 単体テストから import した場合にトップレベル副作用を走らせないためのガード
 if (import.meta.main) {
 switch (command) {
+  case "init":
+    await cmdInit();
+    break;
   case "start":
     await cmdStart();
     break;
