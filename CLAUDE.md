@@ -488,9 +488,9 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 ## レイアウト戦略
 
-### 固定2x2レイアウト
+起動時にレイアウトモードに応じたペイン構成を作成し、セッション終了まで変更しない。モードは `cmux-team start --layout=<wide|16x9>` または `.team/config.json` の `layout` で指定する（デフォルト: `wide`）。
 
-起動時に固定の2x2レイアウト（4ペイン、5 surface）を作成し、セッション終了まで変更しない。
+### wide（デフォルト — 2x2、Conductor x3）
 
 ```
 [Manager|Master] | [Conductor-1]
@@ -499,9 +499,26 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 - **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
 - **右上〜右下**: Conductor-1〜3（常駐 Claude セッション）
-- **4ペインは不動** — close しない
-- **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
 - **最大3タスク並列**、4つ目以降はキューイング
+
+### 16x9（上段フル幅 + 下段 2 分割、Conductor x2）
+
+```
+[ Manager | Master (上段フル幅) ]
+[ Conductor-1 | Conductor-2    ]
+```
+
+- **上段**: Manager | Master（タブとして同居、横幅 100%）
+- **下段左/右**: Conductor-1 / Conductor-2
+- **最大2タスク並列**、3つ目以降はキューイング
+- 16:9 ディスプレイで Conductor ペインの横幅を最大化する用途
+
+### 共通事項
+
+- **ペイン構成は不動** — セッション中に close しない
+- **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
+- 優先順位: CLI 引数 > `.team/config.json` > デフォルト（`wide`）
+- `CMUX_TEAM_MAX_CONDUCTORS` で Conductor 数を上書き可能。`16x9` で 2 超を指定すると警告ログ出力で 2 にクランプ
 
 ## git worktree（概要）
 

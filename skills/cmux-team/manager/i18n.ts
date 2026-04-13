@@ -82,14 +82,19 @@ const en = {
 cmux-team start -- launch daemon + spawn Master + show dashboard
 
 Usage:
-  cmux-team start
+  cmux-team start [--layout=<wide|16x9>]
 
 Options:
-  (none)
+  --layout <wide|16x9>     layout mode (default: wide, or config.json layout)
+                           - wide: 2x2 layout, 3 Conductors (default)
+                           - 16x9: top full-width + bottom split, 2 Conductors
 
 Notes:
   - Must be run inside a cmux session (CMUX_SOCKET_PATH is required)
-  - Starts daemon + logging proxy + 2x2 layout (3 Conductors) + Master
+  - Starts daemon + logging proxy + layout panes + Master
+  - Priority: --layout > .team/config.json "layout" > "wide"
+  - CMUX_TEAM_MAX_CONDUCTORS env var overrides layout-derived max
+    (16x9 still creates only 2 panes; extra conductors are clamped)
   - Dashboard is displayed with keyboard shortcuts for interaction
 `,
 
@@ -589,14 +594,19 @@ const ja: typeof en = {
 cmux-team start -- daemon 起動 + Master spawn + ダッシュボード表示
 
 Usage:
-  cmux-team start
+  cmux-team start [--layout=<wide|16x9>]
 
 Options:
-  なし
+  --layout <wide|16x9>     レイアウトモード (デフォルト: wide、または config.json の layout)
+                           - wide: 2x2 レイアウト、Conductor x3（デフォルト）
+                           - 16x9: 上段フル幅 + 下段 2 分割、Conductor x2
 
 Notes:
   - cmux 環境内で実行する必要があります（CMUX_SOCKET_PATH が必要）
-  - daemon + ロギングプロキシ + 2x2 レイアウト（Conductor x3）+ Master を起動します
+  - daemon + ロギングプロキシ + レイアウト pane + Master を起動します
+  - 優先順位: --layout > .team/config.json の "layout" > "wide"
+  - CMUX_TEAM_MAX_CONDUCTORS 環境変数は layout 派生値を上書きします
+    （16x9 は 2 pane のみ作成、超過分は clamp されます）
   - ダッシュボードが表示され、キーボードショートカットで操作できます
 `,
 

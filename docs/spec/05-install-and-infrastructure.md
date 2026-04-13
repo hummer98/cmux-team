@@ -105,7 +105,7 @@ skills/cmux-team/manager/
 
 | コマンド | 説明 |
 |---------|------|
-| `start` | daemon 起動 + Master spawn + Conductor スロット初期化 + TUI + プロキシ |
+| `start` | daemon 起動 + Master spawn + Conductor スロット初期化 + TUI + プロキシ（`--layout=<wide\|16x9>` でレイアウト指定） |
 | `send <TYPE>` | メッセージ投入（TASK_CREATED, CONDUCTOR_DONE, SHUTDOWN 等） |
 | `status` | daemon ステータス表示（conductor、タスク数、ログ末尾） |
 | `stop` | グレースフルシャットダウン |
@@ -228,6 +228,52 @@ daemon 停止時に `cmux clear-status` でクリアする。
 2. プラグインキャッシュ: `~/.claude/plugins/cache/hummer98-cmux-team/.../templates/`
 3. プロジェクトローカル: `skills/cmux-team/templates/`
 4. 手動インストール: `~/.claude/skills/cmux-team/templates/`
+
+---
+
+## レイアウトモード
+
+`cmux-team start` は起動時に固定のペイン構成を作成する。モードは `--layout` オプションまたは `.team/config.json` の `layout` フィールドで指定する。
+
+### モード一覧
+
+| モード | ペイン構成 | 既定 Conductor 数 |
+|--------|-----------|-------------------|
+| `wide`（デフォルト） | 2x2（Manager\|Master + Conductor x3） | 3 |
+| `16x9` | 上段フル幅（Manager\|Master）+ 下段 2 分割（Conductor x2） | 2 |
+
+#### wide
+
+```
+[Manager|Master] | [Conductor-1]
+[Conductor-2   ] | [Conductor-3]
+```
+
+左上に Manager/Master がタブとして同居し、残り 3 ペインを Conductor に割り当てる。最大 3 タスク並列、4 つ目以降はキューイング。
+
+#### 16x9
+
+```
+[ Manager | Master (上段フル幅) ]
+[ Conductor-1 | Conductor-2    ]
+```
+
+上段フル幅に Manager/Master（タブ同居）、下段を左右 2 分割して Conductor を配置。最大 2 タスク並列、3 つ目以降はキューイング。16:9 ディスプレイで Conductor ペインの横幅を最大化する用途。
+
+### 切り替え方法
+
+1. **CLI**: `cmux-team start --layout=16x9`
+2. **設定ファイル**: `.team/config.json` に `{ "layout": "16x9" }` を記述
+
+### 優先順位
+
+CLI 引数 > `.team/config.json` > デフォルト（`wide`）。
+
+`CMUX_TEAM_MAX_CONDUCTORS` 環境変数で Conductor 数を上書きできるが、`16x9` で 2 を超える値を指定すると警告ログを出力して 2 にクランプされる（下段は 2 ペイン固定のため）。
+
+### 再起動時の挙動
+
+`.team/team.json` に記録された `layout` が起動時の指定と異なる場合、新しい layout で再初期化される（`layout_mismatch_on_resume` をログ記録）。古い team.json に `layout` フィールドがない場合は `wide` とみなす。
 
 ---
 

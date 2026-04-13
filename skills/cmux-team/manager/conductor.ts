@@ -12,7 +12,7 @@ import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
 import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
-import type { ConductorState } from "./schema";
+import type { ConductorState, LayoutMode } from "./schema";
 
 const execFile = promisify(execFileCb);
 
@@ -152,13 +152,45 @@ export async function launchConductor(
 
 /**
  * Conductor 用の pane を分割作成する（Claude は起動しない）
+ *
+ * layout:
+ *   - "wide" (default): 2x2 — 左上 daemon+Master、右上 C1、左下 C2、右下 C3（最大 3）
+ *   - "16x9": 上段フル幅 daemon+Master、下段を 2 分割して C1（左）/ C2（右）（最大 2）
  */
 export async function createConductorPanes(
   count: number,
   daemonSurface?: string,
+  layout: LayoutMode = "wide",
 ): Promise<{ surface: string; paneId?: string }[]> {
   const panes: { surface: string; paneId?: string }[] = [];
 
+  if (layout === "16x9") {
+    if (count > 2) {
+      // env CMUX_TEAM_MAX_CONDUCTORS で 3 以上を要求されても 16x9 は 2 pane しか作らない。
+      // 呼び出し元（daemon.ts）でも警告ログを出すが、ここでは clamp して続行する。
+      await log(
+        "layout_16x9_clamp",
+        `requested=${count} clamped=2 — 16x9 layout supports max 2 conductors`,
+      );
+      count = 2;
+    }
+    // 1. daemon を下に split → Conductor-1 pane（下段の基底）
+    const s1 = await cmux.newSplit(
+      "down",
+      daemonSurface ? { surface: daemonSurface } : undefined,
+    );
+    panes.push({ surface: s1, paneId: await getPaneIdForSurface(s1) });
+
+    if (count >= 2) {
+      // 2. Conductor-1 pane を右に split → Conductor-2 pane（下段を等幅 2 分割）
+      const s2 = await cmux.newSplit("right", { surface: s1 });
+      panes.push({ surface: s2, paneId: await getPaneIdForSurface(s2) });
+    }
+
+    return panes;
+  }
+
+  // --- layout === "wide"（既存ロジック） ---
   // 1. daemon を右に split → Conductor-1 pane
   const s1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
   panes.push({ surface: s1, paneId: await getPaneIdForSurface(s1) });
@@ -186,14 +218,15 @@ export async function initializeConductorSlots(
   count: number = 3,
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
+  layout: LayoutMode = "wide",
 ): Promise<ResumeAssignment[]> {
   const assignments: ResumeAssignment[] = [];
   try {
-    await log("conductor_slots_creating", `count=${count}`);
+    await log("conductor_slots_creating", `count=${count} layout=${layout}`);
 
     // Phase 1: pane 分割（Claude は起動しない）
     await log("conductor_panes_creating", "");
-    const panes = await createConductorPanes(count, daemonSurface);
+    const panes = await createConductorPanes(count, daemonSurface, layout);
     await log("conductor_panes_created", `count=${panes.length}`);
 
     // Phase 2: Claude 一斉起動

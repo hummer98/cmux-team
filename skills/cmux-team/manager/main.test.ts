@@ -7,6 +7,7 @@ import {
   generateConductorSettings,
   validateSendAgentTarget,
   waitForAgentRegistered,
+  resolveLayout,
 } from "./main";
 
 let testDir: string;
@@ -235,6 +236,32 @@ describe("validateSendAgentTarget (§4.3)", () => {
   test("caller が teamJson.conductors にない → reject not_a_conductor", () => {
     const r = validateSendAgentTarget(sampleTeamJson, "surface:999", "surface:382");
     expect(r).toEqual({ ok: false, reason: "not_a_conductor" });
+  });
+});
+
+describe("resolveLayout (T176)", () => {
+  test("default: config なし・CLI なし → wide", () => {
+    expect(resolveLayout({}, undefined)).toBe("wide");
+  });
+
+  test("config.layout=16x9, CLI なし → 16x9", () => {
+    expect(resolveLayout({ layout: "16x9" }, undefined)).toBe("16x9");
+  });
+
+  test("config.layout=16x9, CLI=wide → wide（CLI 優先）", () => {
+    expect(resolveLayout({ layout: "16x9" }, "wide")).toBe("wide");
+  });
+
+  test("config なし, CLI=16x9 → 16x9", () => {
+    expect(resolveLayout({}, "16x9")).toBe("16x9");
+  });
+
+  test("不正値 (CLI) → throw", () => {
+    expect(() => resolveLayout({}, "invalid")).toThrow(/Unknown layout/);
+  });
+
+  test("不正値 (config) → throw", () => {
+    expect(() => resolveLayout({ layout: "foo" as any }, undefined)).toThrow(/Unknown layout/);
   });
 });
 
