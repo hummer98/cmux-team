@@ -4,7 +4,7 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { log } from "./logger";
-import { formatExecError } from "./exec-error";
+import { formatExecError, isExecTimeout } from "./exec-error";
 
 const execFile = promisify(execFileCb);
 
@@ -27,6 +27,10 @@ async function runCmux(args: string[], opts?: RunCmuxOpts): Promise<{ stdout: st
     wrapped.cause = e;
     wrapped.stderr = e?.stderr;
     wrapped.stdout = e?.stdout;
+    // T180: 上位で isExecTimeout() が wrapped にも反応できるよう転写する
+    wrapped.killed = e?.killed;
+    wrapped.signal = e?.signal;
+    wrapped.code = e?.code;
     wrapped.__cmuxWrapped = true;
     throw wrapped;
   }
@@ -121,7 +125,19 @@ export async function renameWorkspace(title: string, workspace?: string): Promis
 /** tree 呼び出しのタイムアウト（ミリ秒） */
 const TREE_TIMEOUT_MS = 5_000;
 
+/**
+ * テストから tree の実体を差し替えるためのフック（R4）。
+ * 未設定時は実 cmux コマンドを呼ぶ。テスト時は `__setTreeImpl()` で差し替える。
+ */
+let treeImpl: ((workspace?: string) => Promise<string>) | null = null;
+
+/** テスト用: tree の実装を差し替える。`null` で元に戻す。 */
+export function __setTreeImpl(impl: ((workspace?: string) => Promise<string>) | null): void {
+  treeImpl = impl;
+}
+
 export async function tree(workspace?: string): Promise<string> {
+  if (treeImpl) return treeImpl(workspace);
   const args = ["tree"];
   if (workspace) args.push("--workspace", workspace);
   const { stdout } = await runCmux(args, { timeout: TREE_TIMEOUT_MS });
@@ -140,7 +156,7 @@ export async function getPaneForSurface(surface: string, workspace?: string): Pr
     }
     return undefined;
   } catch (e: any) {
-    await log("error", `getPaneForSurface failed: surface=${surface} ${e.message}`);
+    await log("error", `getPaneForSurface failed: surface=${surface} ${formatExecError(e)}`);
     return undefined;
   }
 }
@@ -155,30 +171,56 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * surface の生存確認。
+ * surface の生存確認（詳細版 — T180）。
+ *
+ * 戻り値:
+ *   - `"alive"`   : tree に surface が含まれていた
+ *   - `"missing"` : tree 成功したが surface 不在 / 真エラーが 1 回でも出た
+ *   - `"unknown"` : 全試行が execFile タイムアウト（cmux daemon 一時的応答不能の疑い）
  *
  * - tree() が成功した場合は結果を即返す（missing 判定は正常系のためリトライしない）。
  * - tree() が例外を投げた場合のみバックオフ付きでリトライする（cmux 側の一過性 I/O
  *   エラーによる誤 crash 判定を防ぐ）。
+ * - 全試行が timeout だった場合のみ `"unknown"` を返す（混在時は `"missing"` 寄せ
+ *   — 真エラーが 1 回でも返れば cmux daemon は応答しているため）。
  */
-export async function validateSurface(surface: string, workspace?: string): Promise<boolean> {
+export async function validateSurfaceDetailed(
+  surface: string,
+  workspace?: string
+): Promise<"alive" | "missing" | "unknown"> {
+  let allTimedOut = true;
+  let lastError: unknown;
   for (let attempt = 0; attempt < VALIDATE_SURFACE_RETRY_COUNT; attempt++) {
     try {
       const output = await tree(workspace);
-      // tree 成功時は即 return — missing は Agent 終了直後などの正常系
-      return output.includes(surface);
+      return output.includes(surface) ? "alive" : "missing";
     } catch (e: any) {
+      lastError = e;
+      if (!isExecTimeout(e)) {
+        allTimedOut = false;
+      }
       if (attempt === VALIDATE_SURFACE_RETRY_COUNT - 1) {
         await log(
           "validate_surface_failed",
-          `surface=${surface} attempts=${attempt + 1} last_error=${e.message}`
+          `surface=${surface} attempts=${attempt + 1} all_timed_out=${allTimedOut} last_error=${formatExecError(e)}`
         );
-        return false;
+        return allTimedOut ? "unknown" : "missing";
       }
       await sleep(VALIDATE_SURFACE_BACKOFF_MS[attempt] ?? 800);
     }
   }
-  return false;
+  // 到達不能（ループ内で必ず return するが TS のため）
+  void lastError;
+  return "missing";
+}
+
+/**
+ * surface の生存確認（従来 bool 版 — 互換維持のため残置）。
+ * 詳細な `"unknown"` 判定が必要な呼び出し元は `validateSurfaceDetailed` を使うこと。
+ */
+export async function validateSurface(surface: string, workspace?: string): Promise<boolean> {
+  const result = await validateSurfaceDetailed(surface, workspace);
+  return result === "alive";
 }
 
 export async function getCallerSurface(): Promise<string> {
@@ -203,7 +245,7 @@ export async function setStatus(
   try {
     await runCmux(args);
   } catch (e: any) {
-    await log("error", `setStatus failed: key=${key} value=${value} ${e.message}`);
+    await log("error", `setStatus failed: key=${key} value=${value} ${formatExecError(e)}`);
   }
 }
 

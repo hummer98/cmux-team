@@ -43,3 +43,26 @@ export function formatExecError(e: unknown): string {
   if (stdout) parts.push(`stdout=${stdout}`);
   return parts.join(" | ");
 }
+
+/**
+ * execFile の timeout オプション超過による SIGTERM/SIGKILL kill を判定する。
+ *
+ * Node の child_process.execFile は `timeout` 超過時に子プロセスを
+ * SIGTERM で kill し、Error に `killed=true` / `signal='SIGTERM'`（または SIGKILL）を付与する。
+ * cmux 側の正規エラー（非 0 exit code）は `killed=false` で区別できる。
+ *
+ * `runCmux` の wrap 済み Error でも判定できるよう `e.cause` も辿る（R3 統一方針）。
+ */
+export function isExecTimeout(e: unknown): boolean {
+  const check = (err: any): boolean => {
+    if (!err || typeof err !== "object") return false;
+    if (err.killed === true && (err.signal === "SIGTERM" || err.signal === "SIGKILL")) {
+      return true;
+    }
+    return false;
+  };
+  if (check(e)) return true;
+  const cause = (e as { cause?: unknown })?.cause;
+  if (check(cause)) return true;
+  return false;
+}

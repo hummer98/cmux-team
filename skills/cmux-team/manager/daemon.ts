@@ -1002,22 +1002,43 @@ const STARTING_TIMEOUT_SEC = 60;
 const DISCONNECT_TIMEOUT_SEC =
   Number(process.env.CMUX_TEAM_DISCONNECT_TIMEOUT_SEC) || 300;  // 5 分
 
+/**
+ * T180: cmux tree タイムアウトが連続する場合に `kind=cmux_unresponsive` として
+ * disconnected 化するための閾値。
+ *
+ * デフォルト 10 秒 poll × 6 tick = 60s 連続失敗、かつ 120s 経過で昇格する。
+ * 事象ログ（01:56:56〜01:57:28 の 32 秒で 3 失敗）では誤 abort されない値。
+ *
+ * TODO (R2): `kind=cmux_unresponsive` で disconnected 化したケースの復帰パスは本タスク
+ * スコープ外。将来的には tree 復旧時に disconnected → running 復帰を検討する。
+ */
+const UNRESPONSIVE_MAX_TICKS =
+  Number(process.env.CMUX_TEAM_UNRESPONSIVE_MAX_TICKS) || 6;
+const UNRESPONSIVE_MAX_SEC =
+  Number(process.env.CMUX_TEAM_UNRESPONSIVE_MAX_SEC) || 120;
+
 export async function monitorConductors(state: DaemonState): Promise<void> {
   // tick 冒頭で tree() を 1 回だけ呼び、結果をキャッシュする (Major 1)
   //   成功時: surface 判定は treeOutput.includes(surface) で行う
-  //   失敗時: リトライ付き validateSurface にフォールバック
+  //   失敗時: リトライ付き validateSurfaceDetailed にフォールバックし
+  //           timeout 判定で "unknown" を返して crash 誤判定を防ぐ (T180)
   let treeOutput: string | null = null;
   try {
     treeOutput = await cmux.tree(state.workspace ?? undefined);
   } catch (e: any) {
-    await log("monitor_tree_failed", `last_error=${e.message}`);
+    await log("monitor_tree_failed", formatExecError(e));
     treeOutput = null;
   }
 
-  const surfaceAlive = async (surface: string): Promise<boolean> => {
-    if (treeOutput !== null) return treeOutput.includes(surface);
-    return cmux.validateSurface(surface, state.workspace ?? undefined);
+  const surfaceAlive = async (surface: string): Promise<"alive" | "missing" | "unknown"> => {
+    if (treeOutput !== null) {
+      return treeOutput.includes(surface) ? "alive" : "missing";
+    }
+    return cmux.validateSurfaceDetailed(surface, state.workspace ?? undefined);
   };
+
+  // Agent 生存チェックを unknown 時に skip したことを 1 回だけログする
+  let agentSkipLogged = false;
 
   for (const [surface, conductor] of state.conductors) {
     // starting: タイムアウトチェックのみ
@@ -1052,9 +1073,66 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
     // idle: 何もしない
     if (conductor.status === "idle") continue;
 
-    // running: Conductor surface の生存確認
-    const alive = await surfaceAlive(conductor.surface);
-    if (!alive) {
+    // running: Conductor surface の生存確認（3 値）
+    const result = await surfaceAlive(conductor.surface);
+
+    if (result === "alive") {
+      // tree 復旧時の節目ログ
+      if ((conductor.treeFailureCount ?? 0) > 0) {
+        const firstAt = conductor.treeFailureFirstAt;
+        const elapsed = firstAt
+          ? Math.round((Date.now() - new Date(firstAt).getTime()) / 1000)
+          : 0;
+        await log(
+          "conductor_responsive_recovered",
+          `surface=${surface} after_failures=${conductor.treeFailureCount} elapsed=${elapsed}s`
+        );
+        conductor.treeFailureCount = 0;
+        conductor.treeFailureFirstAt = undefined;
+      }
+      // Agent 生存チェックへフォールスルー
+    } else if (result === "unknown") {
+      // T180: cmux daemon 不応答 — crash 判定しない
+      const prev = conductor.treeFailureCount ?? 0;
+      const count = prev + 1;
+      conductor.treeFailureCount = count;
+      if (!conductor.treeFailureFirstAt) {
+        conductor.treeFailureFirstAt = new Date().toISOString();
+        await log(
+          "conductor_unresponsive_started",
+          `surface=${surface} taskRunId=${conductor.taskRunId ?? "-"}`
+        );
+      }
+      const elapsed =
+        (Date.now() - new Date(conductor.treeFailureFirstAt).getTime()) / 1000;
+
+      if (count >= UNRESPONSIVE_MAX_TICKS && elapsed >= UNRESPONSIVE_MAX_SEC) {
+        // 閾値超過 → disconnected 昇格（kind=cmux_unresponsive）
+        await log(
+          "conductor_unresponsive_threshold",
+          `surface=${surface} consecutive=${count} elapsed=${Math.round(elapsed)}s`
+        );
+        await log(
+          "conductor_disconnected",
+          `surface=${surface} reason=tree_unresponsive_persistent kind=cmux_unresponsive ` +
+            `consecutive=${count} elapsed=${Math.round(elapsed)}s ` +
+            `taskRunId=${conductor.taskRunId ?? "-"}`
+        );
+        conductor.status = "disconnected";
+        conductor.disconnectedAt = new Date().toISOString();
+        continue;
+      }
+      // 閾値未満: disconnected 化せずスキップ（Agent チェックも同じ tree 依存なのでスキップ）
+      if (!agentSkipLogged) {
+        await log(
+          "monitor_skip_agents",
+          `reason=cmux_unresponsive surface=${surface} consecutive=${count}`
+        );
+        agentSkipLogged = true;
+      }
+      continue;
+    } else {
+      // result === "missing" — 従来通り即 crash 判定
       await log(
         "conductor_disconnected",
         `surface=${surface} reason=validate_surface_failed kind=crashed taskRunId=${conductor.taskRunId ?? "-"}`
@@ -1067,15 +1145,19 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
     }
 
     // Agent surface の生存チェック — tree キャッシュを使う (Major 1)
+    // unknown 時は上の continue でここに到達しないため安全
     for (let i = conductor.agents.length - 1; i >= 0; i--) {
       const agent = conductor.agents[i]!;
-      if (!(await surfaceAlive(agent.surface))) {
+      const agentResult = await surfaceAlive(agent.surface);
+      if (agentResult === "missing") {
         conductor.agents.splice(i, 1);
         await log(
           "agent_done",
           `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost`
         );
       }
+      // agentResult === "unknown" はここでは起きない（treeOutput null でも Conductor が alive なら
+      // Agent も直前で "alive" に該当するため）。ただし防御的に missing 時のみ削除する。
     }
   }
 }

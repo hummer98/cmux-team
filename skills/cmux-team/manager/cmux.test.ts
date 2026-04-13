@@ -34,7 +34,7 @@ async function writeFakeCmux(script: string): Promise<void> {
 
 // validateSurface は一度 import すれば再利用可能。
 // execFile("cmux", ...) を呼ぶため、PATH 差し替えで fake cmux の挙動が変わる。
-import { validateSurface, send, setStatus } from "./cmux";
+import { validateSurface, validateSurfaceDetailed, send, setStatus, __setTreeImpl } from "./cmux";
 
 describe("validateSurface リトライ (T121)", () => {
   test("1 回目で成功すれば即 true を返す", async () => {
@@ -98,5 +98,94 @@ printf "pane:1\n  surface:99\n"
     // tree() は 1 回だけ呼ばれていること
     const count = (await readFile(join(testDir, "count"), "utf-8")).trim();
     expect(count).toBe("1");
+  });
+});
+
+describe("validateSurfaceDetailed (T180)", () => {
+  // treeImpl 差し替えフックを使ったユニットテスト（fake cmux 不要）
+  test("tree 成功・surface 含む → 'alive'", async () => {
+    __setTreeImpl(async () => "pane:1\n  surface:42\n");
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("alive");
+    } finally {
+      __setTreeImpl(null);
+    }
+  });
+
+  test("tree 成功・surface 不在 → 'missing'", async () => {
+    __setTreeImpl(async () => "pane:1\n  surface:99\n");
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("missing");
+    } finally {
+      __setTreeImpl(null);
+    }
+  });
+
+  test("3 回全て execFile timeout（SIGTERM kill） → 'unknown'", async () => {
+    __setTreeImpl(async () => {
+      const err: any = new Error("Command failed: cmux tree");
+      err.killed = true;
+      err.signal = "SIGTERM";
+      throw err;
+    });
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("unknown");
+    } finally {
+      __setTreeImpl(null);
+    }
+  });
+
+  test("3 回全て真エラー（非 timeout） → 'missing'", async () => {
+    __setTreeImpl(async () => {
+      const err: any = new Error("Command failed: workspace not found");
+      err.code = 1;
+      err.killed = false;
+      throw err;
+    });
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("missing");
+    } finally {
+      __setTreeImpl(null);
+    }
+  });
+
+  test("timeout + timeout + 真エラー → 'missing' (混在時は missing 寄せ)", async () => {
+    let n = 0;
+    __setTreeImpl(async () => {
+      n++;
+      const err: any = new Error("Command failed: cmux tree");
+      if (n < 3) {
+        err.killed = true;
+        err.signal = "SIGTERM";
+      } else {
+        err.killed = false;
+        err.code = 1;
+      }
+      throw err;
+    });
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("missing");
+    } finally {
+      __setTreeImpl(null);
+    }
+  });
+
+  test("1 回目 timeout + 2 回目成功 → 'alive'", async () => {
+    let n = 0;
+    __setTreeImpl(async () => {
+      n++;
+      if (n === 1) {
+        const err: any = new Error("Command failed: cmux tree");
+        err.killed = true;
+        err.signal = "SIGTERM";
+        throw err;
+      }
+      return "pane:1\n  surface:42\n";
+    });
+    try {
+      expect(await validateSurfaceDetailed("surface:42")).toBe("alive");
+    } finally {
+      __setTreeImpl(null);
+    }
   });
 });
