@@ -94,6 +94,8 @@ interface TeamConfig {
   };
   envrcHookPromptSkipped?: boolean;
   layout?: LayoutMode;
+  /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
+  sleepPrevention?: boolean;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -226,6 +228,11 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
+  // スリープ抑止設定（CLI --no-sleep-prevention > config.json sleepPrevention > true）
+  const sleepPrevention = args.includes("--no-sleep-prevention")
+    ? false
+    : (startConfig.sleepPrevention ?? true);
+
   const state = await createDaemon(PROJECT_ROOT, layout);
 
   // ソースファイル mtime 監視を初期化
@@ -244,7 +251,7 @@ async function cmdStart(): Promise<void> {
 
   await log(
     "daemon_started",
-    `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout}`
+    `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout} sleep_prevention=${sleepPrevention}`
   );
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
@@ -290,12 +297,30 @@ async function cmdStart(): Promise<void> {
     await log("error", `version read failed: ${e.message}`);
   }
 
+  // macOS スリープ抑止（caffeinate 管理）
+  // Master/Conductor/Agent のいずれかが稼働中ならスリープを抑止し、全 idle 時は解放する。
+  // 複数の cmux-team インスタンスが同時起動している場合も、各インスタンスが独立して
+  // caffeinate assertion を管理するため、どれか1つがアクティブなら Mac はスリープしない。
+  let caffeinateProc: { kill(): void } | null = null;
+  const updateCaffeinate = (active: boolean) => {
+    if (!sleepPrevention || process.platform !== "darwin") return;
+    if (active && !caffeinateProc) {
+      caffeinateProc = Bun.spawn(["caffeinate", "-i"], {
+        stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      });
+    } else if (!active && caffeinateProc) {
+      caffeinateProc.kill();
+      caffeinateProc = null;
+    }
+  };
+
   // シグナルハンドリング（TUI 起動前に設定）
   // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
   const shutdown = async () => {
     state.running = false;
     state.fileWatcherAbort?.abort();
     state.fileWatcherAbort = null;
+    updateCaffeinate(false);
     if (state.workspace) {
       await cmux.clearStatus("claude_code", state.workspace);
     }
@@ -554,6 +579,12 @@ async function cmdStart(): Promise<void> {
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
     }
+    // caffeinate 制御: Master/Conductor/Agent のいずれかが稼働中ならスリープ抑止
+    const systemActive =
+      state.masterStatus === "running" ||
+      [...state.conductors.values()].some(c => c.status === "running" || c.agents.length > 0);
+    updateCaffeinate(systemActive);
+
     // npm 更新チェック（5分間隔、全 Conductor が idle のときのみ）
     if (Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
       const allIdle = [...state.conductors.values()].every(c => c.status === "idle");
