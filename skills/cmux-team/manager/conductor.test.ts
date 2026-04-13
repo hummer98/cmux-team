@@ -5,12 +5,13 @@
  * cmux.send などのモック不要で再現できるため、ここに注力する。
  * conductor kind のケースはコードレビューで確認する方針。
  */
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { assignTask, AssignTaskError } from "./conductor";
+import { assignTask, AssignTaskError, createConductorPanes } from "./conductor";
 import type { ConductorState } from "./schema";
+import * as cmux from "./cmux";
 
 let testDir: string;
 
@@ -98,5 +99,89 @@ describe("assignTask エラー分類", () => {
     // .worktrees ディレクトリは作られていない
     const { existsSync } = await import("fs");
     expect(existsSync(join(testDir, ".worktrees"))).toBe(false);
+  });
+});
+
+// --- T176: createConductorPanes layout 分岐 ---
+
+describe("createConductorPanes layout 分岐 (T176)", () => {
+  // cmux.newSplit と cmux.tree を spyOn で差し替える。
+  // test.concurrent は副作用を引き起こすため使用しない。
+  let newSplitSpy: ReturnType<typeof spyOn>;
+  let treeSpy: ReturnType<typeof spyOn>;
+  let surfaceCounter: number;
+
+  beforeEach(() => {
+    surfaceCounter = 100;
+    newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(
+      async (_direction: any, _opts?: any) => {
+        return `surface:${++surfaceCounter}`;
+      },
+    );
+    treeSpy = spyOn(cmux, "tree").mockImplementation(async (_workspace?: string) => {
+      // getPaneIdForSurface が呼ぶ。pane 情報は空でよい
+      return "";
+    });
+  });
+
+  afterEach(() => {
+    newSplitSpy.mockRestore();
+    treeSpy.mockRestore();
+  });
+
+  test("layout=wide, count=3 → newSplit の呼び出し順は (right, daemon) → (down, daemon) → (down, c1)", async () => {
+    const panes = await createConductorPanes(3, "surface:1", "wide");
+    expect(panes).toHaveLength(3);
+    expect(newSplitSpy.mock.calls.length).toBe(3);
+
+    const [c1Dir, c1Opts] = newSplitSpy.mock.calls[0];
+    expect(c1Dir).toBe("right");
+    expect(c1Opts).toEqual({ surface: "surface:1" });
+
+    const [c2Dir, c2Opts] = newSplitSpy.mock.calls[1];
+    expect(c2Dir).toBe("down");
+    expect(c2Opts).toEqual({ surface: "surface:1" });
+
+    const [c3Dir, c3Opts] = newSplitSpy.mock.calls[2];
+    expect(c3Dir).toBe("down");
+    // c1 pane を split（= 最初に作った surface を引数に取る）
+    expect((c3Opts as { surface: string }).surface).toBe(panes[0]!.surface);
+  });
+
+  test("layout=16x9, count=2 → newSplit の呼び出し順は (down, daemon) → (right, c1)", async () => {
+    const panes = await createConductorPanes(2, "surface:1", "16x9");
+    expect(panes).toHaveLength(2);
+    expect(newSplitSpy.mock.calls.length).toBe(2);
+
+    const [c1Dir, c1Opts] = newSplitSpy.mock.calls[0];
+    expect(c1Dir).toBe("down");
+    expect(c1Opts).toEqual({ surface: "surface:1" });
+
+    const [c2Dir, c2Opts] = newSplitSpy.mock.calls[1];
+    expect(c2Dir).toBe("right");
+    // C1 pane を split（最初に作った surface）
+    expect((c2Opts as { surface: string }).surface).toBe(panes[0]!.surface);
+  });
+
+  test("layout=16x9, count=1 → 下段は 1 個のみ（right split なし）", async () => {
+    const panes = await createConductorPanes(1, "surface:1", "16x9");
+    expect(panes).toHaveLength(1);
+    expect(newSplitSpy.mock.calls.length).toBe(1);
+    expect(newSplitSpy.mock.calls[0][0]).toBe("down");
+  });
+
+  test("layout=16x9, count=3 は 2 に clamp される（R1 ガード）", async () => {
+    const panes = await createConductorPanes(3, "surface:1", "16x9");
+    // 3 つ目の pane は作られない
+    expect(panes).toHaveLength(2);
+    expect(newSplitSpy.mock.calls.length).toBe(2);
+  });
+
+  test("layout 省略時は wide と同じ挙動（後方互換）", async () => {
+    const panes = await createConductorPanes(3, "surface:1");
+    expect(panes).toHaveLength(3);
+    expect(newSplitSpy.mock.calls[0][0]).toBe("right");
+    expect(newSplitSpy.mock.calls[1][0]).toBe("down");
+    expect(newSplitSpy.mock.calls[2][0]).toBe("down");
   });
 });

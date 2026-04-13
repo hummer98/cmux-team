@@ -169,3 +169,14 @@ export interface RateLimitInfo {
 
 /** 5h unified utilization がこの値以上なら新規タスク割り当てを停止 */
 export const THROTTLE_5H_THRESHOLD = 0.90;
+
+// --- レイアウトモード ---
+
+export const LayoutMode = z.enum(["wide", "16x9"]);
+export type LayoutMode = z.infer<typeof LayoutMode>;
+
+/** 各 layout で作成する Conductor 数（env CMUX_TEAM_MAX_CONDUCTORS 未指定時の既定値） */
+export const LAYOUT_MAX_CONDUCTORS: Record<LayoutMode, number> = {
+  wide: 3,
+  "16x9": 2,
+};

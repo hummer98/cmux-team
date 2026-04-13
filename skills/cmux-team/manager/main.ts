@@ -40,8 +40,8 @@ import { loadTaskState, loadTasks, saveTaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
-import type { QueueMessage } from "./schema";
-import { THROTTLE_5H_THRESHOLD } from "./schema";
+import type { QueueMessage, LayoutMode } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -93,6 +93,7 @@ interface TeamConfig {
     agent?: string;
   };
   envrcHookPromptSkipped?: boolean;
+  layout?: LayoutMode;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -102,6 +103,22 @@ async function loadConfig(): Promise<TeamConfig> {
   } catch {
     return {};
   }
+}
+
+/**
+ * レイアウトモードを解決する。
+ * 優先順位: CLI フラグ (--layout) > config.json の layout > "wide"
+ * 不正値は Error を throw する（呼び出し元で process.exit する想定）。
+ */
+export function resolveLayout(
+  config: Pick<TeamConfig, "layout">,
+  cliLayout: string | undefined,
+): LayoutMode {
+  const raw = cliLayout ?? config.layout ?? "wide";
+  if (raw !== "wide" && raw !== "16x9") {
+    throw new Error(`Unknown layout: ${raw} (expected "wide" or "16x9")`);
+  }
+  return raw;
 }
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
@@ -199,7 +216,17 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
-  const state = await createDaemon(PROJECT_ROOT);
+  // layout 解決（CLI --layout > config.json > "wide"）
+  const startConfig = await loadConfig();
+  let layout: LayoutMode;
+  try {
+    layout = resolveLayout(startConfig, getArg("layout"));
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+
+  const state = await createDaemon(PROJECT_ROOT, layout);
 
   // ソースファイル mtime 監視を初期化
   state.sourceMtimes = await initSourceWatcher();
@@ -217,7 +244,7 @@ async function cmdStart(): Promise<void> {
 
   await log(
     "daemon_started",
-    `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors}`
+    `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout}`
   );
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
@@ -709,7 +736,8 @@ async function cmdStatus(): Promise<void> {
 
   // --- ヘッダー ---
   const status = alive ? "RUNNING" : "STOPPED";
-  console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}`);
+  const layout = typeof teamJson.layout === "string" ? teamJson.layout : "wide";
+  console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
 
   // --- Master ---
   console.log(`─ Master ${"─".repeat(50)}`);

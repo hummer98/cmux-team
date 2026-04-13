@@ -44,9 +44,12 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 4. **逸脱を防ぐより、逸脱しても安全な構造にする** — git worktree 隔離 + 事後レビュー
 5. **シンプルさを優先** — 動くものを最小構成で
 
-## レイアウト: 固定2x2
+## レイアウト
 
-起動時に固定の2x2レイアウト（4ペイン、5 surface）を作成し、セッション終了まで変更しない。
+起動時にレイアウトモードに応じたペイン構成を作成し、セッション終了まで変更しない。
+モードは `cmux-team start --layout=<wide|16x9>` または `.team/config.json` の `layout` で指定する（デフォルト: `wide`）。
+
+### wide（デフォルト — 2x2、Conductor x3）
 
 ```
 [Manager|Master] | [Conductor-1]
@@ -58,6 +61,23 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 - **左下**: Conductor-2（常駐 Claude セッション）
 - **右下**: Conductor-3（常駐 Claude セッション）
 - **最大3タスク並列**、4つ目以降はキューイング
+
+### 16x9（上段フル幅 + 下段 2 分割、Conductor x2）
+
+```
+[ Manager | Master (上段フル幅) ]
+[ Conductor-1 | Conductor-2    ]
+```
+
+- **上段**: Manager | Master（タブとして同居、横幅 100%）
+- **下段左**: Conductor-1
+- **下段右**: Conductor-2
+- **最大2タスク並列**、3つ目以降はキューイング
+- 16:9 ディスプレイで Conductor ペインの横幅を最大化する用途
+
+### 共通事項
+
+- **ペイン構成は不動** — セッション中に close しない
 - **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成
 
 ## 配布方法

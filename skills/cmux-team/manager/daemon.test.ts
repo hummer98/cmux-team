@@ -826,3 +826,65 @@ describe("crashed → disconnected 遷移 (T121)", () => {
     expect(conductor.status).toBe("idle");
   });
 });
+
+// --- T176: layout モード ---
+
+import { updateTeamJson } from "./daemon";
+
+describe("createDaemon: layout (T176)", () => {
+  const prevEnv = process.env.CMUX_TEAM_MAX_CONDUCTORS;
+  beforeEach(() => {
+    delete process.env.CMUX_TEAM_MAX_CONDUCTORS;
+  });
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.CMUX_TEAM_MAX_CONDUCTORS;
+    else process.env.CMUX_TEAM_MAX_CONDUCTORS = prevEnv;
+  });
+
+  test("default (layout 未指定) → wide / maxConductors=3", async () => {
+    const state = await createDaemon(testDir);
+    expect(state.layout).toBe("wide");
+    expect(state.maxConductors).toBe(3);
+  });
+
+  test("layout=16x9 → maxConductors=2", async () => {
+    const state = await createDaemon(testDir, "16x9");
+    expect(state.layout).toBe("16x9");
+    expect(state.maxConductors).toBe(2);
+  });
+
+  test("layout=wide を明示 → maxConductors=3", async () => {
+    const state = await createDaemon(testDir, "wide");
+    expect(state.layout).toBe("wide");
+    expect(state.maxConductors).toBe(3);
+  });
+
+  test("CMUX_TEAM_MAX_CONDUCTORS が env にあれば layout 派生値より優先", async () => {
+    process.env.CMUX_TEAM_MAX_CONDUCTORS = "5";
+    const state = await createDaemon(testDir, "16x9");
+    expect(state.layout).toBe("16x9");
+    expect(state.maxConductors).toBe(5); // env 優先
+  });
+});
+
+describe("updateTeamJson: layout 反映 (T176)", () => {
+  test("team.json に layout フィールドが書き込まれる", async () => {
+    const state = await createDaemon(testDir, "16x9");
+    await updateTeamJson(state);
+
+    const tj = JSON.parse(
+      await (await import("fs/promises")).readFile(join(testDir, ".team/team.json"), "utf-8")
+    );
+    expect(tj.layout).toBe("16x9");
+  });
+
+  test("layout=wide でも team.json に反映される", async () => {
+    const state = await createDaemon(testDir, "wide");
+    await updateTeamJson(state);
+
+    const tj = JSON.parse(
+      await (await import("fs/promises")).readFile(join(testDir, ".team/team.json"), "utf-8")
+    );
+    expect(tj.layout).toBe("wide");
+  });
+});

@@ -20,8 +20,8 @@ import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
 import { formatExecError } from "./exec-error";
-import type { ConductorState, QueueMessage, RateLimitInfo } from "./schema";
-import { THROTTLE_5H_THRESHOLD } from "./schema";
+import type { ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 
 export interface TaskSummary {
   id: string;
@@ -48,6 +48,8 @@ export interface DaemonState {
   projectRoot: string;
   pollInterval: number;
   maxConductors: number;
+  /** レイアウトモード（wide=3 Conductor / 16x9=2 Conductor） */
+  layout: LayoutMode;
   lastUpdate: Date;
   pendingTasks: number;
   openTasks: number;
@@ -89,7 +91,24 @@ function findConductor(state: DaemonState, surface: string): ConductorState | un
   return undefined;
 }
 
-export async function createDaemon(projectRoot: string): Promise<DaemonState> {
+export async function createDaemon(
+  projectRoot: string,
+  layout: LayoutMode = "wide",
+): Promise<DaemonState> {
+  // maxConductors: env が指定されていればそれを優先（既存挙動を破壊しない）。
+  // 未指定なら layout 派生値（wide=3, 16x9=2）を使う。
+  const envMax = process.env.CMUX_TEAM_MAX_CONDUCTORS;
+  const maxConductors = envMax !== undefined && envMax !== ""
+    ? Number(envMax)
+    : LAYOUT_MAX_CONDUCTORS[layout];
+  if (envMax !== undefined && envMax !== "" && layout === "16x9" && Number(envMax) > 2) {
+    // 16x9 は 2 pane しか作らないため env で 3 以上を要求されても pane を増やせない。
+    // 警告だけ出して env 値を尊重しない（pane 作成時に clamp される）。
+    await log(
+      "max_conductors_layout_mismatch",
+      `env=${envMax} layout=${layout} — 16x9 creates only 2 panes; extra conductors will not be created`,
+    );
+  }
   return {
     running: true,
     bootPhase: "infra",
@@ -101,7 +120,8 @@ export async function createDaemon(projectRoot: string): Promise<DaemonState> {
     conductors: new Map(),
     projectRoot,
     pollInterval: Number(process.env.CMUX_TEAM_POLL_INTERVAL ?? 10_000),
-    maxConductors: Number(process.env.CMUX_TEAM_MAX_CONDUCTORS ?? 3),
+    maxConductors,
+    layout,
     lastUpdate: new Date(),
     pendingTasks: 0,
     openTasks: 0,
@@ -383,6 +403,15 @@ export async function initializeLayout(
     if (existsSync(teamJsonPath)) {
       const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
       const conductors: any[] = teamJson.conductors ?? [];
+      // 旧 team.json（layout フィールド無し）は "wide" として扱う
+      const restoredLayout: LayoutMode =
+        teamJson.layout === "16x9" ? "16x9" : "wide";
+      if (restoredLayout !== state.layout) {
+        await log(
+          "layout_mismatch_on_resume",
+          `restored=${restoredLayout} current=${state.layout} — existing panes will be kept; run 'cmux-team stop' then 'start --layout=${state.layout}' to rebuild`,
+        );
+      }
 
       if (conductors.length > 0) {
         const alive: ConductorState[] = [];
@@ -437,13 +466,17 @@ export async function initializeLayout(
   }
 
   // 既存なし → 新規作成
-  await log("layout_creating_new_slots", `count=${state.maxConductors}`);
+  await log(
+    "layout_creating_new_slots",
+    `count=${state.maxConductors} layout=${state.layout}`,
+  );
   const assignments = await initializeConductorSlots(
     state.projectRoot,
     state.conductors,
     state.maxConductors,
     daemonSurface,
     resumePlan,
+    state.layout,
   );
   // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
   return assignments;
@@ -1199,6 +1232,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       status: state.running ? "running" : "stopped",
     };
     teamJson.phase = "running";
+    teamJson.layout = state.layout;
     teamJson.conductors = [...state.conductors.values()].map((c) => ({
       surface: c.surface,
       taskRunId: c.taskRunId,
