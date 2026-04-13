@@ -1,10 +1,6 @@
 import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 
-const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
-const LOG_DIR = join(PROJECT_ROOT, ".team/logs");
-const LOG_FILE = join(LOG_DIR, "manager.log");
-
 // ローカルTZオフセット付きISO 8601タイムスタンプを生成
 function localISOString(): string {
   const now = new Date();
@@ -24,8 +20,11 @@ function localISOString(): string {
 }
 
 export async function log(event: string, detail: string = ""): Promise<void> {
-  await mkdir(LOG_DIR, { recursive: true });
+  const projectRoot = process.env.PROJECT_ROOT || process.cwd();
+  const logDir = join(projectRoot, ".team/logs");
+  const logFile = join(logDir, "manager.log");
+  await mkdir(logDir, { recursive: true });
   const timestamp = localISOString();
   const line = `[${timestamp}] ${event} ${detail}`.trimEnd() + "\n";
-  await appendFile(LOG_FILE, line);
+  await appendFile(logFile, line);
 }
