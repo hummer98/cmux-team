@@ -106,7 +106,7 @@ export async function generateConductorTaskPrompt(
     .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
     .replace(/\{\{CONDUCTOR_ID\}\}/g, taskRunId)
-    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || (locale === "ja" ? "main（デフォルト）" : "main (default)"));
+    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || (locale === "zh" ? "main（默认）" : "main (default)"));
 
   await writeFile(promptFile, content);
   await log("conductor_task_prompt_generated", `taskRunId=${taskRunId} path=${promptFile}`);

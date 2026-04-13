@@ -1,127 +1,127 @@
 # cmux-team
 
-Claude Code + cmux によるマルチエージェント開発オーケストレーションのスキル/コマンドパッケージ。
-Master（ユーザー対話）→ Manager（イベント駆動監視）→ Conductor（タスク実行）→ Agent（実作業）の4層構造。
+Claude Code + cmux 多智能体开发编排的技能/命令包。
+Master（用户交互）→ Manager（事件驱动监控）→ Conductor（任务执行）→ Agent（实际工作）的4层结构。
 
-## プロジェクトミッション
+## 项目使命
 
-**cmux のターミナルマルチプレクサ機能を活用し、Claude Code の複数セッションを協調させて開発タスクを自律的に遂行できるようにする。**
+**利用 cmux 的终端复用功能，协调 Claude Code 的多个会话，自主完成开发任务。**
 
-### ゴール
+### 目标
 
-1. **ユーザーは指示を出すだけ** — 実装・テスト・レビューは全てエージェントが行う
-2. **進捗が見える** — cmux のペイン分割でエージェントの作業がリアルタイムに可視化される
-3. **安全に失敗できる** — git worktree 隔離により main は常に無傷
-4. **プラグインとして誰でもインストールできる** — Claude Code Plugin として配布
+1. **用户只需下达指令** — 实现、测试、评审全部由智能体完成
+2. **进度可见** — 通过 cmux 的窗格分割实时可视化智能体的工作
+3. **安全地失败** — 通过 git worktree 隔离，main 始终不受影响
+4. **任何人都能作为插件安装** — 以 Claude Code Plugin 形式分发
 
-### 設計原則
+### 设计原则
 
-| 原則 | 意味 |
+| 原则 | 含义 |
 |------|------|
-| **上位が下位を監視する（pull 型）** | 下位からの push 報告に依存しない。セマンティック動作の信頼性問題を回避 |
-| **決定論的なものはコードで、判断が必要なものは AI で** | イベント検出は確実に、意思決定は柔軟に |
-| **各層は自分の仕事だけをする** | Master は作業しない、Agent は報告しない、Conductor はユーザーに聞かない |
-| **逸脱を防ぐより、逸脱しても安全な構造にする** | worktree 隔離 + 事後レビュー |
-| **シンプルさを優先** | 動くものを最小構成で。過剰な抽象化を避ける |
+| **上层监控下层（pull 型）** | 不依赖下层的 push 报告。规避语义动作的可靠性问题 |
+| **确定性的用代码，需要判断的用 AI** | 事件检测要确保可靠，决策要保持灵活 |
+| **各层只做自己的工作** | Master 不做具体工作，Agent 不做报告，Conductor 不询问用户 |
+| **与其防止偏离，不如构建即使偏离也安全的结构** | worktree 隔离 + 事后评审 |
+| **简洁优先** | 以最小配置实现可运行的系统。避免过度抽象 |
 
-## 判断基準と優先順位
+## 判断标准与优先级
 
-### タスクの優先順位（高→低）
+### 任务优先级（高→低）
 
-1. **バグ修正** — 既存機能が壊れている場合は最優先
-2. **実験で発見された問題の修正** — 実際に動かして判明した issue（#12 のような具体的な失敗事例）
-3. **ユーザー体験の改善** — インストール・起動・操作が簡単になる変更
-4. **ドキュメントの正確性** — README や SKILL.md が実装と乖離していれば修正
-5. **新機能** — 新しいエージェントロールやコマンドの追加
-6. **最適化** — パフォーマンス、トークン消費、レート制限対策
+1. **Bug 修复** — 现有功能损坏时最优先
+2. **修复实验中发现的问题** — 实际运行后发现的 issue（如 #12 之类的具体失败案例）
+3. **用户体验改善** — 使安装、启动、操作更简便的变更
+4. **文档准确性** — README 或 SKILL.md 与实现不一致时进行修正
+5. **新功能** — 新增智能体角色或命令
+6. **优化** — 性能、token 消耗、速率限制对策
 
-### 判断に迷ったとき
+### 判断犹豫时
 
-- **「動くか？」が最優先** — 理論的な美しさより実際に動作すること
-- **実験で検証してから本実装** — cmux-team-lab 等で試してから SKILL.md に反映
-- **既存の動作を壊さない** — CLI コマンドのインターフェースを安定させる
-- **ユーザーに聞く** — 設計判断で迷ったら issue を作ってユーザーの判断を仰ぐ
+- **"能不能跑？"最优先** — 比起理论上的优雅，实际能运行更重要
+- **先实验验证再正式实现** — 在 cmux-team-lab 等环境试过后再反映到 SKILL.md
+- **不破坏现有行为** — 保持 CLI 命令接口的稳定
+- **询问用户** — 设计决策拿不准时创建 issue 征求用户意见
 
-## GitHub issue 作成ガイドライン
+## GitHub issue 创建指南
 
-> **注意:** ここでの「issue」は GitHub issue を指す。ローカルのタスク管理（`.team/tasks/`）とは別の概念。
+> **注意:** 这里的「issue」指 GitHub issue。与本地任务管理（`.team/tasks/`）是不同的概念。
 
-### issue を作成すべき場面
+### 应该创建 issue 的场景
 
-- 実験中に発見した具体的な失敗パターン（再現手順付き）
-- SKILL.md の指示と実際のエージェント動作の乖離
-- cmux 側の制約による回避策が必要な場合
-- 設計判断が必要で、複数の選択肢がある場合
+- 实验中发现的具体失败模式（附带复现步骤）
+- SKILL.md 的指示与实际智能体行为的偏差
+- 由于 cmux 侧的限制需要变通方案的情况
+- 需要设计决策且存在多个选项的情况
 
-### issue に含めるべき情報
+### issue 中应包含的信息
 
-- **問題**: 何が起きたか（発生事例があれば具体的に）
-- **原因**: なぜ起きたか
-- **修正内容**: 具体的な変更案（ファイル名・セクション番号まで）
-- **対象ファイル**: 修正が必要なファイル一覧
+- **问题**: 发生了什么（如有实际案例请具体描述）
+- **原因**: 为什么发生
+- **修复内容**: 具体的变更方案（精确到文件名和章节号）
+- **目标文件**: 需要修改的文件列表
 
-### issue を作成すべきでない場面
+### 不应该创建 issue 的场景
 
-- typo やフォーマットの軽微な修正 → 直接コミットでよい
-- 明らかなバグ修正 → 直接コミットでよい
-- 将来的な夢の機能 → 現在のゴールに集中する
+- typo 或格式的轻微修正 → 直接提交即可
+- 明显的 bug 修复 → 直接提交即可
+- 未来的理想功能 → 聚焦于当前目标
 
-## リポジトリ構造
+## 仓库结构
 
 ```
 cmux-team/
 ├── .claude-plugin/
-│   ├── plugin.json                   # プラグインマニフェスト
-│   └── marketplace.json              # Marketplace カタログ
-├── package.json                      # npm パッケージ定義
-├── .npmignore                        # npm publish 除外設定
+│   ├── plugin.json                   # 插件清单
+│   └── marketplace.json              # Marketplace 目录
+├── package.json                      # npm 包定义
+├── .npmignore                        # npm publish 排除设置
 ├── bin/
-│   ├── cmux-team.js                  # CLI エントリポイント
-│   └── postinstall.js                # npm postinstall スクリプト
+│   ├── cmux-team.js                  # CLI 入口点
+│   └── postinstall.js                # npm postinstall 脚本
 ├── skills/
 │   ├── cmux-team/
-│   │   ├── SKILL.md                  # 4層アーキテクチャ定義スキル
+│   │   ├── SKILL.md                  # 4层架构定义技能
 │   │   ├── manager/                  # Manager daemon（TypeScript / Bun）
-│   │   │   ├── main.ts               #   CLI エントリー（サブコマンド実装）
-│   │   │   ├── daemon.ts             #   メインループ・ファイル監視
-│   │   │   ├── conductor.ts          #   Conductor 初期化・タスク割当・監視
-│   │   │   ├── master.ts             #   Master spawn・監視
-│   │   │   ├── cmux.ts               #   cmux コマンドラッパー
-│   │   │   ├── proxy.ts              #   ロギングプロキシ（API 透過傍受）
-│   │   │   ├── queue.ts              #   メッセージキュー
-│   │   │   ├── trace-store.ts        #   SQLite FTS5 トレース
-│   │   │   ├── task.ts               #   タスク管理
-│   │   │   ├── template.ts           #   プロンプトテンプレート展開
-│   │   │   ├── artifact.ts           #   アーティファクト管理
-│   │   │   ├── dashboard.tsx         #   TUI ダッシュボード
-│   │   │   ├── logger.ts             #   ログ出力
-│   │   │   ├── schema.ts             #   Zod スキーマ定義
-│   │   │   └── package.json          #   Bun 依存関係
-│   │   └── templates/                # エージェントプロンプトテンプレート (14個)
-│   │       ├── common-header.md      #   全エージェント共通ヘッダー
-│   │       ├── master.md             #   Master ロール
-│   │       ├── manager.md            #   Manager ロール
-│   │       ├── conductor.md          #   Conductor ロール（旧）
-│   │       ├── conductor-role.md     #   Conductor 常駐ロール
-│   │       ├── conductor-task.md     #   Conductor タスク割り当て時プロンプト
-│   │       ├── researcher.md         #   リサーチャーロール
-│   │       ├── architect.md          #   アーキテクトロール
-│   │       ├── planner.md            #   計画立案ロール
-│   │       ├── design-reviewer.md    #   設計レビューロール
-│   │       ├── implementer.md        #   実装者ロール
-│   │       ├── inspector.md          #   検品ロール
-│   │       ├── dockeeper.md          #   ドキュメント管理者ロール
-│   │       └── task-manager.md       #   タスク管理者ロール
+│   │   │   ├── main.ts               #   CLI 入口（子命令实现）
+│   │   │   ├── daemon.ts             #   主循环・文件监控
+│   │   │   ├── conductor.ts          #   Conductor 初始化・任务分配・监控
+│   │   │   ├── master.ts             #   Master spawn・监控
+│   │   │   ├── cmux.ts               #   cmux 命令封装
+│   │   │   ├── proxy.ts              #   日志代理（API 透明拦截）
+│   │   │   ├── queue.ts              #   消息队列
+│   │   │   ├── trace-store.ts        #   SQLite FTS5 追踪
+│   │   │   ├── task.ts               #   任务管理
+│   │   │   ├── template.ts           #   提示词模板展开
+│   │   │   ├── artifact.ts           #   Artifact 管理
+│   │   │   ├── dashboard.tsx         #   TUI 仪表盘
+│   │   │   ├── logger.ts             #   日志输出
+│   │   │   ├── schema.ts             #   Zod schema 定义
+│   │   │   └── package.json          #   Bun 依赖
+│   │   └── templates/                # 智能体提示词模板 (14个)
+│   │       ├── common-header.md      #   全智能体通用头部
+│   │       ├── master.md             #   Master 角色
+│   │       ├── manager.md            #   Manager 角色
+│   │       ├── conductor.md          #   Conductor 角色（旧）
+│   │       ├── conductor-role.md     #   Conductor 常驻角色
+│   │       ├── conductor-task.md     #   Conductor 任务分配时提示词
+│   │       ├── researcher.md         #   研究员角色
+│   │       ├── architect.md          #   架构师角色
+│   │       ├── planner.md            #   计划制定角色
+│   │       ├── design-reviewer.md    #   设计评审角色
+│   │       ├── implementer.md        #   实现者角色
+│   │       ├── inspector.md          #   检验角色
+│   │       ├── dockeeper.md          #   文档管理者角色
+│   │       └── task-manager.md       #   任务管理者角色
 │   └── cmux-agent-role/
-│       └── SKILL.md                  # サブエージェント行動規範スキル
-├── commands/                         # スラッシュコマンド定義 (5個)
-│   ├── master.md                     #   Master ロール再読み込み（/clear 復帰用）
-│   ├── team-spec.md                  #   要件ブレスト（対話型）
-│   ├── team-task.md                  #   タスク管理
-│   ├── team-archive.md              #   完了タスクのアーカイブ
-│   └── artifact.md                  #   知見のアーティファクト化
+│       └── SKILL.md                  # 子智能体行为规范技能
+├── commands/                         # 斜杠命令定义 (5个)
+│   ├── master.md                     #   Master 角色重新加载（/clear 恢复用）
+│   ├── team-spec.md                  #   需求头脑风暴（交互式）
+│   ├── team-task.md                  #   任务管理
+│   ├── team-archive.md              #   已完成任务的归档
+│   └── artifact.md                  #   知识的 Artifact 化
 ├── docs/
-│   ├── spec/                         # 統合仕様書（実装と同期された仕様）
+│   ├── spec/                         # 集成规格书（与实现同步的规格）
 │   │   ├── 00-project-overview.md
 │   │   ├── 01-skill-cmux-team.md
 │   │   ├── 02-skill-cmux-agent-role.md
@@ -129,474 +129,474 @@ cmux-team/
 │   │   ├── 04-templates.md
 │   │   ├── 05-install-and-infrastructure.md
 │   │   └── 06-implementation-tasks.md
-│   ├── research/                     # リサーチドキュメント
-│   └── slides/                       # プレゼン資料
-├── CHANGELOG.md                      # 変更ログ
+│   ├── research/                     # 研究文档
+│   └── slides/                       # 演示资料
+├── CHANGELOG.md                      # 变更日志
 ├── LICENSE                           # MIT
-├── README.md                         # ユーザー向けドキュメント（英語）
-└── README.ja.md                      # ユーザー向けドキュメント（日本語）
+├── README.md                         # 面向用户的文档（英语）
+└── README.ja.md                      # 面向用户的文档（日语）
 ```
 
-### 2つのスキルの役割分担
+### 两个技能的职责分工
 
-| スキル | 誰が読むか | 内容 |
+| 技能 | 谁来读取 | 内容 |
 |--------|-----------|------|
-| `cmux-team` (SKILL.md) | Master（ユーザーセッション） | 4層アーキテクチャ全体の定義、Master 行動原則 |
-| `cmux-agent-role` (SKILL.md) | Agent（実作業エージェント） | 出力プロトコル・タスク作成・作業境界 |
+| `cmux-team` (SKILL.md) | Master（用户会话） | 4层架构整体定义、Master 行为原则 |
+| `cmux-agent-role` (SKILL.md) | Agent（实际工作智能体） | 输出协议・任务创建・工作边界 |
 
-### docs/spec/（統合仕様書）
+### docs/spec/（集成规格书）
 
-実装と同期された統合仕様書。各ファイルはプロジェクトの設計・実装仕様を定義しており、コード変更時に参照すべきドキュメント。
+与实现同步的集成规格书。各文件定义了项目的设计・实现规格，是代码变更时应参考的文档。
 
-**cmux-team の仕様・挙動について質問された場合は、該当する `docs/spec/` のファイルを Read して回答すること。**
+**当被询问 cmux-team 的规格・行为时，应 Read 对应的 `docs/spec/` 文件后回答。**
 
-| ファイル | 内容 |
+| 文件 | 内容 |
 |---------|------|
-| 00-project-overview.md | プロジェクト概要・4層アーキテクチャ・設計原則 |
-| 01-skill-cmux-team.md | cmux-team スキル（SKILL.md）の仕様 |
-| 02-skill-cmux-agent-role.md | cmux-agent-role スキル（SKILL.md）の仕様 |
-| 03-commands.md | スラッシュコマンド定義 |
-| 04-templates.md | エージェントプロンプトテンプレート仕様 |
-| 05-install-and-infrastructure.md | インストール・インフラ構成 |
-| 06-implementation-tasks.md | 実装タスク定義 |
+| 00-project-overview.md | 项目概要・4层架构・设计原则 |
+| 01-skill-cmux-team.md | cmux-team 技能（SKILL.md）的规格 |
+| 02-skill-cmux-agent-role.md | cmux-agent-role 技能（SKILL.md）的规格 |
+| 03-commands.md | 斜杠命令定义 |
+| 04-templates.md | 智能体提示词模板规格 |
+| 05-install-and-infrastructure.md | 安装・基础设施配置 |
+| 06-implementation-tasks.md | 实现任务定义 |
 
-## スキル・コマンドの追加・修正方法
+## 技能・命令的添加・修改方法
 
-### スキルの追加
+### 添加技能
 
-1. `skills/<skill-name>/SKILL.md` を作成
-2. YAML frontmatter に `name`, `description`（トリガー条件を含む）を記載
-3. Markdown 本文にスキルの知識・プロトコルを記述
+1. 创建 `skills/<skill-name>/SKILL.md`
+2. 在 YAML frontmatter 中填写 `name`, `description`（包含触发条件）
+3. 在 Markdown 正文中描述技能的知识・协议
 
-### コマンドの追加
+### 添加命令
 
-1. `commands/<command-name>.md` を作成
-2. YAML frontmatter に `allowed-tools`, `description` を記載
-3. Markdown 本文に手順・引数仕様・注意事項を記述
-4. `$ARGUMENTS` でユーザーからの引数を参照できる
+1. 创建 `commands/<command-name>.md`
+2. 在 YAML frontmatter 中填写 `allowed-tools`, `description`
+3. 在 Markdown 正文中描述步骤・参数规格・注意事项
+4. 使用 `$ARGUMENTS` 引用用户传入的参数
 
-### テンプレートの追加
+### 添加模板
 
-1. `skills/cmux-team/templates/<role-name>.md` を作成
-2. `{{VARIABLE}}` プレースホルダーを使用（下記参照）
-3. Conductor（または Manager）が spawn 時にテンプレート変数を置換し `.team/prompts/` に書き出す
+1. 创建 `skills/cmux-team/templates/<role-name>.md`
+2. 使用 `{{VARIABLE}}` 占位符（见下文）
+3. Conductor（或 Manager）在 spawn 时替换模板变量并写出到 `.team/prompts/`
 
-## テンプレート変数仕様
+## 模板变量规格
 
-テンプレート内の `{{VARIABLE}}` プレースホルダーは、Conductor（または Manager）がプロンプト生成時に実際の値に置換する。
+模板内的 `{{VARIABLE}}` 占位符，由 Conductor（或 Manager）在生成提示词时替换为实际值。
 
-### 共通変数（common-header.md 由来）
+### 通用变量（来自 common-header.md）
 
-| 変数 | 説明 |
+| 变量 | 说明 |
 |------|------|
-| `{{ROLE_ID}}` | エージェントの識別子（例: `researcher-1`, `architect`） |
-| `{{TASK_DESCRIPTION}}` | タスクの説明文 |
-| `{{PROJECT_ROOT}}` | プロジェクトルートの絶対パス |
+| `{{ROLE_ID}}` | 智能体的标识符（例: `researcher-1`, `architect`） |
+| `{{TASK_DESCRIPTION}}` | 任务的描述文本 |
+| `{{PROJECT_ROOT}}` | 项目根目录的绝对路径 |
 
-### Conductor 変数
+### Conductor 变量
 
-| 変数 | 使用テンプレート | 説明 |
+| 变量 | 使用模板 | 说明 |
 |------|----------------|------|
-| `{{TASK_CONTENT}}` | conductor-task | タスクファイル本文 |
-| `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree のパス |
-| `{{OUTPUT_DIR}}` | conductor, conductor-task | 出力ディレクトリパス（例: `.team/output/<taskRunId>/`） |
-| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`） |
-| `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
-| `{{PROJECT_ROOT}}` | conductor-role | プロジェクトルートの絶対パス |
+| `{{TASK_CONTENT}}` | conductor-task | 任务文件正文 |
+| `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree 的路径 |
+| `{{OUTPUT_DIR}}` | conductor, conductor-task | 输出目录路径（例: `.team/output/<taskRunId>/`） |
+| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 执行 ID（`task-<NNN>-<timestamp>` 格式。例: `task-042-1712345678`） |
+| `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完成标记文件路径 |
+| `{{PROJECT_ROOT}}` | conductor-role | 项目根目录的绝对路径 |
 
-### Agent ロール固有変数
+### Agent 角色专用变量
 
-| 変数 | 使用テンプレート | 説明 |
+| 变量 | 使用模板 | 说明 |
 |------|----------------|------|
-| `{{COMMON_HEADER}}` | 全 Agent ロール | common-header.md の展開結果 |
-| `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
-| `{{TOPIC}}` | researcher | リサーチトピック |
-| `{{SUB_QUESTIONS}}` | researcher | 調査すべきサブ質問リスト |
-| `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |
-| `{{RESEARCH_SUMMARY}}` | architect | リサーチ結果の要約 |
-| `{{CODEBASE_CONTEXT}}` | architect | 既存コードベースのコンテキスト |
-| `{{PLAN_CONTENT}}` | planner, design-reviewer, implementer, inspector | plan.md の内容 |
-| `{{TASK_CONTENT}}` | planner, design-reviewer, inspector | タスク内容 |
-| `{{DESIGN_CONTENT}}` | implementer | design.md の内容 |
-| `{{TASKS_CONTENT}}` | implementer | tasks.md のアサインされたタスク |
-| `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
-| `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
-| `{{OPEN_TASKS_LIST}}` | task-manager | オープンタスクの一覧 |
+| `{{COMMON_HEADER}}` | 全 Agent 角色 | common-header.md 的展开结果 |
+| `{{OUTPUT_FILE}}` | 全 Agent 角色 | 输出文件路径（例: `.team/output/researcher-1.md`） |
+| `{{TOPIC}}` | researcher | 研究主题 |
+| `{{SUB_QUESTIONS}}` | researcher | 需要调查的子问题列表 |
+| `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md 的内容 |
+| `{{RESEARCH_SUMMARY}}` | architect | 研究结果摘要 |
+| `{{CODEBASE_CONTEXT}}` | architect | 现有代码库的上下文 |
+| `{{PLAN_CONTENT}}` | planner, design-reviewer, implementer, inspector | plan.md 的内容 |
+| `{{TASK_CONTENT}}` | planner, design-reviewer, inspector | 任务内容 |
+| `{{DESIGN_CONTENT}}` | implementer | design.md 的内容 |
+| `{{TASKS_CONTENT}}` | implementer | tasks.md 中分配的任务 |
+| `{{SPECS_CONTENT}}` | dockeeper | 当前规格书全文 |
+| `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 上次 docs 快照的摘要 |
+| `{{OPEN_TASKS_LIST}}` | task-manager | 未完成任务列表 |
 
-## インストール方法
+## 安装方法
 
 ```bash
 npm install -g @hummer98/cmux-team
 ```
 
-`postinstall` スクリプトにより manager/ の依存関係が自動解決される。
+`postinstall` 脚本会自动解析 manager/ 的依赖。
 
-## テスト方法
+## 测试方法
 
-自動テストはない。以下の手順で E2E テストを行う。
+没有自动测试。按以下步骤进行 E2E 测试。
 
-### 前提
+### 前提条件
 
-- cmux がインストールされていること
-- Claude Code が利用可能であること（Claude Max 推奨）
+- 已安装 cmux
+- Claude Code 可用（推荐 Claude Max）
 
-### インストールテスト
+### 安装测试
 
 ```bash
-# グローバルインストール
+# 全局安装
 npm install -g @hummer98/cmux-team
-# → ~/.claude/ にスキル・コマンド・テンプレートが配置されること
-# → cmux-team コマンドが利用可能になること
+# → 技能・命令・模板应被部署到 ~/.claude/
+# → cmux-team 命令应可用
 
-# アンインストール
+# 卸载
 npm uninstall -g @hummer98/cmux-team
 ```
 
-### 機能テスト（ターミナルで実行）
+### 功能测试（在终端中执行）
 
 ```bash
-# 1. cmux を起動
+# 1. 启动 cmux
 cmux
 
-# 2. チーム体制構築（daemon + Master + Conductor 起動）
+# 2. 构建团队体制（daemon + Master + Conductor 启动）
 cmux-team start
-# → .team/ が作成され team.json が正しいこと
-# → daemon が起動し Manager として機能すること
-# → Master Claude セッションが spawn されること
-# → 3つの Conductor が固定ペインに配置されること
+# → .team/ 应被创建且 team.json 正确
+# → daemon 应启动并作为 Manager 运行
+# → Master Claude 会话应被 spawn
+# → 3个 Conductor 应被放置在固定窗格中
 
-# 3. タスク作成（Master セッション内で）
-cmux-team create-task --title "テストタスク" --status ready --body "テスト用"
-# → .team/tasks/ にタスクファイルが作成されること
-# → daemon がタスクを検出し idle Conductor に割り当てること
-# → Conductor がタスクを自律実行すること
+# 3. 创建任务（在 Master 会话内）
+cmux-team create-task --title "测试任务" --status ready --body "测试用"
+# → 任务文件应在 .team/tasks/ 中创建
+# → daemon 应检测到任务并分配给空闲的 Conductor
+# → Conductor 应自主执行任务
 
-# 4. ステータス確認
+# 4. 确认状态
 cmux-team status
-# → daemon 状態、Conductor 一覧、タスク数、ログが表示されること
+# → 应显示 daemon 状态、Conductor 列表、任务数、日志
 
-# 5. クリーンアップ
+# 5. 清理
 cmux-team stop
-# → daemon が graceful shutdown すること
+# → daemon 应优雅关闭
 ```
 
-### 確認ポイント
+### 确认要点
 
-- 4層構造（Master → Manager(daemon) → Conductor → Agent）が正しく機能すること
-- daemon がタスクを検出し idle Conductor に割り当てること
-- Conductor がタスク完了後に done マーカーを作成し idle に戻ること
-- Agent は git worktree 内で作業し、メインブランチを汚さないこと
-- `cmux send` 後に `cmux send-key return` で送信されること
-- Trust 確認が出た場合に自動承認されること
+- 4层结构（Master → Manager(daemon) → Conductor → Agent）正常运作
+- daemon 检测到任务并分配给空闲的 Conductor
+- Conductor 完成任务后创建 done 标记并回到空闲状态
+- Agent 在 git worktree 内工作，不污染主分支
+- `cmux send` 后通过 `cmux send-key return` 发送
+- 出现 Trust 确认时自动批准
 
-## コーディング規約
+## 编码规范
 
-- **ドキュメント・コメント**: 日本語
-- **コード（変数名・関数名・コマンド）**: 英語
-- スキルは YAML frontmatter + Markdown
-- コマンドは YAML frontmatter（`allowed-tools`, `description`）+ Markdown
-- テンプレートは `{{VARIABLE}}` プレースホルダーを使用
-- README.md やユーザー向けテキストは日本語
+- **文档・注释**: 日语
+- **代码（变量名・函数名・命令）**: 英语
+- 技能使用 YAML frontmatter + Markdown
+- 命令使用 YAML frontmatter（`allowed-tools`, `description`）+ Markdown
+- 模板使用 `{{VARIABLE}}` 占位符
+- README.md 和面向用户的文本使用日语
 
-### 開発者用スキル
+### 开发者用技能
 
-別プロジェクト（mado, Dear 等）の `.team/` 調査は `.claude/skills/cmux-team-investigate/SKILL.md` を参照。
-このスキルはこのリポジトリのワークツリー内でのみ有効で、npm publish には含まれない（配布外）。
+其他项目（mado, Dear 等）的 `.team/` 调查请参考 `.claude/skills/cmux-team-investigate/SKILL.md`。
+该技能仅在此仓库的工作树内有效，不包含在 npm publish 中（非分发范围）。
 
-## cmux API 使用上の注意
+## cmux API 使用注意事项
 
-`cmux tree` はデフォルトで**全ワークスペース**のsurfaceを返す。
-複数のワークスペースで cmux-team を同時起動している場合、別ワークスペースのsurface IDと混同する原因になる。
+`cmux tree` 默认返回**所有工作区**的 surface。
+在多个工作区同时运行 cmux-team 时，可能导致与其他工作区的 surface ID 混淆。
 
-以下のルールを守ること：
+请遵守以下规则：
 
-- `validateSurface(surface)` ではなく `validateSurface(surface, workspace)` を使う
-- `tree()` ではなく `tree(workspace)` を使う（`cmux tree --workspace <id>` に対応）
-- daemon の `state.workspace` に起動時のワークスペースが格納されている（`main.ts` 起動時に `getCallerWorkspace()` で取得・設定）
-- `getCallerWorkspace()` で呼び出し元のワークスペースを取得できる（`cmux identify` の `caller.workspace_ref`）
-- 既存surfaceの検証（`initializeLayout`, `isMasterAlive`, `checkConductorStatus` など）では必ず workspace を渡す
-- `newSplit` 直後など**新規作成したsurface**は現在のワークスペースに確実に属するため、workspace指定は不要
+- 使用 `validateSurface(surface, workspace)` 而非 `validateSurface(surface)`
+- 使用 `tree(workspace)` 而非 `tree()`（对应 `cmux tree --workspace <id>`）
+- daemon 的 `state.workspace` 中存储了启动时的工作区（在 `main.ts` 启动时通过 `getCallerWorkspace()` 获取・设置）
+- 可通过 `getCallerWorkspace()` 获取调用方的工作区（`cmux identify` 的 `caller.workspace_ref`）
+- 验证现有 surface（`initializeLayout`, `isMasterAlive`, `checkConductorStatus` 等）时必须传入 workspace
+- `newSplit` 之后等**新创建的 surface** 必定属于当前工作区，因此无需指定 workspace
 
-## ロギングポリシー
+## 日志策略
 
-Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルール。
+Manager daemon（`skills/cmux-team/manager/`）的日志相关规则。
 
-### ログインターフェース
+### 日志接口
 
-`logger.ts` の `log(event, detail)` を使用する。イベント名でレベルを区別する。
+使用 `logger.ts` 的 `log(event, detail)`。通过事件名区分级别。
 
-| イベント名パターン | 用途 | 例 |
+| 事件名模式 | 用途 | 示例 |
 |-------------------|------|-----|
-| `error` | 操作失敗・例外 | `log("error", "assignTask failed: ...")` |
-| `*_failed` | 特定操作の失敗 | `log("proxy_start_failed", ...)` |
-| `*_started`, `*_completed` | ライフサイクルイベント | `log("daemon_started", ...)` |
-| その他 | 状態変化・判断記録 | `log("conductor_reset", ...)` |
+| `error` | 操作失败・异常 | `log("error", "assignTask failed: ...")` |
+| `*_failed` | 特定操作的失败 | `log("proxy_start_failed", ...)` |
+| `*_started`, `*_completed` | 生命周期事件 | `log("daemon_started", ...)` |
+| 其他 | 状态变化・决策记录 | `log("conductor_reset", ...)` |
 
-### 必ずログすべきイベント
+### 必须记录的事件
 
-1. **例外捕捉時**: `catch` で例外を処理する場合、最低限 `log("error", ...)` でメッセージを記録する
-2. **外部コマンド失敗時**: cmux コマンド（`send`, `sendKey`, `tree` 等）の失敗は `log("error", ...)` で記録する。**error オブジェクトに `stderr` / `stdout` が付いている場合は必ず detail に含める**（`e.message` のみでは "Command failed: <cmd>" で終わり原因追跡が不能になる）。例: `log("error", \`tree failed: ${e.message} stderr=${e.stderr ?? ""}\`)`。
-3. **判断分岐**: 複数パスがある場合、どのパスに入ったか記録する（例: done マーカー検出方法、フォールバック発動）
-4. **状態遷移**: Conductor/Agent のステータス変化は必ず記録する（既存で実施済み）
+1. **异常捕获时**: 在 `catch` 中处理异常时，至少用 `log("error", ...)` 记录消息
+2. **外部命令失败时**: cmux 命令（`send`, `sendKey`, `tree` 等）的失败用 `log("error", ...)` 记录。**当 error 对象包含 `stderr` / `stdout` 时，必须在 detail 中包含**（仅 `e.message` 会以 "Command failed: <cmd>" 结尾，无法追踪原因）。例: `log("error", \`tree failed: ${e.message} stderr=${e.stderr ?? ""}\`)`。
+3. **判断分支**: 存在多个路径时，记录进入了哪个路径（例: done 标记检测方式、fallback 触发）
+4. **状态转换**: Conductor/Agent 的状态变化必须记录（现有实现已做到）
 
-### 禁止事項
+### 禁止事项
 
-- **空の `catch {}`**: 例外を完全に握りつぶさない。最低限ログを残す。ただし以下は例外として許容:
-  - **冪等な後処理**（`closeSurface`, `renameTab`, `branch -d` 等）: 失敗しても影響がない操作
-  - **存在チェック的な操作**（`validateSurface`, ファイル存在確認等）: 失敗＝不在として扱う設計
-- **高頻度ループ内の過剰ログ**: `tick()` 毎回のログは不要。状態変化があった場合のみ記録する
-- **機密情報のログ**: API キー、トークン等をログに含めない
+- **空的 `catch {}`**: 不得完全吞掉异常。至少保留日志。但以下情况例外允许:
+  - **幂等的后处理**（`closeSurface`, `renameTab`, `branch -d` 等）: 失败也没有影响的操作
+  - **存在性检查类操作**（`validateSurface`, 文件存在确认等）: 失败＝不存在的设计
+- **高频循环中的过度日志**: 不需要每次 `tick()` 都记录。仅在状态变化时记录
+- **机密信息日志**: 不在日志中包含 API key、token 等
 
-### ログフォーマット
+### 日志格式
 
 ```
 [2026-04-04T10:30:00+09:00] event_name key1=value1 key2=value2
 ```
 
-- タイムスタンプはローカル TZ 付き ISO 8601（`logger.ts` の `localISOString()` が生成）
-- detail は `key=value` のスペース区切り。値にスペースを含む場合はそのまま末尾に付与
-- 1 行 1 イベント。複数行ログは避ける
+- 时间戳为带本地时区的 ISO 8601（由 `logger.ts` 的 `localISOString()` 生成）
+- detail 为空格分隔的 `key=value`。值包含空格时直接追加到末尾
+- 每行一个事件。避免多行日志
 
-## プロンプト編集ルール（厳守）
+## 提示词编辑规则（严格遵守）
 
-**テンプレート (`skills/cmux-team/templates/*.md`) がソースオブトゥルース。** ランタイムプロンプト (`.team/prompts/*.md`) は派生物であり、直接編集してはならない。
+**模板 (`skills/cmux-team/templates/*.md`) 是唯一真实来源（Source of Truth）。** 运行时提示词 (`.team/prompts/*.md`) 是派生物，不得直接编辑。
 
-| やること | やらないこと |
+| 应该做的 | 不应该做的 |
 |---------|-------------|
-| `skills/cmux-team/templates/master.md` を編集 | `.team/prompts/master.md` を直接編集 |
-| `skills/cmux-team/templates/manager.md` を編集 | `.team/prompts/manager.md` を直接編集 |
-| 編集後に `cmux-team start` で再生成 or テンプレートからコピー | ランタイムだけ書き換えて「動いた」で終わり |
+| 编辑 `skills/cmux-team/templates/master.md` | 直接编辑 `.team/prompts/master.md` |
+| 编辑 `skills/cmux-team/templates/manager.md` | 直接编辑 `.team/prompts/manager.md` |
+| 编辑后通过 `cmux-team start` 重新生成或从模板复制 | 只修改运行时文件就算"改好了" |
 
-**理由:** ランタイムプロンプトだけ書き換えると、テンプレートとの乖離が蓄積する。次回の `cmux-team start` や別プロジェクトでの起動時に変更が消失する。
+**原因:** 如果只修改运行时提示词，与模板的偏差会不断累积。下次 `cmux-team start` 或在其他项目启动时变更将丢失。
 
-プロンプトを変更する場合の手順:
-1. `skills/cmux-team/templates/*.md` を編集
-2. `.team/prompts/*.md` にコピー（または `cmux-team start` で再生成）
-3. 他プロジェクト（Dear 等）のランタイムプロンプトも更新
-4. コミット・リリース
+变更提示词的步骤:
+1. 编辑 `skills/cmux-team/templates/*.md`
+2. 复制到 `.team/prompts/*.md`（或通过 `cmux-team start` 重新生成）
+3. 同时更新其他项目（Dear 等）的运行时提示词
+4. 提交・发布
 
-## Manager プロトコル（内部実装）
+## Manager 协议（内部实现）
 
-TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行。キューベースのイベント駆動でタスク管理を行う。
+以 TypeScript daemon（`skills/cmux-team/manager/main.ts`）形式在 Bun 中运行。基于队列的事件驱动进行任务管理。
 
-- **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
-- **状態確認**: `cmux-team status` で daemon 状態・Conductor 一覧・タスク数・ログ末尾を表示
+- **日志**: 以追加形式记录状态变化到 `.team/logs/manager.log`（`conductor_started`, `task_completed`, `idle_start` 等）
+- **状态确认**: 通过 `cmux-team status` 显示 daemon 状态・Conductor 列表・任务数・日志末尾
 
-### タスク検出
+### 任务检测
 
-`task-state.json` で `status: ready` のタスクを検出し Conductor に割り当てる。なければ待機して再チェック。
+在 `task-state.json` 中检测 `status: ready` 的任务并分配给 Conductor。如果没有则等待并重新检查。
 
-### Conductor へのタスク割り当て
+### 向 Conductor 分配任务
 
-1. idle Conductor を検出（ConductorState の `status: "idle"` + surface 生存）
-2. worktree 作成・プロンプト生成
-3. Conductor surface に `/clear` + 新プロンプト送信
+1. 检测空闲的 Conductor（ConductorState 的 `status: "idle"` + surface 存活）
+2. 创建 worktree・生成提示词
+3. 向 Conductor surface 发送 `/clear` + 新提示词
 
-**Conductor は spawn しない。** 起動時に作成された固定ペインに対してタスクを送信するだけ。
+**Conductor 不会被 spawn。** 只是向启动时创建的固定窗格发送任务。
 
-### Conductor 監視（pull 型）
+### Conductor 监控（pull 型）
 
-- **主要判定**: done マーカーファイル（`.team/output/conductor-N/done`）の存在で完了判定
-- **フォールバック**: `cmux list-status` で Idle 検出
-- **重要**: push ではなく pull 型。Conductor は done マーカーを作成して idle に戻り、Manager が見に来る
+- **主要判定**: 通过 done 标记文件（`.team/output/conductor-N/done`）的存在判定完成
+- **Fallback**: 通过 `cmux list-status` 检测 Idle
+- **重要**: 是 pull 型而非 push 型。Conductor 创建 done 标记并回到空闲状态，Manager 来查看
 
-### タスクの作成・更新は CLI 経由（直接ファイル操作禁止）
+### 任务的创建・更新通过 CLI（禁止直接文件操作）
 
-タスクの作成・更新は必ず CLI を使うこと。`.team/tasks/` への直接ファイル書き込みは hook でブロックされる。
+任务的创建・更新必须使用 CLI。对 `.team/tasks/` 的直接文件写入会被 hook 阻止。
 
 ```bash
-cmux-team create-task --title "タイトル" --status draft --body "説明"
+cmux-team create-task --title "标题" --status draft --body "描述"
 cmux-team update-task --task-id 112 --status ready
 ```
 
-> **注意:** `.team/artifacts/` は直接ファイル作成が前提だが、`.team/tasks/` は CLI 経由のみ。混同しないこと。
+> **注意:** `.team/artifacts/` 以直接创建文件为前提，但 `.team/tasks/` 仅限 CLI。不要混淆。
 
-### assigned タスクの編集禁止
+### 禁止编辑 assigned 状态的任务
 
-assigned 状態のタスクファイルの編集は禁止。Conductor は起動時のプロンプトのスナップショットで動作するため、タスクファイルの変更は実行中の作業に反映されない。変更が必要な場合: `abort-task` で中止 → 新タスク作成。
+禁止编辑 assigned 状态的任务文件。Conductor 基于启动时的提示词快照运行，任务文件的变更不会反映到正在执行的工作中。需要变更时: 用 `abort-task` 中止 → 创建新任务。
 
-### 結果回収
+### 结果回收
 
-完了検出後: ログ記録 → Conductor リセット（`/clear`）→ done マーカー削除。
+完成检测后: 记录日志 → 重置 Conductor（`/clear`）→ 删除 done 标记。
 
-Manager がやらないこと:
-- タスクの close（Conductor が `cmux-team close-task` を実行）
-- Conductor ペインの close（persistent — 閉じない）
-- worktree の削除（Conductor の責務）
-- マージ処理（Conductor が納品方法を判断する）
+Manager 不做的事:
+- 关闭任务（Conductor 执行 `cmux-team close-task`）
+- 关闭 Conductor 窗格（persistent — 不关闭）
+- 删除 worktree（Conductor 的职责）
+- 合并处理（Conductor 判断交付方式）
 
-### ループ継続・アイドル化
+### 循环继续・空闲化
 
-- **Conductor 稼働中**: デフォルト10秒間隔（`CMUX_TEAM_POLL_INTERVAL`）で pull 型監視を実行
-- **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
-- **起床トリガー**: `[TASK_CREATED]` 通知で再起動
+- **Conductor 运行中**: 默认10秒间隔（`CMUX_TEAM_POLL_INTERVAL`）执行 pull 型监控
+- **空闲时（open tasks 为零）**: 停止并等待。记录 `idle_start` 日志
+- **唤醒触发**: 通过 `[TASK_CREATED]` 通知重新启动
 
-## 通信プロトコル
+## 通信协议
 
-### ファイルベース通信
+### 基于文件的通信
 
-`.team/` ディレクトリ構造:
+`.team/` 目录结构:
 
 ```
 .team/
-├── tasks/             # タスクファイル（フラット構造）
-├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
-├── artifacts/         # Axxx — 知見の記録（調査・設計判断・セッション要約）
-├── output/            # Conductor/Agent の出力（taskRunId 別）
-├── conductors/        # Conductor 状態ファイル
-├── prompts/           # プロンプト（監査証跡）
-├── specs/             # 要件・設計ドキュメント
-├── queue/             # メッセージキュー（incoming/ + processed/）
+├── tasks/             # 任务文件（扁平结构）
+├── task-state.json    # 任务状态管理（status: draft/ready/assigned/closed）
+├── artifacts/         # Axxx — 知识记录（调查・设计决策・会话摘要）
+├── output/            # Conductor/Agent 的输出（按 taskRunId 分组）
+├── conductors/        # Conductor 状态文件
+├── prompts/           # 提示词（审计轨迹）
+├── specs/             # 需求・设计文档
+├── queue/             # 消息队列（incoming/ + processed/）
 ├── logs/              # manager.log + traces/bodies/
-├── traces/            # SQLite トレースDB（traces.db）
-├── sessions/          # セッション情報
-├── proxy-port         # プロキシポート番号
-└── team.json          # チーム構成（daemon が自動更新）
+├── traces/            # SQLite 追踪 DB（traces.db）
+├── sessions/          # 会话信息
+├── proxy-port         # 代理端口号
+└── team.json          # 团队配置（daemon 自动更新）
 ```
 
-### cmux コマンド通信
+### cmux 命令通信
 
-| コマンド | 用途 |
+| 命令 | 用途 |
 |---------|------|
-| `cmux send` | 上位→下位のプロンプト送信 |
-| `cmux send-key return` | 複数行プロンプトの送信確定 |
-| `cmux list-status` | 上位が下位の状態を取得（pull 型監視） |
-| `cmux read-screen` | Trust 確認・エラー確認 |
-| `cmux close-surface` | 完了した Agent タブの終了 |
-| `cmux-team spawn-agent` | Agent 起動（タブ作成・プロキシ設定・Trust 承認を一括実行） |
+| `cmux send` | 上层→下层的提示词发送 |
+| `cmux send-key return` | 多行提示词的发送确认 |
+| `cmux list-status` | 上层获取下层的状态（pull 型监控） |
+| `cmux read-screen` | Trust 确认・错误确认 |
+| `cmux close-surface` | 关闭已完成的 Agent 标签页 |
+| `cmux-team spawn-agent` | Agent 启动（标签页创建・代理设置・Trust 批准一并执行） |
 
-### 複数行テキスト送信
+### 多行文本发送
 
-単一行は末尾 `\n` で送信可能。複数行プロンプトは `cmux send` の後に `sleep 0.5` + `cmux send-key return` で送信確定。
+单行可以在末尾加 `\n` 发送。多行提示词在 `cmux send` 之后通过 `sleep 0.5` + `cmux send-key return` 确认发送。
 
-## チーム状態管理
+## 团队状态管理
 
 ### team.json
 
-daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
+由 daemon 的 `updateTeamJson()` 定期自动更新。Master、Conductor、手动命令不得直接写入。
 
-### 進捗情報の取得方法（Master 向け）
+### 获取进度信息（面向 Master）
 
-status.json は廃止。Master は以下の真のソースから直接情報を取得する:
+status.json 已废弃。Master 从以下真实来源直接获取信息:
 
-| 情報 | 真のソース | 取得方法 |
+| 信息 | 真实来源 | 获取方法 |
 |------|-----------|---------|
-| Manager の状態 | Manager workspace | `cmux list-status --workspace MANAGER_WS` |
-| 稼働中 Conductor | cmux ペイン構成 | `cmux tree` |
-| open task 数 | task-state.json | `cat .team/task-state.json`（status で絞り込み） |
-| 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
+| Manager 的状态 | Manager workspace | `cmux list-status --workspace MANAGER_WS` |
+| 运行中的 Conductor | cmux 窗格配置 | `cmux tree` |
+| open task 数 | task-state.json | `cat .team/task-state.json`（按 status 筛选） |
+| 已完成任务历史 | 日志 | `cat .team/logs/manager.log` |
 
-## レイアウト戦略
+## 布局策略
 
-### 固定2x2レイアウト
+### 固定2x2布局
 
-起動時に固定の2x2レイアウト（4ペイン、5 surface）を作成し、セッション終了まで変更しない。
+启动时创建固定的2x2布局（4个窗格，5个 surface），在会话结束前不变。
 
 ```
 [Manager|Master] | [Conductor-1]
 [Conductor-2   ] | [Conductor-3]
 ```
 
-- **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
-- **右上〜右下**: Conductor-1〜3（常駐 Claude セッション）
-- **4ペインは不動** — close しない
-- **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
-- **最大3タスク並列**、4つ目以降はキューイング
+- **左上**: Manager（daemon）| Master（用户会话）— 2个 surface 以标签页形式共存
+- **右上〜右下**: Conductor-1〜3（常驻 Claude 会话）
+- **4个窗格不变** — 不关闭
+- **子智能体**通过 `spawn-agent` CLI 在 Conductor 窗格内以标签页形式创建（标签页不占用空间，因此布局不会错乱）
+- **最多3个任务并行**，第4个及之后排队等待
 
 ## git worktree（概要）
 
-すべての作業は `.worktrees/<taskRunId>/` 内で行う。main ブランチは常に無傷。
+所有工作在 `.worktrees/<taskRunId>/` 内进行。main 分支始终不受影响。
 
-- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId は `task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`）
-- **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
-- **成功時**: worktree 内でコミット → main にマージ → worktree 削除
-- **失敗時**: `git worktree remove --force` + ブランチ削除
-- **クリーンアップ**: `git worktree list` で確認、`git worktree remove <path> --force` で削除、`git worktree prune` で壊れた参照を修復
+- **创建**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId 为 `task-<NNN>-<timestamp>` 格式。例: `task-042-1712345678`）
+- **引导**: 由于只检出 tracked files，需要 `npm install` 等初始化（详情参见 `templates/conductor.md`）
+- **成功时**: 在 worktree 内提交 → 合并到 main → 删除 worktree
+- **失败时**: `git worktree remove --force` + 删除分支
+- **清理**: 用 `git worktree list` 确认，用 `git worktree remove <path> --force` 删除，用 `git worktree prune` 修复损坏的引用
 
-## エラーリカバリ
+## 错误恢复
 
-| 障害 | 検出者 | 対応 |
+| 故障 | 检测者 | 应对 |
 |------|--------|------|
-| Agent クラッシュ | Conductor | `cmux list-status` で消失検出 → 再 spawn |
-| Conductor クラッシュ | Manager | Idle のまま done マーカーなし → 再 spawn or abort してタスク reopen |
-| Manager クラッシュ | Master | Manager が応答なし → 再 spawn |
-| API レート制限 | 各層 | 待機して再試行、同時 Agent 数を削減 |
+| Agent 崩溃 | Conductor | 通过 `cmux list-status` 检测消失 → 重新 spawn |
+| Conductor 崩溃 | Manager | 一直 Idle 且无 done 标记 → 重新 spawn 或 abort 后 reopen 任务 |
+| Manager 崩溃 | Master | Manager 无响应 → 重新 spawn |
+| API 速率限制 | 各层 | 等待后重试，减少同时 Agent 数 |
 
-**異常検出**: `cmux list-status` で Running/Idle を判定。検出できない場合は `cmux read-screen` にフォールバック（シェルプロンプト表示 → Claude 終了、エラーメッセージ → クラッシュ、画面空 → ペイン消失）。
+**异常检测**: 通过 `cmux list-status` 判定 Running/Idle。无法检测时回退到 `cmux read-screen`（显示 shell 提示符 → Claude 已终止，错误消息 → 崩溃，画面为空 → 窗格消失）。
 
-## 既知の注意点
+## 已知注意事项
 
-### Trust 確認（初回起動時）
+### Trust 确认（首次启动时）
 
-新しいディレクトリで Claude を起動すると「Trust this folder?」確認が表示される。Manager または Conductor が `cmux read-screen` で検出し `cmux send-key return` で自動承認するが、タイミングによっては手動介入が必要な場合がある。
+在新目录中启动 Claude 时会显示「Trust this folder?」确认。Manager 或 Conductor 通过 `cmux read-screen` 检测并用 `cmux send-key return` 自动批准，但因时序问题有时可能需要手动介入。
 
-### ペイン幅の注意
+### 窗格宽度注意事项
 
-サブエージェントは Conductor と同じ pane 内にタブとして作成される（`cmux new-surface`）。タブ作成に失敗した場合は `new-split right` にフォールバックする。
+子智能体在 Conductor 的同一 pane 内以标签页形式创建（`cmux new-surface`）。标签页创建失败时会回退到 `new-split right`。
 
-### パーミッション確認
+### 权限确认
 
-`--dangerously-skip-permissions` で起動しても `.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが出る場合がある。最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること。
+即使以 `--dangerously-skip-permissions` 启动，写入 `.claude/commands/` 或 `.claude/skills/` 时也可能出现确认对话框。请在首次确认时选择「Yes, and allow Claude to edit its own settings for this session」。
 
-### トレーサビリティ（v3.4.0）
+### 可追溯性（v3.4.0）
 
-daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQLite FTS5 データベースに記録する。
+daemon 启动时 API Proxy 自动启动，将所有 API 请求记录到 SQLite FTS5 数据库。
 
-- **DB パス**: `.team/traces/traces.db`
-- **本文保存**: `.team/logs/traces/bodies/`
-- **検索**: `cmux-team trace --task <id>`, `--search <query>`, `--show <id>`
-- **メタデータ**: `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role` ヘッダーで伝播
-- **自動設定**: Master/Conductor に `ANTHROPIC_BASE_URL` を設定し、全リクエストを Proxy 経由にする
+- **DB 路径**: `.team/traces/traces.db`
+- **正文保存**: `.team/logs/traces/bodies/`
+- **搜索**: `cmux-team trace --task <id>`, `--search <query>`, `--show <id>`
+- **元数据**: 通过 `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role` 头部传播
+- **自动设置**: 为 Master/Conductor 设置 `ANTHROPIC_BASE_URL`，使所有请求经过 Proxy
 
-### API レート制限
+### API 速率限制
 
-複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
+多智能体同时执行容易造成 API 过载。由于4层结构增加了同时会话数，推荐使用 Claude Max。
 
-## Artifacts（知見の記録）
+## Artifacts（知识记录）
 
-会話中の調査結果・設計判断・セッション要約は `.team/artifacts/` に Axxx 番号付きで保存する。
+会话中的调查结果・设计决策・会话摘要以 Axxx 编号保存在 `.team/artifacts/` 中。
 
-### Txxx と Axxx の違い
+### Txxx 与 Axxx 的区别
 
-| | Txxx（タスク） | Axxx（アーティファクト） |
+| | Txxx（任务） | Axxx（Artifact） |
 |---|---|---|
-| 本質 | 「やること」の管理 | 「わかったこと」の記録 |
-| ライフサイクル | draft → ready → assigned → closed | 作成 → 参照（→ アーカイブ） |
-| 誰が作る | Master / ユーザー | 誰でも（Master, Conductor, Agent） |
+| 本质 | 「要做的事」的管理 | 「了解到的事」的记录 |
+| 生命周期 | draft → ready → assigned → closed | 创建 → 引用（→ 归档） |
+| 谁创建 | Master / 用户 | 任何人（Master, Conductor, Agent） |
 
-### いつ Artifact を作るか
+### 何时创建 Artifact
 
-- 調査・リサーチを行ったとき（type: research）
-- 設計上の判断を下したとき（type: decision）
-- セッション終了時に重要な発見があったとき（type: session）
-- 要件・仕様を整理したとき（type: spec）
-- 分析レポートを作成したとき（type: report）
+- 进行调查・研究时（type: research）
+- 做出设计决策时（type: decision）
+- 会话结束时有重要发现时（type: session）
+- 整理需求・规格时（type: spec）
+- 创建分析报告时（type: report）
 
-### フォーマット
+### 格式
 
-ファイル名: `.team/artifacts/Axxx-<slug>.md`
+文件名: `.team/artifacts/Axxx-<slug>.md`
 
 ```yaml
 ---
 id: A001
 type: research          # research | decision | session | spec | report
-title: "タイトル"
+title: "标题"
 created: <ISO 8601>
-updated: <ISO 8601>     # 任意 — 更新時に付与
+updated: <ISO 8601>     # 可选 — 更新时附加
 author: master          # master | conductor-N | agent-xxx
-task: T038              # 任意 — 関連タスク
-tags: [tag1, tag2]      # 任意
+task: T038              # 可选 — 关联任务
+tags: [tag1, tag2]      # 可选
 ---
 ```
 
-### 参照方法
+### 引用方法
 
-- 会話中: 「A001で調査した通り」「A003の設計判断に基づき」
-- タスクとの紐付け: フロントマターの `task: T038` で関連付け
-- 新セッション開始時: 直近の artifacts を確認してコンテキストを復元
+- 会话中: 「如 A001 调查所示」「基于 A003 的设计决策」
+- 与任务关联: 通过 frontmatter 的 `task: T038` 进行关联
+- 新会话开始时: 查看最近的 artifacts 恢复上下文
 
-### コマンド
+### 命令
 
-- `/artifact [type] "タイトル"` — 会話コンテキストから要約生成・保存
-- `/artifact list` — 一覧表示
-- `/artifact show Axxx` — 内容表示
+- `/artifact [type] "标题"` — 从会话上下文生成摘要・保存
+- `/artifact list` — 列表显示
+- `/artifact show Axxx` — 显示内容
