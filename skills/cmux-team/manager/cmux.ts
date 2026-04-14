@@ -19,7 +19,8 @@ type RunCmuxOpts = { timeout?: number };
  */
 async function runCmux(args: string[], opts?: RunCmuxOpts): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execFile("cmux", args, opts);
+    const { stdout, stderr } = await execFile("cmux", args, opts);
+    return { stdout: stdout.toString(), stderr: stderr.toString() };
   } catch (e: any) {
     if (e?.__cmuxWrapped) throw e;
     const detail = formatExecError(e);

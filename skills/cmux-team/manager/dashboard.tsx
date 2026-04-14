@@ -370,7 +370,6 @@ function sectionTitle(label: string) {
     id: `section-${label}`,
     label: `─ ${label} ${HR_FILL}`,
     px: 0,
-    dsVariant: "unstyled",
     style: { dim: true },
     focusable: false,
   });
@@ -997,7 +996,6 @@ export async function startDashboard(
           id: "section-tasks",
           label: `─ Tasks ${daemon.openTasks} open ${HR_FILL}`,
           px: 0,
-          dsVariant: "unstyled",
           style: { dim: true },
           focusable: false,
           onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks" })); } catch {} },

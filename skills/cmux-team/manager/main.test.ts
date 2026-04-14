@@ -81,7 +81,7 @@ function extractHookScript(settings: any): string {
   const cmd: string = settings.hooks.PreToolUse[0].hooks[0].command;
   const m = cmd.match(/^bash -c '([\s\S]*)'$/);
   if (!m) throw new Error(`unexpected hook command format: ${cmd}`);
-  return m[1];
+  return m[1]!;
 }
 
 describe("PreToolUse hook 挙動 (§4.2)", () => {
