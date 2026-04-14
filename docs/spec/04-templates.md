@@ -1,7 +1,7 @@
 # Seed: Agent Prompt Templates
 
-テンプレートは `skills/cmux-team/templates/` に配置。全14個（うち planner, design-reviewer, implementer, inspector は4フェーズフロー用）。
-Conductor（または daemon）が spawn 時に変数を置換し、タスク中心フォルダ集約により `.team/tasks/TNNN-slug/runs/<taskRunId>/` 配下に書き出す。
+テンプレートは `skills/cmux-team/templates/{ja,en}/` に言語別で配置。各言語ディレクトリに全14個（うち planner, design-reviewer, implementer, inspector は4フェーズフロー用）。`CMUX_TEAM_LANG` もしくは config.json の `lang` で言語を切り替える（未設定時は `ja`）。
+Conductor（または daemon）が spawn 時に変数を置換し、タスク中心フォルダ集約により `.team/tasks/TNNN-slug/runs/<taskRunId>/` 配下に書き出す。statusline はロール別にカスタムステータスバーを出し分ける（Master は open タスク数、Conductor は担当タスク、Agent は role 名など）。
 
 ---
 
@@ -102,6 +102,8 @@ conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報�
 
 **Design Review ループ:** Changes Requested → Planner 再 spawn（前回 plan.md + 指摘事項）→ 再レビュー（最大2往復）
 **Inspection NOGO ループ:** NOGO → Implementer 再 spawn（plan.md + Fix Required）→ 再検品（最大2往復）
+
+**調査系タスクの summary artifact 化:** コード改変を伴わない調査・リサーチ系タスクでは、完了直前に `runs/<taskRunId>/summary.md` を artifact として登録する（`cmux-team artifacts add` 経由）。後続セッションが内容を参照できるようにするための必須ステップ。
 
 **テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`（パス情報はタスク割り当て時に付与）
 

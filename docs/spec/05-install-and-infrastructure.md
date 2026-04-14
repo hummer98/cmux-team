@@ -123,6 +123,10 @@ skills/cmux-team/manager/
 | `spawn-master` | Master surface 起動 |
 | `artifacts` | アーティファクト一覧・検索・追加（`add`）・表示（`show`）・Markdown ビューア（`open`） |
 | `resume` | assigned タスクの Conductor セッションを `claude --resume` で再開 |
+| `restart-task` | assigned タスクの Conductor セッションを再起動（タスク自体は assigned のまま維持） |
+| `await-task` | タスク完了を fs.watch で待機（カンマ区切りで複数指定可、`--timeout` サポート） |
+| `send-agent` | Agent/Conductor surface へメッセージ送信（`--surface`, positional message, `--no-return`）。Conductor → 他 surface 操作の唯一の入口 |
+| `trace-task` | 特定タスクのセッション履歴を分析 |
 
 ### メインループ
 
@@ -145,7 +149,7 @@ Conductor が worktree を初期化する際には `.claude/settings.local.json`
 
 #### assigned タスクの resume
 
-daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned` のタスクを検出し、以下の条件を満たす場合は idle Conductor に割り当てて `cmux-team resume <task-id>` で再開する:
+daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned` のタスクを検出し、以下の条件を満たす場合は Manager が該当 Conductor ペインの shell 側で直接 `cmux-team resume <task-id>` を実行する（Conductor ペインに "cmux-team resume" 文字列を `cmux send` で打ち込む方式は禁止。既に Claude が起動していると chat 入力として扱われてしまうため）:
 
 1. `sessionId` が記録されている
 2. `worktreePath` が存在する
@@ -171,18 +175,20 @@ daemon 停止時に `cmux clear-status` でクリアする。
 
 ### プロキシサーバー
 
-- Bun.serve ベースの HTTP プロキシ
+- Bun.serve ベースの HTTP プロキシ（`idleTimeout: 255s` で長時間の SSE ストリームを維持）
 - Anthropic API へのリクエスト/レスポンスを SQLite FTS5 データベースに記録
 - ストリーミング対応（`text/event-stream` の tee）
 - ポートは `.team/proxy-port` に保存
 - 既存プロセスが生きていれば再利用
 - daemon の auto-restart 後にポートが変わった場合は Master セッションを自動再接続
 - レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
-- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`
+- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信）
 
 #### 5h レート制限スロットリング
 
-5h unified utilization が閾値（`THROTTLE_5H_THRESHOLD = 0.90`、90%）以上になると、`scanTasks()` で新規タスクの Conductor への割り当てを一時停止する。既に実行中のタスクは影響を受けない。TUI ダッシュボードにもスロットリング状態とリセット残り時間を表示する。
+5h unified utilization が閾値（`THROTTLE_5H_THRESHOLD = 0.90`、90%）以上になると、`scanTasks()` で新規タスクの Conductor への割り当てを一時停止する。既に実行中のタスクは影響を受けない。TUI ダッシュボードにもスロットリング状態（THROTTLED 点滅表示）とリセット残り時間を表示する。
+
+スロットル中は `cmux-team spawn-agent` が `/rate-limit` API でブロックされ exit code 75 を返す。これを受け取った Conductor は自分で再試行する仕組み。
 
 ### TUI ダッシュボード
 
@@ -300,21 +306,47 @@ CLI 引数 > `.team/config.json` > デフォルト（`wide`）。
 ## .team/.gitignore（initInfra で自動生成）
 
 ```
+# セッション固有（追跡不要）
+team.json
+master.surface
+proxy-port
+logs/
 output/
 prompts/
-docs-snapshot/
-logs/
 queue/
+traces/
+sessions/
 conductors/
-master.surface
-task-state.json
-tasks/*.status.json
+docs-snapshot/
+e2e-results/
+
+# 追跡すべき（上記以外）
+# tasks/        — タスク定義・runs の成果物
+# artifacts/    — 知見の記録
+# specs/        — 要件・設計
+# task-state.json — タスク状態（resume に必要）
 ```
 
-`output/`, `prompts/`, `queue/` はタスク中心フォルダ集約への移行で実体としては未使用だが、過去バージョンとの互換のため引き続き ignore に列挙されている。
+`output/`, `prompts/`, `queue/` はタスク中心フォルダ集約への移行で実体としては未使用だが、過去バージョンとの互換のため引き続き ignore に列挙されている。`team.json` は daemon が自動更新する派生物のため追跡しない（以前は追跡対象だったが v3.41 以降で無視に変更）。`task-state.json` は resume に必要なため追跡する。
 
 追跡するもの:
-- `team.json` — チーム構成
 - `tasks/` — タスクディレクトリ集約（`TNNN-slug/task.md` ＋ `runs/<taskRunId>/`）
 - `specs/` — 要件・設計ドキュメント
 - `artifacts/` — 知見の記録
+- `task-state.json` — タスク状態（resume で参照）
+
+### .team/config.json（初回起動時に自動生成）
+
+```json
+{
+  "models": { "master": "opus", "conductor": "opus", "agent": "opus" },
+  "envrcHookPromptSkipped": false
+}
+```
+
+- `models` — Master / Conductor / Agent のデフォルトモデル（`--model` CLI フラグで上書き可）
+- `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ
+
+### .envrc 対話提案（初回起動）
+
+プロジェクトルートに `.envrc` が存在し、かつ `CMUX_CLAUDE_HOOKS_DISABLED=1` が未設定の場合、初回 `cmux-team start` 時にユーザーへ追記を提案する。承諾すると `.envrc` 末尾にエントリーを追記し、`direnv allow` の実行と再起動を促す。断る場合は `config.json` の `envrcHookPromptSkipped: true` で以降スキップする。

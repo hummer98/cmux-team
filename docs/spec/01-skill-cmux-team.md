@@ -69,22 +69,26 @@ description: >
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send TODO` | TODO 通知（`--content` 必須） |
 | `cmux-team send SHUTDOWN` | シャットダウン通知 |
+| `cmux-team send-agent` | Agent/Conductor surface へメッセージ送信（`--surface` 必須、`<message>` positional、`--no-return` 任意）。Conductor → 他 surface 操作はこの CLI 経由に限定され、`cmux send` の直接呼び出しは hook でブロックされる |
 | `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
-| `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
+| `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`）。`/rate-limit` API でスロットル中はブロックされ exit code 75 を返す |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body`, `--depends-on`, `--base-branch`, `--run-after-all` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id` 必須、`--status` / `--title` / `--body` / `--depends-on` のいずれか必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal`, `--force` 任意。close 後 `CONDUCTOR_DONE` を送信） |
 | `cmux-team abort-task` | 実行中タスクの中止（`--task-id` 必須、`--journal` 任意）。Conductor 停止 → worktree 削除 → `aborted` に遷移 → Conductor を再起動 |
+| `cmux-team restart-task` | assigned タスクの Conductor セッションを再起動（`--task-id` 必須、`--journal` 任意）。タスク自体は assigned のまま維持 |
 | `cmux-team delete-task` | draft/ready タスクの削除（`--task-id` 必須、`--journal` 任意）。`assigned` のタスクは `abort-task` を使う |
+| `cmux-team await-task` | タスク完了を fs.watch で待機（`--task-id` 必須、カンマ区切りで複数指定可、`--timeout` 任意。非ブロッキング用途） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
+| `cmux-team trace-task` | 特定タスクのセッション履歴を分析（タスク ID 必須） |
 | `cmux-team conductor` | Conductor 情報表示 |
 | `cmux-team spawn-master` | Master surface 起動 |
 | `cmux-team artifacts` | アーティファクト一覧・検索 |
 | `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
 | `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
-| `cmux-team resume` | assigned タスクの Conductor セッション再開（`<task-id>` positional 引数必須。`claude --resume` で再開） |
+| `cmux-team resume` | assigned タスクの Conductor セッション再開（`<task-id>` positional 引数必須）。起動時 resume 経路では Manager が shell 側で直接 `claude --resume` を実行する（Conductor ペインに `cmux-team resume` 文字列を送らないこと） |
 
 ### 2. トレーサビリティ
 

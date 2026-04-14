@@ -250,9 +250,68 @@ v3.35〜v3.38 で実施された主要改善:
 
 ---
 
+## Phase 9: 運用強化（T143〜T174）— 完了済み
+
+v3.39.0〜v3.43.0 で実施された主要改善:
+
+### 観測・分析
+- **Tasks パネル Enter で task.md をビューア起動（T143）**
+- **trace-task CLI + cmux-team-guide スキル（T144〜T147）** — タスク→セッション索引、配布先向けヘルプ
+- **trace DB をタスク-セッション索引に再設計（T144）**
+
+### Conductor 統合・環境改善
+- **Conductor `--session-id` 引数を撤廃し自己生成方式に**
+- **statusline ロール別カスタム** — Master は open タスク数、Conductor/Agent は役割別表示
+- **Conductor 完了時に要約レポート表示**
+- **slot-id 引数廃止・`CMUX_SURFACE` 環境変数に統一**
+
+### Markdown ビューア
+- **`mo` ビューアで既存ブラウザを再利用（T156）**
+- **TUI 停止せず `mo + cmux browser open` 方式（T153）**
+- **ファイル固有 URL で直接フォーカス**
+
+### resume / 起動フロー
+- **full_quit から worktree 削除を撤廃し resume ログ改善**
+- **worktree 作成時に `baseBranch` を start-point として使用**
+- **assigned タスクの resume は shell 側で直接実行（T174）** — Conductor ペインに `cmux-team resume` 文字列を送らない
+
+### i18n・テンプレート
+- **プロンプトテンプレートの i18n 対応（T159）** — `templates/{ja,en}/` で分離
+
+### インフラ・設定
+- **`.team/.gitignore` の内容更新（T161）** — `team.json` を追跡対象外に移し、追跡対象をコメントで明示
+- **Master statusline のコスト表示を open タスク数に置換（T158）**
+- **初期化時の `.gitignore`/`config.json`/`team.json` 生成をログ記録（T162）**
+- **初回起動時に `.envrc` へ `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記を対話提案（T162/T164）** — direnv allow と再起動も促す
+
+### ロギング
+- **execFile エラー時に stderr/stdout をログに含める（T163）**
+
+### 配布・可観測性
+- **`marketplace.json` のバージョンを現行に同期**
+- **conductor-role.md に他 Conductor surface 直接操作の禁止を追記**
+- **conductor-role.md に調査系タスク完了時の summary.md artifact 化ステップ追加（T171）**
+
+### ダッシュボード
+- **tab-axis キー入力時の activeTab/focusedArea 同期修正（T170）**
+- **THROTTLED 表示の重複解消＋点滅表示（T172）**
+
+### レート制限・スロットル
+- **spawn-agent を rate-limit 時にブロック＋exit code 75 + Conductor retry（T173）** — `/rate-limit` API + ラッパー
+
+### プロキシ
+- **Bun.serve の `idleTimeout` を 255s に延長（v3.42.0）** — 長時間 SSE ストリーム切断防止
+
+### Conductor 制御
+- **Conductor からの `cmux send`/`cmux send-key` を PreToolUse hook でブロック（T167/T169）** — 代替の `cmux-team send-agent` CLI を追加
+
+---
+
 ## 未実装の改善候補
 
 - レート制限のインテリジェント制御（5h 閾値スロットリングは実装済み、7d 制限や動的閾値調整は未実装）
 - Conductor 台数の動的スケーリング
 - Web UI ダッシュボード
 - マルチプロジェクト対応
+- Master 稼働中スピナー（TUI 反映）の実装 — T175 として draft 化
+- 16:9 レイアウトモード（Conductor 2 セッション構成）の追加 — T176 として ready 化

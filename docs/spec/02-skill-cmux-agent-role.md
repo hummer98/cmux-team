@@ -88,6 +88,8 @@ cmux-team create-task --title "hotfix" --base-branch develop --status ready
 - `.team/output/<other-role>.md` が存在すれば読む
 - 存在しない場合は `blocker` タイプのタスクを作成
 
+**重要:** Conductor / Agent が他 surface へメッセージを送る場合は必ず `cmux-team send-agent` CLI を経由する。`cmux send` / `cmux send-key` の直接呼び出しは `conductor-settings.json` の hook によってブロックされる。Agent の spawn/kill も `cmux-team spawn-agent` / `cmux-team kill-agent` を使うこと。
+
 ### 6. ロール別ガイドライン
 
 | ロール | 主な責務 |
@@ -138,6 +140,8 @@ cmux-team trace --show <trace-id>
 - 調査結果（複数の選択肢の比較、技術的な発見）→ type: research
 - 設計判断（なぜその方法を選んだか）→ type: decision
 - セッション要約（重要な発見・学び）→ type: session
+
+**Researcher / 調査系タスクの必須ステップ:** タスク完了前に `runs/<taskRunId>/summary.md` を artifact 化する（`cmux-team artifacts add` で登録）。コード改変を伴わず成果が文書のみのタスクでは、後続セッションが参照できる形で artifacts に残すのが必須フロー。
 
 **手順:**
 
