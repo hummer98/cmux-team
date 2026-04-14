@@ -563,20 +563,6 @@ export async function resetConductor(
   }
 }
 
-// --- checkConductorStatus ---
-
-export async function checkConductorStatus(
-  conductor: ConductorState,
-  workspace?: string
-): Promise<"idle" | "running" | "crashed"> {
-  if (conductor.status === "idle") return "idle";
-
-  // surface 消失 → クラッシュ
-  if (!(await cmux.validateSurface(conductor.surface, workspace))) return "crashed";
-
-  return "running";
-}
-
 // --- collectResults ---
 
 export async function collectResults(

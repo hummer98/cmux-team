@@ -75,7 +75,7 @@ Conductor のフルワークフロー定義。タスク分解 → Agent spawn �
 **主な指示:**
 - **コードを書かない** — 全作業を Agent に委任
 - Agent は `cmux-team spawn-agent` CLI で起動（`--prompt-file` でプロンプトファイルを渡す）
-- Agent 監視: 30秒間隔ポーリング + `cmux list-status` で Idle/Running 検出
+- Agent 監視: `cmux-team await-agent`（done マーカーの fs.watch、push 型通知）+ 生存は PID ウォッチャー
 - レビュー: コード変更がある場合のみ Reviewer Agent を起動
 - クリーンアップ: kill-agent → commit → merge/PR → summary → worktree 削除 → close-task → done マーカー
 

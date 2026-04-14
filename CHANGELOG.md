@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.47.0] - 2026-04-16
+
+### Changed (Breaking)
+- **Manager の Conductor/Agent/Master 生存監視を PID ベースに全面移行（T195）**。`cmux tree` / `cmux list-status` を使った周期ポーリングを廃止し、SessionStart hook が送る `SESSION_STARTED`（`--pid` 付き）で Manager が PID を受け取り、`spawnPidWatcher` / `spawnAgentPidWatcher` / `spawnMasterPidWatcher` が 1 秒間隔で `process.kill(pid, 0)`（`cmux.isAlive(pid)`）を呼んで生死判定する。cmux 側の SwiftUI メインスレッドデッドロック（A011）で Manager daemon がハングする問題を根治する
+- **Agent 起動時に `SessionStart` hook を追加**。`.claude/settings.json` の `SessionStart` に `cmux-team send SESSION_STARTED --pid "$PPID" --surface "$CMUX_SURFACE" --conductor-surface "$CMUX_CONDUCTOR_SURFACE" --role "$CMUX_ROLE"` を登録し、Agent 側も PID が Manager に伝わるようにした。Conductor/Agent の `team.json` に `pid` フィールドが永続化され、`cmux-team resume` 時に復元される
+- **`isMasterAlive(state)` のシグネチャ変更**。以前は `workspace` を受けて `cmux tree` を叩いていたが、今は `state.masterPid` を `process.kill` するだけ。`validateSurface` も cmux.ts から削除（呼び出し箇所なし）
+- **PID 再利用に関する注意**。PID は OS が再利用する可能性があるため、SessionEnd hook による明示的な `SESSION_ENDED` 通知を優先する。pidWatcher はあくまで hook が来なかった場合のフォールバック扱い
+- **削除ログイベント**: `tree_failed` / `list_status_failed` / `surface_validation_failed`（新イベント: `pid_watcher_started` / `session_ended`（`reason=pid_watcher`））
+
+### Changed
+- **Conductor テンプレート書き換え**。`skills/cmux-team/templates/ja/conductor.md` / `en/conductor.md` の Agent 監視ループから `cmux list-status` 参照を削除し、`cmux-team await-agent` の exit code（0=completed/ask, 10=crashed, 2=timeout）を case 分岐で扱う手順に差し替えた
+- **ドキュメント同期**。`CLAUDE.md` / `skills/cmux-team/SKILL.md` / `docs/spec/01-skill-cmux-team.md` / `docs/spec/04-templates.md` / `.team/specs/requirements.md` から `cmux list-status` 参照を削除し、`cmux tree` の用途を「init 時の pane 逆引きのみ」と明記
+
 ## [3.46.0] - 2026-04-15
 
 ### Added

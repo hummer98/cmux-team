@@ -5,7 +5,6 @@ import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/pro
 import { existsSync, openSync, readSync, closeSync, fstatSync } from "fs";
 import { join, dirname } from "path";
 import {
-  checkConductorStatus,
   collectResults,
   initializeConductorSlots,
   assignTask,
@@ -20,9 +19,8 @@ import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterR
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
-import { formatExecError } from "./exec-error";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
-import type { ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
+import type { AgentState, ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 
 export interface TaskSummary {
@@ -457,13 +455,26 @@ export async function initInfra(state: DaemonState): Promise<void> {
 }
 
 export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // マーカーファイルから既存 Master を検出
+  // マーカーファイルから既存 Master を検出（T195: PID ベース復旧）
   const markerPath = join(state.projectRoot, ".team/master.surface");
+  const teamJsonPath = join(state.projectRoot, ".team/team.json");
+  let restoredMasterPid: number | undefined;
   try {
     if (existsSync(markerPath)) {
       const surface = (await readFile(markerPath, "utf-8")).trim();
       if (surface) {
-        const alive = await isMasterAlive(surface, state.workspace ?? undefined);
+        // team.json から master.pid を読む（isMasterAlive が参照するのと同じソース）
+        try {
+          if (existsSync(teamJsonPath)) {
+            const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+            const pid = teamJson?.master?.pid;
+            if (typeof pid === "number") restoredMasterPid = pid;
+          }
+        } catch (e: any) {
+          await log("master_check_error", `team.json read failed: ${e.message}`);
+        }
+
+        const alive = restoredMasterPid != null && await isMasterAlive(state.projectRoot);
         if (alive) {
           // proxy ポート変化時: 旧 Master を close して再 spawn
           if (state.proxyPortChanged) {
@@ -473,8 +484,10 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
             // fall-through して下の spawn コードへ
           } else {
             state.masterSurface = surface;
+            state.masterPid = restoredMasterPid;
             state.masterStatus = "idle";
-            await log("master_alive", formatSurface(surface, "U"));
+            spawnMasterPidWatcher(state, restoredMasterPid!);
+            await log("master_restored", `${formatSurface(surface, "U")} pid=${restoredMasterPid}`);
             return;
           }
         }
@@ -519,38 +532,56 @@ export async function initializeLayout(
       }
 
       if (conductors.length > 0) {
-        const alive: ConductorState[] = [];
+        const restored: ConductorState[] = [];
         for (const c of conductors) {
           if (!c.surface) continue;
-          if (await cmux.validateSurface(c.surface, state.workspace ?? undefined)) {
-            alive.push({
-              surface: c.surface,
-              taskRunId: c.taskRunId,
-              taskId: c.taskId,
-              taskTitle: c.taskTitle,
-              worktreePath: c.worktreePath,
-              outputDir: c.outputDir,
-              startedAt: c.startedAt ?? new Date().toISOString(),
-              paneId: c.paneId,
-              sessionId: c.sessionId,
-              agents: (c.agents ?? []).map((a: any) => ({
-                surface: a.surface,
-                role: a.role,
-                sessionId: a.sessionId,
-                spawnedAt: a.spawnedAt ?? new Date().toISOString(),
-              })),
-              // starting は復元しない（再起動時はセッション状態が不明なため idle として扱う）
-              status: c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle",
-            });
-          }
+          // T195: PID alive check で復元判定する
+          const conductorAlive = typeof c.pid === "number" && cmux.isAlive(c.pid);
+          const restoredAgents: AgentState[] = (c.agents ?? []).map((a: any) => ({
+            surface: a.surface,
+            role: a.role,
+            sessionId: a.sessionId,
+            spawnedAt: a.spawnedAt ?? new Date().toISOString(),
+            pid: (typeof a.pid === "number" && cmux.isAlive(a.pid)) ? a.pid : undefined,
+          }));
+          const restoredConductor: ConductorState = {
+            surface: c.surface,
+            taskRunId: c.taskRunId,
+            taskId: c.taskId,
+            taskTitle: c.taskTitle,
+            worktreePath: c.worktreePath,
+            outputDir: c.outputDir,
+            startedAt: c.startedAt ?? new Date().toISOString(),
+            paneId: c.paneId,
+            sessionId: c.sessionId,
+            pid: conductorAlive ? c.pid : undefined,
+            agents: restoredAgents,
+            status: conductorAlive
+              ? (c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle")
+              : "disconnected",
+            disconnectedAt: conductorAlive ? undefined : new Date().toISOString(),
+          };
+          restored.push(restoredConductor);
         }
 
-        if (alive.length > 0) {
+        if (restored.length > 0) {
           state.conductors.clear();
-          for (const c of alive) {
+          for (const c of restored) {
             state.conductors.set(c.surface, c);
+            // PID watcher を再起動
+            if (typeof c.pid === "number") {
+              spawnPidWatcher(state, c, c.pid);
+            }
+            for (const a of c.agents) {
+              if (typeof a.pid === "number") {
+                spawnAgentPidWatcher(state, c, a, a.pid);
+              }
+            }
           }
-          await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => formatSurface(c.surface, "C")).join(",")}`);
+          await log(
+            "conductors_restored",
+            `count=${restored.length} surfaces=${restored.map(c => formatSurface(c.surface, "C")).join(",")}`
+          );
           // team.json 復元パスでは Claude が既に稼働中の前提。
           // resumePlan で与えられた assigned タスクには何もしない（resume 命令は送らない）。
           // 旧コードでは resume_skipped が出ていたため、観測性確保のため noop ログを残す。
@@ -733,8 +764,27 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "session_started",
           `${formatSurface(message.surface, "C")} pid=${message.pid}`
         );
-      } else {
-        await log("session_started_ignored", `${formatSurface(message.surface, "C")} reason=conductor_not_found`);
+        break;
+      }
+
+      // T195: Agent surface か？ 全 Conductor の agents 配列を逆引き
+      let agentMatched = false;
+      for (const c of state.conductors.values()) {
+        const agent = c.agents.find(a => a.surface === message.surface);
+        if (agent) {
+          agent.pid = message.pid;
+          spawnAgentPidWatcher(state, c, agent, message.pid);
+          notifyStateChanged("daemon.ts:handleMessage:session-started-agent");
+          await log(
+            "session_started",
+            `${formatPair(c.surface, message.surface, "C", "A")} pid=${message.pid}`
+          );
+          agentMatched = true;
+          break;
+        }
+      }
+      if (!agentMatched) {
+        await log("session_started_ignored", `${formatSurface(message.surface, "S")} reason=not_found`);
       }
       break;
     }
@@ -1028,7 +1078,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
         conductor.status = "idle";
         conductor.disconnectedAt = undefined;
-        if (message.pid) conductor.pid = message.pid;
+        // T195: pid 更新は SESSION_STARTED の責務に統一。SESSION_CLEAR で pid を触らない
         notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
         await log(event, `${formatSurface(message.surface, "C")} via=SESSION_CLEAR`);
       }
@@ -1054,6 +1104,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           clearInterval(conductor.pidWatcherInterval);
           conductor.pidWatcherInterval = undefined;
         }
+        // T195: /clear で旧 Claude は死ぬ。次の SESSION_STARTED で新 pid が届くまで保留
+        conductor.pid = undefined;
         await resetConductor(conductor, state.projectRoot);
       }
       // idle 時は何もしない（TUI チラつき防止）
@@ -1216,8 +1268,35 @@ export async function scanTasks(state: DaemonState): Promise<void> {
   }
 }
 
+/**
+ * Conductor PID 1 tick 分の判定本体（テストから直接呼ぶため export）。
+ *
+ * @returns `"alive"` = まだ生きている / `"dead"` = 死亡検出して disconnected に遷移 /
+ *          `"stopped"` = daemon 停止中で何もせず return / `"stale"` = pid ミスマッチで abort
+ */
+export async function __testSpawnPidWatcherTick(
+  state: DaemonState,
+  conductor: ConductorState,
+  pid: number
+): Promise<"alive" | "dead" | "stopped" | "stale"> {
+  if (!state.running) return "stopped";
+  if (cmux.isAlive(pid)) return "alive";
+  if (conductor.pid !== pid) return "stale";
+  conductor.status = "disconnected";
+  conductor.disconnectedAt = new Date().toISOString();
+  conductor.pid = undefined;
+  notifyStateChanged("daemon.ts:spawnPidWatcher:conductor-disconnected");
+  // sessionId は保持する（resume で必要）。
+  // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
+  await log(
+    "session_ended",
+    `${formatSurface(conductor.surface, "C")} pid=${pid} status=disconnected reason=pid_watcher`
+  );
+  return "dead";
+}
+
 /** PID ウォッチャー: 指定 PID の終了を検出して disconnected にする */
-function spawnPidWatcher(
+export function spawnPidWatcher(
   state: DaemonState,
   conductor: ConductorState,
   pid: number
@@ -1226,58 +1305,117 @@ function spawnPidWatcher(
     clearInterval(conductor.pidWatcherInterval);
   }
   const checkInterval = setInterval(async () => {
-    if (!state.running) {
+    const result = await __testSpawnPidWatcherTick(state, conductor, pid);
+    if (result !== "alive") {
       clearInterval(checkInterval);
       conductor.pidWatcherInterval = undefined;
-      return;
-    }
-    try {
-      process.kill(pid, 0);
-    } catch {
-      clearInterval(checkInterval);
-      conductor.pidWatcherInterval = undefined;
-      if (conductor.pid === pid) {
-        conductor.status = "disconnected";
-        conductor.disconnectedAt = new Date().toISOString();
-        conductor.pid = undefined;
-        notifyStateChanged("daemon.ts:spawnPidWatcher:conductor-disconnected");
-        // sessionId は保持する（resume で必要）。
-        // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
-        await log(
-          "session_ended",
-          `${formatSurface(conductor.surface, "C")} pid=${pid} status=disconnected reason=pid_watcher`
-        );
-      }
     }
   }, 1000);
   conductor.pidWatcherInterval = checkInterval;
 }
 
-function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
+/**
+ * Agent PID 1 tick 分の判定本体（テストから直接呼ぶため export）。
+ *
+ * @returns `"alive"` = まだ生きている / `"dead"` = 死亡検出して agents から削除 /
+ *          `"stopped"` = daemon 停止中で何もせず return /
+ *          `"noop"` = すでに agents から削除されていて冪等 no-op
+ */
+export async function __testSpawnAgentPidWatcherTick(
+  state: DaemonState,
+  conductor: ConductorState,
+  agent: AgentState,
+  pid: number,
+): Promise<"alive" | "dead" | "stopped" | "noop"> {
+  if (!state.running) return "stopped";
+  if (cmux.isAlive(pid)) return "alive";
+
+  // 冪等性: agents 配列から既に削除されていたら no-op
+  const idx = conductor.agents.findIndex(a => a.surface === agent.surface);
+  if (idx === -1) {
+    await log(
+      "agent_pid_watcher_noop",
+      `${formatPair(conductor.surface, agent.surface, "C", "A")} reason=already_removed pid=${pid}`
+    );
+    return "noop";
+  }
+
+  try {
+    await writeAgentDone(state.projectRoot, conductor.surface, agent.surface, {
+      status: "crashed",
+      reason: "pid_watcher",
+    });
+  } catch (e: any) {
+    await log("error", `writeAgentDone failed (agent pid_watcher): ${e.message}`);
+  }
+  conductor.agents.splice(idx, 1);
+  notifyStateChanged("daemon.ts:spawnAgentPidWatcher:agent-removed");
+  await log(
+    "agent_done",
+    `${formatPair(conductor.surface, agent.surface, "C", "A")} trigger=pid_watcher status=crashed pid=${pid}`
+  );
+  return "dead";
+}
+
+/**
+ * Agent 用 PID ウォッチャー (T195)。
+ *
+ * 1 秒間隔で `cmux.isAlive(pid)` を呼び、dead を検出したら:
+ * - done マーカーを書き出し（status=crashed reason=pid_watcher）
+ * - conductor.agents 配列から該当 Agent を削除
+ *
+ * 冪等性: すでに agents 配列から削除されていた場合は no-op で return する。
+ * SESSION_ENDED ハンドラが先に削除していた場合もこの経路に入る。
+ */
+export function spawnAgentPidWatcher(
+  state: DaemonState,
+  conductor: ConductorState,
+  agent: AgentState,
+  pid: number,
+): void {
+  if (agent.pidWatcherInterval) {
+    clearInterval(agent.pidWatcherInterval);
+  }
+  const checkInterval = setInterval(async () => {
+    const result = await __testSpawnAgentPidWatcherTick(state, conductor, agent, pid);
+    if (result !== "alive") {
+      clearInterval(checkInterval);
+      agent.pidWatcherInterval = undefined;
+    }
+  }, 1000);
+  agent.pidWatcherInterval = checkInterval;
+}
+
+/**
+ * Master PID 1 tick 分の判定本体（テストから直接呼ぶため export）。
+ */
+export async function __testSpawnMasterPidWatcherTick(
+  state: DaemonState,
+  pid: number
+): Promise<"alive" | "dead" | "stopped" | "stale"> {
+  if (!state.running) return "stopped";
+  if (cmux.isAlive(pid)) return "alive";
+  if (state.masterPid !== pid) return "stale";
+  state.masterStatus = "disconnected";
+  state.masterDisconnectedAt = new Date().toISOString();
+  state.masterPid = undefined;
+  notifyStateChanged("daemon.ts:spawnMasterPidWatcher:master-disconnected");
+  await log(
+    "master_session_ended",
+    `${formatSurface(state.masterSurface, "U")} pid=${pid} reason=pid_watcher`
+  );
+  return "dead";
+}
+
+export function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
   if (state.masterPidWatcherInterval) {
     clearInterval(state.masterPidWatcherInterval);
   }
   const checkInterval = setInterval(async () => {
-    if (!state.running) {
+    const result = await __testSpawnMasterPidWatcherTick(state, pid);
+    if (result !== "alive") {
       clearInterval(checkInterval);
       state.masterPidWatcherInterval = undefined;
-      return;
-    }
-    try {
-      process.kill(pid, 0);
-    } catch {
-      clearInterval(checkInterval);
-      state.masterPidWatcherInterval = undefined;
-      if (state.masterPid === pid) {
-        state.masterStatus = "disconnected";
-        state.masterDisconnectedAt = new Date().toISOString();
-        state.masterPid = undefined;
-        notifyStateChanged("daemon.ts:spawnMasterPidWatcher:master-disconnected");
-        await log(
-          "master_session_ended",
-          `${formatSurface(state.masterSurface, "U")} pid=${pid} reason=pid_watcher`
-        );
-      }
     }
   }, 1000);
   state.masterPidWatcherInterval = checkInterval;
@@ -1290,43 +1428,13 @@ const DISCONNECT_TIMEOUT_SEC =
   Number(process.env.CMUX_TEAM_DISCONNECT_TIMEOUT_SEC) || 300;  // 5 分
 
 /**
- * T180: cmux tree タイムアウトが連続する場合に `kind=cmux_unresponsive` として
- * disconnected 化するための閾値。
+ * monitorConductors — T195 以降は starting/disconnected のタイムアウト判定のみ。
  *
- * デフォルト 10 秒 poll × 6 tick = 60s 連続失敗、かつ 120s 経過で昇格する。
- * 事象ログ（01:56:56〜01:57:28 の 32 秒で 3 失敗）では誤 abort されない値。
- *
- * TODO (R2): `kind=cmux_unresponsive` で disconnected 化したケースの復帰パスは本タスク
- * スコープ外。将来的には tree 復旧時に disconnected → running 復帰を検討する。
+ * Conductor / Agent の生存確認は `spawnPidWatcher` / `spawnAgentPidWatcher` に
+ * 一本化している（push 型 hook + PID watcher）。tree / list-status に依存しない
+ * ため、cmux daemon の main thread deadlock（A011）の影響を受けない。
  */
-const UNRESPONSIVE_MAX_TICKS =
-  Number(process.env.CMUX_TEAM_UNRESPONSIVE_MAX_TICKS) || 6;
-const UNRESPONSIVE_MAX_SEC =
-  Number(process.env.CMUX_TEAM_UNRESPONSIVE_MAX_SEC) || 120;
-
 export async function monitorConductors(state: DaemonState): Promise<void> {
-  // tick 冒頭で tree() を 1 回だけ呼び、結果をキャッシュする (Major 1)
-  //   成功時: surface 判定は treeOutput.includes(surface) で行う
-  //   失敗時: リトライ付き validateSurfaceDetailed にフォールバックし
-  //           timeout 判定で "unknown" を返して crash 誤判定を防ぐ (T180)
-  let treeOutput: string | null = null;
-  try {
-    treeOutput = await cmux.tree(state.workspace ?? undefined);
-  } catch (e: any) {
-    await log("monitor_tree_failed", formatExecError(e));
-    treeOutput = null;
-  }
-
-  const surfaceAlive = async (surface: string): Promise<"alive" | "missing" | "unknown"> => {
-    if (treeOutput !== null) {
-      return treeOutput.includes(surface) ? "alive" : "missing";
-    }
-    return cmux.validateSurfaceDetailed(surface, state.workspace ?? undefined);
-  };
-
-  // Agent 生存チェックを unknown 時に skip したことを 1 回だけログする
-  let agentSkipLogged = false;
-
   for (const [surface, conductor] of state.conductors) {
     // starting: タイムアウトチェックのみ
     if (conductor.status === "starting") {
@@ -1358,107 +1466,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       continue;
     }
 
-    // idle: 何もしない
-    if (conductor.status === "idle") continue;
-
-    // running: Conductor surface の生存確認（3 値）
-    const result = await surfaceAlive(conductor.surface);
-
-    if (result === "alive") {
-      // tree 復旧時の節目ログ
-      if ((conductor.treeFailureCount ?? 0) > 0) {
-        const firstAt = conductor.treeFailureFirstAt;
-        const elapsed = firstAt
-          ? Math.round((Date.now() - new Date(firstAt).getTime()) / 1000)
-          : 0;
-        await log(
-          "conductor_responsive_recovered",
-          `${formatSurface(surface, "C")} after_failures=${conductor.treeFailureCount} elapsed=${elapsed}s`
-        );
-        conductor.treeFailureCount = 0;
-        conductor.treeFailureFirstAt = undefined;
-      }
-      // Agent 生存チェックへフォールスルー
-    } else if (result === "unknown") {
-      // T180: cmux daemon 不応答 — crash 判定しない
-      const prev = conductor.treeFailureCount ?? 0;
-      const count = prev + 1;
-      conductor.treeFailureCount = count;
-      if (!conductor.treeFailureFirstAt) {
-        conductor.treeFailureFirstAt = new Date().toISOString();
-        await log(
-          "conductor_unresponsive_started",
-          `${formatSurface(surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`
-        );
-      }
-      const elapsed =
-        (Date.now() - new Date(conductor.treeFailureFirstAt).getTime()) / 1000;
-
-      if (count >= UNRESPONSIVE_MAX_TICKS && elapsed >= UNRESPONSIVE_MAX_SEC) {
-        // 閾値超過 → disconnected 昇格（kind=cmux_unresponsive）
-        await log(
-          "conductor_unresponsive_threshold",
-          `${formatSurface(surface, "C")} consecutive=${count} elapsed=${Math.round(elapsed)}s`
-        );
-        await log(
-          "conductor_disconnected",
-          `${formatSurface(surface, "C")} reason=tree_unresponsive_persistent kind=cmux_unresponsive ` +
-            `consecutive=${count} elapsed=${Math.round(elapsed)}s ` +
-            `taskRunId=${conductor.taskRunId ?? "-"}`
-        );
-        conductor.status = "disconnected";
-        conductor.disconnectedAt = new Date().toISOString();
-        notifyStateChanged("daemon.ts:monitorConductors:unresponsive-threshold");
-        continue;
-      }
-      // 閾値未満: disconnected 化せずスキップ（Agent チェックも同じ tree 依存なのでスキップ）
-      if (!agentSkipLogged) {
-        await log(
-          "monitor_skip_agents",
-          `reason=cmux_unresponsive ${formatSurface(surface, "C")} consecutive=${count}`
-        );
-        agentSkipLogged = true;
-      }
-      continue;
-    } else {
-      // result === "missing" — 従来通り即 crash 判定
-      await log(
-        "conductor_disconnected",
-        `${formatSurface(surface, "C")} reason=validate_surface_failed kind=crashed taskRunId=${conductor.taskRunId ?? "-"}`
-      );
-      conductor.status = "disconnected";
-      conductor.disconnectedAt = new Date().toISOString();
-      notifyStateChanged("daemon.ts:monitorConductors:surface-missing");
-      // taskRunId / taskTitle / worktreePath / outputDir / agents は意図的に保持
-      // 復活時 (SESSION_ACTIVE/IDLE) または timeout 時 (C-2) に cleanup 判断
-      continue;
-    }
-
-    // Agent surface の生存チェック — tree キャッシュを使う (Major 1)
-    // unknown 時は上の continue でここに到達しないため安全
-    for (let i = conductor.agents.length - 1; i >= 0; i--) {
-      const agent = conductor.agents[i]!;
-      const agentResult = await surfaceAlive(agent.surface);
-      if (agentResult === "missing") {
-        // T181: Conductor の await-agent がタイムアウトで終わらないよう done マーカーを書く
-        try {
-          await writeAgentDone(state.projectRoot, surface, agent.surface, {
-            status: "crashed",
-            reason: "surface_lost",
-          });
-        } catch (e: any) {
-          await log("error", `writeAgentDone failed (surface_lost): ${e.message}`);
-        }
-        conductor.agents.splice(i, 1);
-        notifyStateChanged("daemon.ts:monitorConductors:agent-removed");
-        await log(
-          "agent_done",
-          `${formatPair(surface, agent.surface, "C", "A")} trigger=surface_lost status=crashed`
-        );
-      }
-      // agentResult === "unknown" はここでは起きない（treeOutput null でも Conductor が alive なら
-      // Agent も直前で "alive" に該当するため）。ただし防御的に missing 時のみ削除する。
-    }
+    // running / idle / asking: 生存確認は spawnPidWatcher / spawnAgentPidWatcher が担当
   }
 }
 
@@ -1569,10 +1577,12 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       startedAt: c.startedAt,
       paneId: c.paneId,
       sessionId: c.sessionId,
+      pid: c.pid,
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,
         sessionId: a.sessionId,
+        pid: a.pid,
       })),
     }));
     // アトミック書き込み: tmp → rename で中途半端な書き込みを防止

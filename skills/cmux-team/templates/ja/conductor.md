@@ -64,7 +64,7 @@ TaskCreate: "テンプレート修正" → task-3
 spawn-agent → Agent 起動成功 → TaskUpdate: task-1 → in_progress
 
 # 3. Agent 完了検出後に completed に
-cmux list-status で Idle 検出 → TaskUpdate: task-1 → completed
+cmux-team await-agent が STATUS=completed で返る → TaskUpdate: task-1 → completed
 
 # 4. 全タスク完了を確認してから結果統合へ
 ```
@@ -112,7 +112,7 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 **重要:** `--prompt` でインライン渡しも後方互換として残っているが、プロンプトが長い場合やエスケープが複雑な場合は必ず `--prompt-file` を使うこと。
 
-**1体ずつ確実に起動すること。** 起動確認（`cmux list-status` で Running 検出）してから次を起動する。
+**1体ずつ確実に起動すること。** 起動確認（`spawn-agent` が exit code 0 を返す）してから次を起動する。
 
 **禁止事項:**
 - `cmux new-surface` で直接タブを作成してはならない — 必ず `cmux-team spawn-agent` を使う
@@ -120,64 +120,35 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 ## Agent 監視ループ
 
-Agent を起動したら、30秒間隔でポーリングして完了を待つ。**Agent が完了するまで次のステップに進まない。**
-
-spawn 時に前後の `cmux list-status` を比較して Agent の cN キーを特定する:
+Agent を起動したら `cmux-team await-agent` で done マーカーを待機する（fs.watch による push 型通知）。ポーリング不要。**Agent が完了するまで次のステップに進まない。**
 
 ```bash
-# spawn 前の list-status を取得
-MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
-STATUS_BEFORE=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
+# spawn-agent の結果から AGENT_SURFACE を取得済みとする
+# cmux-team await-agent が done マーカー（Agent の Stop/SessionEnd hook が書き出す）を fs.watch で待機
+cmux-team await-agent --surface "$AGENT_SURFACE" --timeout 1800
+EXIT_CODE=$?
 
-# ... (Agent spawn) ...
-
-sleep 2
-STATUS_AFTER=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
-# 新しく出現した cN エントリを特定
-AGENT_KEY=$(diff <(echo "$STATUS_BEFORE") <(echo "$STATUS_AFTER") | grep "^>" | head -1 | awk -F= '{print $1}' | tr -d '> ')
-echo "Agent key: $AGENT_KEY"
+case "$EXIT_CODE" in
+  0)
+    # STATUS=completed または STATUS=ask（stdout に STATUS= 行が出力される）
+    echo "Agent $AGENT_SURFACE: 正常終了"
+    ;;
+  10)
+    # STATUS=crashed（Manager の spawnAgentPidWatcher が PID 死亡を検出した場合含む）
+    echo "WARNING: Agent $AGENT_SURFACE がクラッシュ"
+    ;;
+  2)
+    echo "WARNING: Agent $AGENT_SURFACE がタイムアウト"
+    ;;
+esac
 ```
 
-監視ループ:
+複数 Agent を並列実行する場合は、`--surface` をカンマ区切りで指定する（`cmux-team await-agent` は複数 surface に対応）。
 
-```bash
-# 全 Agent の完了を待つループ
-MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
-while true; do
-  ALL_DONE=true
-  STATUS=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
-  for AGENT_KEY in $AGENT_KEYS; do
-    AGENT_STATE=$(echo "$STATUS" | grep "^${AGENT_KEY}=" | sed 's/^[^=]*=//' | awk '{print $1}')
-    case "$AGENT_STATE" in
-      Running|⚙)
-        # 実行中
-        ALL_DONE=false
-        ;;
-      Idle|○)
-        echo "Agent $AGENT_KEY: 完了"
-        ;;
-      "Needs"|"⚠")
-        echo "WARNING: Agent $AGENT_KEY が入力待ち"
-        ALL_DONE=false
-        ;;
-      "")
-        # エントリ消失 → クラッシュ
-        echo "WARNING: Agent $AGENT_KEY が消失。クラッシュとして処理。"
-        ;;
-    esac
-  done
-  if $ALL_DONE; then
-    break
-  fi
-  sleep 30
-done
-```
-
-**完了判定:**
-- `cmux list-status` で cN が `Idle` / `○` → **完了**
-- `cmux list-status` で cN が `Running` / `⚙` → **まだ実行中**
-- `cmux list-status` で cN が `Needs input` / `⚠` → **入力待ち**（Trust 確認等を対処）
-- cN エントリが消失 → **クラッシュ**
+**完了判定（`cmux-team await-agent` の exit code）:**
+- `0` → **完了 / ask**（stdout の `STATUS=` 行で区別。`ask` なら質問にユーザー介入が必要な場合あり）
+- `10` → **クラッシュ**（PID 死亡 or SessionEnd hook が crashed を通知）
+- `2` → **タイムアウト**
 
 ## レビュー判断（ステップ 5）
 

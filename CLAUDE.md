@@ -429,11 +429,11 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 
 **Conductor は spawn しない。** 起動時に作成された固定ペインに対してタスクを送信するだけ。
 
-### Conductor 監視（pull 型）
+### Conductor 監視（push + PID）
 
 - **主要判定**: done マーカーファイル（`.team/output/conductor-N/done`）の存在で完了判定
-- **フォールバック**: `cmux list-status` で Idle 検出
-- **重要**: push ではなく pull 型。Conductor は done マーカーを作成して idle に戻り、Manager が見に来る
+- **生存確認**: 独自 hook の `SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED` が daemon に push され、PID 単位で `spawnPidWatcher` が生存追跡（`process.kill(pid, 0)` を 1 秒間隔）
+- **重要**: T195 以降 `cmux tree` / `cmux list-status` への依存は完全撤廃。Conductor / Agent / Master の生存確認は PID ベース + hook push に一本化
 
 ### タスクの作成・更新は CLI 経由（直接ファイル操作禁止）
 
@@ -495,7 +495,7 @@ Manager がやらないこと:
 |---------|------|
 | `cmux send` | 上位→下位のプロンプト送信 |
 | `cmux send-key return` | 複数行プロンプトの送信確定 |
-| `cmux list-status` | 上位が下位の状態を取得（pull 型監視） |
+| `cmux tree` | init 時の pane 逆引きのみ使用（監視は hook + PID に一本化） |
 | `cmux read-screen` | Trust 確認・エラー確認 |
 | `cmux close-surface` | 完了した Agent タブの終了 |
 | `cmux-team spawn-agent` | Agent 起動（タブ作成・プロキシ設定・Trust 承認を一括実行） |
@@ -516,8 +516,8 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 | 情報 | 真のソース | 取得方法 |
 |------|-----------|---------|
-| Manager の状態 | Manager workspace | `cmux list-status --workspace MANAGER_WS` |
-| 稼働中 Conductor | cmux ペイン構成 | `cmux tree` |
+| Manager の状態 | `.team/logs/manager.log` | `cat .team/logs/manager.log` または `cmux-team status` |
+| 稼働中 Conductor | `.team/team.json` | `jq .conductors .team/team.json` |
 | open task 数 | task-state.json | `cat .team/task-state.json`（status で絞り込み） |
 | 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
 
@@ -569,12 +569,12 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 
 | 障害 | 検出者 | 対応 |
 |------|--------|------|
-| Agent クラッシュ | Conductor | `cmux list-status` で消失検出 → 再 spawn |
-| Conductor クラッシュ | Manager | Idle のまま done マーカーなし → 再 spawn or abort してタスク reopen |
+| Agent クラッシュ | Conductor | `cmux-team await-agent` が STATUS=crashed で exit 10 → Conductor が判断 |
+| Conductor クラッシュ | Manager | `spawnPidWatcher` が PID 死亡を検出 → `disconnected` → timeout 後 forced close |
 | Manager クラッシュ | Master | Manager が応答なし → 再 spawn |
 | API レート制限 | 各層 | 待機して再試行、同時 Agent 数を削減 |
 
-**異常検出**: `cmux list-status` で Running/Idle を判定。検出できない場合は `cmux read-screen` にフォールバック（シェルプロンプト表示 → Claude 終了、エラーメッセージ → クラッシュ、画面空 → ペイン消失）。
+**異常検出**: PID ベース生存確認（`spawnPidWatcher` が `process.kill(pid, 0)` を 1 秒間隔で呼ぶ）と hook push（`SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED`）で行う。`cmux read-screen` は Trust 確認検出にのみ使う。
 
 ## 既知の注意点
 

@@ -57,8 +57,8 @@ description: >
 | Manager → Conductor | `cmux send`（`/clear` + 新プロンプト送信） |
 | Manager ← Conductor | done マーカーファイル（`.team/output/conductor-N/done`）の存在確認（pull 型） |
 | Conductor → Agent | `cmux send`（プロンプト送信） |
-| Conductor ← Agent | pull（`cmux list-status` で Idle/Running 検出） |
-| Manager → Master | `.team/logs/manager.log` + `cmux list-status`（直接参照） |
+| Conductor ← Agent | `cmux-team await-agent`（done マーカーの fs.watch）+ PID watcher |
+| Manager → Master | `.team/logs/manager.log` + `cmux-team status`（team.json + ログ） |
 
 ## 1. コマンド一覧
 
@@ -164,7 +164,7 @@ cmux-team trace --search "rate_limit"
 | コマンド | 用途 |
 |---------|------|
 | `cmux identify` | 自分の workspace/surface を確認 |
-| `cmux tree` | ペイン・サーフェス階層を表示 |
+| `cmux tree` | ペイン・サーフェス階層を表示（T195 以降は init 時の pane 逆引きのみ使用） |
 | `cmux list-panes` | ペイン一覧 |
 | `cmux list-pane-surfaces` | ペイン内のサーフェス一覧 |
 | `cmux new-split right` | 右にペイン分割（`left`/`up`/`down` も可） |
