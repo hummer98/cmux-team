@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.45.0] - 2026-04-14
 
 ### Changed (Breaking)
 - **auto-update を `update-notifier` ベースの 3 モード（`off | notify | task`）に再設計（T187）**。daemon 自身は install しなくなり、`task` モードでは `--run-after-all` の update タスク（frontmatter `kind: cmux-team-update`）を自動起票して Conductor に install を委ねる。検出間隔は 12h 固定。`NO_UPDATE_NOTIFIER=1` で無効化可能。`cmux-team self-update` サブコマンドを追加（手動起票）
@@ -13,6 +13,9 @@
 - `dashboard.tsx` に update 通知バナー（黄色、ヘッダ直下）を追加。`notify` モードでは `cmux-team self-update` 誘導文言、`task` モードでは起票済み task ID を表示
 - `schema.ts` に `AutoUpdateMode` enum + `normalizeAutoUpdate()` ヘルパー
 - `task.ts` に `createTaskProgrammatic()` を新設（cmdCreateTask と daemon 内部起票の共通化）
+- `cmux-team --version` / `-v` フラグを追加。`package.json` のバージョンを出力して即終了する（T185）
+- `eventBus.ts` に `notifyStateChanged` / `onStateChanged` の名前付きラッパーを集約し、Conductor の status 変更・daemon の tick/monitor/scan 結果・dashboard の再描画購読を接続。tick 待ちなしで TUI が即時反映される。`CMUX_TEAM_TRACE_EVENTS=1` で `event_emit` ログが `manager.log` に出力される（T184）
+- `update-task` 等の全更新経路から `TASK_UPDATED` を emit し TUI が即時反映されるよう統一（T183）
 
 ## [3.44.1] - 2026-04-14
 
