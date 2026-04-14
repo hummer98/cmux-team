@@ -19,6 +19,7 @@ import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
 import { log } from "./logger";
+import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import type { ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
@@ -588,6 +589,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           taskTitle: message.taskTitle,
           spawnedAt: message.timestamp,
         });
+        notifyStateChanged("daemon.ts:handleMessage:agent-spawned");
         await log(
           "agent_spawned",
           `conductor_surface=${message.conductorSurface} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
@@ -602,6 +604,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterPid = message.pid;
         state.masterStatus = "idle";
         state.masterDisconnectedAt = undefined;
+        notifyStateChanged("daemon.ts:handleMessage:session-started-master");
         spawnMasterPidWatcher(state, message.pid);
         await log("master_session_started", `surface=${message.surface} pid=${message.pid}`);
         break;
@@ -619,6 +622,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
+        notifyStateChanged("daemon.ts:handleMessage:session-started-conductor");
         spawnPidWatcher(state, conductor, message.pid);
 
         await log(
@@ -639,6 +643,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         startedAt: message.timestamp,
         agents: [],
       });
+      notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
       await log("conductor_registered", `surface=${message.surface} pane=${message.paneId}`);
       break;
     }
@@ -647,6 +652,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       const conductor = findConductor(state, message.surface);
       if (conductor) {
         conductor.sessionId = message.sessionId;
+        notifyStateChanged("daemon.ts:handleMessage:conductor-session");
         await log(
           "conductor_session",
           `surface=${message.surface} session_id=${message.sessionId}`
@@ -666,6 +672,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterStatus = "disconnected";
         state.masterDisconnectedAt = message.timestamp;
         state.masterPid = undefined;
+        notifyStateChanged("daemon.ts:handleMessage:session-ended-master");
         await log("master_session_ended", `surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`);
         break;
       }
@@ -682,6 +689,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         conductor.status = "disconnected";
         conductor.disconnectedAt = message.timestamp;
         conductor.pid = undefined;
+        notifyStateChanged("daemon.ts:handleMessage:session-ended-conductor");
         await log(
           "session_ended",
           `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
@@ -692,6 +700,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           const idx = c.agents.findIndex(a => a.surface === message.surface);
           if (idx !== -1) {
             c.agents.splice(idx, 1);
+            notifyStateChanged("daemon.ts:handleMessage:session-ended-agent");
             await log(
               "agent_done",
               `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended`
@@ -709,6 +718,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterStatus = "running";
         state.masterDisconnectedAt = undefined;
         if (message.pid) state.masterPid = message.pid;
+        notifyStateChanged("daemon.ts:handleMessage:session-active-master");
         await log("master_session_active", `surface=${message.surface}`);
         break;
       }
@@ -723,6 +733,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           conductor.status = "idle";
           await log("conductor_ready", `surface=${message.surface} via=SESSION_ACTIVE`);
         }
+        notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
       }
       break;
     }
@@ -733,6 +744,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterStatus = "idle";
         state.masterDisconnectedAt = undefined;
         if (message.pid) state.masterPid = message.pid;
+        notifyStateChanged("daemon.ts:handleMessage:session-idle-master");
         await log("master_session_idle", `surface=${message.surface}`);
         break;
       }
@@ -760,6 +772,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           conductor.status = "idle";
           await log("conductor_ready", `surface=${message.surface} via=SESSION_IDLE`);
         }
+        notifyStateChanged("daemon.ts:handleMessage:session-idle-conductor");
         await log(
           "session_idle",
           `surface=${message.surface}`
@@ -775,6 +788,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         conductor.status = "idle";
         conductor.disconnectedAt = undefined;
         if (message.pid) conductor.pid = message.pid;
+        notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
         await log(event, `surface=${message.surface} via=SESSION_CLEAR`);
       }
       if (conductor && conductor.status === "running") {
@@ -808,11 +822,18 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     case "SHUTDOWN":
       await log("shutdown_requested");
       state.running = false;
+      notifyStateChanged("daemon.ts:handleMessage:shutdown");
       break;
   }
 }
 
 export async function scanTasks(state: DaemonState): Promise<void> {
+  const prevOpenTasks = state.openTasks;
+  const prevPendingTasks = state.pendingTasks;
+  const prevTaskListHash = JSON.stringify(
+    state.taskList.map((t) => ({ id: t.id, status: t.status, title: t.title }))
+  );
+
   const { tasks, taskState } = await loadTasks(state.projectRoot);
 
   const closed = new Set(
@@ -861,6 +882,18 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     filePath: t.filePath,
   }));
 
+  // 差分検出: taskList / openTasks / pendingTasks のいずれかが変化したら notify
+  const newTaskListHash = JSON.stringify(
+    state.taskList.map((t) => ({ id: t.id, status: t.status, title: t.title }))
+  );
+  if (
+    state.openTasks !== prevOpenTasks ||
+    state.pendingTasks !== prevPendingTasks ||
+    newTaskListHash !== prevTaskListHash
+  ) {
+    notifyStateChanged("daemon.ts:scanTasks:task-list-changed");
+  }
+
   // === スロットリングガード ===
   const throttled5h = (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
   if (throttled5h && allExecutable.length > 0) {
@@ -908,6 +941,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
         // e.kind === "conductor" → 従来通り disconnected
         idleConductor.status = "disconnected";
         idleConductor.disconnectedAt = new Date().toISOString();
+        notifyStateChanged("daemon.ts:scanTasks:conductor-disconnected");
         await log(
           "conductor_disconnected",
           `surface=${idleConductor.surface} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason}`
@@ -920,10 +954,12 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       await log("error", `assignTask unexpected: task_id=${task.id} ${(e as Error).message}`);
       idleConductor.status = "disconnected";
       idleConductor.disconnectedAt = new Date().toISOString();
+      notifyStateChanged("daemon.ts:scanTasks:conductor-disconnected");
       continue;
     }
 
     state.conductors.set(updated.surface, updated);
+    notifyStateChanged("daemon.ts:scanTasks:conductor-updated");
     // task-state.json に assigned + assignedAt + resume 情報を記録
     const ts = await loadTaskState(state.projectRoot);
     ts[task.id] = {
@@ -963,6 +999,7 @@ function spawnPidWatcher(
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
         conductor.pid = undefined;
+        notifyStateChanged("daemon.ts:spawnPidWatcher:conductor-disconnected");
         // sessionId は保持する（resume で必要）。
         // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
         await log(
@@ -994,6 +1031,7 @@ function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
         state.masterStatus = "disconnected";
         state.masterDisconnectedAt = new Date().toISOString();
         state.masterPid = undefined;
+        notifyStateChanged("daemon.ts:spawnMasterPidWatcher:master-disconnected");
         await log(
           "master_session_ended",
           `surface=${state.masterSurface} pid=${pid} reason=pid_watcher`
@@ -1055,6 +1093,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       if (elapsed > STARTING_TIMEOUT_SEC) {
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
+        notifyStateChanged("daemon.ts:monitorConductors:starting-timeout");
         await log(
           "conductor_start_timeout",
           `surface=${surface} elapsed=${Math.round(elapsed)}s`
@@ -1128,6 +1167,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         );
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
+        notifyStateChanged("daemon.ts:monitorConductors:unresponsive-threshold");
         continue;
       }
       // 閾値未満: disconnected 化せずスキップ（Agent チェックも同じ tree 依存なのでスキップ）
@@ -1147,6 +1187,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       );
       conductor.status = "disconnected";
       conductor.disconnectedAt = new Date().toISOString();
+      notifyStateChanged("daemon.ts:monitorConductors:surface-missing");
       // taskRunId / taskTitle / worktreePath / outputDir / agents は意図的に保持
       // 復活時 (SESSION_ACTIVE/IDLE) または timeout 時 (C-2) に cleanup 判断
       continue;
@@ -1159,6 +1200,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       const agentResult = await surfaceAlive(agent.surface);
       if (agentResult === "missing") {
         conductor.agents.splice(i, 1);
+        notifyStateChanged("daemon.ts:monitorConductors:agent-removed");
         await log(
           "agent_done",
           `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost`

@@ -16,6 +16,7 @@ import type { ConductorState, RateLimitInfo } from "./schema";
 import type { AgentState } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
+import { onStateChanged } from "./eventBus";
 import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
@@ -825,6 +826,7 @@ let appInstance: NodeApp<AppState> | null = null;
 let spinnerInterval: ReturnType<typeof setInterval> | null = null;
 /** TUI が表示中かどうか（ビューア表示中は false にして app.update を防ぐ） */
 let dashboardActive = false;
+let eventBusUnsubscribe: (() => void) | null = null;
 
 export async function startDashboard(
   getState: () => DaemonState,
@@ -1314,6 +1316,13 @@ export async function startDashboard(
     }, 100);
   };
 
+  // eventBus: 実 state mutation 直後の即時 TUI refresh
+  if (eventBusUnsubscribe) {
+    eventBusUnsubscribe();
+    eventBusUnsubscribe = null;
+  }
+  eventBusUnsubscribe = onStateChanged(() => scheduleRefresh());
+
   return { scheduleRefresh };
 }
 
@@ -1322,6 +1331,10 @@ function cleanup() {
   if (spinnerInterval) {
     clearInterval(spinnerInterval);
     spinnerInterval = null;
+  }
+  if (eventBusUnsubscribe) {
+    eventBusUnsubscribe();
+    eventBusUnsubscribe = null;
   }
 }
 

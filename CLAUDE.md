@@ -357,6 +357,17 @@ Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルー
 - detail は `key=value` のスペース区切り。値にスペースを含む場合はそのまま末尾に付与
 - 1 行 1 イベント。複数行ログは避ける
 
+## EventBus ポリシー
+
+daemon 内の **実 state mutation** → TUI refresh は `eventBus.ts` 経由で通知する。
+
+- `notifyStateChanged(source)` / `onStateChanged(cb)` のみ使用可
+- `bus.emit` / `bus.on` の直接呼び出しは `eventBus.ts` 外では禁止（`rg "bus\.(emit|on)\b" skills/cmux-team/manager | rg -v eventBus.ts` で 0 件を維持）
+- emit は **実際に state が変化した直後のみ**。中間処理の完了点（外部コマンド終了、ローカル変数更新）では emit しない。「emit 箇所 = state mutation 箇所」の不変条件を維持する
+- source 引数は `"<ファイル>:<関数>:<理由>"` 形式で呼び出し位置を明示する
+- `CMUX_TEAM_TRACE_EVENTS=1` で emit ログが `manager.log` に出力される
+- `logger.ts` は `eventBus.ts` を import してはならない（循環依存禁止）
+
 ## プロンプト編集ルール（厳守）
 
 **テンプレート (`skills/cmux-team/templates/*.md`) がソースオブトゥルース。** ランタイムプロンプト (`.team/prompts/*.md`) は派生物であり、直接編集してはならない。
