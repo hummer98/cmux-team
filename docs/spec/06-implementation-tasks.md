@@ -148,7 +148,7 @@
 ### Task 6.7: トレースDB — 完了
 - SQLite FTS5 データベース（`trace-store.ts`）
 - API リクエスト/レスポンスのメタデータ + 本文を記録
-- CLI 検索: `cmux-team trace --task <id>`, `--search <query>`, `--show <id>`
+- CLI: `cmux-team trace-task <task-id>`（旧 `trace --task/--search/--show` は廃止）
 - メタデータヘッダー伝播: `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role`
 
 ### Task 6.8: アーティファクト管理 — 完了
@@ -307,6 +307,37 @@ v3.39.0〜v3.43.0 で実施された主要改善:
 
 ### auto-update
 - **`update-notifier` ベースの 3 モード auto-update（T187）** — `off | notify | task` に拡張。`task` モードで `--run-after-all` の update タスクを自動起票し、install を Conductor に委ねる。daemon は検出のみ。`cmux-team self-update` サブコマンド追加。ログフォーマット破壊的変更（`enabled=<bool>` → `mode=<mode>`）、`npm_auto_update` / `npm_update_check_failed` / `npm_self_update_completed` ログ廃止。
+
+---
+
+## Phase 10: await-agent 方式への移行（T180〜T190）— 完了済み
+
+v3.44.0〜v3.45.0 で実施された主要改善:
+
+### Agent 監視プロトコル刷新（T181）
+- **Agent にも Stop / SessionEnd hook を注入** — `conductor-settings.json` 相当の hook 設定を Agent spawn 時にも適用
+- **done マーカー方式** — Agent 完了時に `.team/conductors/<conductor>/agent-done/<agent>.done` を書き出す
+- **`cmux-team await-agent` CLI** — done マーカーを `fs.watch` で監視し、Conductor の 30 秒ポーリングを置換。`STATUS=DONE|ASK|CRASH|TIMEOUT` を stdout に出力し状態別の exit code で終了
+- **`SESSION_ASK` メッセージと `asking` 状態** — AskUserQuestion で停止した Agent/Conductor を検出可能に
+- **「プロセス継続のままプロンプトに戻る」ケース（429 後等）の検出** — 旧来の surface_lost だけでは取れなかった asking/idle 遷移を hook 経由で捕捉
+- **Conductor テンプレート書き換え** — `conductor-role.md` の Agent 監視ループを `await-agent` ベースに全面刷新
+
+### Manager 健全性（T180）
+- **`cmux tree` タイムアウトを crash 判定から除外** — 過剰な `conductor_disconnected` 誤判定を修正。`monitor_tree_failed` / `validate_surface_failed` のエラー詳細に stderr/stdout を含めてログ強化
+
+### 運用改善
+- **update-task の全更新で TUI 即時反映（T183）** — status 以外の更新でも `postMessage TASK_CREATED` 相当の通知を送り、次 tick を待たずにダッシュボードへ反映
+- **state 変更の TUI 即時反映（T184）** — `eventBus.ts` 導入。`notifyStateChanged(source)` ラッパー経由で mutation 直後に `state-changed` イベントを emit、`CMUX_TEAM_TRACE_EVENTS=1` で emit ログを出力
+
+### CLI
+- **`cmux-team --version` / `-v`（T185）** — package.json の version を出力
+- **auto-update のデフォルト OFF + opt-in 化（T186）** — T187 による 3 モード再設計の前段
+
+### TypeScript 健全性（T190）
+- **既知の tsc エラー 6 件を解消** — `cmux.ts` の stdout/stderr 型不整合、`update-notifier` の型定義追加、`dashboard.tsx` の WidgetVariant、`main.test.ts` の undefined 伝播を修正
+
+### リリース運用
+- **`--run-after-all` の release タスク自動化（T188）** — Conductor が直接 `npm version` → `git push` → `npm publish` を実行するオペレーショナルタスク
 
 ---
 

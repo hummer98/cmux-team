@@ -66,48 +66,80 @@ daemon は `update-notifier` で新バージョンを**検出**するだけで�
 cmux を起動し、その中で Claude Code を起動します。
 
 ```
-あなた: /cmux-team:start
+$ cmux-team start
   → daemon が起動し、ダッシュボードを表示
-  → Master ペインが自動作成される
+  → Manager / Master ペインが作成され、Conductor も起動される
   → Master ペインに切り替えてタスクを伝える
 
 あなた: React で TODO アプリを作って
 Claude: タスクを作成しました。
-  → daemon がタスクを検出 → Conductor を起動
-  → Conductor が Agent を隣のペインに起動
+  → daemon がタスクを検出 → idle Conductor に割り当て
+  → Conductor が Agent を同じペインのタブとして起動
   → 各エージェントの作業がリアルタイムで見える
 
 あなた: 状況は？
 Claude: （manager.log・cmux tree を確認して報告）
         Conductor-1: 実装中（Agent 2/3 完了）
 
-あなた: あと worktree を整理して（TODO）
-Claude: → CLI でキューに TODO を追加
-       → daemon が新しい Conductor を起動して並列実行
+あなた: あと worktree を整理して
+Claude: → cmux-team create-task --title "..." --status ready
+       → daemon が別の idle Conductor に割り当てて並列実行
 ```
 
 ### コマンド一覧
 
 #### CLI コマンド（ターミナルで実行）
 
-| コマンド | やること | いつ使う |
-|---------|---------|---------|
-| `cmux-team start` | daemon 起動 + Master + Conductor spawn | セッション開始時 |
-| `cmux-team status` | チーム状態表示 | いつでも |
-| `cmux-team stop` | graceful shutdown | 作業完了時 |
-| `cmux-team create-task` | タスク作成 | タスク追加時 |
-| `cmux-team trace` | API トレース検索 | デバッグ・分析時 |
-| `cmux-team artifacts` | アーティファクト一覧・表示・検索 | 知見の管理 |
+完全なリストは `cmux-team --help` を参照。主要なコマンド:
+
+**ライフサイクル**
+| コマンド | やること |
+|---------|---------|
+| `cmux-team start` | daemon 起動 + Master + Conductor spawn |
+| `cmux-team status` | チーム状態表示 |
+| `cmux-team stop` | graceful shutdown |
+| `cmux-team --version` | バージョン表示 |
+
+**タスク管理**
+| コマンド | やること |
+|---------|---------|
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all]` | タスク作成 |
+| `cmux-team update-task --task-id <id> --status <s>` | タスク状態更新 |
+| `cmux-team close-task --task-id <id> [--journal <text>]` | タスク close |
+| `cmux-team abort-task --task-id <id>` | 実行中タスクを中止 |
+| `cmux-team restart-task --task-id <id>` | assigned タスクの Conductor を再起動 |
+| `cmux-team delete-task --task-id <id>` | draft / ready タスクを削除 |
+| `cmux-team await-task --task-id <id> [--timeout <sec>]` | タスク完了待ち |
+
+**Agent / Conductor**
+| コマンド | やること |
+|---------|---------|
+| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
+| `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Agent タブを起動 |
+| `cmux-team agents` | 稼働中エージェント一覧 |
+| `cmux-team kill-agent --surface <s>` | Agent 終了 |
+| `cmux-team send-agent --surface <s> <message>` | Agent / Conductor にメッセージ送信 |
+| `cmux-team conductor` | Conductor 起動（proxy 自動解決） |
+| `cmux-team spawn-master` | Master 起動（proxy 自動解決） |
+
+**診断・補助**
+| コマンド | やること |
+|---------|---------|
+| `cmux-team trace-task <task-id>` | タスクのセッション履歴を表示 |
+| `cmux-team artifacts [add\|show\|open\|search]` | アーティファクト管理 |
+| `cmux-team self-update` | update タスクを手動起票 |
 
 #### スラッシュコマンド（Claude 内で実行）
 
 | コマンド | やること | いつ使う |
 |---------|---------|---------|
-| `/cmux-team:master` | Master ロール再読み込み | `/clear` 後 |
+| `/master` | Master ロール再読み込み | `/clear` 後 |
 | `/team-spec [概要]` | 要件をブレスト | 何を作るか決める時 |
-| `/team-task [操作]` | タスク管理 | 設計判断・課題の記録 |
+| `/team-task [操作]` | タスク管理 | タスクの作成・一覧・クローズ |
 | `/team-archive [範囲]` | 完了タスクのアーカイブ | タスク整理時 |
 | `/artifact [type] "タイトル"` | 知見をアーティファクトとして保存 | 調査・判断の記録 |
+| `/docs-sync [--dry-run\|--auto]` | `docs/spec/` を実装と同期 | ドキュメント整備 |
+| `/trace-task <task-id>` | タスクのセッション履歴を分析 | デバッグ・レビュー |
 
 ## アーキテクチャ
 
@@ -134,19 +166,20 @@ Claude: → CLI でキューに TODO を追加
 
 Manager は Claude Code セッションではなく、**TypeScript の決定論的ループ**で動作します。
 
-- **ファイルキュー** (`.team/queue/`) による通信（`cmux send-key` 不要）
+- **HTTP メッセージキュー**（内蔵 proxy 経由、`cmux-team send <TYPE>`）— イベント駆動
+- **ファイルベースのタスク状態**（`.team/tasks/` + `task-state.json`）
 - **zod** によるメッセージスキーマ検証
 - **ink** ベースの TUI ダッシュボード
 - **タスク依存解決** (`depends_on` フィールド)
 - **優先度ソート** (high > medium > low)
+- **Agent 完了は fs.watch**（Agent の Stop / SessionEnd hook が done マーカーを書き、Conductor が `cmux-team await-agent` で待機。busy polling 不要、T181）
 
 ```bash
 # daemon 操作
-./main.ts start          # 起動 + Master spawn + ダッシュボード
-./main.ts send TODO --content "worktree 整理"
-./main.ts send TASK_CREATED --task-id 035 --task-file ...
-./main.ts status         # ステータス表示
-./main.ts stop           # graceful shutdown
+cmux-team start                                          # 起動 + Master spawn + ダッシュボード
+cmux-team send TASK_CREATED --task-id 035 --task-file .team/tasks/035-xxx/task.md
+cmux-team status                                         # ステータス表示
+cmux-team stop                                           # graceful shutdown
 ```
 
 ### タスクの依存関係
@@ -168,10 +201,12 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 
 | 方向 | 手段 |
 |------|------|
-| Master → daemon | CLI (`main.ts send`) → `.team/queue/*.json` |
-| daemon → Conductor | `cmux new-split` + Claude Code 起動 |
-| Conductor → daemon | SessionEnd hook → `.team/queue/*.json` + `cmux list-status` ポーリング |
-| daemon → Master | なし（Master が `manager.log` を直接参照） |
+| Master → daemon | `cmux-team send <TYPE>` → proxy 経由の HTTP メッセージ |
+| daemon → Conductor | `cmux send`（`/clear` + 新プロンプト。Conductor ペインは常駐） |
+| daemon ← Conductor | done マーカーファイル（`.team/conductors/<id>/done`）+ SESSION_* hook メッセージ |
+| Conductor → Agent | `cmux-team send-agent` / `spawn-agent`（`cmux send` の直接呼び出しは hook でブロック） |
+| Conductor ← Agent | `cmux-team await-agent`（Agent done マーカーを fs.watch） |
+| daemon → Master | なし（Master が `manager.log` / `task-state.json` を直接参照） |
 
 ### エージェントロール
 
@@ -190,20 +225,19 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 
 ```
 .team/
-├── team.json          # チーム状態（自動管理）
-├── manager/           # daemon ランタイム（TypeScript）
-├── queue/             # メッセージキュー
-│   └── processed/     # 処理済みメッセージ
-├── tasks/
-│   ├── open/          # 未完了タスク
-│   ├── closed/        # 完了タスク
-│   └── archived/      # アーカイブ済み
-├── artifacts/         # 知見の記録（Axxx 番号付き）
+├── team.json          # チーム構成（daemon が自動更新）
+├── task-state.json    # タスク状態（status: draft/ready/assigned/closed）
+├── tasks/             # タスクファイル（TNNN-slug/ にタスク本体と runs/）
+│   └── archived/      # アーカイブ済み（closed → archived）
+├── artifacts/         # 知見の記録（Axxx 番号付き、直接ファイル作成可）
 ├── specs/             # 仕様書（git tracked）
-├── output/            # エージェント出力（gitignore）
-├── prompts/           # 生成プロンプト（gitignore）
-├── logs/              # manager.log（gitignore）
-└── scripts/           # ランタイムスクリプト
+├── conductors/        # Conductor 状態ファイル + agent-done/ マーカー
+├── sessions/          # セッション情報
+├── output/            # エージェント出力（taskRunId 別、gitignore）
+├── prompts/           # プロンプト監査証跡（gitignore）
+├── logs/              # manager.log + traces/bodies/（gitignore）
+├── traces/            # SQLite FTS5 トレース DB
+└── proxy-port         # プロキシポート番号
 ```
 
 ## Hooks 設定（推奨）
@@ -235,20 +269,14 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 
 daemon 起動中、組み込みプロキシを通じて全 API リクエストが自動記録されます。
 
-### トレース検索
+### タスクのセッション履歴
 
 ```bash
-# タスクIDでフィルタ
-cmux-team trace --task 035
-
-# 全文検索（SQLite FTS5）
-cmux-team trace --search "エラー"
-
-# トレース詳細表示（リクエスト/レスポンス本文含む）
-cmux-team trace --show 42
+# 特定タスクのセッション一覧（Conductor + Agent）
+cmux-team trace-task 035
 ```
 
-トレースは `.team/traces/traces.db` に、リクエスト/レスポンス本文は `.team/logs/traces/bodies/` に保存されます。
+トレースは `.team/traces/traces.db` に、リクエスト/レスポンス本文は `.team/logs/traces/bodies/` に保存されます。メタデータヘッダー（`x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role`）が伝播されるため、API リクエストを起票元タスクと紐付けられます。
 
 ## トラブルシューティング
 

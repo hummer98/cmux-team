@@ -13,6 +13,7 @@ npm install -g @hummer98/cmux-team
 `postinstall` スクリプトにより:
 1. `bun install` で manager/ の依存関係を解決
 2. `claude plugin add hummer98/cmux-team` で Plugin を登録
+3. `skills/cmux-team/manager/statusline.sh` を `~/.claude/statusline.sh` にコピー（ロール別ステータスライン用）
 
 ### 2. Claude Code Plugin
 
@@ -21,7 +22,7 @@ npm install -g @hummer98/cmux-team
 ```json
 {
   "name": "cmux-team",
-  "version": "3.31.0",
+  "version": "3.45.0",
   "description": "Multi-agent development orchestration with Claude Code + cmux.",
   "skills": "./skills/",
   "commands": "./commands/",
@@ -47,7 +48,7 @@ Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=
 ```json
 {
   "name": "@hummer98/cmux-team",
-  "version": "3.31.0",
+  "version": "3.45.0",
   "bin": { "cmux-team": "bin/cmux-team.js" },
   "scripts": {
     "postinstall": "node bin/postinstall.js",
@@ -80,7 +81,7 @@ npm postinstall スクリプト。
 
 ```
 skills/cmux-team/manager/
-├── main.ts          # CLI エントリーポイント（17サブコマンド）
+├── main.ts          # CLI エントリーポイント（多数のサブコマンド、cmux-team --help 参照）
 ├── daemon.ts        # イベント駆動ステートマシン + メインループ
 ├── master.ts        # Master surface 起動
 ├── conductor.ts     # Conductor ライフサイクル管理
@@ -92,10 +93,16 @@ skills/cmux-team/manager/
 ├── template.ts      # プロンプトテンプレート検索・生成
 ├── logger.ts        # 追記型ログ
 ├── cmux.ts          # cmux CLI ラッパー
+├── eventBus.ts      # state mutation → TUI refresh の EventEmitter ラッパー
+├── exec-error.ts    # execFile エラーの正規化（stderr/stdout 保存）
+├── envrc-prompt.ts  # 初回起動時の .envrc 追記対話
+├── preflight.ts     # 起動前チェック（bun / cmux / claude 等）
+├── i18n.ts          # 日英ロケール切替
 ├── dashboard.tsx    # React (ink) TUI ダッシュボード
 ├── e2e.ts           # E2E テストランナー
-├── *.test.ts        # ユニットテスト（daemon / proxy / task など）
-├── package.json     # 依存: ink, react, zod, @rezi-ui/core, @rezi-ui/node
+├── statusline.sh    # ロール別 statusline スクリプト（postinstall で ~/.claude/ に配置）
+├── *.test.ts        # ユニットテスト（daemon / proxy / task / cmux / eventBus など）
+├── package.json     # 依存: ink, react, zod, update-notifier, @rezi-ui/core, @rezi-ui/node
 └── tsconfig.json
 ```
 
@@ -125,8 +132,10 @@ skills/cmux-team/manager/
 | `resume` | assigned タスクの Conductor セッションを `claude --resume` で再開 |
 | `restart-task` | assigned タスクの Conductor セッションを再起動（タスク自体は assigned のまま維持） |
 | `await-task` | タスク完了を fs.watch で待機（カンマ区切りで複数指定可、`--timeout` サポート） |
+| `await-agent` | Agent 完了/ask/crash を done マーカーの fs.watch で待機（T181、Conductor から使用） |
 | `send-agent` | Agent/Conductor surface へメッセージ送信（`--surface`, positional message, `--no-return`）。Conductor → 他 surface 操作の唯一の入口 |
 | `trace-task` | 特定タスクのセッション履歴を分析 |
+| `self-update` | update タスクを手動で起票（T187、`--run-after-all` で全 open タスク完了後に install） |
 
 ### メインループ
 
@@ -209,11 +218,23 @@ daemon 停止時に `cmux clear-status` でクリアする。
 ### メッセージング
 
 - daemon の HTTP プロキシが受け口を兼ね、CLI（`cmux-team send <TYPE>`）から POST されたメッセージを受信
-- メッセージ種別: `TASK_CREATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_CLEAR`, `SHUTDOWN`
+- メッセージ種別: `TASK_CREATED`, `TASK_UPDATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `CONDUCTOR_SESSION`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_ASK`, `SESSION_CLEAR`, `SHUTDOWN`
 - Zod バリデーション（不正メッセージはスキップ）
 - `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
 
 `SESSION_CLEAR` は Conductor が `/clear` を実行したときに送信される。Conductor が `running` 状態のときに `SESSION_CLEAR` を受信すると、ユーザーの手動 `/clear` とみなしてタスクを `aborted` に遷移させ、Conductor を idle にリセットする（`forceCloseDisconnectedConductor` と同パターン）。`idle` 状態の場合は何もしない（TUI チラつき防止）。
+
+`SESSION_ASK` は Stop hook が AskUserQuestion による停止を検出したときに送信される（T181）。Conductor が `running` 状態で受信すると status を `asking` に遷移させ、ユーザー入力待ちであることを TUI に反映する。Agent 側で発火した場合は Conductor の `await-agent` が STATUS=ASK を受け取り再開判断を行う。
+
+### Conductor status enum
+
+| status | 意味 |
+|--------|------|
+| `starting` | 起動直後（Claude 初期化中） |
+| `idle` | タスク待機中（done マーカー解消済み） |
+| `running` | タスク実行中 |
+| `asking` | AskUserQuestion で停止中（ユーザー入力待ち、T181） |
+| `disconnected` | 監視失敗または surface 消失 |
 
 ### タスク状態の拡張フィールド（resume 用）
 

@@ -2,9 +2,9 @@
 
 コマンドは `commands/` に配置。プラグインインストール時は自動で参照される。
 
-全6コマンド。
+全7コマンド（`/master`, `/team-spec`, `/team-task`, `/team-archive`, `/artifact`, `/docs-sync`, `/trace-task`）。
 
-> **注意:** 初期設計では13コマンドを想定していたが、ワークフロー系コマンド（research, design, impl, review, test, sync-docs）は廃止され、起動・停止・ステータスは CLI サブコマンド（`cmux-team start`, `cmux-team status`, `cmux-team stop`）に移行した。
+> **注意:** 初期設計では13コマンドを想定していたが、ワークフロー系コマンド（research, design, impl, review, test）は廃止され、起動・停止・ステータスは CLI サブコマンド（`cmux-team start`, `cmux-team status`, `cmux-team stop`）に移行した。`docs-sync` はその後 dockeeper スキル経由で再追加されている。
 
 ---
 
@@ -154,3 +154,21 @@ tags: [tag1, tag2]      # 任意
 - `--auto` → 確認なしで自動更新
 
 **allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
+
+---
+
+## /trace-task
+
+**File:** `trace-task.md`
+
+**Purpose:** タスクに関連した全セッション（Conductor + Agent）の履歴を取得・分析する。
+
+**Behavior:**
+1. 引数からタスク ID を抽出（`T` プレフィックスがあれば除去）
+2. `cmux-team trace-task <task-id>` でセッション一覧を取得
+3. 出力された JSONL パスを `Read` で開く（大きい場合は `offset` + `limit` で部分読み込み）
+4. タイムライン・エラー・判断・成果物を要約して報告
+
+**Arguments:** `$ARGUMENTS` = タスク ID（例: `T141`, `141`）
+
+**allowed-tools:** `Bash, Read, Glob, Grep`

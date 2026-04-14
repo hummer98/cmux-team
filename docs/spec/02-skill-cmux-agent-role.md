@@ -38,6 +38,8 @@ Output: .team/output/<role-id>.md
 
 **環境変数:** Agent は `CMUX_CLAUDE_HOOKS_DISABLED=1` が設定された状態で起動される。これにより cmux ラッパーの hook（Plugin hooks）が無効化され、Manager が生成する `conductor-settings.json` の hook のみが適用される。
 
+**完了検出プロトコル（T181 以降）:** Agent の Stop / SessionEnd hook が done マーカー（`.team/conductors/<conductor>/agent-done/<agent>.done`）を書き出す。Conductor 側は `cmux-team await-agent --surface <agent-surface>` でこれを fs.watch し、ビジーループ不要で完了を待つ。AskUserQuestion で停止した場合は hook が `SESSION_ASK` を送信し、Conductor の status は `asking` に遷移する。
+
 ### 2. 出力プロトコル
 
 すべての成果物は指定された出力ファイルに書き込む:
@@ -118,20 +120,16 @@ cmux-team status --log 20
 
 `cmux read-screen` でダッシュボードの TUI を読む必要はない。`status` コマンドが同じ情報を返す。
 
-### 8. トレース検索
+### 8. トレース参照
 
-過去の API リクエスト履歴を検索できる:
+過去の API リクエスト履歴を参照できる:
 
 ```bash
-# タスクに関連するトレースを表示
-cmux-team trace --task <task-id>
-
-# 全文検索
-cmux-team trace --search "keyword"
-
-# 特定トレースの詳細（リクエスト/レスポンス本文含む）
-cmux-team trace --show <trace-id>
+# タスクに関連するセッション履歴（Conductor + Agent）を表示
+cmux-team trace-task <task-id>
 ```
+
+> 全文検索 / 個別トレース詳細表示は現在 CLI に実装されておらず、`.team/traces/traces.db` を直接参照する。
 
 ### 9. Artifact 出力
 
