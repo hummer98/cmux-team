@@ -27,7 +27,7 @@ import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkNpmUpdate, handleMessage } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -36,12 +36,12 @@ import { start as startProxy } from "./proxy";
 import { launchConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
-import type { QueueMessage, LayoutMode } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -96,8 +96,14 @@ interface TeamConfig {
   layout?: LayoutMode;
   /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
   sleepPrevention?: boolean;
-  /** npm auto-update を有効化する（デフォルト: false）。env CMUX_TEAM_AUTO_UPDATE が優先 */
-  autoUpdate?: boolean;
+  /**
+   * auto-update のモード（デフォルト: "off"）。env CMUX_TEAM_AUTO_UPDATE が優先。
+   * - "off": 更新チェックしない
+   * - "notify": 更新を検出して TUI バナーに表示（install は行わない）
+   * - "task": 更新を検出して update タスクを --run-after-all で自動起票
+   * 後方互換: true→"task", false→"off"
+   */
+  autoUpdate?: boolean | AutoUpdateMode;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -126,23 +132,34 @@ export function resolveLayout(
 }
 
 /**
- * npm auto-update の有効/無効を解決する。
- * 優先順位: env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > false
- * env 値の真偽判定: "1" | "true" のみ ON、それ以外（"0", "false" 等）は OFF。
- * 空文字・未設定は未設定扱いで config にフォールバック。
+ * auto-update のモードを解決する。
+ * 優先順位: env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > "off"
+ *
+ * env 値の解釈:
+ * - 未定義 / 空文字 → config にフォールバック
+ * - "0" / "false" / "off" → off (source=env)
+ * - "1" / "true" / "task" → task (source=env)
+ * - "notify" → notify (source=env)
+ * - それ以外 → throw
+ *
+ * config 値の解釈: normalizeAutoUpdate に委譲（true→task, false→off, 文字列はそのまま）
  */
-export function resolveAutoUpdateEnabled(
+export function resolveAutoUpdateMode(
   config: Pick<TeamConfig, "autoUpdate">,
   env: NodeJS.ProcessEnv = process.env,
-): { enabled: boolean; source: "env" | "config" | "default" } {
+): { mode: AutoUpdateMode; source: "env" | "config" | "default" } {
   const raw = env.CMUX_TEAM_AUTO_UPDATE;
   if (raw !== undefined && raw !== "") {
-    return { enabled: raw === "1" || raw === "true", source: "env" };
+    const v = raw.trim().toLowerCase();
+    if (v === "0" || v === "false" || v === "off") return { mode: "off", source: "env" };
+    if (v === "1" || v === "true" || v === "task") return { mode: "task", source: "env" };
+    if (v === "notify") return { mode: "notify", source: "env" };
+    throw new Error(`unknown CMUX_TEAM_AUTO_UPDATE=${JSON.stringify(raw)} (expected 0|1|true|false|off|notify|task)`);
   }
   if (config.autoUpdate !== undefined) {
-    return { enabled: config.autoUpdate === true, source: "config" };
+    return { mode: normalizeAutoUpdate(config.autoUpdate), source: "config" };
   }
-  return { enabled: false, source: "default" };
+  return { mode: "off", source: "default" };
 }
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
@@ -255,10 +272,17 @@ async function cmdStart(): Promise<void> {
     ? false
     : (startConfig.sleepPrevention ?? true);
 
-  // npm auto-update 設定（env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > false）
-  const autoUpdate = resolveAutoUpdateEnabled(startConfig);
+  // auto-update 設定（env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > "off"）
+  let autoUpdate: { mode: AutoUpdateMode; source: "env" | "config" | "default" };
+  try {
+    autoUpdate = resolveAutoUpdateMode(startConfig);
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 
   const state = await createDaemon(PROJECT_ROOT, layout);
+  state.updateMode = autoUpdate.mode;
 
   // ソースファイル mtime 監視を初期化
   state.sourceMtimes = await initSourceWatcher();
@@ -280,7 +304,7 @@ async function cmdStart(): Promise<void> {
   );
   await log(
     "auto_update_config",
-    `enabled=${autoUpdate.enabled} source=${autoUpdate.source}`
+    `mode=${autoUpdate.mode} source=${autoUpdate.source}`
   );
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
@@ -597,8 +621,15 @@ async function cmdStart(): Promise<void> {
   await log("boot_completed");
   scheduleRefresh();
 
+  // 起動時に 1 回 update チェック（off 以外のモードのみ）
+  if (autoUpdate.mode !== "off") {
+    state.lastUpdateCheckAt = Date.now();
+    await checkUpdateAndNotify(state, autoUpdate.mode);
+    scheduleRefresh();
+  }
+
   // メインループ
-  const NPM_CHECK_INTERVAL = 300_000; // 5分
+  const UPDATE_CHECK_INTERVAL = 12 * 60 * 60 * 1000; // 12時間
   while (state.running) {
     try {
       await tick(state);
@@ -614,14 +645,10 @@ async function cmdStart(): Promise<void> {
       [...state.conductors.values()].some(c => c.status === "running" || c.agents.length > 0);
     updateCaffeinate(systemActive);
 
-    // npm 更新チェック（opt-in: env CMUX_TEAM_AUTO_UPDATE=1 or config.autoUpdate=true。
-    // 5分間隔、全 Conductor が idle のときのみ）
-    if (autoUpdate.enabled && Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
-      const allIdle = [...state.conductors.values()].every(c => c.status === "idle");
-      if (allIdle) {
-        state.lastNpmCheckAt = Date.now();
-        await checkNpmUpdate(state);
-      }
+    // update チェック（12h 間隔、off 以外のモードで実行）
+    if (autoUpdate.mode !== "off" && Date.now() - state.lastUpdateCheckAt >= UPDATE_CHECK_INTERVAL) {
+      state.lastUpdateCheckAt = Date.now();
+      await checkUpdateAndNotify(state, autoUpdate.mode);
     }
     await sleepUntilWakeup(state);
   }
@@ -1655,87 +1682,50 @@ async function cmdSendAgent(): Promise<void> {
 async function cmdCreateTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_create_task"));
   const title = requireArg("title");
-  const priority = getArg("priority") || "medium";
+  const priority = (getArg("priority") || "medium") as "high" | "medium" | "low";
   const status = getArg("status") || "draft";
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
-  const dependsOn = getArg("depends-on") || "";
+  const dependsOnRaw = getArg("depends-on") || "";
   const runAfterAll = process.argv.includes("--run-after-all");
+  const kind = getArg("kind") || "";
 
-  // run_after_all タスクが既に存在する場合はエラー
-  if (runAfterAll) {
-    const { tasks } = await loadTasks(PROJECT_ROOT);
-    const existingRunAfterAll = tasks.find(t =>
-      t.runAfterAll && t.status !== "closed"
-    );
-    if (existingRunAfterAll) {
-      console.error(`Error: run_after_all task already exists: ${existingRunAfterAll.id} (${existingRunAfterAll.title})`);
-      process.exit(1);
-    }
-  }
-
-  // slug 生成
-  let slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!slug) slug = "task";
-
-  // 最大 ID 取得
-  const tasksDir = join(PROJECT_ROOT, ".team/tasks");
-  await mkdir(tasksDir, { recursive: true });
-
-  let maxId = 0;
-  try {
-    const files = await readdir(tasksDir);
-    for (const f of files) {
-      const n = parseInt(f, 10);
-      if (!isNaN(n) && n > maxId) maxId = n;
-    }
-  } catch {}
-
-  const newId = String(maxId + 1).padStart(3, "0");
-  const dirName = `${newId}-${slug}`;
-  const taskDir = join(tasksDir, dirName);
-  await mkdir(taskDir, { recursive: true });
-  const filePath = join(taskDir, "task.md");
-
-  // depends_on パース
-  const depsArray = dependsOn
-    ? dependsOn.split(",").map(s => s.trim()).filter(Boolean)
+  const dependsOn = dependsOnRaw
+    ? dependsOnRaw.split(",").map(s => s.trim()).filter(Boolean)
     : [];
 
-  // タスクファイル生成（status は含めない — task-state.json で管理）
-  const content = `---
-id: ${newId}
-title: ${title}
-priority: ${priority}${baseBranch ? `\nbase_branch: ${baseBranch}` : ""}${runAfterAll ? "\nrun_after_all: true" : ""}${depsArray.length > 0 ? `\ndepends_on: [${depsArray.join(", ")}]` : ""}
-created_at: ${new Date().toISOString()}
----
-
-## ${t("task_section_header")}
-${body}
-`;
-  await writeFile(filePath, content);
-
-  // task-state.json に初期状態を書き込む
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  taskState[newId] = { status };
-  await saveTaskState(PROJECT_ROOT, taskState);
+  let result: { id: string; filePath: string; relPath: string };
+  try {
+    result = await createTaskProgrammatic(PROJECT_ROOT, {
+      title,
+      priority,
+      status,
+      body,
+      baseBranch: baseBranch || undefined,
+      dependsOn,
+      runAfterAll,
+      kind: kind || undefined,
+      sectionHeader: t("task_section_header"),
+    });
+  } catch (e: any) {
+    if (e?.code === "RUN_AFTER_ALL_CONFLICT") {
+      console.error(`Error: ${e.message}`);
+      process.exit(1);
+    }
+    throw e;
+  }
 
   // status が ready の場合のみ TASK_CREATED を送信
   if (status === "ready") {
     await postMessage({
       type: "TASK_CREATED",
-      taskId: newId,
-      taskFile: filePath,
+      taskId: result.id,
+      taskFile: result.filePath,
       timestamp: new Date().toISOString(),
     });
   }
 
-  const relPath = `.team/tasks/${dirName}/task.md`;
-  console.log(`TASK_ID=${newId} FILE=${relPath}`);
+  console.log(`TASK_ID=${result.id} FILE=${result.relPath}`);
 }
 
 async function cmdUpdateTask(): Promise<void> {
@@ -2421,6 +2411,87 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- self-update サブコマンド ---
+async function cmdSelfUpdate(): Promise<void> {
+  if (hasHelpFlag()) {
+    console.log(`Usage: cmux-team self-update
+
+  現在のバージョンと npm registry の最新バージョンを比較し、
+  更新がある場合は --run-after-all の update タスクを起票する。
+
+  Exit codes:
+    0  更新タスク起票 / 既に最新 / 既に予約済み
+    1  fetchInfo 失敗（ネットワーク断など）
+`);
+    process.exit(0);
+  }
+
+  // current version
+  let currentVersion: string;
+  try {
+    const pkgPath = join(dirname(import.meta.path), "../../../package.json");
+    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+    currentVersion = pkg.version as string;
+  } catch (e: any) {
+    console.error(`Error: failed to read package.json: ${e.message}`);
+    process.exit(1);
+  }
+
+  // latest version
+  const { fetchLatestVersion } = await import("./daemon");
+  const result = await fetchLatestVersion(currentVersion);
+  if (!result) {
+    console.error(`Error: failed to fetch latest version from npm registry`);
+    process.exit(1);
+  }
+
+  const { current, latest } = result;
+  if (current === latest) {
+    console.log(`already up to date (v${current})`);
+    process.exit(0);
+  }
+
+  // body
+  const body = `cmux-team を v${latest} に更新する（self-update 手動トリガー）。
+
+## 手順
+
+1. \`which cmux-team\` と \`npm root -g\` で現インストール先を確認
+2. \`npm install -g @hummer98/cmux-team@${latest}\`
+3. \`cmux-team --version\` で確認
+4. パス不一致があれば journal に記録
+5. \`cmux-team close-task --task-id <ID> --journal "updated to v${latest}"\`
+`;
+
+  try {
+    const created = await createTaskProgrammatic(PROJECT_ROOT, {
+      title: `cmux-team を v${latest} にアップデート`,
+      priority: "low",
+      status: "ready",
+      runAfterAll: true,
+      kind: "cmux-team-update",
+      body,
+    });
+    await postMessage({
+      type: "TASK_CREATED",
+      taskId: created.id,
+      taskFile: created.filePath,
+      timestamp: new Date().toISOString(),
+    });
+    console.log(`update task created: T${created.id} (v${current} → v${latest})`);
+    process.exit(0);
+  } catch (e: any) {
+    if (e?.code === "RUN_AFTER_ALL_CONFLICT") {
+      console.log(
+        `更新タスクは既に予約されています: T${e.existingTaskId} (run-after-all 競合)`,
+      );
+      process.exit(0);
+    }
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+}
+
 // --- artifacts サブコマンド ---
 async function cmdArtifacts(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_artifacts"));
@@ -2660,6 +2731,9 @@ switch (command) {
     break;
   case "artifacts":
     await cmdArtifacts();
+    break;
+  case "self-update":
+    await cmdSelfUpdate();
     break;
   default:
     if (!command || hasHelpFlag()) {

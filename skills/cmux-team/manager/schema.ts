@@ -195,3 +195,25 @@ export const LAYOUT_MAX_CONDUCTORS: Record<LayoutMode, number> = {
   wide: 3,
   "16x9": 2,
 };
+
+// --- Auto update mode ---
+
+export const AutoUpdateMode = z.enum(["off", "notify", "task"]);
+export type AutoUpdateMode = z.infer<typeof AutoUpdateMode>;
+
+/**
+ * config / env の生値を AutoUpdateMode に正規化する。
+ * - boolean: true→"task", false→"off"（T186 後方互換）
+ * - string: "off"/"notify"/"task" のみ許容。それ以外は throw
+ * - undefined/null: "off"
+ */
+export function normalizeAutoUpdate(val: unknown): AutoUpdateMode {
+  if (val === undefined || val === null) return "off";
+  if (typeof val === "boolean") return val ? "task" : "off";
+  if (typeof val === "string") {
+    const v = val.trim().toLowerCase();
+    if (v === "off" || v === "notify" || v === "task") return v;
+    throw new Error(`unknown autoUpdate value: ${JSON.stringify(val)} (expected off|notify|task|true|false)`);
+  }
+  throw new Error(`unknown autoUpdate value type: ${typeof val}`);
+}

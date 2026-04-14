@@ -35,14 +35,29 @@ cmux-team は、cmux のターミナル分割を使ってサブエージェン�
 npm install -g @hummer98/cmux-team
 ```
 
-### npm auto-update について
+### auto-update について
 
-daemon 稼働中の npm 自動更新はデフォルト **OFF** です。有効化したい場合:
+daemon は `update-notifier` で新バージョンを**検出**するだけで、install は行いません。install は `--run-after-all` の update タスクを自動起票し、Conductor に委ねます。
 
-- 環境変数: `CMUX_TEAM_AUTO_UPDATE=1 cmux-team start`
-- または `.team/config.json` に `{ "autoUpdate": true }` を追加
+3モード（デフォルト: `off`）:
 
-優先順位: env > config > default(OFF)。複数 Node 環境（Volta / nvm / Homebrew など）が混在している場合、自動更新が意図しないバージョンを上書きする問題が報告されているため、デフォルトは OFF としています。
+| mode | 挙動 |
+|------|------|
+| `off` | 何もしない（registry アクセスなし） |
+| `notify` | 12h 周期で検出 → TUI バナー表示のみ |
+| `task` | 12h 周期で検出 → update タスクを自動起票 |
+
+設定（優先順位: **env > config > default**）:
+
+- `CMUX_TEAM_AUTO_UPDATE=off|notify|task`（`0|false` は off、`1|true` は task として扱う）
+- `.team/config.json`: `{ "autoUpdate": "off" | "notify" | "task" }`（後方互換: `true` → task、`false` → off）
+
+関連:
+- `NO_UPDATE_NOTIFIER=1` で無効化（update-notifier 標準の環境変数）
+- `cmux-team self-update` で手動起票
+- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`（**T186 の `enabled=<bool>` から破壊的変更**）
+
+複数 Node 環境（Volta / nvm / Homebrew など）の混在で意図しないバージョンが上書きされる問題を避けるため、デフォルトは OFF としています。
 
 ## 使い方
 

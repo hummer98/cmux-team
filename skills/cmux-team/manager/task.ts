@@ -1,7 +1,7 @@
 /**
  * タスクファイルのパース・依存解決
  */
-import { readdir, readFile, writeFile, rename, stat } from "fs/promises";
+import { readdir, readFile, writeFile, rename, stat, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { log } from "./logger";
@@ -18,6 +18,8 @@ export interface TaskMeta {
   createdAt: string;  // ISO 8601 datetime
   baseBranch?: string;  // マージ先ブランチ（未指定時は暗黙的に main）
   taskDir?: string;  // フォルダ構造の場合のディレクトリパス
+  /** タスク種別（frontmatter kind フィールド）。例: "cmux-team-update" */
+  kind?: string;
 }
 
 export interface TaskState {
@@ -52,6 +54,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
   const priority = unquote(fm.match(/^priority:\s*(.+)$/m)?.[1]?.trim() ?? "medium");
   const createdAt = unquote(fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "");
   const baseBranch = unquote(fm.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim() ?? "");
+  const kind = unquote(fm.match(/^kind:\s*(.+)$/m)?.[1]?.trim() ?? "");
 
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
@@ -84,6 +87,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     fileName,
     createdAt,
     baseBranch: baseBranch || undefined,
+    kind: kind || undefined,
   };
 }
 
@@ -244,4 +248,112 @@ export function sortByPriority(tasks: TaskMeta[]): TaskMeta[] {
 /** ダッシュボード表示用: open タスクを createdAt 降順（新しい順）にソート */
 export function sortOpenTasksForDisplay(tasks: TaskMeta[]): TaskMeta[] {
   return [...tasks].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+}
+
+/**
+ * タスクをプログラム的に作成する（cmdCreateTask と daemon の双方から呼び出す共通化 API）。
+ *
+ * - newId の採番（既存タスクの最大 ID + 1、3 桁 zero-pad）
+ * - slug 生成
+ * - {PROJECT_ROOT}/.team/tasks/{NNN-slug}/task.md を書く
+ * - task-state.json を更新
+ * - run_after_all 競合時は throw（呼び出し側で try/catch）
+ * - TASK_CREATED の postMessage は**呼ばない**（呼び出し側に委ねる）
+ */
+export async function createTaskProgrammatic(
+  projectRoot: string,
+  opts: {
+    title: string;
+    priority?: "high" | "medium" | "low";
+    status?: string; // "draft" | "ready" | ...
+    body?: string;
+    baseBranch?: string;
+    dependsOn?: string[];
+    runAfterAll?: boolean;
+    kind?: string;
+    /** tasks セクションのヘッダ（i18n 用）。デフォルト "タスク内容" */
+    sectionHeader?: string;
+  },
+): Promise<{ id: string; filePath: string; dirName: string; relPath: string }> {
+  const title = opts.title;
+  const priority = opts.priority ?? "medium";
+  const status = opts.status ?? "draft";
+  const body = opts.body ?? "";
+  const baseBranch = opts.baseBranch ?? "";
+  const dependsOn = opts.dependsOn ?? [];
+  const runAfterAll = opts.runAfterAll ?? false;
+  const kind = opts.kind ?? "";
+  const sectionHeader = opts.sectionHeader ?? "タスク内容";
+
+  // run_after_all 競合チェック
+  if (runAfterAll) {
+    const { tasks } = await loadTasks(projectRoot);
+    const existingRunAfterAll = tasks.find(
+      (t) => t.runAfterAll && t.status !== "closed",
+    );
+    if (existingRunAfterAll) {
+      const err = new Error(
+        `run_after_all task already exists: ${existingRunAfterAll.id} (${existingRunAfterAll.title})`,
+      );
+      (err as any).code = "RUN_AFTER_ALL_CONFLICT";
+      (err as any).existingTaskId = existingRunAfterAll.id;
+      throw err;
+    }
+  }
+
+  // slug 生成
+  let slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!slug) slug = "task";
+
+  const tasksDir = join(projectRoot, ".team/tasks");
+  await mkdir(tasksDir, { recursive: true });
+
+  let maxId = 0;
+  try {
+    const files = await readdir(tasksDir);
+    for (const f of files) {
+      const n = parseInt(f, 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+    }
+  } catch {}
+
+  const newId = String(maxId + 1).padStart(3, "0");
+  const dirName = `${newId}-${slug}`;
+  const taskDir = join(tasksDir, dirName);
+  await mkdir(taskDir, { recursive: true });
+  const filePath = join(taskDir, "task.md");
+
+  const frontmatterLines: string[] = [
+    `id: ${newId}`,
+    `title: ${title}`,
+    `priority: ${priority}`,
+  ];
+  if (baseBranch) frontmatterLines.push(`base_branch: ${baseBranch}`);
+  if (runAfterAll) frontmatterLines.push(`run_after_all: true`);
+  if (dependsOn.length > 0) {
+    frontmatterLines.push(`depends_on: [${dependsOn.join(", ")}]`);
+  }
+  if (kind) frontmatterLines.push(`kind: ${kind}`);
+  frontmatterLines.push(`created_at: ${new Date().toISOString()}`);
+
+  const content = `---
+${frontmatterLines.join("\n")}
+---
+
+## ${sectionHeader}
+${body}
+`;
+  await writeFile(filePath, content);
+
+  // task-state.json 更新
+  const taskState = await loadTaskState(projectRoot);
+  taskState[newId] = { status };
+  await saveTaskState(projectRoot, taskState);
+
+  const relPath = `.team/tasks/${dirName}/task.md`;
+  return { id: newId, filePath, dirName, relPath };
 }

@@ -305,6 +305,9 @@ v3.39.0〜v3.43.0 で実施された主要改善:
 ### Conductor 制御
 - **Conductor からの `cmux send`/`cmux send-key` を PreToolUse hook でブロック（T167/T169）** — 代替の `cmux-team send-agent` CLI を追加
 
+### auto-update
+- **`update-notifier` ベースの 3 モード auto-update（T187）** — `off | notify | task` に拡張。`task` モードで `--run-after-all` の update タスクを自動起票し、install を Conductor に委ねる。daemon は検出のみ。`cmux-team self-update` サブコマンド追加。ログフォーマット破壊的変更（`enabled=<bool>` → `mode=<mode>`）、`npm_auto_update` / `npm_update_check_failed` / `npm_self_update_completed` ログ廃止。
+
 ---
 
 ## 未実装の改善候補

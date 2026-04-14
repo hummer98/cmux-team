@@ -4,7 +4,6 @@
 import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
-import { execFile } from "child_process";
 import {
   checkConductorStatus,
   collectResults,
@@ -17,7 +16,8 @@ import {
 } from "./conductor";
 import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay } from "./task";
+import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic } from "./task";
+import updateNotifier from "update-notifier";
 import { log } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
@@ -57,8 +57,17 @@ export interface DaemonState {
   taskList: TaskSummary[];
   sourceMtimes: Map<string, number>;
   restartRequested: boolean;
-  /** 最後に npm 更新チェックした時刻（Date.now()） */
-  lastNpmCheckAt: number;
+  /** 最後に update チェックした時刻（Date.now()） */
+  lastUpdateCheckAt: number;
+  /** update 検出結果（null = 更新なし、または未チェック） */
+  updateAvailable: {
+    current: string;
+    latest: string;
+    detectedAt: string;
+    createdTaskId?: string | null;
+  } | null;
+  /** auto-update のモード（dashboard のバナー文言分岐に使用） */
+  updateMode: "off" | "notify" | "task";
   /** API レート制限情報（proxy.ts が更新） */
   rateLimit: RateLimitInfo | null;
   /** ロギングプロキシのポート番号（null = 未起動または不明） */
@@ -129,7 +138,9 @@ export async function createDaemon(
     taskList: [],
     sourceMtimes: new Map(),
     restartRequested: false,
-    lastNpmCheckAt: 0,
+    lastUpdateCheckAt: 0,
+    updateAvailable: null,
+    updateMode: "off",
     rateLimit: null,
     proxyPort: null,
     wakeup: null,
@@ -1289,63 +1300,6 @@ async function handleConductorDone(
   await resetConductor(conductor, state.projectRoot);
 }
 
-/** semver 大小比較: a > b なら true */
-function isNewerVersion(latest: string, current: string): boolean {
-  const l = latest.split(".").map(Number);
-  const c = current.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((l[i] ?? 0) > (c[i] ?? 0)) return true;
-    if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
-  }
-  return false;
-}
-
-/** npm registry から最新バージョンを確認し、新バージョンがあれば自動インストール + 再起動フラグをセット */
-export async function checkNpmUpdate(state: DaemonState): Promise<void> {
-  try {
-    // 現在バージョンを package.json から取得
-    const pkgPath = join(dirname(import.meta.path), "../../../package.json");
-    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-    const currentVersion: string = pkg.version;
-
-    // npm registry の最新バージョンを確認
-    const latestVersion = await new Promise<string>((resolve, reject) => {
-      execFile("npm", ["view", "@hummer98/cmux-team", "version"], { timeout: 30_000 }, (err, stdout, stderr) => {
-        if (err) {
-          // err.stderr/stdout は execFile が自動付与するが、コールバックの stderr も明示的に転写しておく
-          (err as any).stderr ??= stderr;
-          (err as any).stdout ??= stdout;
-          return reject(err);
-        }
-        resolve(stdout.trim());
-      });
-    });
-
-    // バージョンが異なれば更新
-    if (isNewerVersion(latestVersion, currentVersion)) {
-      await log("npm_auto_update", `current=${currentVersion} latest=${latestVersion} installing...`);
-
-      await new Promise<void>((resolve, reject) => {
-        execFile("npm", ["install", "-g", "@hummer98/cmux-team@latest"], { timeout: 120_000 }, (err, stdout, stderr) => {
-          if (err) {
-            (err as any).stderr ??= stderr;
-            (err as any).stdout ??= stdout;
-            return reject(err);
-          }
-          resolve();
-        });
-      });
-
-      await log("npm_self_update_completed", `current=${currentVersion} latest=${latestVersion}`);
-      await log("npm_auto_update", `updated ${currentVersion} → ${latestVersion}`);
-      state.running = false;
-      state.restartRequested = true;
-    }
-  } catch (e: any) {
-    await log("npm_update_check_failed", formatExecError(e));
-  }
-}
-
 export async function updateTeamJson(state: DaemonState): Promise<void> {
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
@@ -1502,4 +1456,210 @@ export async function updateSidebarStatus(state: DaemonState): Promise<void> {
   state.lastSidebarCategory = status.category;
 
   await cmux.setStatus(SIDEBAR_STATUS_KEY, status.label, status.icon, status.color, state.workspace);
+}
+
+// ============================================================================
+// Update check (T187)
+// ============================================================================
+
+const UPDATE_PKG_NAME = "@hummer98/cmux-team";
+
+/** package.json から cmux-team 本体の現在バージョンを読む */
+async function readCurrentVersion(): Promise<string> {
+  const pkgPath = join(dirname(import.meta.path), "../../../package.json");
+  const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+  return pkg.version as string;
+}
+
+/**
+ * update-notifier で最新バージョンを fetch する。
+ * 失敗時は null を返す（daemon は落とさない）。
+ */
+export async function fetchLatestVersion(
+  currentVersion: string,
+): Promise<{ current: string; latest: string } | null> {
+  try {
+    const notifier = updateNotifier({
+      pkg: { name: UPDATE_PKG_NAME, version: currentVersion },
+      updateCheckInterval: 0, // バックグラウンド spawn を抑制
+    });
+    const info = await notifier.fetchInfo();
+    if (!info?.latest) return null;
+    return { current: info.current, latest: info.latest };
+  } catch (e: any) {
+    await log(
+      "update_check_failed",
+      `reason=${e?.message ?? String(e)} stderr=${e?.stderr ?? ""}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * 更新チェックを実行し、mode に応じて通知 or update タスク起票する。
+ *
+ * - mode="notify": state.updateAvailable にセットするだけ（TUI が表示）
+ * - mode="task": update タスクを --run-after-all で起票
+ * - NO_UPDATE_NOTIFIER=1 で early return
+ */
+export async function checkUpdateAndNotify(
+  state: DaemonState,
+  mode: "off" | "notify" | "task",
+): Promise<void> {
+  if (mode === "off") return;
+  if (process.env.NO_UPDATE_NOTIFIER === "1") {
+    await log("update_check_skipped", "reason=NO_UPDATE_NOTIFIER=1");
+    return;
+  }
+
+  let currentVersion: string;
+  try {
+    currentVersion = await readCurrentVersion();
+  } catch (e: any) {
+    await log("update_check_failed", `reason=read_pkg ${e.message}`);
+    return;
+  }
+
+  await log("update_check_started", `current=${currentVersion} mode=${mode}`);
+  const result = await fetchLatestVersion(currentVersion);
+  if (!result) return;
+
+  const { current, latest } = result;
+  if (latest === current) {
+    state.updateAvailable = null;
+    return;
+  }
+
+  state.updateAvailable = {
+    current,
+    latest,
+    detectedAt: new Date().toISOString(),
+    createdTaskId: null,
+  };
+  await log("update_available", `current=${current} latest=${latest} mode=${mode}`);
+  notifyStateChanged("daemon.ts:checkUpdateAndNotify:update-available");
+
+  if (mode === "task") {
+    await createUpdateTask(state, latest);
+  }
+}
+
+/**
+ * update タスクを --run-after-all で起票する。
+ *
+ * - 既存 open タスクに `kind: cmux-team-update` があり、同 latest なら skip
+ * - 古い latest のタスクが open なら close して再起票（assigned 状態は skip）
+ * - run_after_all 競合時は skip + ログ（daemon を落とさない）
+ */
+export async function createUpdateTask(
+  state: DaemonState,
+  latest: string,
+): Promise<void> {
+  const { tasks } = await loadTasks(state.projectRoot);
+
+  // 既存 update タスクを探す
+  const existing = tasks.filter(
+    (t) => t.kind === "cmux-team-update" && t.status !== "closed",
+  );
+
+  for (const ex of existing) {
+    // 既存タスクの body から latest を抽出
+    let exLatest: string | null = null;
+    try {
+      const body = await readFile(ex.filePath, "utf-8");
+      const m = body.match(/cmux-team@([\d.]+)/);
+      if (m) exLatest = m[1] ?? null;
+    } catch {}
+
+    if (exLatest === latest) {
+      await log(
+        "update_task_skipped_duplicate",
+        `task_id=${ex.id} latest=${latest}`,
+      );
+      if (state.updateAvailable) state.updateAvailable.createdTaskId = ex.id;
+      return;
+    }
+
+    // 古い latest 向けのタスク
+    if (ex.status === "assigned" || ex.status === "in_progress") {
+      await log(
+        "update_task_skipped_assigned_in_progress",
+        `task_id=${ex.id} old_latest=${exLatest ?? "unknown"} new_latest=${latest}`,
+      );
+      return;
+    }
+    // draft/ready は close して新規起票
+    try {
+      const taskState = await loadTaskState(state.projectRoot);
+      if (taskState[ex.id]) {
+        taskState[ex.id] = {
+          ...taskState[ex.id]!,
+          status: "closed",
+          closedAt: new Date().toISOString(),
+          journal: `superseded by newer update target v${latest}`,
+        };
+        await saveTaskState(state.projectRoot, taskState);
+        await log(
+          "update_task_superseded",
+          `task_id=${ex.id} old_latest=${exLatest ?? "unknown"} new_latest=${latest}`,
+        );
+      }
+    } catch (e: any) {
+      await log("error", `update_task_supersede_failed: ${e.message}`);
+    }
+  }
+
+  // 新規起票
+  const body = buildUpdateTaskBody(latest);
+  try {
+    const result = await createTaskProgrammatic(state.projectRoot, {
+      title: `cmux-team を v${latest} にアップデート`,
+      priority: "low",
+      status: "ready",
+      runAfterAll: true,
+      kind: "cmux-team-update",
+      body,
+    });
+    await log("update_task_created", `task_id=${result.id} latest=${latest}`);
+    if (state.updateAvailable) state.updateAvailable.createdTaskId = result.id;
+    requestWakeup(state);
+    notifyStateChanged("daemon.ts:createUpdateTask:task-created");
+  } catch (e: any) {
+    if (e?.code === "RUN_AFTER_ALL_CONFLICT") {
+      await log(
+        "update_task_skipped_run_after_all_conflict",
+        `existing_task_id=${e.existingTaskId} latest=${latest}`,
+      );
+      return;
+    }
+    await log("error", `createUpdateTask failed: ${e.message}`);
+  }
+}
+
+function buildUpdateTaskBody(latest: string): string {
+  return `cmux-team を v${latest} に更新する。
+
+## 手順
+
+1. 現在の cmux-team インストールパスを確認:
+   \`\`\`bash
+   which cmux-team
+   npm root -g
+   \`\`\`
+2. グローバルインストール（バージョン固定）:
+   \`\`\`bash
+   npm install -g @hummer98/cmux-team@${latest}
+   \`\`\`
+3. バージョン確認:
+   \`\`\`bash
+   cmux-team --version
+   \`\`\`
+4. インストールパスが上記 1. と同じか再確認。不一致なら journal に警告として記録する。
+5. 完了したら \`cmux-team close-task --task-id <ID> --journal "updated to v${latest}"\` で close。
+
+## 注意
+
+- daemon を再起動する必要がある場合は、Master に確認してから実施すること。
+- 複数 Node 環境（Volta / nvm / Homebrew 等）が混在している場合は、パス不一致を必ず journal に記録する。
+`;
 }
