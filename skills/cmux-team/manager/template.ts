@@ -17,18 +17,24 @@ function resolveLocalizedDir(base: string): string | null {
   return null;
 }
 
-export function findTemplateDir(): string | null {
-  // 1. daemon 自身からの相対パス（manager/ の兄弟 templates/）
-  //    manager/template.ts → ../templates/
-  const fromSelf = join(dirname(import.meta.path), "../templates");
-  const resolved1 = resolveLocalizedDir(fromSelf);
-  if (resolved1) return resolved1;
-
-  // 2. プロジェクトローカル
+export async function findTemplateDir(): Promise<string | null> {
+  // 1. プロジェクトローカル（dev リポジトリを最優先）
   const projectRoot = process.env.PROJECT_ROOT || process.cwd();
   const local = join(projectRoot, "skills/cmux-team/templates");
-  const resolved2 = resolveLocalizedDir(local);
-  if (resolved2) return resolved2;
+  const resolved1 = resolveLocalizedDir(local);
+  if (resolved1) {
+    await log("template_dir_resolved", `path=${resolved1} source=project_local`);
+    return resolved1;
+  }
+
+  // 2. daemon 自身からの相対パス（installed package のフォールバック）
+  //    manager/template.ts → ../templates/
+  const fromSelf = join(dirname(import.meta.path), "../templates");
+  const resolved2 = resolveLocalizedDir(fromSelf);
+  if (resolved2) {
+    await log("template_dir_resolved", `path=${resolved2} source=installed`);
+    return resolved2;
+  }
 
   return null;
 }
@@ -40,7 +46,7 @@ export async function generateMasterPrompt(
   await mkdir(promptsDir, { recursive: true });
   const dst = join(promptsDir, "master.md");
 
-  const templateDir = findTemplateDir();
+  const templateDir = await findTemplateDir();
   if (!templateDir) {
     throw new Error(t("template_dir_not_found"));
   }
@@ -52,7 +58,7 @@ export async function generateMasterPrompt(
 export async function generateConductorRolePrompt(
   projectRoot: string
 ): Promise<string> {
-  const templateDir = findTemplateDir();
+  const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-role.md"))) {
     throw new Error(t("conductor_role_template_not_found"));
   }
@@ -80,7 +86,7 @@ export async function generateConductorTaskPrompt(
   baseBranch?: string,
   taskDir?: string
 ): Promise<string> {
-  const templateDir = findTemplateDir();
+  const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
     throw new Error(t("conductor_task_template_not_found"));
   }
