@@ -40,7 +40,30 @@ You are an inspection agent. Inspect implementation results across 5 criteria an
 - Are import paths correct?
 - Are configuration file updates not missing?
 - **Wiring task verification**: Are new components correctly referenced from consumer files (verify with `grep`)?
-- **TypeScript compilation**: No errors from `bun build` or type checking?
+
+### 6. Zero Type Errors — touched files (Critical)
+
+**Rule**: If any file touched by this task has type errors, it is an unconditional blocker (critical). Count-based "no regression" judgment and treating as "minor finding" are prohibited.
+
+**Inspection procedure**:
+
+```bash
+TOUCHED=$(git diff main...HEAD --name-only -- '*.ts' '*.tsx' | tr '\n' '|' | sed 's/|$//')
+if [ -n "$TOUCHED" ]; then
+  bunx tsc --noEmit 2>&1 | grep -E "^($TOUCHED)" || true
+fi
+```
+
+**Judgment**:
+
+- Empty output → pass
+- Any output line → **blocker (critical)**
+- Exception: if the Implementer's impl-report documents "this file/error has been split into cleanup task T<id>" and `cmux-team show-task T<id>` confirms the task exists, treat as pass
+
+**Prohibited**:
+
+- Downgrading a newly introduced type error to "minor finding" to let it pass
+- Judging pass by global type-error count delta (count-based regression check)
 
 ## GO/NOGO Criteria
 
