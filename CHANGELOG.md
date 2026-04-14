@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.46.0] - 2026-04-15
+
+### Added
+- **Agent の完了検出を await-agent 方式に刷新（T181）**。Conductor の 30 秒ポーリング（`cmux read-screen`）を廃止し、Agent の Stop/SessionEnd hook が done マーカーを書き出し、Conductor 側は `cmux-team await-agent` が `fs.watch` で即時検知する pull 型構造に移行。TOCTOU 対策として watcher を先に起動し、`startedAt` 比較で古い done マーカーを無視する
+- **AskUserQuestion の構造的検出（T181）**。Agent のトランスクリプト JSONL から AskUserQuestion を検出し、Agent タスクでは Conductor が自律回答、Conductor タスクでは TUI に `status=asking` バッジを表示してユーザー介入を待つ。`schema.ts` に `SessionAskMessage` / `ConductorState.askQuestion` を追加
+- **Stop hook の分類ロジックを Manager 側に移行（T189）**。shell 側の detect-ask スクリプトを 70 行→23 行の forwarder に縮退し、ASK/IDLE/SKIP の判定は daemon の純粋関数 `classifyStopPayload()` が担当する（unit test 15 件）。preflight に `jq` 必須化を追加（python3 fallback を撤去）
+- **logger の surface 表記を簡略化（T192）**。`formatSurface()` / `formatPair()` ヘルパーを追加し、`surface:NNN` 生表記を `C[665]` / `A[719]` / `C[665]>A[719]` のようなロール別プレフィックス形式に統一。`daemon_started` ログ先頭に `package.json` から読んだバージョンを付加
+- **タブ名をロールのみに固定（T193）**。従来のタスク進捗を混ぜた動的タブ名を廃止し、`[N] Master` / `[N] Manager` / `[N] Conductor` / `[N] Agent` の 4 種類だけに正規化。タスク状態は dashboard / team.json / statusline / log で可視化する
+
+### Changed
+- **Conductor の初期プロンプトを廃止（T193）**。Conductor ペインは ❯ idle 状態で起動し、タスク割当時にだけプロンプトを push するようになった。起動直後に 1 通のチャットメッセージが消費されなくなり、`/clear` なしで 1 ターン分のコンテキストを節約できる。`i18n.ts` から未使用の `conductor_wait_prompt` を削除
+- **ドキュメント同期（T191）**。CLI 一覧を `cmux-team --help` と同期（`await-agent` / `await-task` / `self-update` / `trace-task` を追加、旧 trace 系を削除）し、T181 の await-agent 方式、T187 の autoUpdate 3 モード、レイアウト戦略 wide / 16x9、コマンド一覧（/master, /team-spec, /team-task, /team-archive, /artifact, /docs-sync, /trace-task）を `docs/spec/` と README 両版に反映。`docs/spec/06-implementation-tasks.md` に Phase 10（T180-T190）を追加
+
+### Fixed
+- **既知の tsc エラー 6 件を解消（T190）**。T181 で顕在化した型エラーを実行時挙動を変えずに解消: `cmux.ts` の execFile 戻り値を destructure + `.toString()` で string に正規化、`@types/update-notifier` を devDependencies に追加（T187 で入れ忘れ）、`dashboard.tsx` の無効な `dsVariant: "unstyled"` を削除（2 箇所）、`main.test.ts` の RegExp capture を non-null 断言、`main.ts` の `state.workspace` を `?? undefined` で変換
+
 ## [3.45.0] - 2026-04-14
 
 ### Changed (Breaking)
