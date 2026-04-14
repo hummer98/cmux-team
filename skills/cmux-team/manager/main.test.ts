@@ -591,3 +591,98 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     expect(r.code).toBe(0);
   });
 });
+
+// --- T181 §12.1: cmdAwaitAgent race 検証 ---
+
+describe("cmdAwaitAgent — done marker race (T181 §12.1)", () => {
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+  const AGENT_SURFACE = "surface:900";
+  const CONDUCTOR_SURFACE = "surface:100";
+
+  async function setupForAwait(): Promise<{ doneDir: string; doneFile: string }> {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/conductors/surface_100/agent-done"), { recursive: true });
+    await wf(
+      join(testDir, ".team/team.json"),
+      JSON.stringify({
+        conductors: [{ surface: CONDUCTOR_SURFACE, agents: [{ surface: AGENT_SURFACE }] }],
+      }),
+    );
+    return {
+      doneDir: join(testDir, ".team/conductors/surface_100/agent-done"),
+      doneFile: join(testDir, ".team/conductors/surface_100/agent-done/surface_900.done"),
+    };
+  }
+
+  function spawnAwait(timeoutSec = 5): ReturnType<typeof spawn> & {
+    done: Promise<{ code: number; stdout: string; stderr: string }>;
+  } {
+    const proc = spawn("bun", [
+      "run", MAIN_TS,
+      "await-agent",
+      "--surface", AGENT_SURFACE,
+      "--timeout", String(timeoutSec),
+    ], {
+      cwd: testDir,
+      env: { ...process.env, PROJECT_ROOT: testDir },
+    }) as any;
+    let stdout = "";
+    let stderr = "";
+    proc.stdout!.on("data", (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr!.on("data", (d: Buffer) => { stderr += d.toString(); });
+    proc.done = new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      proc.on("close", (code: number | null) => resolve({ code: code ?? 0, stdout, stderr }));
+    });
+    return proc;
+  }
+
+  test("watcher 起動より前に done が書かれていても検出される (existsSync フォールバック)", async () => {
+    const { doneFile } = await setupForAwait();
+    // watcher 起動前に done を置く。タイムスタンプは await-agent 起動予定より少し未来にして
+    // 「await-agent.startedAt 直後に書かれた done が watcher 起動前に反映された」状況を再現する。
+    // （existsSync フォールバックが fs.watch の race で必要になる実運用ケース）
+    const ts = Date.now() + 3_000;
+    await writeFile(
+      doneFile,
+      `status=completed\ntimestamp_ms=${ts}\ntimestamp=${new Date(ts).toISOString()}\n`,
+    );
+    const proc = spawnAwait(10);
+    const r = await proc.done;
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("STATUS=completed");
+  }, 15000);
+
+  test("watcher 起動後に done が書かれた場合に検出される (fs.watch イベント)", async () => {
+    const { doneFile } = await setupForAwait();
+    const proc = spawnAwait(10);
+    // watcher 起動 + 初回 existsSync が終わる時間を待ってから書く
+    await new Promise((r) => setTimeout(r, 800));
+    const ts = Date.now();
+    await writeFile(
+      doneFile,
+      `status=ask\ntimestamp_ms=${ts}\ntimestamp=${new Date(ts).toISOString()}\nquestion=really?\n`,
+    );
+    const r = await proc.done;
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("STATUS=ask");
+    expect(r.stdout).toContain("QUESTION=really?");
+  }, 15000);
+
+  test("startedAt より古い timestamp_ms の done は skip され unlink される", async () => {
+    const { doneFile } = await setupForAwait();
+    // 10 秒以上前の古い done（「前回の残骸」）を仕込む
+    const oldTs = Date.now() - 10_000;
+    await writeFile(
+      doneFile,
+      `status=completed\ntimestamp_ms=${oldTs}\ntimestamp=${new Date(oldTs).toISOString()}\n`,
+    );
+    // short timeout で timeout パスに入ることを確認
+    const proc = spawnAwait(2);
+    const r = await proc.done;
+    expect(r.code).toBe(2);
+    expect(r.stdout).toContain("STATUS=timeout");
+    // 古い done は削除されている
+    const { existsSync: ex } = await import("fs");
+    expect(ex(doneFile)).toBe(false);
+  }, 15000);
+});
