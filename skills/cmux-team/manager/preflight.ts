@@ -14,7 +14,7 @@ import { sanitizeForLog } from "./exec-error";
 const execFile = promisify(execFileCb);
 
 export interface PreflightIssue {
-  key: "not_git_repo" | "claude_not_found" | "bun_not_found" | "team_dir_not_writable";
+  key: "not_git_repo" | "claude_not_found" | "bun_not_found" | "team_dir_not_writable" | "jq_not_found";
   message: string; // 1 行見出し（日本語）
   hint: string; // 解決方法（複数行可）
   context?: string; // 付加情報（例: カレントディレクトリパス）
@@ -56,6 +56,21 @@ function checkClaude(): PreflightIssue | null {
       "解決方法:\n" +
       "  https://docs.claude.com/en/docs/claude-code/overview を参照して\n" +
       "  Claude Code をインストールしてください",
+  };
+}
+
+// T189: Stop hook forwarder が jq を必須とするため preflight で検査する。
+// DI 用に Bun.which を外から差し替え可能にしておく（test で mock する）。
+export function checkJq(which: (bin: string) => string | null = (b) => Bun.which(b)): PreflightIssue | null {
+  if (which("jq")) return null;
+  return {
+    key: "jq_not_found",
+    message: "jq バイナリが見つかりません",
+    hint:
+      "解決方法:\n" +
+      "  macOS:   brew install jq\n" +
+      "  Debian:  sudo apt install jq\n" +
+      "  その他: https://jqlang.org/download/ を参照してください",
   };
 }
 
@@ -116,6 +131,9 @@ export async function runPreflight(projectRoot: string): Promise<PreflightResult
 
   const bunIssue = checkBun();
   if (bunIssue) issues.push(bunIssue);
+
+  const jqIssue = checkJq();
+  if (jqIssue) issues.push(jqIssue);
 
   const writeIssue = await checkWritable(projectRoot);
   if (writeIssue) issues.push(writeIssue);

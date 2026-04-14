@@ -2,7 +2,7 @@
  * Daemon — メインループ + surface 管理
  */
 import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, openSync, readSync, closeSync, fstatSync } from "fs";
 import { join, dirname } from "path";
 import {
   checkConductorStatus,
@@ -21,6 +21,7 @@ import updateNotifier from "update-notifier";
 import { log } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
+import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
 import type { ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 
@@ -138,6 +139,30 @@ export async function writeAgentDone(
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n) + "…";
+}
+
+/**
+ * T189: transcript JSONL ファイルの末尾 N bytes のみ読む。
+ * Claude Code transcript は数十 MB に成長しうるため全読込を避ける。
+ * ファイルが bytes 未満なら全体を返す。読込失敗時は null。
+ */
+function readTranscriptTail(path: string, bytes: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const { size } = fstatSync(fd);
+    const readLen = Math.min(size, bytes);
+    const offset = size - readLen;
+    const buf = Buffer.alloc(readLen);
+    readSync(fd, buf, 0, readLen, offset);
+    return buf.toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) {
+      try { closeSync(fd); } catch {}
+    }
+  }
 }
 
 /** surface または taskRunId で Conductor を検索 */
@@ -805,6 +830,45 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
       }
+      break;
+    }
+
+    case "SESSION_STOP": {
+      // T189: Stop hook からの生データを Manager 側で分類し、
+      // SESSION_ASK / SESSION_IDLE に合成して再入する（SKIP は副作用なし）。
+      if (!message.surface) {
+        await log("session_stop_dropped", "reason=empty_surface");
+        break;
+      }
+      const isConductor = !!message.conductorId;
+      const cls = classifyStopPayload(message.payload ?? {}, {
+        isConductor,
+        readTranscriptTail: (p, bytes) => readTranscriptTail(p, bytes),
+      });
+      await log(
+        "session_stop_classified",
+        `surface=${message.surface} case=${cls.kind} is_conductor=${isConductor ? 1 : 0}` +
+          (cls.kind === "ASK" ? ` question=${truncate(cls.question, 60)}` : "") +
+          (cls.kind === "SKIP" ? ` reason=${cls.reason}` : "")
+      );
+      if (cls.kind === "SKIP") break;
+      // 合成メッセージは型安全に構築するため QueueMessage.parse は行わない（高速パス）
+      const synthesized: QueueMessage = cls.kind === "ASK"
+        ? {
+            type: "SESSION_ASK",
+            surface: message.surface,
+            question: cls.question,
+            conductorId: message.conductorId,
+            pid: message.pid,
+            timestamp: message.timestamp,
+          }
+        : {
+            type: "SESSION_IDLE",
+            surface: message.surface,
+            pid: message.pid,
+            timestamp: message.timestamp,
+          };
+      await handleMessage(state, synthesized);
       break;
     }
 

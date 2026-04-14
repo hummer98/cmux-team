@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
-import { runPreflight, printPreflightIssues } from "./preflight";
+import { runPreflight, printPreflightIssues, checkJq } from "./preflight";
 
 const execFile = promisify(execFileCb);
 
@@ -96,6 +96,20 @@ describe("runPreflight", () => {
     const keys = result.issues.map((i) => i.key);
     expect(keys).not.toContain("not_git_repo");
     expect(keys).not.toContain("team_dir_not_writable");
+  });
+});
+
+describe("checkJq (T189)", () => {
+  test("jq が見つかる場合は null を返す", () => {
+    const result = checkJq(() => "/usr/bin/jq");
+    expect(result).toBeNull();
+  });
+
+  test("jq が見つからない場合は jq_not_found issue を返す", () => {
+    const result = checkJq(() => null);
+    expect(result).not.toBeNull();
+    expect(result?.key).toBe("jq_not_found");
+    expect(result?.hint).toContain("brew install jq");
   });
 });
 

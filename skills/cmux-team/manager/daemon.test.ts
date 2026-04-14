@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readdir, readFile } from "fs/promises";
+import { existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -998,6 +999,137 @@ created_at: ${new Date().toISOString()}
 
     await createUpdateTask(state, "9.9.9");
     expect(state.updateAvailable?.createdTaskId).toBe("902");
+  });
+});
+
+// --- T189: SESSION_STOP 分類ルーティング ---
+
+describe("handleMessage: SESSION_STOP (T189)", () => {
+  async function writeTranscript(lines: any[]): Promise<string> {
+    const path = join(testDir, ".team/transcript.jsonl");
+    await writeFile(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    return path;
+  }
+
+  test("Agent / Case A (ASK) → writeAgentDone(status=ask) が呼ばれる", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    const transcriptPath = await writeTranscript([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "どうしますか?" },
+            { type: "tool_use", name: "AskUserQuestion", input: {} },
+          ],
+        },
+      },
+    ]);
+
+    await handleMessage(state, {
+      type: "SESSION_STOP",
+      surface: "surface:a1",
+      pid: 123,
+      timestamp: new Date().toISOString(),
+      payload: { transcript_path: transcriptPath },
+    });
+
+    // Agent の done マーカーが書かれる
+    const doneFile = join(
+      testDir,
+      ".team/conductors/surface_c1/agent-done/surface_a1.done",
+    );
+    const done = await readFile(doneFile, "utf-8");
+    expect(done).toContain("status=ask");
+    expect(done).toContain("question=どうしますか?");
+  });
+
+  test("Conductor / Case C (IDLE) → conductor.status 遷移", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "asking",
+      askQuestion: "old?",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    const transcriptPath = await writeTranscript([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "Read", input: {} },
+            { type: "tool_result", content: "..." },
+          ],
+        },
+      },
+    ]);
+
+    await handleMessage(state, {
+      type: "SESSION_STOP",
+      surface: "surface:c1",
+      conductorId: "task-010-xxx",
+      pid: 123,
+      timestamp: new Date().toISOString(),
+      payload: { transcript_path: transcriptPath },
+    });
+
+    // asking → idle（SESSION_IDLE handler の ask 解決パス）
+    expect(conductor.status).toBe("idle");
+    expect(conductor.askQuestion).toBeUndefined();
+  });
+
+  test("Agent / Case B (SKIP=monologue) → writeAgentDone が呼ばれない", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    const transcriptPath = await writeTranscript([
+      { type: "assistant", message: { content: [{ type: "text", text: "考え中..." }] } },
+    ]);
+
+    await handleMessage(state, {
+      type: "SESSION_STOP",
+      surface: "surface:a1",
+      pid: 123,
+      timestamp: new Date().toISOString(),
+      payload: { transcript_path: transcriptPath },
+    });
+
+    // done マーカーは作られていない（SKIP のため）
+    const doneFile = join(
+      testDir,
+      ".team/conductors/surface_c1/agent-done/surface_a1.done",
+    );
+    expect(existsSync(doneFile)).toBe(false);
+  });
+
+  test("空 surface は早期 drop（副作用なし）", async () => {
+    const state = await createDaemon(testDir);
+    // masterSurface / conductor を一切セットしない状態で呼んでも throw しない
+    await handleMessage(state, {
+      type: "SESSION_STOP",
+      surface: "",
+      pid: 123,
+      timestamp: new Date().toISOString(),
+      payload: {},
+    });
+    // ここまで到達すれば OK（早期 return で break）
+    expect(state.conductors.size).toBe(0);
   });
 });
 
