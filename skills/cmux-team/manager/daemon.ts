@@ -18,7 +18,7 @@ import { spawnMaster, isMasterAlive } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic } from "./task";
 import updateNotifier from "update-notifier";
-import { log } from "./logger";
+import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
@@ -89,6 +89,8 @@ export interface DaemonState {
   lastSidebarStatus: string | null;
   /** サイドバーステータスの前回カテゴリ（遷移判定用） */
   lastSidebarCategory: string | null;
+  /** daemon プロセスが属する cmux-team パッケージのバージョン（例: "v3.45.0"）。T192 で追加 */
+  version: string;
 }
 
 /**
@@ -225,7 +227,23 @@ export async function createDaemon(
     workspace: null,
     lastSidebarStatus: null,
     lastSidebarCategory: null,
+    version: "v?.?.?",
   };
+}
+
+/**
+ * T192: ルート package.json からバージョンを読み取り "v3.45.0" 形式で返す。
+ * 失敗時は "v?.?.?" を返し daemon 起動を阻害しない。
+ */
+export async function loadVersion(): Promise<string> {
+  try {
+    const pkgPath = join(dirname(import.meta.path), "../../../package.json");
+    const raw = await readFile(pkgPath, "utf-8");
+    const version = JSON.parse(raw).version as string | undefined;
+    return version ? `v${version}` : "v?.?.?";
+  } catch {
+    return "v?.?.?";
+  }
 }
 
 /** manager/ ディレクトリ内の全 .ts ファイルの mtime を記録した Map を返す */
@@ -449,18 +467,18 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
         if (alive) {
           // proxy ポート変化時: 旧 Master を close して再 spawn
           if (state.proxyPortChanged) {
-            await log("master_respawn_proxy_changed", `surface=${surface} newPort=${state.proxyPort}`);
+            await log("master_respawn_proxy_changed", `${formatSurface(surface, "U")} newPort=${state.proxyPort}`);
             await cmux.closeSurface(surface).catch(() => {});
             state.proxyPortChanged = false;  // フラグリセット
             // fall-through して下の spawn コードへ
           } else {
             state.masterSurface = surface;
             state.masterStatus = "idle";
-            await log("master_alive", `surface=${surface}`);
+            await log("master_alive", formatSurface(surface, "U"));
             return;
           }
         }
-        await log("master_check_failed", `surface=${surface} alive=false`);
+        await log("master_check_failed", `${formatSurface(surface, "U")} alive=false`);
       }
     }
   } catch (e: any) {
@@ -473,7 +491,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   if (master) {
     state.masterSurface = master.surface;
     state.masterStatus = "idle";
-    await log("master_started", `surface=${master.surface}`);
+    await log("master_started", formatSurface(master.surface, "U"));
   } else {
     await log("master_spawn_failed");
   }
@@ -532,7 +550,7 @@ export async function initializeLayout(
           for (const c of alive) {
             state.conductors.set(c.surface, c);
           }
-          await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => c.surface).join(",")}`);
+          await log("conductors_restored", `count=${alive.length} surfaces=${alive.map(c => formatSurface(c.surface, "C")).join(",")}`);
           // team.json 復元パスでは Claude が既に稼働中の前提。
           // resumePlan で与えられた assigned タスクには何もしない（resume 命令は送らない）。
           // 旧コードでは resume_skipped が出ていたため、観測性確保のため noop ログを残す。
@@ -638,7 +656,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (!conductor) {
         await log(
           "conductor_done_ignored",
-          `surface=${message.surface} reason=not_found`
+          `${formatSurface(message.surface, "C")} reason=not_found`
         );
         break;
       }
@@ -647,20 +665,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (conductor.status !== "running" && !conductor.taskRunId) {
         await log(
           "conductor_done_ignored",
-          `surface=${message.surface} status=${conductor.status} reason=no_task`
+          `${formatSurface(message.surface, "C")} status=${conductor.status} reason=no_task`
         );
         break;
       }
       if (conductor.status !== "running") {
         await log(
           "conductor_done_late_cleanup",
-          `surface=${message.surface} status=${conductor.status} taskRunId=${conductor.taskRunId}`
+          `${formatSurface(message.surface, "C")} status=${conductor.status} taskRunId=${conductor.taskRunId}`
         );
       }
       const isSuccess = message.success !== false;
       await log(
         isSuccess ? "conductor_done_signal" : "conductor_error",
-        `surface=${message.surface}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
+        `${formatSurface(message.surface, "C")}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
       );
       await handleConductorDone(state, conductor);
       break;
@@ -678,7 +696,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         notifyStateChanged("daemon.ts:handleMessage:agent-spawned");
         await log(
           "agent_spawned",
-          `conductor_surface=${message.conductorSurface} surface=${message.surface}${message.role ? ` role=${message.role}` : ""}`
+          `${formatPair(message.conductorSurface, message.surface, "C", "A")}${message.role ? ` role=${message.role}` : ""}`
         );
       }
       break;
@@ -692,7 +710,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterDisconnectedAt = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-started-master");
         spawnMasterPidWatcher(state, message.pid);
-        await log("master_session_started", `surface=${message.surface} pid=${message.pid}`);
+        await log("master_session_started", `${formatSurface(message.surface, "U")} pid=${message.pid}`);
         break;
       }
       const conductor = findConductor(state, message.surface);
@@ -703,7 +721,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           conductor.status = "idle";
           await log(
             prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
-            `surface=${message.surface}`
+            formatSurface(message.surface, "C")
           );
         }
         conductor.pid = message.pid;
@@ -713,10 +731,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
         await log(
           "session_started",
-          `surface=${message.surface} pid=${message.pid}`
+          `${formatSurface(message.surface, "C")} pid=${message.pid}`
         );
       } else {
-        await log("session_started_ignored", `surface=${message.surface} reason=conductor_not_found`);
+        await log("session_started_ignored", `${formatSurface(message.surface, "C")} reason=conductor_not_found`);
       }
       break;
     }
@@ -730,7 +748,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         agents: [],
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
-      await log("conductor_registered", `surface=${message.surface} pane=${message.paneId}`);
+      await log("conductor_registered", `${formatSurface(message.surface, "C")} pane=${message.paneId}`);
       break;
     }
 
@@ -741,12 +759,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         notifyStateChanged("daemon.ts:handleMessage:conductor-session");
         await log(
           "conductor_session",
-          `surface=${message.surface} session_id=${message.sessionId}`
+          `${formatSurface(message.surface, "C")} session_id=${message.sessionId}`
         );
       } else {
         await log(
           "conductor_session_ignored",
-          `surface=${message.surface} reason=conductor_not_found`
+          `${formatSurface(message.surface, "C")} reason=conductor_not_found`
         );
       }
       break;
@@ -759,7 +777,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterDisconnectedAt = message.timestamp;
         state.masterPid = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-ended-master");
-        await log("master_session_ended", `surface=${message.surface}${message.reason ? ` reason=${message.reason}` : ""}`);
+        await log("master_session_ended", `${formatSurface(message.surface, "U")}${message.reason ? ` reason=${message.reason}` : ""}`);
         break;
       }
       const conductor = findConductor(state, message.surface);
@@ -768,7 +786,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (message.surface !== conductor.surface) {
           await log(
             "session_ended_ignored",
-            `event_surface=${message.surface} current_surface=${conductor.surface}`
+            `event=${formatSurface(message.surface, "C")} current=${formatSurface(conductor.surface, "C")}`
           );
           break;
         }
@@ -778,7 +796,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         notifyStateChanged("daemon.ts:handleMessage:session-ended-conductor");
         await log(
           "session_ended",
-          `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
+          `${formatSurface(message.surface, "C")} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
         );
       } else {
         // Agent surface かチェック (T181: done マーカーを書き出す)
@@ -798,7 +816,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             notifyStateChanged("daemon.ts:handleMessage:session-ended-agent");
             await log(
               "agent_done",
-              `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended status=crashed`
+              `${formatPair(c.surface, message.surface, "C", "A")} trigger=session_ended status=crashed`
             );
             break;
           }
@@ -814,7 +832,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterDisconnectedAt = undefined;
         if (message.pid) state.masterPid = message.pid;
         notifyStateChanged("daemon.ts:handleMessage:session-active-master");
-        await log("master_session_active", `surface=${message.surface}`);
+        await log("master_session_active", formatSurface(message.surface, "U"));
         break;
       }
       const conductor = findConductor(state, message.surface);
@@ -823,10 +841,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (message.pid) conductor.pid = message.pid;
         if (conductor.status === "disconnected") {
           conductor.status = "running";
-          await log("conductor_recovered", `surface=${message.surface} via=SESSION_ACTIVE new_status=running`);
+          await log("conductor_recovered", `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE new_status=running`);
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
-          await log("conductor_ready", `surface=${message.surface} via=SESSION_ACTIVE`);
+          await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE`);
         }
         notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
       }
@@ -847,7 +865,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       });
       await log(
         "session_stop_classified",
-        `surface=${message.surface} case=${cls.kind} is_conductor=${isConductor ? 1 : 0}` +
+        `${formatSurface(message.surface, "C")} case=${cls.kind} is_conductor=${isConductor ? 1 : 0}` +
           (cls.kind === "ASK" ? ` question=${truncate(cls.question, 60)}` : "") +
           (cls.kind === "SKIP" ? ` reason=${cls.reason}` : "")
       );
@@ -879,7 +897,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         state.masterDisconnectedAt = undefined;
         if (message.pid) state.masterPid = message.pid;
         notifyStateChanged("daemon.ts:handleMessage:session-idle-master");
-        await log("master_session_idle", `surface=${message.surface}`);
+        await log("master_session_idle", formatSurface(message.surface, "U"));
         break;
       }
       const conductor = findConductor(state, message.surface);
@@ -892,7 +910,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           conductor.status = conductor.taskRunId ? "running" : "idle";
           await log(
             "conductor_ask_resolved",
-            `surface=${message.surface} new_status=${conductor.status}`
+            `${formatSurface(message.surface, "C")} new_status=${conductor.status}`
           );
         } else if (conductor.status === "disconnected") {
           if (conductor.taskRunId) {
@@ -903,21 +921,21 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             conductor.status = "running";
             await log(
               "conductor_recovered",
-              `surface=${message.surface} via=SESSION_IDLE new_status=running taskRunId=${conductor.taskRunId}`
+              `${formatSurface(message.surface, "C")} via=SESSION_IDLE new_status=running taskRunId=${conductor.taskRunId}`
             );
           } else {
             // taskRunId なし → 通常復帰 (idle)
             conductor.status = "idle";
-            await log("conductor_recovered", `surface=${message.surface} via=SESSION_IDLE`);
+            await log("conductor_recovered", `${formatSurface(message.surface, "C")} via=SESSION_IDLE`);
           }
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
-          await log("conductor_ready", `surface=${message.surface} via=SESSION_IDLE`);
+          await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_IDLE`);
         }
         notifyStateChanged("daemon.ts:handleMessage:session-idle-conductor");
         await log(
           "session_idle",
-          `surface=${message.surface}`
+          `${formatSurface(message.surface, "C")}`
         );
         break;
       }
@@ -938,14 +956,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // agents リストからは削除しない（idle 中の Agent も生存扱い。SESSION_ENDED / surface_lost で削除）
         await log(
           "agent_done",
-          `conductor_surface=${c.surface} surface=${agent.surface} trigger=session_idle status=completed`
+          `${formatPair(c.surface, agent.surface, "C", "A")} trigger=session_idle status=completed`
         );
         break;
       }
       if (!matched) {
         await log(
           "session_idle_unknown_surface",
-          `surface=${message.surface} pid=${message.pid ?? ""}`
+          `${formatSurface(message.surface, "S")} pid=${message.pid ?? ""}`
         );
       }
       break;
@@ -955,7 +973,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       // T181: AskUserQuestion 検出時の処理
       // 1) Master は対象外
       if (message.surface === state.masterSurface) {
-        await log("master_session_ask_ignored", `surface=${message.surface}`);
+        await log("master_session_ask_ignored", `${formatSurface(message.surface, "U")}`);
         break;
       }
 
@@ -969,7 +987,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         notifyStateChanged("daemon.ts:handleMessage:session-ask-conductor");
         await log(
           "conductor_asking",
-          `surface=${message.surface} question=${truncate(message.question, 120)}`
+          `${formatSurface(message.surface, "C")} question=${truncate(message.question, 120)}`
         );
         break;
       }
@@ -990,7 +1008,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         await log(
           "agent_ask",
-          `conductor_surface=${c.surface} surface=${agent.surface} question=${truncate(message.question, 120)}`
+          `${formatPair(c.surface, agent.surface, "C", "A")} question=${truncate(message.question, 120)}`
         );
         // Agent surface は閉じない（Conductor が await-agent で STATUS=ask を受けて対処）
         break;
@@ -998,7 +1016,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (!matched) {
         await log(
           "session_ask_unknown_surface",
-          `surface=${message.surface} pid=${message.pid ?? ""}`
+          `${formatSurface(message.surface, "S")} pid=${message.pid ?? ""}`
         );
       }
       break;
@@ -1012,7 +1030,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         conductor.disconnectedAt = undefined;
         if (message.pid) conductor.pid = message.pid;
         notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
-        await log(event, `surface=${message.surface} via=SESSION_CLEAR`);
+        await log(event, `${formatSurface(message.surface, "C")} via=SESSION_CLEAR`);
       }
       if (conductor && conductor.status === "running") {
         // ユーザー手動 /clear → タスク abort + idle リセット
@@ -1023,7 +1041,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             const ts = await loadTaskState(state.projectRoot);
             const current = ts[taskId];
             if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
-              const journal = `user_clear: surface=${conductor.surface} taskRunId=${conductor.taskRunId ?? "-"}`;
+              const journal = `user_clear: ${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
               ts[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
               await saveTaskState(state.projectRoot, ts);
               await log("task_aborted", `task_id=${taskId} reason=user_clear`);
@@ -1167,7 +1185,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
         notifyStateChanged("daemon.ts:scanTasks:conductor-disconnected");
         await log(
           "conductor_disconnected",
-          `surface=${idleConductor.surface} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason}`
+          `${formatSurface(idleConductor.surface, "C")} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason}`
         );
         continue;
       }
@@ -1227,7 +1245,7 @@ function spawnPidWatcher(
         // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
         await log(
           "session_ended",
-          `surface=${conductor.surface} pid=${pid} status=disconnected reason=pid_watcher`
+          `${formatSurface(conductor.surface, "C")} pid=${pid} status=disconnected reason=pid_watcher`
         );
       }
     }
@@ -1257,7 +1275,7 @@ function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
         notifyStateChanged("daemon.ts:spawnMasterPidWatcher:master-disconnected");
         await log(
           "master_session_ended",
-          `surface=${state.masterSurface} pid=${pid} reason=pid_watcher`
+          `${formatSurface(state.masterSurface, "U")} pid=${pid} reason=pid_watcher`
         );
       }
     }
@@ -1319,7 +1337,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         notifyStateChanged("daemon.ts:monitorConductors:starting-timeout");
         await log(
           "conductor_start_timeout",
-          `surface=${surface} elapsed=${Math.round(elapsed)}s`
+          `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s`
         );
       }
       continue;
@@ -1332,7 +1350,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         if (elapsed > DISCONNECT_TIMEOUT_SEC) {
           await log(
             "conductor_disconnect_timeout",
-            `surface=${surface} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
+            `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
           );
           await forceCloseDisconnectedConductor(state, conductor);
         }
@@ -1355,7 +1373,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           : 0;
         await log(
           "conductor_responsive_recovered",
-          `surface=${surface} after_failures=${conductor.treeFailureCount} elapsed=${elapsed}s`
+          `${formatSurface(surface, "C")} after_failures=${conductor.treeFailureCount} elapsed=${elapsed}s`
         );
         conductor.treeFailureCount = 0;
         conductor.treeFailureFirstAt = undefined;
@@ -1370,7 +1388,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         conductor.treeFailureFirstAt = new Date().toISOString();
         await log(
           "conductor_unresponsive_started",
-          `surface=${surface} taskRunId=${conductor.taskRunId ?? "-"}`
+          `${formatSurface(surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`
         );
       }
       const elapsed =
@@ -1380,11 +1398,11 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         // 閾値超過 → disconnected 昇格（kind=cmux_unresponsive）
         await log(
           "conductor_unresponsive_threshold",
-          `surface=${surface} consecutive=${count} elapsed=${Math.round(elapsed)}s`
+          `${formatSurface(surface, "C")} consecutive=${count} elapsed=${Math.round(elapsed)}s`
         );
         await log(
           "conductor_disconnected",
-          `surface=${surface} reason=tree_unresponsive_persistent kind=cmux_unresponsive ` +
+          `${formatSurface(surface, "C")} reason=tree_unresponsive_persistent kind=cmux_unresponsive ` +
             `consecutive=${count} elapsed=${Math.round(elapsed)}s ` +
             `taskRunId=${conductor.taskRunId ?? "-"}`
         );
@@ -1397,7 +1415,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       if (!agentSkipLogged) {
         await log(
           "monitor_skip_agents",
-          `reason=cmux_unresponsive surface=${surface} consecutive=${count}`
+          `reason=cmux_unresponsive ${formatSurface(surface, "C")} consecutive=${count}`
         );
         agentSkipLogged = true;
       }
@@ -1406,7 +1424,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       // result === "missing" — 従来通り即 crash 判定
       await log(
         "conductor_disconnected",
-        `surface=${surface} reason=validate_surface_failed kind=crashed taskRunId=${conductor.taskRunId ?? "-"}`
+        `${formatSurface(surface, "C")} reason=validate_surface_failed kind=crashed taskRunId=${conductor.taskRunId ?? "-"}`
       );
       conductor.status = "disconnected";
       conductor.disconnectedAt = new Date().toISOString();
@@ -1435,7 +1453,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         notifyStateChanged("daemon.ts:monitorConductors:agent-removed");
         await log(
           "agent_done",
-          `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost status=crashed`
+          `${formatPair(surface, agent.surface, "C", "A")} trigger=surface_lost status=crashed`
         );
       }
       // agentResult === "unknown" はここでは起きない（treeOutput null でも Conductor が alive なら
@@ -1466,7 +1484,7 @@ async function forceCloseDisconnectedConductor(
         current?.status !== "aborted" &&
         current?.status !== "deleted"
       ) {
-        const journal = `disconnect_timeout: surface=${conductor.surface} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
+        const journal = `disconnect_timeout: ${formatSurface(conductor.surface, "C")} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
         ts[taskId] = {
           ...current,
           status: "aborted",
@@ -1506,12 +1524,12 @@ async function handleConductorDone(
   if (!conductor.taskId || conductor.taskId === "undefined") {
     await log(
       "error",
-      `handleConductorDone: conductor.taskId is undefined surface=${conductor.surface}`
+      `handleConductorDone: conductor.taskId is undefined ${formatSurface(conductor.surface, "C")}`
     );
   } else {
     await log(
       "task_completed",
-      `task_id=${conductor.taskId} surface=${conductor.surface}${
+      `task_id=${conductor.taskId} ${formatSurface(conductor.surface, "C")}${
         conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
       }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
     );

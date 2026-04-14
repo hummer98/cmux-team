@@ -357,6 +357,30 @@ Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルー
 - detail は `key=value` のスペース区切り。値にスペースを含む場合はそのまま末尾に付与
 - 1 行 1 イベント。複数行ログは避ける
 
+#### surface 表記（T192）
+
+surface はロール別プレフィックス + `[ID]` で表記する。生の `surface:NNN` や `surface=surface:NNN` は使わない。`formatSurface(surface, role)` / `formatPair(parent, child, pRole, cRole)`（`logger.ts`）を利用する。
+
+| ロール | 意味 | 例 |
+|-------|------|-----|
+| `C` | Conductor | `C[665]` |
+| `A` | Agent | `A[719]` |
+| `M` | Manager (daemon) | `M[120]` |
+| `U` | User session (Master) | `U[100]` |
+| `S` | 不明（`cmux.ts` の低レベル箇所のみ） | `S[300]` |
+
+親子関係は `>` で連結する: `C[665]>A[719]`（Conductor → Agent）。
+
+例:
+
+```
+[2026-04-14T10:30:00+09:00] daemon_started v0.23.0 pid=12345 poll=10000ms ...
+[2026-04-14T10:30:05+09:00] conductor_started C[665] task_id=T042 conductor_id=task-042-1712345678
+[2026-04-14T10:31:00+09:00] agent_done C[665]>A[719] trigger=session_idle status=completed
+```
+
+`task_id=` / `conductor_id=` / `artifact_id=` / `pid=` 等の他のキーは従来通り `key=value` 形式を維持する。
+
 ## EventBus ポリシー
 
 daemon 内の **実 state mutation** → TUI refresh は `eventBus.ts` 経由で通知する。

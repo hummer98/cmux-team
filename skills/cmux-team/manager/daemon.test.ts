@@ -1154,3 +1154,17 @@ describe("updateTeamJson: layout 反映 (T176)", () => {
     expect(tj.layout).toBe("wide");
   });
 });
+
+describe("loadVersion (T192)", () => {
+  test('ルート package.json から "vX.Y.Z" 形式の文字列を返す', async () => {
+    const { loadVersion } = await import("./daemon");
+    const version = await loadVersion();
+    expect(version).toMatch(/^v\d+\.\d+\.\d+/);
+  });
+
+  test("createDaemon の初期 state.version は 'v?.?.?' (loadVersion 未呼び出し時)", async () => {
+    const { createDaemon } = await import("./daemon");
+    const state = await createDaemon(testDir, "wide");
+    expect(state.version).toBe("v?.?.?");
+  });
+});

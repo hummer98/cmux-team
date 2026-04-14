@@ -3,7 +3,7 @@
  */
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
-import { log } from "./logger";
+import { log, formatSurface } from "./logger";
 import { formatExecError, isExecTimeout } from "./exec-error";
 
 const execFile = promisify(execFileCb);
@@ -157,7 +157,7 @@ export async function getPaneForSurface(surface: string, workspace?: string): Pr
     }
     return undefined;
   } catch (e: any) {
-    await log("error", `getPaneForSurface failed: surface=${surface} ${formatExecError(e)}`);
+    await log("error", `getPaneForSurface failed: ${formatSurface(surface, "S")} ${formatExecError(e)}`);
     return undefined;
   }
 }
@@ -203,7 +203,7 @@ export async function validateSurfaceDetailed(
       if (attempt === VALIDATE_SURFACE_RETRY_COUNT - 1) {
         await log(
           "validate_surface_failed",
-          `surface=${surface} attempts=${attempt + 1} all_timed_out=${allTimedOut} last_error=${formatExecError(e)}`
+          `${formatSurface(surface, "S")} attempts=${attempt + 1} all_timed_out=${allTimedOut} last_error=${formatExecError(e)}`
         );
         return allTimedOut ? "unknown" : "missing";
       }

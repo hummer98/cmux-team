@@ -9,7 +9,7 @@ import { join, relative, dirname } from "path";
 import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
-import { log } from "./logger";
+import { log, formatSurface } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
@@ -61,7 +61,7 @@ async function getPaneIdForSurface(surface: string, workspace?: string): Promise
       if (line.includes(surface) && currentPane) return currentPane;
     }
   } catch (e: any) {
-    await log("error", `getPaneIdForSurface failed: surface=${surface} ${e.message}`);
+    await log("error", `getPaneIdForSurface failed: ${formatSurface(surface, "C")} ${e.message}`);
   }
   return undefined;
 }
@@ -121,7 +121,7 @@ export async function launchConductor(
       }),
     });
   } catch (e: any) {
-    await log("error", `CONDUCTOR_REGISTERED send failed: surface=${surface} ${e.message}`);
+    await log("error", `CONDUCTOR_REGISTERED send failed: ${formatSurface(surface, "C")} ${e.message}`);
   }
 
   // 2. 環境変数をシェルに焼き付け
@@ -257,7 +257,7 @@ export async function initializeConductorSlots(
     for (const [i, pane] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
       if (!conductors.has(pane.surface)) {
-        await log("conductor_registered_fallback", `surface=${pane.surface}`);
+        await log("conductor_registered_fallback", formatSurface(pane.surface, "C"));
         if (resumeItem) {
           // resume 割当済みの場合は running + taskId を最初からセット
           conductors.set(pane.surface, {
@@ -450,7 +450,7 @@ export async function assignTask(
     try {
       await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
     } catch (e: any) {
-      await log("error", `renameTab failed: surface=${conductor.surface} ${e.message}`);
+      await log("error", `renameTab failed: ${formatSurface(conductor.surface, "C")} ${e.message}`);
     }
 
     // タスク-セッション索引に記録
@@ -485,7 +485,7 @@ export async function assignTask(
 
     await log(
       "conductor_started",
-      `task_id=${taskId} task_run_id=${taskRunId} surface=${conductor.surface} title=${taskTitle}`
+      `task_id=${taskId} task_run_id=${taskRunId} ${formatSurface(conductor.surface, "C")} title=${taskTitle}`
     );
 
     return conductor;
@@ -574,7 +574,7 @@ export async function resetConductor(
     // sessionId は初回起動時に発行済み — reset で消さない（常駐セッション）
     notifyStateChanged("conductor.ts:resetConductor:status-idle");
 
-    await log("conductor_reset", `surface=${conductor.surface}`);
+    await log("conductor_reset", formatSurface(conductor.surface, "C"));
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);
   }

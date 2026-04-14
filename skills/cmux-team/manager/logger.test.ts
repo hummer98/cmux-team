@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { mkdtemp, rm, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { log } from "./logger";
+import { log, formatSurface, formatPair } from "./logger";
 
 const SENTINEL = `regression_sentinel_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 const cwdLogFile = join(process.cwd(), ".team/logs/manager.log");
@@ -46,6 +46,53 @@ afterEach(async () => {
   }
   await rm(tmpdirA, { recursive: true, force: true });
   await rm(tmpdirB, { recursive: true, force: true });
+});
+
+describe("formatSurface", () => {
+  test('"surface:665" と role "C" → "C[665]"', () => {
+    expect(formatSurface("surface:665", "C")).toBe("C[665]");
+  });
+  test('"665" と role "A" → "A[665]"', () => {
+    expect(formatSurface("665", "A")).toBe("A[665]");
+  });
+  test('空文字 → ""', () => {
+    expect(formatSurface("", "C")).toBe("");
+  });
+  test('undefined → ""', () => {
+    expect(formatSurface(undefined, "C")).toBe("");
+  });
+  test('"surface:999" と role "S" → "S[999]"', () => {
+    expect(formatSurface("surface:999", "S")).toBe("S[999]");
+  });
+  test('role "M" / "U" も使える', () => {
+    expect(formatSurface("surface:10", "M")).toBe("M[10]");
+    expect(formatSurface("surface:20", "U")).toBe("U[20]");
+  });
+  test("冪等性: すでに C[665] 形式のものはそのまま扱えること", () => {
+    // 念のため surface:C[665] のような異常入力では prefix を除いた数値部分のみ抽出
+    // 設計上の主要経路は生 ID を渡すので厳密なガードは不要だが、挙動を固定
+    expect(formatSurface("C[665]", "C")).toBe("C[665]");
+  });
+});
+
+describe("formatPair", () => {
+  test('両方ある → "C[665]>A[719]"', () => {
+    expect(formatPair("surface:665", "surface:719", "C", "A")).toBe("C[665]>A[719]");
+  });
+  test('parent 空 → child 側のみ', () => {
+    expect(formatPair("", "surface:719", "C", "A")).toBe("A[719]");
+  });
+  test('child 空 → parent 側のみ', () => {
+    expect(formatPair("surface:665", "", "C", "A")).toBe("C[665]");
+  });
+  test('両方空 → ""', () => {
+    expect(formatPair("", "", "C", "A")).toBe("");
+  });
+  test("undefined 混在", () => {
+    expect(formatPair(undefined, "surface:719", "C", "A")).toBe("A[719]");
+    expect(formatPair("surface:665", undefined, "C", "A")).toBe("C[665]");
+    expect(formatPair(undefined, undefined, "C", "A")).toBe("");
+  });
 });
 
 describe("logger - PROJECT_ROOT 遅延評価", () => {
