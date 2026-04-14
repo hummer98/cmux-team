@@ -6,6 +6,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
+    "@types/update-notifier": "^6.0.8",
     "ink-testing-library": "^4.0.0"
   },
   "peerDependencies": {

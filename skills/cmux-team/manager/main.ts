@@ -512,7 +512,7 @@ async function cmdStart(): Promise<void> {
 
   // ワークスペース名を起動フォルダ名に設定
   const folderName = basename(PROJECT_ROOT);
-  await cmux.renameWorkspace(folderName, state.workspace);
+  await cmux.renameWorkspace(folderName, state.workspace ?? undefined);
 
   // --- assigned タスクの resumePlan を boot 前に構築 ---
   //   launchConductor に `{ resumeTaskId }` を渡して起動時点で
