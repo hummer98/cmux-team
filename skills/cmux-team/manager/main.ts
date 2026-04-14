@@ -696,6 +696,17 @@ async function cmdSend(): Promise<void> {
       console.error(`Error: invalid JSON on stdin: ${e.message}`);
       process.exit(1);
     }
+    // T189: hook からの空文字 conductorId は undefined に正規化する。
+    // shell の `"${CONDUCTOR_ID:-}"` が空文字として出るケースを吸収。
+    // SESSION_STOP の surface 空は早期 reject する（daemon 側でも二重防御あり）。
+    if (obj && typeof obj === "object") {
+      const o = obj as Record<string, unknown>;
+      if (o.conductorId === "") o.conductorId = undefined;
+      if (o.type === "SESSION_STOP" && (typeof o.surface !== "string" || o.surface === "")) {
+        console.error("Error: SESSION_STOP requires non-empty surface");
+        process.exit(1);
+      }
+    }
     try {
       message = QueueMessageSchema.parse(obj);
     } catch (e: any) {
@@ -833,7 +844,7 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
       process.exit(1);
   }
 
@@ -999,84 +1010,37 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
 ].join("\n");
 
 /**
- * Stop hook ディスパッチャスクリプト (T181)。
+ * Stop hook forwarder スクリプト (T189)。
  * stdin: Stop hook JSON payload（Claude Code 仕様）
  *
- * 役割:
- *   - transcript_path から末尾 10 行を読み、最終 assistant メッセージの content を分類
- *   - Case A: AskUserQuestion tool_use を含む → SESSION_ASK を送信（question = 直前 text 4KB）
- *   - Case B (Agent のみ): tool_use / tool_result を一切含まない純粋 text stop → exit 0（独白 → 無視）
- *   - Case C: それ以外 → SESSION_IDLE を送信
- *   - Conductor の場合は CONDUCTOR_ID env が立っており Case B 判定を skip する
- *   - jq が無い場合の degrade: SESSION_IDLE にフォールバック（fail-safe）
+ * 役割は「forwarder」のみ:
+ *   - payload から transcript_path を抽出し、surface/conductorId/pid/type を足して
+ *     SESSION_STOP メッセージに整形、cmux-team send --from-stdin に流す
+ *   - 分類（ASK/IDLE/SKIP）は Manager (daemon) 側の classifyStopPayload が担う
  *
- * cmux-team send --from-stdin で JSON payload を stdin 渡しし shell エスケープ問題を回避。
+ * jq は preflight (checkJq) で必須扱いのため fallback 分岐は持たない。
  */
 const DETECT_ASK_SCRIPT = [
   '#!/usr/bin/env bash',
-  '# cmux-team Agent/Conductor 用 Stop hook ディスパッチャ (T181)',
-  '# stdin: Stop hook JSON payload',
+  '# cmux-team Stop hook forwarder (T189)',
+  '# stdin: Stop hook JSON payload → SESSION_STOP に整形して daemon に転送するだけ',
   'set -u',
   '',
   'PAYLOAD="$(cat)"',
   'SURFACE="${CMUX_SURFACE:-${SURFACE_OVERRIDE:-}}"',
   'CONDUCTOR_ID="${CONDUCTOR_ID:-}"',
-  'IS_CONDUCTOR=0',
-  '[ -n "$CONDUCTOR_ID" ] && IS_CONDUCTOR=1',
+  'TS="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"',
   '',
-  '# jq が無い場合は fail-safe で SESSION_IDLE を送信して終了',
-  'if ! command -v jq >/dev/null 2>&1; then',
-  '  # 最小 JSON を組み立てる（python3 でエスケープ）',
-  '  if command -v python3 >/dev/null 2>&1; then',
-  '    python3 -c "import json,sys,os,datetime; print(json.dumps({\\"type\\":\\"SESSION_IDLE\\",\\"surface\\":os.environ.get(\\"SURFACE\\",\\"\\"),\\"pid\\":int(os.environ.get(\\"PPID\\",0) or 0),\\"timestamp\\":datetime.datetime.utcnow().isoformat()+\\"Z\\"}))" SURFACE="$SURFACE" 2>/dev/null \\',
-  '      | cmux-team send --from-stdin 2>/dev/null || true',
-  '  fi',
-  '  exit 0',
-  'fi',
+  '# jq は preflight (checkJq) で必須扱い。不在時は hook もサイレント失敗する。',
+  'TRANSCRIPT_PATH="$(printf %s "$PAYLOAD" | jq -r \'.transcript_path // empty\' 2>/dev/null || true)"',
   '',
-  'TRANSCRIPT=$(printf "%s" "$PAYLOAD" | jq -r ".transcript_path // empty" 2>/dev/null)',
-  '',
-  'CASE="C"',
-  'QUESTION=""',
-  '',
-  'if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then',
-  '  LAST_ASSISTANT=$(tail -n 10 "$TRANSCRIPT" | jq -c "select(.type == \\"assistant\\")" 2>/dev/null | tail -n 1)',
-  '  if [ -n "$LAST_ASSISTANT" ]; then',
-  '    HAS_ASK=$(printf "%s" "$LAST_ASSISTANT" | jq -r "[.message.content[]? | select(.type == \\"tool_use\\" and .name == \\"AskUserQuestion\\")] | length" 2>/dev/null)',
-  '    HAS_TOOL=$(printf "%s" "$LAST_ASSISTANT" | jq -r "[.message.content[]? | select(.type == \\"tool_use\\" or .type == \\"tool_result\\")] | length" 2>/dev/null)',
-  '    if [ "${HAS_ASK:-0}" -gt 0 ] 2>/dev/null; then',
-  '      CASE="A"',
-  '      QUESTION=$(printf "%s" "$LAST_ASSISTANT" | jq -r ".message.content[]? | select(.type == \\"text\\") | .text" 2>/dev/null | tail -n 1 | head -c 4096)',
-  '    elif [ "${HAS_TOOL:-0}" = "0" ] && [ "$IS_CONDUCTOR" = "0" ]; then',
-  '      CASE="B"',
-  '    fi',
-  '  fi',
-  'fi',
-  '',
-  'if [ "$CASE" = "B" ]; then',
-  '  # Agent の純粋 text stop → 途中独白として無視（done を書かせない）',
-  '  exit 0',
-  'fi',
-  '',
-  'TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")',
-  '',
-  'if [ "$CASE" = "A" ]; then',
-  '  jq -n \\',
-  '    --arg surface "$SURFACE" \\',
-  '    --arg conductor_id "$CONDUCTOR_ID" \\',
-  '    --arg pid "$PPID" \\',
-  '    --arg question "$QUESTION" \\',
-  '    --arg ts "$TS" \\',
-  '    \'{type:"SESSION_ASK", surface:$surface, conductorId:$conductor_id, pid:($pid|tonumber), question:$question, timestamp:$ts}\' \\',
-  '    | cmux-team send --from-stdin 2>/dev/null || true',
-  'else',
-  '  jq -n \\',
-  '    --arg surface "$SURFACE" \\',
-  '    --arg pid "$PPID" \\',
-  '    --arg ts "$TS" \\',
-  '    \'{type:"SESSION_IDLE", surface:$surface, pid:($pid|tonumber), timestamp:$ts}\' \\',
-  '    | cmux-team send --from-stdin 2>/dev/null || true',
-  'fi',
+  'printf \'{"type":"SESSION_STOP","surface":%s,"conductorId":%s,"pid":%d,"timestamp":%s,"payload":{"transcript_path":%s}}\\n\' \\',
+  '  "$(printf %s "$SURFACE" | jq -Rs .)" \\',
+  '  "$(printf %s "$CONDUCTOR_ID" | jq -Rs .)" \\',
+  '  "$PPID" \\',
+  '  "$(printf %s "$TS" | jq -Rs .)" \\',
+  '  "$(printf %s "$TRANSCRIPT_PATH" | jq -Rs .)" \\',
+  '  | cmux-team send --from-stdin 2>/dev/null || true',
   '',
   'exit 0',
   '',
@@ -1085,6 +1049,7 @@ const DETECT_ASK_SCRIPT = [
 /**
  * detect-ask.sh を .team/prompts/ に冪等に書き出し、そのパスを返す。
  * Conductor/Agent の Stop hook が共通で呼び出す。
+ * T189 以降は forwarder（SESSION_STOP を Manager に転送するだけ）。
  */
 export function ensureAskDetectorScript(projectRoot: string): string {
   const scriptPath = join(projectRoot, ".team/prompts/detect-ask.sh");

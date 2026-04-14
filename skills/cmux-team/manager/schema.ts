@@ -82,6 +82,18 @@ export const SessionAskMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T189: Stop hook からの生データ（Manager 側で ASK/IDLE/SKIP に分類する）
+export const SessionStopMessage = z.object({
+  type: z.literal("SESSION_STOP"),
+  surface: z.string(),
+  conductorId: z.string().optional(),
+  pid: z.number(),
+  timestamp: z.string().datetime(),
+  payload: z.object({
+    transcript_path: z.string().optional(),
+  }),
+});
+
 export const SessionClearMessage = z.object({
   type: z.literal("SESSION_CLEAR"),
   surface: z.string(),
@@ -113,6 +125,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionActiveMessage,
   SessionIdleMessage,
   SessionAskMessage,
+  SessionStopMessage,
   SessionClearMessage,
   ConductorSessionMessage,
   ShutdownMessage,
@@ -125,6 +138,7 @@ export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
 export type ConductorSessionMessage = z.infer<typeof ConductorSessionMessage>;
 export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
+export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 
 // --- Agent 状態 ---
 
