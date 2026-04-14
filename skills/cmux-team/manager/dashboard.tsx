@@ -665,7 +665,7 @@ function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
       ui.text(entry.time, { dim: true }),
       ui.text(entry.icon, entry.iconColor ? { style: { fg: entry.iconColor } } : {}),
       ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
-      entry.surface ? ui.text(`[${entry.surface}]`, { dim: true }) : null,
+      entry.surface ? ui.text(`[${entry.surface.replace("surface:", "")}]`, { dim: true }) : null,
       buildTitleWithLinks(entry.message, repoUrl),
     ]);
   });
