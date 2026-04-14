@@ -151,7 +151,7 @@ bun run "$MAIN_TS" spawn-agent \
 
 ### Agent の完了検出・kill
 
-- Conductor が `cmux list-status` で Idle を検出（pull 型、hooks ベース）
+- Conductor が `cmux-team await-agent` で done マーカーを fs.watch 経由で待機（push 型）。生存は Manager の `spawnAgentPidWatcher` が `process.kill(pid, 0)` で検出（T195）
 - `main.ts kill-agent --surface <s>` で surface クローズ + AGENT_DONE 送信
 
 ## team.json の Conductors 構造

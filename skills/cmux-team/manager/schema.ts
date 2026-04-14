@@ -148,6 +148,8 @@ export interface AgentState {
   taskTitle?: string;
   spawnedAt: string;
   sessionId?: string;
+  pid?: number;
+  pidWatcherInterval?: ReturnType<typeof setInterval>;
 }
 
 // --- Conductor 状態 ---
@@ -163,12 +165,6 @@ export const ConductorState = z.object({
   pid: z.number().optional(),
   sessionId: z.string().optional(),
   disconnectedAt: z.string().datetime().optional(),
-  // T180: cmux tree タイムアウト連続失敗カウンタ
-  //   - tree 成功時に reset される
-  //   - 閾値超過で `kind=cmux_unresponsive` として disconnected 化
-  //   - 既存セッション互換のため optional
-  treeFailureCount: z.number().optional(),
-  treeFailureFirstAt: z.string().datetime().optional(),
   // T181: AskUserQuestion 検出時の質問本文（hook が SESSION_ASK で通知）
   askQuestion: z.string().optional(),
 });

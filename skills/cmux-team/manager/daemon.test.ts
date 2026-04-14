@@ -567,31 +567,9 @@ describe("initFileWatcher", () => {
   });
 });
 
-// --- crashed → disconnected 遷移とリカバリ (T119/T121) ---
-
-// PATH 差し替え用ヘルパー（fake cmux スクリプト）
-let fakeBinDir: string;
-let origPath: string | undefined;
-
-async function setupFakeCmux(): Promise<void> {
-  fakeBinDir = join(testDir, "fake-bin");
-  await mkdir(fakeBinDir, { recursive: true });
-  origPath = process.env.PATH;
-  process.env.PATH = `${fakeBinDir}:${origPath}`;
-}
-
-async function teardownFakeCmux(): Promise<void> {
-  if (origPath !== undefined) {
-    process.env.PATH = origPath;
-  }
-}
-
-async function writeFakeCmux(script: string): Promise<void> {
-  const { chmod } = await import("fs/promises");
-  const path = join(fakeBinDir, "cmux");
-  await writeFile(path, `#!/bin/sh\n${script}\n`);
-  await chmod(path, 0o755);
-}
+// --- crashed → disconnected 遷移とリカバリ (T121/T195) ---
+// T195 以降: 生存確認は `cmux.isAlive(pid)` + `spawnPidWatcher` 一本。
+// fake cmux / writeFakeCmux は不要になり、代わりに `__setIsAliveImpl` で差し替える。
 
 describe("handleMessage: TASK_UPDATED", () => {
   test("TASK_UPDATED は requestWakeup を発火させる", async () => {
@@ -609,53 +587,121 @@ describe("handleMessage: TASK_UPDATED", () => {
   });
 });
 
-describe("crashed → disconnected 遷移 (T121)", () => {
-  // 各テストで fake cmux を設定・解除する
-  // (resetConductor / monitorConductors が cmux コマンドを呼ぶため)
-  beforeEach(async () => {
-    await setupFakeCmux();
-    // デフォルト: tree 成功（ただし surface なし）、他コマンドは成功して何もしない
-    await writeFakeCmux(`
-      case "$1" in
-        tree) printf "pane:1\\n" ;;
-        *) exit 0 ;;
-      esac
-    `);
+describe("crashed → disconnected 遷移 (T121/T195)", () => {
+  test("1. spawnPidWatcher tick: dead 検出で disconnected + taskRunId 保持", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:71",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-010-1712345678",
+        taskId: "010",
+        taskTitle: "journal-generator",
+        worktreePath: join(testDir, ".worktrees/task-010-1712345678"),
+        outputDir: ".team/output/task-010-1712345678",
+        agents: [],
+        status: "running",
+        pid: 99999,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const result = await __testSpawnPidWatcherTick(state, conductor, 99999);
+
+      expect(result).toBe("dead");
+      expect(conductor.status).toBe("disconnected");
+      expect(conductor.disconnectedAt).toBeDefined();
+      // pid はクリアされる
+      expect(conductor.pid).toBeUndefined();
+      // taskRunId 等は保持される（意図的に残す設計）
+      expect(conductor.taskRunId).toBe("task-010-1712345678");
+      expect(conductor.taskId).toBe("010");
+      expect(conductor.worktreePath).toBe(join(testDir, ".worktrees/task-010-1712345678"));
+    } finally {
+      __setIsAliveImpl(null);
+    }
   });
 
-  afterEach(async () => {
-    await teardownFakeCmux();
+  test("1b. spawnPidWatcher tick: alive なら状態変化なし", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:71",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-010-x",
+        taskId: "010",
+        agents: [],
+        status: "running",
+        pid: 12345,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const result = await __testSpawnPidWatcherTick(state, conductor, 12345);
+
+      expect(result).toBe("alive");
+      expect(conductor.status).toBe("running");
+      expect(conductor.pid).toBe(12345);
+      expect(conductor.disconnectedAt).toBeUndefined();
+    } finally {
+      __setIsAliveImpl(null);
+    }
   });
 
-  test("1. running で tree が常に失敗 → disconnected + taskRunId 保持", async () => {
-    // tree を常に失敗させる（リトライ 3 回全てでエラー）
-    await writeFakeCmux(`echo "tree error" >&2; exit 1`);
+  test("1c. spawnPidWatcher tick: daemon 停止中は stopped で no-op", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      state.running = false;
+      const conductor: ConductorState = {
+        surface: "surface:71",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "running",
+        pid: 99999,
+      };
+      state.conductors.set(conductor.surface, conductor);
 
-    const state = await createDaemon(testDir);
-    const conductor: ConductorState = {
-      surface: "surface:71",
-      startedAt: new Date().toISOString(),
-      taskRunId: "task-010-1712345678",
-      taskId: "010",
-      taskTitle: "journal-generator",
-      worktreePath: join(testDir, ".worktrees/task-010-1712345678"),
-      outputDir: ".team/output/task-010-1712345678",
-      agents: [],
-      status: "running",
-    };
-    state.conductors.set(conductor.surface, conductor);
+      const result = await __testSpawnPidWatcherTick(state, conductor, 99999);
 
-    await monitorConductors(state);
+      expect(result).toBe("stopped");
+      expect(conductor.status).toBe("running");
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
 
-    expect(conductor.status).toBe("disconnected");
-    expect(conductor.disconnectedAt).toBeDefined();
-    // taskRunId 等は保持される（意図的に残す設計）
-    expect(conductor.taskRunId).toBe("task-010-1712345678");
-    expect(conductor.taskId).toBe("010");
-    expect(conductor.worktreePath).toBe(join(testDir, ".worktrees/task-010-1712345678"));
-    // ログは logger.ts のモジュールキャッシュにより testDir 外に書かれるため、
-    // ファイル検証ではなく状態遷移の assert で conductor_disconnected + kind=crashed を検証。
-    // (conductor_disconnected は status === "disconnected" と同値)
+  test("1d. spawnPidWatcher tick: pid ミスマッチ（再起動後）は stale で abort", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:71",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "running",
+        pid: 22222, // 新しい pid
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      // 古い pid を渡す（restart 前のウォッチャー）
+      const result = await __testSpawnPidWatcherTick(state, conductor, 11111);
+
+      expect(result).toBe("stale");
+      // conductor はそのまま（新しい pid の session は生きている）
+      expect(conductor.status).toBe("running");
+      expect(conductor.pid).toBe(22222);
+    } finally {
+      __setIsAliveImpl(null);
+    }
   });
 
   test("2. disconnected + CONDUCTOR_DONE で late cleanup が走る", async () => {
@@ -841,6 +887,160 @@ describe("crashed → disconnected 遷移 (T121)", () => {
     });
 
     expect(conductor.status).toBe("idle");
+  });
+});
+
+describe("spawnAgentPidWatcher tick (T195)", () => {
+  test("dead 検出で agents から削除され done マーカーが書かれる", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnAgentPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const agent = {
+        surface: "surface:a1",
+        spawnedAt: new Date().toISOString(),
+        pid: 99999,
+      };
+      const conductor: ConductorState = {
+        surface: "surface:c1",
+        startedAt: new Date().toISOString(),
+        agents: [agent],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+      await mkdir(join(testDir, ".team/conductors/surface_c1/agent-done"), { recursive: true });
+
+      const result = await __testSpawnAgentPidWatcherTick(state, conductor, agent, 99999);
+
+      expect(result).toBe("dead");
+      expect(conductor.agents).toHaveLength(0);
+      // done マーカーが書かれている
+      const doneFile = join(testDir, ".team/conductors/surface_c1/agent-done/surface_a1.done");
+      const done = await readFile(doneFile, "utf-8");
+      expect(done).toContain("status=crashed");
+      expect(done).toContain("reason=pid_watcher");
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("alive なら agents 配列は変化しない", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnAgentPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const agent = {
+        surface: "surface:a1",
+        spawnedAt: new Date().toISOString(),
+        pid: 12345,
+      };
+      const conductor: ConductorState = {
+        surface: "surface:c1",
+        startedAt: new Date().toISOString(),
+        agents: [agent],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const result = await __testSpawnAgentPidWatcherTick(state, conductor, agent, 12345);
+
+      expect(result).toBe("alive");
+      expect(conductor.agents).toHaveLength(1);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("冪等性: SESSION_ENDED で先に削除されていたら noop", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnAgentPidWatcherTick } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      // agent object は生き残っているが、conductor.agents 配列からは既に削除済み
+      const agent = {
+        surface: "surface:a1",
+        spawnedAt: new Date().toISOString(),
+        pid: 99999,
+      };
+      const conductor: ConductorState = {
+        surface: "surface:c1",
+        startedAt: new Date().toISOString(),
+        agents: [], // 既に削除済み
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const result = await __testSpawnAgentPidWatcherTick(state, conductor, agent, 99999);
+
+      expect(result).toBe("noop");
+      expect(conductor.agents).toHaveLength(0);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+});
+
+describe("SESSION_CLEAR: pid リセット (T195)", () => {
+  test("running-reset: conductor.pid が undefined になる", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      pid: 99999,
+      taskRunId: "task-010-x",
+      taskId: "10",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: "surface:c1",
+      timestamp: new Date().toISOString(),
+    });
+
+    // pid はクリアされる（次の SESSION_STARTED で新 pid が入る）
+    expect(conductor.pid).toBeUndefined();
+  });
+});
+
+describe("Agent SESSION_STARTED (T195)", () => {
+  test("agent surface にマッチする SESSION_STARTED で pid が登録されウォッチャーが起動", async () => {
+    const state = await createDaemon(testDir);
+    const agent = {
+      surface: "surface:a1",
+      spawnedAt: new Date().toISOString(),
+    };
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [agent],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:a1",
+      pid: 55555,
+      timestamp: new Date().toISOString(),
+    });
+
+    // agent.pid が記録される
+    const updated = conductor.agents.find(a => a.surface === "surface:a1");
+    expect(updated?.pid).toBe(55555);
+    // pidWatcherInterval がセットされている
+    expect(updated?.pidWatcherInterval).toBeDefined();
+
+    // クリーンアップ（interval を止める）
+    if (updated?.pidWatcherInterval) {
+      clearInterval(updated.pidWatcherInterval);
+      updated.pidWatcherInterval = undefined;
+    }
   });
 });
 

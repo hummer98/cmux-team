@@ -4,7 +4,7 @@
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { log, formatSurface } from "./logger";
-import { formatExecError, isExecTimeout } from "./exec-error";
+import { formatExecError } from "./exec-error";
 
 const execFile = promisify(execFileCb);
 
@@ -162,66 +162,31 @@ export async function getPaneForSurface(surface: string, workspace?: string): Pr
   }
 }
 
-/** validateSurface の最大試行回数（1回目 + リトライ2回 = 計3回） */
-const VALIDATE_SURFACE_RETRY_COUNT = 3;
-/** 試行間のバックオフ（ミリ秒） */
-const VALIDATE_SURFACE_BACKOFF_MS = [200, 400, 800] as const;
+/**
+ * PID 生存確認（T195）。
+ *
+ * `process.kill(pid, 0)` で signal 0 を送信し、プロセス存在を確認する。
+ * tree / list-status を使わないため cmux daemon の deadlock 影響を受けない。
+ *
+ * 注意: PID は OS で再利用されるため、kill(pid, 0) が true を返しても
+ * それが元のプロセスとは限らない。Manager 再起動直後は team.json 永続化の
+ * pid が別プロセスと衝突する可能性があるが、発生確率は低いため割り切る。
+ */
+let isAliveImpl: ((pid: number) => boolean) | null = null;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+/** テスト用: `isAlive` の実装を差し替える。`null` で元に戻す。 */
+export function __setIsAliveImpl(impl: ((pid: number) => boolean) | null): void {
+  isAliveImpl = impl;
 }
 
-/**
- * surface の生存確認（詳細版 — T180）。
- *
- * 戻り値:
- *   - `"alive"`   : tree に surface が含まれていた
- *   - `"missing"` : tree 成功したが surface 不在 / 真エラーが 1 回でも出た
- *   - `"unknown"` : 全試行が execFile タイムアウト（cmux daemon 一時的応答不能の疑い）
- *
- * - tree() が成功した場合は結果を即返す（missing 判定は正常系のためリトライしない）。
- * - tree() が例外を投げた場合のみバックオフ付きでリトライする（cmux 側の一過性 I/O
- *   エラーによる誤 crash 判定を防ぐ）。
- * - 全試行が timeout だった場合のみ `"unknown"` を返す（混在時は `"missing"` 寄せ
- *   — 真エラーが 1 回でも返れば cmux daemon は応答しているため）。
- */
-export async function validateSurfaceDetailed(
-  surface: string,
-  workspace?: string
-): Promise<"alive" | "missing" | "unknown"> {
-  let allTimedOut = true;
-  let lastError: unknown;
-  for (let attempt = 0; attempt < VALIDATE_SURFACE_RETRY_COUNT; attempt++) {
-    try {
-      const output = await tree(workspace);
-      return output.includes(surface) ? "alive" : "missing";
-    } catch (e: any) {
-      lastError = e;
-      if (!isExecTimeout(e)) {
-        allTimedOut = false;
-      }
-      if (attempt === VALIDATE_SURFACE_RETRY_COUNT - 1) {
-        await log(
-          "validate_surface_failed",
-          `${formatSurface(surface, "S")} attempts=${attempt + 1} all_timed_out=${allTimedOut} last_error=${formatExecError(e)}`
-        );
-        return allTimedOut ? "unknown" : "missing";
-      }
-      await sleep(VALIDATE_SURFACE_BACKOFF_MS[attempt] ?? 800);
-    }
+export function isAlive(pid: number): boolean {
+  if (isAliveImpl) return isAliveImpl(pid);
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
-  // 到達不能（ループ内で必ず return するが TS のため）
-  void lastError;
-  return "missing";
-}
-
-/**
- * surface の生存確認（従来 bool 版 — 互換維持のため残置）。
- * 詳細な `"unknown"` 判定が必要な呼び出し元は `validateSurfaceDetailed` を使うこと。
- */
-export async function validateSurface(surface: string, workspace?: string): Promise<boolean> {
-  const result = await validateSurfaceDetailed(surface, workspace);
-  return result === "alive";
 }
 
 export async function getCallerSurface(): Promise<string> {

@@ -1,7 +1,7 @@
 /**
  * Master surface の作成・管理
  */
-import { writeFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import * as cmux from "./cmux";
 import { log, formatSurface } from "./logger";
@@ -17,12 +17,6 @@ export async function spawnMaster(
   try {
     // ペイン作成（daemon surface を右に split）
     const surface = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
-
-    const workspace = await cmux.getCallerWorkspace();
-    if (!(await cmux.validateSurface(surface, workspace))) {
-      await log("error", `Master ${formatSurface(surface, "U")} validation failed`);
-      return null;
-    }
 
     // cmux-team spawn-master ラッパー経由で起動（proxy ポートを動的解決）
     await cmux.send(
@@ -46,6 +40,22 @@ export async function spawnMaster(
   }
 }
 
-export async function isMasterAlive(surface: string, workspace?: string): Promise<boolean> {
-  return cmux.validateSurface(surface, workspace);
+/**
+ * Master の生存確認（T195: PID ベース）。
+ *
+ * `.team/team.json` から `master.pid` を読み、`cmux.isAlive(pid)` で確認する。
+ * - pid が無い / team.json が読めない / dead → false
+ * - alive → true
+ */
+export async function isMasterAlive(projectRoot: string): Promise<boolean> {
+  try {
+    const teamJsonPath = join(projectRoot, ".team/team.json");
+    const raw = await readFile(teamJsonPath, "utf-8");
+    const teamJson = JSON.parse(raw);
+    const pid = teamJson?.master?.pid;
+    if (typeof pid !== "number") return false;
+    return cmux.isAlive(pid);
+  } catch {
+    return false;
+  }
 }

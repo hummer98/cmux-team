@@ -64,7 +64,7 @@ TaskCreate: "Fix templates" → task-3
 spawn-agent → Agent launched successfully → TaskUpdate: task-1 → in_progress
 
 # 3. Set to completed after Agent completion detected
-cmux list-status detects Idle → TaskUpdate: task-1 → completed
+cmux-team await-agent returns STATUS=completed → TaskUpdate: task-1 → completed
 
 # 4. Confirm all tasks completed before proceeding to result integration
 ```
@@ -112,7 +112,7 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 **Important:** Inline passing with `--prompt` is retained for backward compatibility, but always use `--prompt-file` for long prompts or complex escaping.
 
-**Launch one at a time with confirmation.** Confirm launch (detect Running with `cmux list-status`) before launching the next.
+**Launch one at a time with confirmation.** Confirm launch (spawn-agent returns exit code 0) before launching the next.
 
 **Prohibited:**
 - Do not create tabs directly with `cmux new-surface` — always use `cmux-team spawn-agent`
@@ -120,64 +120,35 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 ## Agent Monitoring Loop
 
-After launching an Agent, poll at 30-second intervals to wait for completion. **Do not proceed to the next step until the Agent completes.**
-
-Identify the Agent's cN key by comparing `cmux list-status` before and after spawn:
+After launching an Agent, use `cmux-team await-agent` to wait for the done marker (push-type notification via fs.watch). No polling needed. **Do not proceed to the next step until the Agent completes.**
 
 ```bash
-# Get list-status before spawn
-MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
-STATUS_BEFORE=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
+# Assume AGENT_SURFACE is already obtained from spawn-agent result
+# cmux-team await-agent waits for the done marker (written by the Agent's Stop/SessionEnd hook) via fs.watch
+cmux-team await-agent --surface "$AGENT_SURFACE" --timeout 1800
+EXIT_CODE=$?
 
-# ... (Agent spawn) ...
-
-sleep 2
-STATUS_AFTER=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
-# Identify the newly appeared cN entry
-AGENT_KEY=$(diff <(echo "$STATUS_BEFORE") <(echo "$STATUS_AFTER") | grep "^>" | head -1 | awk -F= '{print $1}' | tr -d '> ')
-echo "Agent key: $AGENT_KEY"
+case "$EXIT_CODE" in
+  0)
+    # STATUS=completed or STATUS=ask (printed to stdout as a STATUS= line)
+    echo "Agent $AGENT_SURFACE: finished normally"
+    ;;
+  10)
+    # STATUS=crashed (including cases where Manager's spawnAgentPidWatcher detected PID death)
+    echo "WARNING: Agent $AGENT_SURFACE crashed"
+    ;;
+  2)
+    echo "WARNING: Agent $AGENT_SURFACE timed out"
+    ;;
+esac
 ```
 
-Monitoring loop:
+When running multiple Agents in parallel, pass comma-separated surfaces via `--surface` (`cmux-team await-agent` supports multiple surfaces).
 
-```bash
-# Wait for all Agents to complete
-MY_WS=$(cmux identify | jq -r '.caller.workspace_ref')
-while true; do
-  ALL_DONE=true
-  STATUS=$(cmux list-status --workspace "$MY_WS" 2>/dev/null)
-  for AGENT_KEY in $AGENT_KEYS; do
-    AGENT_STATE=$(echo "$STATUS" | grep "^${AGENT_KEY}=" | sed 's/^[^=]*=//' | awk '{print $1}')
-    case "$AGENT_STATE" in
-      Running|⚙)
-        # Running
-        ALL_DONE=false
-        ;;
-      Idle|○)
-        echo "Agent $AGENT_KEY: completed"
-        ;;
-      "Needs"|"⚠")
-        echo "WARNING: Agent $AGENT_KEY waiting for input"
-        ALL_DONE=false
-        ;;
-      "")
-        # Entry disappeared → crash
-        echo "WARNING: Agent $AGENT_KEY disappeared. Treating as crash."
-        ;;
-    esac
-  done
-  if $ALL_DONE; then
-    break
-  fi
-  sleep 30
-done
-```
-
-**Completion detection:**
-- `cmux list-status` shows cN as `Idle` / `○` → **Completed**
-- `cmux list-status` shows cN as `Running` / `⚙` → **Still running**
-- `cmux list-status` shows cN as `Needs input` / `⚠` → **Waiting for input** (handle Trust confirmation, etc.)
-- cN entry disappeared → **Crashed**
+**Completion detection (`cmux-team await-agent` exit codes):**
+- `0` → **Completed / ask** (distinguished by the `STATUS=` line in stdout. For `ask`, user intervention may be required.)
+- `10` → **Crashed** (PID death or SessionEnd hook reports crashed)
+- `2` → **Timeout**
 
 ## Review Decision (Step 5)
 

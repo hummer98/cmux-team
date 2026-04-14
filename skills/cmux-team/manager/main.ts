@@ -1058,6 +1058,7 @@ export function ensureAskDetectorScript(projectRoot: string): string {
 
 /**
  * Agent 用 settings.json を生成する。
+ * - SessionStart hook: SESSION_STARTED 送信（T195: PID 追跡に使う）
  * - Stop hook: detect-ask.sh（AskUserQuestion 検出 / SESSION_IDLE 送信）
  * - SessionEnd hook: SESSION_ENDED 送信（logout/prompt_input_exit/other）
  * - statusLine: 存在する場合のみ付与
@@ -1067,6 +1068,16 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const settings: Record<string, any> = {
     hooks: {
+      SessionStart: [
+        {
+          matcher: "startup",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send SESSION_STARTED --surface "${surface}" --pid "$PPID" 2>/dev/null || true'`,
+            timeout: 5000,
+          }],
+        },
+      ],
       Stop: [
         {
           matcher: "",
@@ -1485,10 +1496,8 @@ async function cmdSpawnAgent(): Promise<void> {
     surface = await cmux.newSplit("right");
   }
 
-  if (!(await cmux.validateSurface(surface, callerWorkspace))) {
-    console.error(`Error: surface ${surface} validation failed`);
-    process.exit(1);
-  }
+  // T195: newSurface / newSplit 成功時点で surface は cmux 側に存在する。
+  // 念押しの validation は deadlock リスクを招くため廃止。
 
   // --- 3. Claude Code 起動 ---
   // モデル解決
@@ -1776,13 +1785,32 @@ async function cmdSendAgent(): Promise<void> {
     process.exit(1);
   }
 
-  // cmux 実態の validateSurface でも確認（team.json と実態のズレ対策）
+  // T195: Agent の PID を team.json から引いて生存確認する（PID ベース）。
+  // pid 未反映ウィンドウに備えて 200ms × 3 リトライする。
+  let targetAgentPid: number | undefined;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+      const conductors: any[] = teamJson?.conductors ?? [];
+      for (const c of conductors) {
+        const ag = (c.agents ?? []).find((a: any) => a.surface === targetSurface);
+        if (ag?.pid) {
+          targetAgentPid = ag.pid;
+          break;
+        }
+      }
+    } catch {}
+    if (typeof targetAgentPid === "number") break;
+    await sleep(200);
+  }
+
   const workspace = await cmux.getCallerWorkspace();
-  if (!(await cmux.validateSurface(targetSurface, workspace))) {
-    console.error(`Error: surface ${targetSurface} validation failed`);
+  if (typeof targetAgentPid !== "number" || !cmux.isAlive(targetAgentPid)) {
+    const reason = typeof targetAgentPid !== "number" ? "no_pid_in_team_json" : "pid_dead";
+    console.error(`Error: surface ${targetSurface} is not alive (${reason})`);
     await log(
       "send_agent_rejected",
-      `caller=${callerSurface} target=${targetSurface} reason=validate_surface_failed`,
+      `caller=${callerSurface} target=${targetSurface} reason=${reason}`,
     );
     process.exit(1);
   }

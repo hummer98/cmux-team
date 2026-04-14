@@ -43,8 +43,8 @@ description: >
 | Manager → Conductor | `cmux send`（`/clear` + 新プロンプト送信） |
 | Manager ← Conductor | done マーカーファイル（`.team/conductors/<conductor>/done`）の存在確認（pull 型）+ Conductor の Stop/SessionEnd hook が送る SESSION_* メッセージ |
 | Conductor → Agent | `cmux-team send-agent`（Conductor の `cmux send` 直接呼び出しは PreToolUse hook でブロック） |
-| Conductor ← Agent | `cmux-team await-agent`（Agent の Stop/SessionEnd hook が書き出す done マーカーを fs.watch で監視）+ fallback の `cmux list-status` |
-| Manager → Master | `.team/logs/manager.log` + `cmux list-status`（直接参照） |
+| Conductor ← Agent | `cmux-team await-agent`（Agent の Stop/SessionEnd hook が書き出す done マーカーを fs.watch で監視） |
+| Manager → Master | `.team/logs/manager.log` + `cmux-team status` |
 
 ### 1. コマンド一覧
 
@@ -128,14 +128,14 @@ cmux-team trace-task 035            # 特定タスクのセッション履歴（
 
 **workspace 分離（重要）:**
 
-`cmux tree` はデフォルトで全ワークスペースの surface を返すため、複数ワークスペースで cmux-team を同時起動している場合は別ワークスペースの surface ID と混同する原因になる。daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、surface 検証や tree 取得には常に `--workspace` を付けて問い合わせる。
+`cmux tree` はデフォルトで全ワークスペースの surface を返すため、複数ワークスペースで cmux-team を同時起動している場合は別ワークスペースの surface ID と混同する原因になる。daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、pane 逆引き・surface 作成には常に `--workspace` を付けて問い合わせる（T195 以降 surface 検証は PID ベースに移行したため、`cmux tree` は init 時の pane 逆引きにのみ使用）。
 
 **基本操作コマンド:**
 
 | コマンド | 用途 |
 |---------|------|
 | `cmux identify` | 自分の workspace/surface を確認 |
-| `cmux tree --workspace <id>` | ペイン・サーフェス階層を表示（cmux-team では必ず workspace を指定） |
+| `cmux tree --workspace <id>` | ペイン・サーフェス階層を表示（T195 以降は init 時の pane 逆引きのみに使用。生存確認は PID + hook push に一本化） |
 | `cmux list-panes` | ペイン一覧 |
 | `cmux list-pane-surfaces` | ペイン内のサーフェス一覧 |
 | `cmux new-split right` | 右にペイン分割（`left`/`up`/`down` も可） |
