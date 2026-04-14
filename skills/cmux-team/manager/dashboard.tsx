@@ -277,6 +277,23 @@ function isValidTaskId(id: string): boolean {
   return id !== "" && id !== "?" && id !== "undefined";
 }
 
+/**
+ * detail 文字列から surface 識別子を抽出する (T192)。
+ *
+ * 対応フォーマット:
+ *   - 旧: `surface=surface:NNN` → `surface:NNN` を返す
+ *   - 新: `C[NNN]` / `A[NNN]` / `M[NNN]` / `U[NNN]` / `S[NNN]` → `surface:NNN` を返す
+ *
+ * 戻り値は旧フォーマット互換の `surface:NNN` 形式で、JournalEntry.surface に格納される。
+ */
+function extractSurface(detail: string): string {
+  const old = detail.match(/surface=surface:(\S+)/);
+  if (old) return `surface:${old[1]}`;
+  const fmt = detail.match(/\b[CAMUS]\[(\d+)\]/);
+  if (fmt) return `surface:${fmt[1]}`;
+  return "";
+}
+
 function parseJournalEntries(lines: string[]): JournalEntry[] {
   const result: JournalEntry[] = [];
   for (const line of lines) {
@@ -295,13 +312,13 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
     } else if (event === "conductor_started") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       if (!isValidTaskId(taskId)) continue;
-      const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
+      const surface = extractSurface(detail);
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf04b", "[▶]"), taskId, message: title || `${detail.match(/conductor_id=(\S+)/)?.[1] ?? ""} started`, level: "warn", surface: surface || undefined, iconColor: YELLOW });
     } else if (event === "task_completed") {
       const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
       if (!isValidTaskId(taskId)) continue;
-      const surface = detail.match(/surface=surface:(\S+)/)?.[1] ?? "";
+      const surface = extractSurface(detail);
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf058", "[✓]"), taskId, message: summary || title || detail, level: "info", surface: surface || undefined, iconColor: GREEN });

@@ -4,7 +4,7 @@
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import * as cmux from "./cmux";
-import { log } from "./logger";
+import { log, formatSurface } from "./logger";
 
 export interface MasterState {
   surface: string;
@@ -20,7 +20,7 @@ export async function spawnMaster(
 
     const workspace = await cmux.getCallerWorkspace();
     if (!(await cmux.validateSurface(surface, workspace))) {
-      await log("error", `Master surface ${surface} validation failed`);
+      await log("error", `Master ${formatSurface(surface, "U")} validation failed`);
       return null;
     }
 
@@ -38,7 +38,7 @@ export async function spawnMaster(
     const markerPath = join(projectRoot, ".team/master.surface");
     await writeFile(markerPath, surface);
 
-    await log("master_spawned", `surface=${surface}`);
+    await log("master_spawned", formatSurface(surface, "U"));
     return { surface };
   } catch (e: any) {
     await log("error", `Master spawn failed: ${e.message}`);

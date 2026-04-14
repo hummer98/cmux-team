@@ -27,9 +27,9 @@ import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
-import { log } from "./logger";
+import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -313,9 +313,11 @@ async function cmdStart(): Promise<void> {
   // proxy 起動・TUI 起動より前で同期実行する（Ink TUI が stdin/stdout を奪うため）
   await ensureEnvrcHookPrompt(PROJECT_ROOT);
 
+  // T192: ルート package.json からバージョンを読み込み state と daemon_started ログに記録
+  state.version = await loadVersion();
   await log(
     "daemon_started",
-    `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout} sleep_prevention=${sleepPrevention}`
+    `${state.version} pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout} sleep_prevention=${sleepPrevention}`
   );
   await log(
     "auto_update_config",
@@ -483,7 +485,7 @@ async function cmdStart(): Promise<void> {
   // daemon surface / workspace 取得（CMUX_SURFACE 環境変数 → cmux identify フォールバック）
   let daemonSurface: string | undefined = process.env.CMUX_SURFACE;
   if (daemonSurface) {
-    await log("daemon_surface", `surface=${daemonSurface} (env)`);
+    await log("daemon_surface", `${formatSurface(daemonSurface, "M")} (env)`);
     // surface が env 経由の場合も identify でworkspaceを取得
     const ws = await cmux.getCallerWorkspace();
     if (ws) {
@@ -493,7 +495,7 @@ async function cmdStart(): Promise<void> {
   } else {
     try {
       daemonSurface = await cmux.getCallerSurface();
-      await log("daemon_surface", `surface=${daemonSurface} (identify)`);
+      await log("daemon_surface", `${formatSurface(daemonSurface, "M")} (identify)`);
     } catch (e: any) {
       await log("daemon_surface_fallback", e.message);
     }
@@ -599,7 +601,7 @@ async function cmdStart(): Promise<void> {
   for (const r of resumeAssignments) {
     const c = state.conductors.get(r.surface);
     if (!c) {
-      await log("resume_assignment_missing_conductor", `surface=${r.surface} task_id=${r.taskId}`);
+      await log("resume_assignment_missing_conductor", `${formatSurface(r.surface, "C")} task_id=${r.taskId}`);
       continue;
     }
     c.taskId = r.taskId;
@@ -616,7 +618,7 @@ async function cmdStart(): Promise<void> {
 
     await log(
       "task_resumed",
-      `task_id=${r.taskId} session_id=${r.sessionId} surface=${r.surface} (via boot)`
+      `task_id=${r.taskId} session_id=${r.sessionId} ${formatSurface(r.surface, "C")} (via boot)`
     );
   }
 
