@@ -235,6 +235,23 @@ daemon 停止時に `cmux clear-status` でクリアする。
 3. プロジェクトローカル: `skills/cmux-team/templates/`
 4. 手動インストール: `~/.claude/skills/cmux-team/templates/`
 
+### Event Catalog（eventBus.ts）
+
+daemon プロセス内の **実 state mutation** → TUI refresh を疎結合に接続するための EventEmitter ラッパー。
+
+| event | payload | emitter（実 mutation 点） | subscriber |
+|---|---|---|---|
+| state-changed | source: string | conductor.ts (assignTask L481, resetConductor L572), daemon.ts (handleMessage 各 case の実 mutation 直後, scanTasks 差分あり時, monitorConductors/pidWatcher の status 遷移) | dashboard.tsx (scheduleRefresh 経由で 100ms debounce 描画) |
+
+**追跡性ガイドライン**:
+
+- `bus.emit` / `bus.on` の直接呼び出しは eventBus.ts 外では禁止（`rg "bus\.(emit|on)\b" skills/cmux-team/manager | rg -v eventBus.ts` で 0 件になることを確認）
+- emit は必ず `notifyStateChanged(source)` ラッパー経由。source には `"<ファイル>:<関数>:<理由>"` 形式の文字列を渡す
+- emit は **実際に state が mutate した直後のみ**。中間処理完了点（外部コマンド終了、ローカル変数更新）では emit しない
+- `CMUX_TEAM_TRACE_EVENTS=1` で起動すると `manager.log` に `event_emit event=state-changed source=...` が記録される（デバッグ用）
+- 新 event を追加する場合は `Event` discriminated union を導入し、専用 `notify*` ラッパーを export する
+- `logger.ts` は `eventBus.ts` を import してはならない（循環依存禁止）
+
 ---
 
 ## レイアウトモード

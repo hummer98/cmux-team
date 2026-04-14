@@ -10,6 +10,7 @@ import { loadTaskState } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log } from "./logger";
+import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
 import type { ConductorState, LayoutMode } from "./schema";
@@ -480,6 +481,7 @@ export async function assignTask(
     conductor.agents = [];
     conductor.status = "running";
     // sessionId は初回起動時に発行済み — タスク割り当てで変更しない
+    notifyStateChanged("conductor.ts:assignTask:status-running");
 
     await log(
       "conductor_started",
@@ -570,6 +572,7 @@ export async function resetConductor(
     // 古い disconnectedAt が残ることを防ぐ (Minor 3)
     conductor.disconnectedAt = undefined;
     // sessionId は初回起動時に発行済み — reset で消さない（常駐セッション）
+    notifyStateChanged("conductor.ts:resetConductor:status-idle");
 
     await log("conductor_reset", `surface=${conductor.surface}`);
   } catch (e: any) {
