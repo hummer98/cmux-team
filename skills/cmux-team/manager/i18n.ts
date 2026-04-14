@@ -64,10 +64,6 @@ const en = {
   conductor_task_template_not_found:
     "Conductor task template not found. Please run: npm install -g @hummer98/cmux-team",
 
-  // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
-  conductor_wait_prompt:
-    "You are a Conductor slot. Wait at the ❯ prompt without doing anything until the Manager assigns a task via /clear + prompt. Do NOT search, read, or execute any tasks.",
-
   // ── e2e.ts ────────────────────────────────────────────────────────────────────
   e2e_daemon_not_confirmed:
     "  WARNING: daemon startup not confirmed. Continuing tests.",
@@ -586,10 +582,6 @@ const ja: typeof en = {
     "Conductor role template not found. npm install -g @hummer98/cmux-team を実行してください",
   conductor_task_template_not_found:
     "Conductor task template not found. npm install -g @hummer98/cmux-team を実行してください",
-
-  // ── Conductor 待機プロンプト ───────────────────────────────────────────────────
-  conductor_wait_prompt:
-    "あなたは Conductor スロットです。Manager が /clear + プロンプト送信でタスクを割り当てるまで、何もせず ❯ プロンプトで待機してください。タスクの検索・読み取り・実行は一切行わないこと。",
 
   // ── e2e.ts ────────────────────────────────────────────────────────────────────
   e2e_daemon_not_confirmed: "  WARNING: daemon 起動未確認。テストを続行します。",

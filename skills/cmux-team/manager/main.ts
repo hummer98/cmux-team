@@ -573,7 +573,7 @@ async function cmdStart(): Promise<void> {
     await log("resume_overflow_to_ready", `task_id=${overflow.taskId}`);
   }
 
-  // タスクタイトルを取得（renameTab 用）
+  // タスクタイトルを取得（ダッシュボード/team.json 用）
   for (const item of rawResumePlan) {
     const taskFile = await findTaskFile(item.taskId);
     if (taskFile) {
@@ -611,10 +611,6 @@ async function cmdStart(): Promise<void> {
     c.status = "running";
     c.startedAt = new Date().toISOString();
     c.agents = [];
-
-    const num = c.surface.replace("surface:", "");
-    const shortTitle = (c.taskTitle ?? "").slice(0, 30);
-    await cmux.renameTab(c.surface, `[${num}] ♦ T${r.taskId} ${shortTitle}`).catch(() => {});
 
     await log(
       "task_resumed",
@@ -1242,10 +1238,11 @@ async function cmdConductor(): Promise<void> {
   claudeArgs.push("--session-id", sessionId);
 
   // 初期プロンプトを決定
-  const initialPrompt = taskPromptFile
-    ? `${taskPromptFile} を読んで指示に従って作業してください。`
-    : t("conductor_wait_prompt");
-  claudeArgs.push(initialPrompt);
+  //   taskPromptFile 指定時のみチャット入力として push する。
+  //   未指定（通常の待機起動）は何も push せず、Claude は純粋に ❯ で待機する。
+  if (taskPromptFile) {
+    claudeArgs.push(`${taskPromptFile} を読んで指示に従って作業してください。`);
+  }
 
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
@@ -1544,22 +1541,8 @@ async function cmdSpawnAgent(): Promise<void> {
   await cmux.send(surface, claudeCmd + "\n");
 
   // --- 4. タブ名設定 ---
-  const roleIcons: Record<string, string> = {
-    researcher: "🔍", research: "🔍",
-    architect: "📐", design: "📐",
-    implementer: "⚙", impl: "⚙",
-    reviewer: "👀", review: "👀",
-    tester: "🧪", test: "🧪",
-    dockeeper: "📝", docs: "📝",
-    "task-manager": "📋",
-  };
-  const roleIcon = roleIcons[role] ?? "▸";
   const num = surface.replace("surface:", "");
-  const shortTitle = taskTitle
-    ? (taskTitle.length > 25 ? taskTitle.slice(0, 25) + "…" : taskTitle)
-    : "";
-  const tabName = shortTitle ? `[${num}] ${roleIcon} ${shortTitle}` : `[${num}] ${roleIcon} ${role}`;
-  await cmux.renameTab(surface, tabName);
+  await cmux.renameTab(surface, `[${num}] Agent`);
 
   // --- 6. AGENT_SPAWNED を daemon に送信 ---
   await postMessage({

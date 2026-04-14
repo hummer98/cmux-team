@@ -140,13 +140,11 @@ export async function launchConductor(
   }
 
   // 4. タブ名設定
-  //    resume 時はタブ名を呼び出し元（initializeLayout / main.ts）が
-  //    `[N] ♦ T<id> <title>` に rename するため、ここでは idle を付けず何もしない。
-  //    （二重 rename を避ける — plan/design-review で確認済み）
-  if (!opts?.resumeTaskId) {
-    const num = surface.replace("surface:", "");
-    await cmux.renameTab(surface, `[${num}] ♦ idle`);
-  }
+  //    resume / 新規問わず `[N] Conductor` を設定する。
+  //    T193 でタブ名はロール固定表記にしたため、後続で assign/reset 時に
+  //    rename する必要はなく、ここで一度だけ設定すれば十分。
+  const num = surface.replace("surface:", "");
+  await cmux.renameTab(surface, `[${num}] Conductor`);
 }
 
 // --- createConductorPanes ---
@@ -442,17 +440,6 @@ export async function assignTask(
       throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
     }
 
-    // --- 5. タブ名更新（失敗しても task は継続）---
-    // renameTab は表示用の冪等な後処理。catch-all に捕まって task abort
-    // されると実害の無い失敗でタスクが吹き飛ぶため、個別に握りつぶす。
-    const num = conductor.surface.replace("surface:", "");
-    const shortTitle = taskTitle.length > 30 ? taskTitle.slice(0, 30) + "…" : taskTitle;
-    try {
-      await cmux.renameTab(conductor.surface, `[${num}] ♦ T${taskId} ${shortTitle}`);
-    } catch (e: any) {
-      await log("error", `renameTab failed: ${formatSurface(conductor.surface, "C")} ${e.message}`);
-    }
-
     // タスク-セッション索引に記録
     try {
       const db = initDB(projectRoot);
@@ -555,10 +542,6 @@ export async function resetConductor(
         }
       }
     }
-
-    // 3. タブ名をリセット
-    const num = conductor.surface.replace("surface:", "");
-    await cmux.renameTab(conductor.surface, `[${num}] ♦ idle`);
 
     // 4. ConductorState リセット
     conductor.status = "idle";
