@@ -90,6 +90,56 @@ export interface DaemonState {
   lastSidebarCategory: string | null;
 }
 
+/**
+ * surface 名をファイルパス用に正規化する (T181)。
+ * `surface:12` のようなコロンを含む surface 名を `surface_12` に変換。
+ * await-agent / daemon 双方で同じ関数を使って一貫した done ファイルパスを組み立てる。
+ */
+export function normalizeSurfaceForPath(surface: string): string {
+  return surface.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Agent の done マーカーファイルを書き出す (T181)。
+ * Conductor の await-agent がこのファイルを fs.watch し、STATUS/REASON/QUESTION を
+ * stdout に返す。timestamp_ms は await-agent が古い done を skip するために使う。
+ *
+ * ファイルパス: .team/conductors/<conductor-surface>/agent-done/<agent-surface>.done
+ */
+export async function writeAgentDone(
+  projectRoot: string,
+  conductorSurface: string,
+  agentSurface: string,
+  payload: { status: "completed" | "crashed" | "ask"; reason?: string; question?: string },
+): Promise<void> {
+  const dir = join(
+    projectRoot,
+    ".team/conductors",
+    normalizeSurfaceForPath(conductorSurface),
+    "agent-done",
+  );
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `${normalizeSurfaceForPath(agentSurface)}.done`);
+  const now = new Date();
+  const lines = [
+    `status=${payload.status}`,
+    `timestamp_ms=${now.getTime()}`,
+    `timestamp=${now.toISOString()}`,
+  ];
+  if (payload.reason) lines.push(`reason=${payload.reason}`);
+  if (payload.question) {
+    const q = payload.question.replace(/\r?\n/g, " ").slice(0, 4096);
+    lines.push(`question=${q}`);
+  }
+  await writeFile(file, lines.join("\n") + "\n");
+}
+
+/** 長い文字列をログ用に短縮 */
+function truncate(s: string, n: number): string {
+  if (s.length <= n) return s;
+  return s.slice(0, n) + "…";
+}
+
 /** surface または taskRunId で Conductor を検索 */
 function findConductor(state: DaemonState, surface: string): ConductorState | undefined {
   const direct = state.conductors.get(surface);
@@ -706,15 +756,24 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           `surface=${message.surface} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
         );
       } else {
-        // Agent surface かチェック
+        // Agent surface かチェック (T181: done マーカーを書き出す)
         for (const c of state.conductors.values()) {
           const idx = c.agents.findIndex(a => a.surface === message.surface);
           if (idx !== -1) {
+            const agent = c.agents[idx]!;
+            try {
+              await writeAgentDone(state.projectRoot, c.surface, agent.surface, {
+                status: "crashed",
+                reason: message.reason ?? "session_end",
+              });
+            } catch (e: any) {
+              await log("error", `writeAgentDone failed (session_ended): ${e.message}`);
+            }
             c.agents.splice(idx, 1);
             notifyStateChanged("daemon.ts:handleMessage:session-ended-agent");
             await log(
               "agent_done",
-              `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended`
+              `conductor_surface=${c.surface} surface=${message.surface} trigger=session_ended status=crashed`
             );
             break;
           }
@@ -763,7 +822,15 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (conductor) {
         conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
         if (message.pid) conductor.pid = message.pid;
-        if (conductor.status === "disconnected") {
+        // T181: asking → idle/running に戻る経路（Ask 解決後の通常 stop）
+        if (conductor.status === "asking") {
+          conductor.askQuestion = undefined;
+          conductor.status = conductor.taskRunId ? "running" : "idle";
+          await log(
+            "conductor_ask_resolved",
+            `surface=${message.surface} new_status=${conductor.status}`
+          );
+        } else if (conductor.status === "disconnected") {
           if (conductor.taskRunId) {
             // タスク実行中だった Conductor が復活 → running に戻すだけ。
             // cleanup は C-1 (CONDUCTOR_DONE) か C-2 (disconnect_timeout) が担う。
@@ -787,6 +854,87 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         await log(
           "session_idle",
           `surface=${message.surface}`
+        );
+        break;
+      }
+
+      // T181: Conductor にマッチしなければ Agent surface として処理
+      let matched = false;
+      for (const c of state.conductors.values()) {
+        const agent = c.agents.find(a => a.surface === message.surface);
+        if (!agent) continue;
+        matched = true;
+        try {
+          await writeAgentDone(state.projectRoot, c.surface, agent.surface, {
+            status: "completed",
+          });
+        } catch (e: any) {
+          await log("error", `writeAgentDone failed (session_idle): ${e.message}`);
+        }
+        // agents リストからは削除しない（idle 中の Agent も生存扱い。SESSION_ENDED / surface_lost で削除）
+        await log(
+          "agent_done",
+          `conductor_surface=${c.surface} surface=${agent.surface} trigger=session_idle status=completed`
+        );
+        break;
+      }
+      if (!matched) {
+        await log(
+          "session_idle_unknown_surface",
+          `surface=${message.surface} pid=${message.pid ?? ""}`
+        );
+      }
+      break;
+    }
+
+    case "SESSION_ASK": {
+      // T181: AskUserQuestion 検出時の処理
+      // 1) Master は対象外
+      if (message.surface === state.masterSurface) {
+        await log("master_session_ask_ignored", `surface=${message.surface}`);
+        break;
+      }
+
+      // 2) Conductor surface か判定
+      const conductor = findConductor(state, message.surface);
+      if (conductor) {
+        conductor.askQuestion = message.question;
+        conductor.status = "asking";
+        if (message.pid) conductor.pid = message.pid;
+        conductor.disconnectedAt = undefined;
+        notifyStateChanged("daemon.ts:handleMessage:session-ask-conductor");
+        await log(
+          "conductor_asking",
+          `surface=${message.surface} question=${truncate(message.question, 120)}`
+        );
+        break;
+      }
+
+      // 3) Agent surface か判定
+      let matched = false;
+      for (const c of state.conductors.values()) {
+        const agent = c.agents.find(a => a.surface === message.surface);
+        if (!agent) continue;
+        matched = true;
+        try {
+          await writeAgentDone(state.projectRoot, c.surface, agent.surface, {
+            status: "ask",
+            question: message.question,
+          });
+        } catch (e: any) {
+          await log("error", `writeAgentDone failed (session_ask): ${e.message}`);
+        }
+        await log(
+          "agent_ask",
+          `conductor_surface=${c.surface} surface=${agent.surface} question=${truncate(message.question, 120)}`
+        );
+        // Agent surface は閉じない（Conductor が await-agent で STATUS=ask を受けて対処）
+        break;
+      }
+      if (!matched) {
+        await log(
+          "session_ask_unknown_surface",
+          `surface=${message.surface} pid=${message.pid ?? ""}`
         );
       }
       break;
@@ -1210,11 +1358,20 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       const agent = conductor.agents[i]!;
       const agentResult = await surfaceAlive(agent.surface);
       if (agentResult === "missing") {
+        // T181: Conductor の await-agent がタイムアウトで終わらないよう done マーカーを書く
+        try {
+          await writeAgentDone(state.projectRoot, surface, agent.surface, {
+            status: "crashed",
+            reason: "surface_lost",
+          });
+        } catch (e: any) {
+          await log("error", `writeAgentDone failed (surface_lost): ${e.message}`);
+        }
         conductor.agents.splice(i, 1);
         notifyStateChanged("daemon.ts:monitorConductors:agent-removed");
         await log(
           "agent_done",
-          `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost`
+          `conductor_surface=${surface} surface=${agent.surface} trigger=surface_lost status=crashed`
         );
       }
       // agentResult === "unknown" はここでは起きない（treeOutput null でも Conductor が alive なら

@@ -25,9 +25,9 @@
 import { join, dirname, basename } from "path";
 import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
-import { readFile, readdir, writeFile, mkdir, stat } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -41,7 +41,7 @@ import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from ".
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import type { QueueMessage, LayoutMode, AutoUpdateMode } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -184,9 +184,24 @@ function requireArg(name: string): string {
   return val;
 }
 
+/** --<name> （値なし）フラグの有無を判定 */
+function hasFlag(name: string): boolean {
+  return args.includes(`--${name}`);
+}
+
 /** --help / -h フラグの有無を判定 */
 function hasHelpFlag(): boolean {
   return args.includes("--help") || args.includes("-h");
+}
+
+/** stdin を全部読み切って文字列で返す */
+async function readStdin(): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on("data", (c) => chunks.push(typeof c === "string" ? Buffer.from(c) : c));
+    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    process.stdin.on("error", reject);
+  });
 }
 
 /** ヘルプテキストを表示して正常終了 */
@@ -666,10 +681,32 @@ async function cmdStart(): Promise<void> {
 
 async function cmdSend(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_send"));
-  const type = args[1];
   const now = new Date().toISOString();
 
   let message: QueueMessage;
+
+  // T181: JSON payload 全体を stdin で受け取るモード。
+  // shell エスケープ問題（改行・クォート）を避けるため hook 側から使う。
+  if (hasFlag("from-stdin")) {
+    const raw = await readStdin();
+    let obj: unknown;
+    try {
+      obj = JSON.parse(raw);
+    } catch (e: any) {
+      console.error(`Error: invalid JSON on stdin: ${e.message}`);
+      process.exit(1);
+    }
+    try {
+      message = QueueMessageSchema.parse(obj);
+    } catch (e: any) {
+      console.error(`Error: queue message validation failed: ${e.message}`);
+      process.exit(1);
+    }
+    await postMessageAndExit(message);
+    return;
+  }
+
+  const type = args[1];
 
   switch (type) {
     case "TASK_CREATED":
@@ -761,6 +798,17 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "SESSION_ASK":
+      message = {
+        type: "SESSION_ASK",
+        surface: requireArg("surface"),
+        question: requireArg("question"),
+        conductorId: getArg("conductor-id"),
+        pid: getArg("pid") ? Number(getArg("pid")) : undefined,
+        timestamp: now,
+      };
+      break;
+
     case "SESSION_CLEAR":
       message = {
         type: "SESSION_CLEAR",
@@ -785,11 +833,15 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
       process.exit(1);
   }
 
-  // proxy-port ファイルからポート取得
+  await postMessageAndExit(message);
+}
+
+/** daemon HTTP API に QueueMessage を POST して結果に応じて exit する */
+async function postMessageAndExit(message: QueueMessage): Promise<void> {
   const portFile = join(PROJECT_ROOT, ".team/proxy-port");
   if (!existsSync(portFile)) {
     console.error(t("daemon_not_running"));
@@ -946,8 +998,148 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
   'exit 0',
 ].join("\n");
 
+/**
+ * Stop hook ディスパッチャスクリプト (T181)。
+ * stdin: Stop hook JSON payload（Claude Code 仕様）
+ *
+ * 役割:
+ *   - transcript_path から末尾 10 行を読み、最終 assistant メッセージの content を分類
+ *   - Case A: AskUserQuestion tool_use を含む → SESSION_ASK を送信（question = 直前 text 4KB）
+ *   - Case B (Agent のみ): tool_use / tool_result を一切含まない純粋 text stop → exit 0（独白 → 無視）
+ *   - Case C: それ以外 → SESSION_IDLE を送信
+ *   - Conductor の場合は CONDUCTOR_ID env が立っており Case B 判定を skip する
+ *   - jq が無い場合の degrade: SESSION_IDLE にフォールバック（fail-safe）
+ *
+ * cmux-team send --from-stdin で JSON payload を stdin 渡しし shell エスケープ問題を回避。
+ */
+const DETECT_ASK_SCRIPT = [
+  '#!/usr/bin/env bash',
+  '# cmux-team Agent/Conductor 用 Stop hook ディスパッチャ (T181)',
+  '# stdin: Stop hook JSON payload',
+  'set -u',
+  '',
+  'PAYLOAD="$(cat)"',
+  'SURFACE="${CMUX_SURFACE:-${SURFACE_OVERRIDE:-}}"',
+  'CONDUCTOR_ID="${CONDUCTOR_ID:-}"',
+  'IS_CONDUCTOR=0',
+  '[ -n "$CONDUCTOR_ID" ] && IS_CONDUCTOR=1',
+  '',
+  '# jq が無い場合は fail-safe で SESSION_IDLE を送信して終了',
+  'if ! command -v jq >/dev/null 2>&1; then',
+  '  # 最小 JSON を組み立てる（python3 でエスケープ）',
+  '  if command -v python3 >/dev/null 2>&1; then',
+  '    python3 -c "import json,sys,os,datetime; print(json.dumps({\\"type\\":\\"SESSION_IDLE\\",\\"surface\\":os.environ.get(\\"SURFACE\\",\\"\\"),\\"pid\\":int(os.environ.get(\\"PPID\\",0) or 0),\\"timestamp\\":datetime.datetime.utcnow().isoformat()+\\"Z\\"}))" SURFACE="$SURFACE" 2>/dev/null \\',
+  '      | cmux-team send --from-stdin 2>/dev/null || true',
+  '  fi',
+  '  exit 0',
+  'fi',
+  '',
+  'TRANSCRIPT=$(printf "%s" "$PAYLOAD" | jq -r ".transcript_path // empty" 2>/dev/null)',
+  '',
+  'CASE="C"',
+  'QUESTION=""',
+  '',
+  'if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then',
+  '  LAST_ASSISTANT=$(tail -n 10 "$TRANSCRIPT" | jq -c "select(.type == \\"assistant\\")" 2>/dev/null | tail -n 1)',
+  '  if [ -n "$LAST_ASSISTANT" ]; then',
+  '    HAS_ASK=$(printf "%s" "$LAST_ASSISTANT" | jq -r "[.message.content[]? | select(.type == \\"tool_use\\" and .name == \\"AskUserQuestion\\")] | length" 2>/dev/null)',
+  '    HAS_TOOL=$(printf "%s" "$LAST_ASSISTANT" | jq -r "[.message.content[]? | select(.type == \\"tool_use\\" or .type == \\"tool_result\\")] | length" 2>/dev/null)',
+  '    if [ "${HAS_ASK:-0}" -gt 0 ] 2>/dev/null; then',
+  '      CASE="A"',
+  '      QUESTION=$(printf "%s" "$LAST_ASSISTANT" | jq -r ".message.content[]? | select(.type == \\"text\\") | .text" 2>/dev/null | tail -n 1 | head -c 4096)',
+  '    elif [ "${HAS_TOOL:-0}" = "0" ] && [ "$IS_CONDUCTOR" = "0" ]; then',
+  '      CASE="B"',
+  '    fi',
+  '  fi',
+  'fi',
+  '',
+  'if [ "$CASE" = "B" ]; then',
+  '  # Agent の純粋 text stop → 途中独白として無視（done を書かせない）',
+  '  exit 0',
+  'fi',
+  '',
+  'TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")',
+  '',
+  'if [ "$CASE" = "A" ]; then',
+  '  jq -n \\',
+  '    --arg surface "$SURFACE" \\',
+  '    --arg conductor_id "$CONDUCTOR_ID" \\',
+  '    --arg pid "$PPID" \\',
+  '    --arg question "$QUESTION" \\',
+  '    --arg ts "$TS" \\',
+  '    \'{type:"SESSION_ASK", surface:$surface, conductorId:$conductor_id, pid:($pid|tonumber), question:$question, timestamp:$ts}\' \\',
+  '    | cmux-team send --from-stdin 2>/dev/null || true',
+  'else',
+  '  jq -n \\',
+  '    --arg surface "$SURFACE" \\',
+  '    --arg pid "$PPID" \\',
+  '    --arg ts "$TS" \\',
+  '    \'{type:"SESSION_IDLE", surface:$surface, pid:($pid|tonumber), timestamp:$ts}\' \\',
+  '    | cmux-team send --from-stdin 2>/dev/null || true',
+  'fi',
+  '',
+  'exit 0',
+  '',
+].join("\n");
+
+/**
+ * detect-ask.sh を .team/prompts/ に冪等に書き出し、そのパスを返す。
+ * Conductor/Agent の Stop hook が共通で呼び出す。
+ */
+export function ensureAskDetectorScript(projectRoot: string): string {
+  const scriptPath = join(projectRoot, ".team/prompts/detect-ask.sh");
+  try { mkdirSync(join(projectRoot, ".team/prompts"), { recursive: true }); } catch {}
+  writeFileSync(scriptPath, DETECT_ASK_SCRIPT, { mode: 0o755 });
+  return scriptPath;
+}
+
+/**
+ * Agent 用 settings.json を生成する。
+ * - Stop hook: detect-ask.sh（AskUserQuestion 検出 / SESSION_IDLE 送信）
+ * - SessionEnd hook: SESSION_ENDED 送信（logout/prompt_input_exit/other）
+ * - statusLine: 存在する場合のみ付与
+ */
+export function generateAgentSettings(projectRoot: string, surface: string): string {
+  const settingsPath = join(projectRoot, `.team/prompts/${surface}-agent-settings.json`);
+  const askDetectorPath = ensureAskDetectorScript(projectRoot);
+  const settings: Record<string, any> = {
+    hooks: {
+      Stop: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `bash ${askDetectorPath}`,
+            timeout: 5000,
+          }],
+        },
+      ],
+      SessionEnd: [
+        {
+          matcher: "logout|prompt_input_exit|other",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send SESSION_ENDED --surface "${surface}" --pid "$PPID" --reason "session_end" 2>/dev/null || true'`,
+            timeout: 5000,
+          }],
+        },
+      ],
+    },
+  };
+
+  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
+  if (existsSync(statuslineScript)) {
+    settings.statusLine = { type: "command", command: statuslineScript };
+  }
+
+  try { mkdirSync(join(projectRoot, ".team/prompts"), { recursive: true }); } catch {}
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  return settingsPath;
+}
+
 export function generateConductorSettings(projectRoot: string, surface: string): string {
   const conductorSettingsPath = join(projectRoot, `.team/prompts/${surface}-settings.json`);
+  const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const conductorSettings: Record<string, any> = {
     hooks: {
       PreToolUse: [
@@ -975,7 +1167,7 @@ export function generateConductorSettings(projectRoot: string, surface: string):
           matcher: "",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_IDLE --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
+            command: `bash ${askDetectorPath}`,
             timeout: 5000,
           }],
         },
@@ -1339,21 +1531,9 @@ async function cmdSpawnAgent(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "agent", getArg("model"));
 
-  // Agent 用 settings.json 生成
-  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
-  let agentSettingsFlag = "";
-  if (existsSync(statuslineScript)) {
-    const agentSettingsPath = join(PROJECT_ROOT, `.team/prompts/${surface}-agent-settings.json`);
-    const agentSettings = {
-      statusLine: {
-        type: "command",
-        command: statuslineScript,
-      },
-    };
-    try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
-    writeFileSync(agentSettingsPath, JSON.stringify(agentSettings, null, 2));
-    agentSettingsFlag = `--settings '${agentSettingsPath}'`;
-  }
+  // Agent 用 settings.json 生成（T181: Stop / SessionEnd hook + statusLine）
+  const agentSettingsPath = generateAgentSettings(PROJECT_ROOT, surface);
+  const agentSettingsFlag = `--settings '${agentSettingsPath}'`;
 
   // 環境変数をシェルに焼き付け
   const exportVars = [
@@ -1985,6 +2165,157 @@ async function cmdAwaitTask(): Promise<void> {
     if (e?.name === "AbortError") return;
     throw e;
   }
+}
+
+/**
+ * cmux-team await-agent — Agent の完了/ask/crash を done マーカー経由で待つ (T181)。
+ *
+ * 設計:
+ *   - daemon が `.team/conductors/<c>/agent-done/<a>.done` を書く → fs.watch で即検出
+ *   - `cmdAwaitTask` と同じく watcher 先起動 + existsSync の 3 段構えで TOCTOU race を解消
+ *   - 起動時刻 (startedAt) より古い `timestamp_ms` の done は残骸として skip + unlink
+ *   - STATUS=completed / ask → exit 0, crashed → exit 10, timeout → exit 2
+ *
+ * 注意: `await-agent` は Agent プロセスの wait ではなく done ファイルの fs.watch であり、
+ * rate limit (429) を直接は受けない。Agent 側の Claude CLI が 429 で止まった場合は:
+ *   - 内部リトライ → timeout で再 await
+ *   - SessionEnd → STATUS=crashed で Conductor が判断して spawn-agent/send-agent で再開
+ * のいずれかに倒れる（plan §8.3 / §10.2）。
+ */
+async function cmdAwaitAgent(): Promise<void> {
+  if (hasHelpFlag()) {
+    showHelp([
+      "Usage: cmux-team await-agent --surface <agent-surface> [--timeout <sec>]",
+      "",
+      "Wait for an agent's done marker (completed / ask / crashed / timeout).",
+      "",
+      "Options:",
+      "  --surface <s>   Target agent surface (required)",
+      "  --timeout <n>   Timeout seconds (default: 600)",
+      "",
+      "Exit codes:",
+      "  0  completed or ask",
+      "  2  timeout",
+      "  10 crashed",
+      "  1  internal error",
+    ].join("\n"));
+  }
+
+  const surface = requireArg("surface");
+  const timeoutSec = parseInt(getArg("timeout") ?? "600", 10);
+
+  // team.json から agent の所属 Conductor を逆引き
+  const conductorSurface = await findConductorSurfaceForAgent(surface);
+  if (!conductorSurface) {
+    console.error(`Error: agent surface ${surface} not registered in team.json`);
+    process.exit(1);
+  }
+
+  const doneDir = join(
+    PROJECT_ROOT,
+    ".team/conductors",
+    normalizeSurfaceForPath(conductorSurface),
+    "agent-done",
+  );
+  const doneFileName = `${normalizeSurfaceForPath(surface)}.done`;
+  const doneFile = join(doneDir, doneFileName);
+  await mkdir(doneDir, { recursive: true });
+
+  // startedAt より古い done は「前回の残骸」として skip する (plan §8.4)
+  const startedAt = Date.now();
+
+  const ac = new AbortController();
+  let watcherClosed = false;
+  const timer = setTimeout(() => {
+    watcherClosed = true;
+    ac.abort();
+    console.log("STATUS=timeout");
+    process.exit(2);
+  }, timeoutSec * 1000);
+
+  const handleDoneIfFresh = async (): Promise<boolean> => {
+    if (!existsSync(doneFile)) return false;
+    let content: string;
+    try {
+      content = await readFile(doneFile, "utf-8");
+    } catch {
+      return false;
+    }
+    const tsMatch = /^timestamp_ms=(\d+)/m.exec(content);
+    const ts = tsMatch ? Number(tsMatch[1]) : 0;
+    // 古い done は残骸として除去
+    if (ts && ts < startedAt) {
+      await unlink(doneFile).catch(() => {});
+      return false;
+    }
+    clearTimeout(timer);
+    watcherClosed = true;
+    ac.abort();
+    await printAgentDoneAndExit(doneFile, content);
+    return true;
+  };
+
+  // watcher を先に起動してから存在チェック → 書き込みのタイミングがどちらに転んでも拾える
+  try {
+    const { watch: watchAsync } = await import("fs/promises");
+    (async () => {
+      try {
+        for await (const ev of watchAsync(doneDir, { signal: ac.signal })) {
+          if (watcherClosed) break;
+          if (ev.filename !== doneFileName) continue;
+          await handleDoneIfFresh();
+        }
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        console.error(`Error: watcher failed: ${e.message}`);
+        process.exit(1);
+      }
+    })();
+  } catch (e: any) {
+    console.error(`Error: failed to start watcher: ${e.message}`);
+    process.exit(1);
+  }
+
+  // watcher セットアップ後に「既に書かれていないか」再チェック
+  await handleDoneIfFresh();
+}
+
+/** done ファイルの key=value を STDOUT に大文字化して出し、STATUS に応じて exit する。 */
+async function printAgentDoneAndExit(doneFile: string, content: string): Promise<never> {
+  const out = content
+    .split("\n")
+    .map(line => {
+      const idx = line.indexOf("=");
+      if (idx <= 0) return line;
+      return line.slice(0, idx).toUpperCase() + line.slice(idx);
+    })
+    .join("\n");
+  process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+
+  const status = /^STATUS=(\w+)/m.exec(out)?.[1];
+  const code =
+    status === "completed" || status === "ask" ? 0 :
+    status === "crashed" ? 10 :
+    1;
+
+  // 次回 await-agent が古い done を誤検出しないよう削除する（同期点）
+  await unlink(doneFile).catch(() => {});
+  process.exit(code);
+}
+
+/** team.json から Agent surface の所属 Conductor surface を逆引きする */
+async function findConductorSurfaceForAgent(agentSurface: string): Promise<string | null> {
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  if (!existsSync(teamJsonPath)) return null;
+  try {
+    const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8")) as {
+      conductors?: Array<{ surface: string; agents?: Array<{ surface: string }> }>;
+    };
+    for (const c of teamJson.conductors ?? []) {
+      if (c.agents?.some(a => a.surface === agentSurface)) return c.surface;
+    }
+  } catch {}
+  return null;
 }
 
 /** タスクの summary.md を探して stdout にダンプする */
@@ -2707,6 +3038,9 @@ switch (command) {
     break;
   case "await-task":
     await cmdAwaitTask();
+    break;
+  case "await-agent":
+    await cmdAwaitAgent();
     break;
   case "abort-task":
     await cmdAbortTask();

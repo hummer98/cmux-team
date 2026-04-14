@@ -73,6 +73,15 @@ export const SessionIdleMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const SessionAskMessage = z.object({
+  type: z.literal("SESSION_ASK"),
+  surface: z.string(),
+  question: z.string(),
+  pid: z.number().optional(),
+  conductorId: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const SessionClearMessage = z.object({
   type: z.literal("SESSION_CLEAR"),
   surface: z.string(),
@@ -103,6 +112,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionEndedMessage,
   SessionActiveMessage,
   SessionIdleMessage,
+  SessionAskMessage,
   SessionClearMessage,
   ConductorSessionMessage,
   ShutdownMessage,
@@ -114,6 +124,7 @@ export type TaskUpdatedMessage = z.infer<typeof TaskUpdatedMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
 export type ConductorSessionMessage = z.infer<typeof ConductorSessionMessage>;
+export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
 
 // --- Agent 状態 ---
 
@@ -144,11 +155,13 @@ export const ConductorState = z.object({
   //   - 既存セッション互換のため optional
   treeFailureCount: z.number().optional(),
   treeFailureFirstAt: z.string().datetime().optional(),
+  // T181: AskUserQuestion 検出時の質問本文（hook が SESSION_ASK で通知）
+  askQuestion: z.string().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  status: "starting" | "idle" | "running" | "disconnected";
+  status: "starting" | "idle" | "running" | "asking" | "disconnected";
   paneId?: string;
   pidWatcherInterval?: ReturnType<typeof setInterval>;
 };

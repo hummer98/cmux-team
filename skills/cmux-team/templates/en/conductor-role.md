@@ -119,41 +119,53 @@ echo "Agent spawned: $AGENT_SURFACE"
 
 **Important:** Inline passing with `--prompt` is retained for backward compatibility, but always use `--prompt-file` for long prompts or complex escaping.
 
-## Agent Monitoring Loop
+## Agent Monitoring Loop (await-agent)
 
-After launching an Agent, poll at 30-second intervals to wait for completion. **Do not proceed to the next step until the Agent completes.**
+After launching an Agent, use `cmux-team await-agent` for event-driven completion waiting. **Do not proceed to the next step until the Agent completes.**
+
+`await-agent` watches the done-marker file (`.team/conductors/<conductor>/agent-done/<agent>.done`) written by the Agent's Stop / SessionEnd hooks via fs.watch. On completion it prints `STATUS=...` (and optional `QUESTION=` / `REASON=`) to stdout and exits with a status-specific exit code:
+
+| exit code | STATUS | meaning |
+|-----------|--------|---------|
+| 0 | `completed` | normal completion |
+| 0 | `ask` | Agent raised AskUserQuestion (needs decision) |
+| 10 | `crashed` | session ended abnormally / surface lost |
+| 2 | `timeout` | wait timed out |
+| 1 | other | unknown status |
 
 ```bash
-# Wait for all Agents to complete
-while true; do
-  ALL_DONE=true
-  for AGENT_SURFACE in $AGENT_SURFACES; do
-    if cmux tree 2>&1 | grep -q "$AGENT_SURFACE"; then
-      SCREEN=$(cmux read-screen --surface "$AGENT_SURFACE" --lines 10 2>&1)
-      if echo "$SCREEN" | grep -q '❯' && ! echo "$SCREEN" | grep -q 'esc to interrupt'; then
-        # ❯ present AND no "esc to interrupt" → completed
-        echo "Agent $AGENT_SURFACE: completed"
-      else
-        # Still running
-        ALL_DONE=false
-      fi
-    else
-      # Surface disappeared → treat as Agent crash
-      echo "WARNING: Agent $AGENT_SURFACE disappeared. Treating as crash."
-    fi
-  done
+# Wait for a single Agent
+OUT=$(cmux-team await-agent --surface "$AGENT_SURFACE" --timeout 1800)
+EC=$?
+STATUS=$(echo "$OUT" | grep '^STATUS=' | head -1 | cut -d= -f2)
 
-  if $ALL_DONE; then
-    break
-  fi
-  sleep 30
-done
+case "$STATUS" in
+  completed)
+    echo "Agent $AGENT_SURFACE: completed"
+    ;;
+  ask)
+    QUESTION=$(echo "$OUT" | grep '^QUESTION=' | head -1 | cut -d= -f2-)
+    echo "Agent $AGENT_SURFACE: AskUserQuestion -> $QUESTION"
+    # → optionally issue follow-up instructions via cmux-team send-agent
+    ;;
+  crashed)
+    REASON=$(echo "$OUT" | grep '^REASON=' | head -1 | cut -d= -f2-)
+    echo "WARNING: Agent $AGENT_SURFACE crashed: $REASON"
+    ;;
+  timeout)
+    echo "WARNING: Agent $AGENT_SURFACE timeout"
+    ;;
+esac
 ```
 
+**Waiting for multiple Agents in parallel:** launch `await-agent` in the background for each surface and `wait` for them, or wait sequentially. No busy loop either way.
+
 **Completion detection:**
-- `❯` is displayed AND `esc to interrupt` is not present → **Completed**
-- `❯` is displayed AND `esc to interrupt` is present → **Still running**
-- Surface does not exist → **Crashed**
+- STATUS=`completed` → normal completion
+- STATUS=`ask` → AskUserQuestion raised (needs decision, Agent still alive)
+- STATUS=`crashed` → SessionEnd hook fired / surface disappeared
+
+**Do not poll with `cmux read-screen`** — Stop hooks write the done-marker, so no screen scraping is needed. The legacy "❯ present AND no 'esc to interrupt'" heuristic is removed as of v3.45.
 
 ## Recovery when an Agent has stalled
 

@@ -167,41 +167,53 @@ done
 
 **重要:** `--prompt` でインライン渡しも後方互換として残っているが、プロンプトが長い場合やエスケープが複雑な場合は必ず `--prompt-file` を使うこと。
 
-## Agent 監視ループ
+## Agent 監視ループ（await-agent）
 
-Agent を起動したら、30秒間隔でポーリングして完了を待つ。**Agent が完了するまで次のステップに進まない。**
+Agent を起動したら、`cmux-team await-agent` でイベント駆動で完了を待つ。**Agent が完了するまで次のステップに進まない。**
+
+`await-agent` は Agent の Stop/SessionEnd hook が書き出す done マーカー（`.team/conductors/<conductor>/agent-done/<agent>.done`）を fs.watch で監視する。完了したら STDOUT に `STATUS=...` ほかを出力し、status に応じた exit code で終了する:
+
+| exit code | STATUS | 意味 |
+|-----------|--------|------|
+| 0 | `completed` | 正常完了 |
+| 0 | `ask` | Agent が AskUserQuestion を出した（要判断） |
+| 10 | `crashed` | session 異常終了 / surface 消失 |
+| 2 | `timeout` | タイムアウト |
+| 1 | その他 | 未知の status |
 
 ```bash
-# 全 Agent の完了を待つループ
-while true; do
-  ALL_DONE=true
-  for AGENT_SURFACE in $AGENT_SURFACES; do
-    if cmux tree 2>&1 | grep -q "$AGENT_SURFACE"; then
-      SCREEN=$(cmux read-screen --surface "$AGENT_SURFACE" --lines 10 2>&1)
-      if echo "$SCREEN" | grep -q '❯' && ! echo "$SCREEN" | grep -q 'esc to interrupt'; then
-        # ❯ あり AND "esc to interrupt" なし → 完了
-        echo "Agent $AGENT_SURFACE: 完了"
-      else
-        # まだ実行中
-        ALL_DONE=false
-      fi
-    else
-      # surface 消失 → Agent クラッシュとして処理
-      echo "WARNING: Agent $AGENT_SURFACE が消失。クラッシュとして処理。"
-    fi
-  done
+# 1 Agent 待ち
+OUT=$(cmux-team await-agent --surface "$AGENT_SURFACE" --timeout 1800)
+EC=$?
+STATUS=$(echo "$OUT" | grep '^STATUS=' | head -1 | cut -d= -f2)
 
-  if $ALL_DONE; then
-    break
-  fi
-  sleep 30
-done
+case "$STATUS" in
+  completed)
+    echo "Agent $AGENT_SURFACE: 完了"
+    ;;
+  ask)
+    QUESTION=$(echo "$OUT" | grep '^QUESTION=' | head -1 | cut -d= -f2-)
+    echo "Agent $AGENT_SURFACE: AskUserQuestion -> $QUESTION"
+    # → 必要に応じて cmux-team send-agent で追加指示を出す
+    ;;
+  crashed)
+    REASON=$(echo "$OUT" | grep '^REASON=' | head -1 | cut -d= -f2-)
+    echo "WARNING: Agent $AGENT_SURFACE crashed: $REASON"
+    ;;
+  timeout)
+    echo "WARNING: Agent $AGENT_SURFACE timeout"
+    ;;
+esac
 ```
 
+**複数 Agent を並列で待つ場合:** 各 surface に対して `await-agent` をバックグラウンドで起動し `wait` でまとめる、あるいは順次待つ。いずれもビジーループ不要。
+
 **完了判定:**
-- `❯` が表示されている AND `esc to interrupt` が含まれていない → **完了**
-- `❯` が表示されている AND `esc to interrupt` が含まれている → **まだ実行中**
-- surface が存在しない → **クラッシュ**
+- STATUS=`completed` → 正常完了
+- STATUS=`ask` → AskUserQuestion 出現（要判断、作業は継続中）
+- STATUS=`crashed` → SessionEnd hook / surface 消失で異常終了
+
+**`cmux read-screen` でのポーリングは禁止** — Stop hook が done マーカーを書き出すので、画面読みに頼らない。時間経過による完了判定（`❯` + `esc to interrupt` 無し）は v3.45 以降で廃止された。
 
 ## Agent が途中で停止した場合の回復
 

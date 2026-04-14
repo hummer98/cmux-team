@@ -421,6 +421,7 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   const isStarting = c.status === "starting";
   const isIdle = c.status === "idle";
   const isDisconnected = c.status === "disconnected";
+  const isAsking = c.status === "asking";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
 
@@ -445,6 +446,33 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
         ui.text("idle", { dim: true }),
       ])
     );
+  } else if (isAsking) {
+    const taskParts: ReturnType<typeof ui.text>[] = [];
+    if (c.taskId) {
+      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+    }
+    if (c.taskTitle) {
+      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+    }
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text("⚠", { style: { fg: YELLOW } }),
+        ui.text(`[${surface}]`),
+        ...taskParts,
+        ui.text("asking", { style: { fg: YELLOW } }),
+        ui.text(elapsed, { dim: true }),
+      ])
+    );
+    const q = (c.askQuestion ?? "").replace(/\s+/g, " ").trim();
+    if (q) {
+      const shown = q.length > 120 ? q.slice(0, 117) + "..." : q;
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text("  ?", { style: { fg: YELLOW } }),
+          ui.text(shown, { dim: true }),
+        ])
+      );
+    }
   } else if (isDisconnected) {
     const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
     const taskParts: ReturnType<typeof ui.text>[] = [];
@@ -866,6 +894,7 @@ export async function startDashboard(
     const { daemon, repoUrl } = state;
     const startingCount = [...daemon.conductors.values()].filter(c => c.status === "starting").length;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
+    const askingCount = [...daemon.conductors.values()].filter(c => c.status === "asking").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
@@ -961,7 +990,7 @@ export async function startDashboard(
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
+        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション（クリックでフォーカス）
         ui.button({
