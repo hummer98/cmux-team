@@ -35,6 +35,15 @@ cmux-team は、cmux のターミナル分割を使ってサブエージェン�
 npm install -g @hummer98/cmux-team
 ```
 
+### npm auto-update について
+
+daemon 稼働中の npm 自動更新はデフォルト **OFF** です。有効化したい場合:
+
+- 環境変数: `CMUX_TEAM_AUTO_UPDATE=1 cmux-team start`
+- または `.team/config.json` に `{ "autoUpdate": true }` を追加
+
+優先順位: env > config > default(OFF)。複数 Node 環境（Volta / nvm / Homebrew など）が混在している場合、自動更新が意図しないバージョンを上書きする問題が報告されているため、デフォルトは OFF としています。
+
 ## 使い方
 
 ### 基本的な流れ

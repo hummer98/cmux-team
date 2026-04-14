@@ -580,6 +580,15 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 
 複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
 
+### npm auto-update（デフォルト OFF）
+
+daemon 稼働中の npm 自動更新はデフォルトで無効。複数 Node 環境（Volta / nvm / Homebrew など）が混在する環境で意図しないバージョンに上書きされる問題があるため。有効化するには以下のいずれか:
+
+- 環境変数 `CMUX_TEAM_AUTO_UPDATE=1`（または `true`）を設定して `cmux-team start`
+- `.team/config.json` に `{ "autoUpdate": true }` を追加
+
+優先順位: **env > config > default(OFF)**。無効時は `checkNpmUpdate()` が呼ばれず、npm registry への問い合わせ自体が発生しない。起動時に `auto_update_config enabled=<bool> source=<env|config|default>` ログで確認可能。
+
 ## Artifacts（知見の記録）
 
 会話中の調査結果・設計判断・セッション要約は `.team/artifacts/` に Axxx 番号付きで保存する。

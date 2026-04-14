@@ -8,6 +8,7 @@ import {
   validateSendAgentTarget,
   waitForAgentRegistered,
   resolveLayout,
+  resolveAutoUpdateEnabled,
 } from "./main";
 
 let testDir: string;
@@ -262,6 +263,48 @@ describe("resolveLayout (T176)", () => {
 
   test("不正値 (config) → throw", () => {
     expect(() => resolveLayout({ layout: "foo" as any }, undefined)).toThrow(/Unknown layout/);
+  });
+});
+
+describe("resolveAutoUpdateEnabled (T186)", () => {
+  test("env=1 → enabled, source=env（config を上書き）", () => {
+    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "1" }))
+      .toEqual({ enabled: true, source: "env" });
+  });
+
+  test("env=true → enabled, source=env", () => {
+    expect(resolveAutoUpdateEnabled({}, { CMUX_TEAM_AUTO_UPDATE: "true" }))
+      .toEqual({ enabled: true, source: "env" });
+  });
+
+  test("env=0 → disabled, source=env（config=true を上書き）", () => {
+    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "0" }))
+      .toEqual({ enabled: false, source: "env" });
+  });
+
+  test("env=false → disabled, source=env", () => {
+    expect(resolveAutoUpdateEnabled({}, { CMUX_TEAM_AUTO_UPDATE: "false" }))
+      .toEqual({ enabled: false, source: "env" });
+  });
+
+  test("env 未設定 + config=true → enabled, source=config", () => {
+    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, {}))
+      .toEqual({ enabled: true, source: "config" });
+  });
+
+  test("env 未設定 + config=false → disabled, source=config", () => {
+    expect(resolveAutoUpdateEnabled({ autoUpdate: false }, {}))
+      .toEqual({ enabled: false, source: "config" });
+  });
+
+  test("env 空文字は未設定扱い → config にフォールバック", () => {
+    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "" }))
+      .toEqual({ enabled: true, source: "config" });
+  });
+
+  test("env 未設定 + config 未設定 → disabled, source=default", () => {
+    expect(resolveAutoUpdateEnabled({}, {}))
+      .toEqual({ enabled: false, source: "default" });
   });
 });
 

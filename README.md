@@ -35,6 +35,15 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 npm install -g @hummer98/cmux-team
 ```
 
+### About npm auto-update
+
+The daemon's npm auto-update is **OFF by default**. To enable it:
+
+- Environment variable: `CMUX_TEAM_AUTO_UPDATE=1 cmux-team start`
+- Or add `{ "autoUpdate": true }` to `.team/config.json`
+
+Precedence: env > config > default(OFF). We default to OFF because environments with multiple Node installations (Volta / nvm / Homebrew, etc.) have reported cases where auto-update overwrites an unintended version.
+
 ## Usage
 
 ### Basic Workflow
