@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.44.1] - 2026-04-14
+
+### Changed
+- `/release` コマンドを Master 自身が実行する方式から `--run-after-all` タスクとして起票する方式に変更。全オープンタスクの完了を待って Conductor がリリース作業を実行する運用に統一
+- 仕様書 (`docs/spec/`) を v3.39〜v3.43 の実装状況に同期。Phase 9 運用強化セクション（CLI 拡張、i18n テンプレート、レート制限スロットル、conductor 制御 hook 等）を追加
+- `.claude/scheduled_tasks.lock` を `.gitignore` に追加（ローカル固有のランタイム状態のため追跡対象外）
+
+### Fixed
+- cmux daemon 高負荷で `cmux tree` が一時的にタイムアウトした際、Manager が Conductor を crash と誤判定し稼働中タスクが abort される問題を修正。タイムアウトは `unknown` 状態として扱い、連続失敗が閾値を超えた場合のみ `cmux_unresponsive` で disconnected 化する。環境変数 `CMUX_TEAM_UNRESPONSIVE_MAX_TICKS` (default 6) / `CMUX_TEAM_UNRESPONSIVE_MAX_SEC` (default 120) で調整可能
+
 ## [3.44.0] - 2026-04-14
 
 ### Added
