@@ -330,3 +330,145 @@ describe("waitForAgentRegistered retry ループ (R2)", () => {
     expect(r).toEqual({ ok: false, reason: "agent_not_found" });
   });
 });
+
+// --- TASK_UPDATED postMessage 統合テスト (T183) ---
+//
+// update-task / delete-task / close-task / abort-task (no-conductor 早期 return パス) の
+// 各コマンドで TUI 即時反映用の TASK_UPDATED が daemon の HTTP API に POST されることを検証する。
+// mock HTTP サーバーでメッセージを捕捉し、CLI を subprocess で呼び出して検証する。
+
+import { createServer } from "http";
+import type { Server } from "http";
+
+describe("TASK_UPDATED postMessage (T183)", () => {
+  let server: Server;
+  let receivedMessages: any[];
+  let port: number;
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  // テスト用の簡易 .team 構造を用意する
+  async function setupTeamDir(taskId: string, title: string, status: string): Promise<string> {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks", `${taskId}-example`), { recursive: true });
+    const taskFile = join(testDir, ".team/tasks", `${taskId}-example`, "task.md");
+    await wf(
+      taskFile,
+      `---\nid: ${taskId}\ntitle: ${title}\n---\n\nbody text\n`,
+    );
+    const taskState: Record<string, any> = {};
+    taskState[taskId] = { status };
+    await wf(join(testDir, ".team/task-state.json"), JSON.stringify(taskState, null, 2));
+    await wf(join(testDir, ".team/proxy-port"), String(port));
+    return taskFile;
+  }
+
+  async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["run", MAIN_TS, ...args], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    });
+  }
+
+  beforeEach(async () => {
+    receivedMessages = [];
+    server = createServer((req, res) => {
+      if (req.url === "/api/messages" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk.toString(); });
+        req.on("end", () => {
+          try {
+            receivedMessages.push(JSON.parse(body));
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+          } catch {
+            res.writeHead(400);
+            res.end();
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+    const addr = server.address();
+    port = typeof addr === "object" && addr ? addr.port : 0;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("update-task: --title のみで TASK_UPDATED が送信される（TASK_CREATED は送らない）", async () => {
+    await setupTeamDir("500", "orig-title", "draft");
+    const r = await runCli(["update-task", "--task-id", "500", "--title", "new-title"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+    expect(receivedMessages[0].taskId).toBe("500");
+  });
+
+  test("update-task: status=ready では TASK_CREATED のみ（TASK_UPDATED は送らない）", async () => {
+    await setupTeamDir("501", "t1", "draft");
+    const r = await runCli(["update-task", "--task-id", "501", "--status", "ready"]);
+    expect(r.code).toBe(0);
+    const types = receivedMessages.map((m) => m.type);
+    expect(types).toEqual(["TASK_CREATED"]);
+  });
+
+  test("update-task: status=draft への変更で TASK_UPDATED が送信される", async () => {
+    await setupTeamDir("502", "t2", "ready");
+    const r = await runCli(["update-task", "--task-id", "502", "--status", "draft"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+  });
+
+  test("delete-task: TASK_UPDATED が送信される", async () => {
+    await setupTeamDir("503", "t3", "draft");
+    const r = await runCli(["delete-task", "--task-id", "503"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+    expect(receivedMessages[0].taskId).toBe("503");
+  });
+
+  test("close-task: conductor 不在時に TASK_UPDATED が送信される", async () => {
+    await setupTeamDir("504", "t4", "draft");
+    // team.json を置かない（または conductors なし） → conductor 不在パス
+    const r = await runCli(["close-task", "--task-id", "504"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+  });
+
+  test("abort-task: no-conductor 早期 return パスで TASK_UPDATED が送信される", async () => {
+    const taskFile = await setupTeamDir("505", "t5", "assigned");
+    // team.json に空の conductors を書いて「見つからない」状態を作る
+    const { writeFile: wf } = await import("fs/promises");
+    await wf(join(testDir, ".team/team.json"), JSON.stringify({ conductors: [] }));
+    const r = await runCli(["abort-task", "--task-id", "505"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+    expect(receivedMessages[0].taskFile).toBe(taskFile);
+  });
+
+  test("後方互換: proxy が TASK_UPDATED を 400 で返しても CLI は成功する", async () => {
+    // server を閉じて新しく 400 だけ返すサーバーに差し替える
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    receivedMessages = [];
+    server = createServer((req, res) => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unknown type" }));
+    });
+    await new Promise<void>((resolve) => server.listen(port, () => resolve()));
+
+    await setupTeamDir("506", "t6", "draft");
+    const r = await runCli(["update-task", "--task-id", "506", "--title", "renamed"]);
+    // CLI は成功扱い（postMessage は fetch 失敗/4xx を握りつぶす）
+    expect(r.code).toBe(0);
+  });
+});

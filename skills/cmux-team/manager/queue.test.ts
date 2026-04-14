@@ -127,6 +127,23 @@ describe("Queue", () => {
     ).toThrow();
   });
 
+  test("TASK_UPDATED メッセージを送信・読み取りできる", async () => {
+    const q = await getQueue();
+    const path = await q.send({
+      type: "TASK_UPDATED",
+      taskId: "183",
+      taskFile: ".team/tasks/183-update.md",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(path).toContain("task_updated.json");
+
+    const messages = await q.read();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.message.type).toBe("TASK_UPDATED");
+    expect(messages[0]!.message.taskId).toBe("183");
+  });
+
   test("CONDUCTOR_DONE メッセージが正しく処理される", async () => {
     const q = await getQueue();
     await q.send({

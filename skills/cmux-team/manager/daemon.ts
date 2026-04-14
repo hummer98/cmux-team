@@ -538,6 +538,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "TASK_UPDATED": {
+      await log("task_updated", `task_id=${message.taskId}`);
+      // 任意のタスク変更（title/body/depends-on/status/close/delete/abort 等）で
+      // 即時 tick を発火し TUI に反映する
+      requestWakeup(state);
+      break;
+    }
+
     case "CONDUCTOR_DONE": {
       const conductor = findConductor(state, message.surface);
       if (!conductor) {

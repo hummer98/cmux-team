@@ -9,6 +9,13 @@ export const TaskCreatedMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+export const TaskUpdatedMessage = z.object({
+  type: z.literal("TASK_UPDATED"),
+  taskId: z.string(),
+  taskFile: z.string(),
+  timestamp: z.string().datetime(),
+});
+
 export const ConductorDoneMessage = z.object({
   type: z.literal("CONDUCTOR_DONE"),
   sessionId: z.string().optional(),
@@ -88,6 +95,7 @@ export const ShutdownMessage = z.object({
 
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
+  TaskUpdatedMessage,
   ConductorDoneMessage,
   ConductorRegisteredMessage,
   AgentSpawnedMessage,
@@ -102,6 +110,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
 
 export type QueueMessage = z.infer<typeof QueueMessage>;
 export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
+export type TaskUpdatedMessage = z.infer<typeof TaskUpdatedMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
 export type ConductorSessionMessage = z.infer<typeof ConductorSessionMessage>;
