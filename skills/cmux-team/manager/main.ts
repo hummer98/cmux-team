@@ -2555,6 +2555,18 @@ async function cmdArtifacts(): Promise<void> {
 // --- ルーティング ---
 // 単体テストから import した場合にトップレベル副作用を走らせないためのガード
 if (import.meta.main) {
+// --version / -v はサブコマンド dispatch より先に処理
+if (args[0] === "--version" || args[0] === "-v") {
+  try {
+    const pkgUrl = new URL("../../../package.json", import.meta.url);
+    const pkg = JSON.parse(await readFile(pkgUrl, "utf8")) as { version?: string };
+    if (!pkg.version) throw new Error("no version field");
+    console.log(`cmux-team ${pkg.version}`);
+  } catch {
+    console.log("cmux-team (version unknown)");
+  }
+  process.exit(0);
+}
 switch (command) {
   case "start":
     await cmdStart();

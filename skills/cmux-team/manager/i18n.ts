@@ -516,6 +516,7 @@ Examples:
   help_main: `cmux-team — multi-agent development orchestration
 
 Usage:
+  cmux-team --version                          show version
   cmux-team start                              launch daemon + spawn Master
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
@@ -1037,6 +1038,7 @@ Examples:
   help_main: `cmux-team — マルチエージェント開発オーケストレーション
 
 Usage:
+  cmux-team --version                          バージョン表示
   cmux-team start                              daemon 起動 + Master spawn
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
