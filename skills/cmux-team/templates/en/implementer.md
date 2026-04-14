@@ -60,6 +60,49 @@ If no automated test framework exists, reinterpret TDD's RED/GREEN as follows:
 ### VERIFY → Re-run all verifications
 - Re-run new verifications and existing behavior checks related to changes
 - For TypeScript: confirm no compilation errors with `bun build` or type checking
+- For touched files, see "Handling out-of-scope pre-existing type errors" below for details
+
+## Handling Out-of-Scope Pre-existing Type Errors
+
+If you discover a pre-existing type error that seems out-of-scope within touched files (files changed by this task), proceed in the following order.
+
+### Step 1: Evaluate whether this task can fix it
+- If it can be resolved with a simple type annotation, type import, or null check → fix in this task
+- Only if fixing it would significantly exceed the plan's scope (spilling into different systems/modules), proceed to Step 2
+
+### Step 2: Split into a cleanup task
+
+```bash
+cmux-team create-task \
+  --title "cleanup: fix pre-existing type errors found in <original task name>" \
+  --depends-on <current-task-id> \
+  --status ready \
+  --body "$(cat <<'EOF'
+## Discovery Context
+Found out-of-scope pre-existing type errors in touched files during task T<current-id>.
+
+## Target
+- File: <path>
+- Error: <paste tsc output>
+
+## Approach
+<how to fix>
+EOF
+)"
+```
+
+### Step 3: Document in impl-report
+In the `## Issues Encountered` section of your impl-report ({{OUTPUT_FILE}}), explicitly record:
+- "Split into cleanup task T<id>"
+- Target file path
+- Error summary
+- Rationale for the split
+
+The Inspector will treat the listed errors as exceptions to the touched-files zero-errors check when this documentation and `cmux-team show-task T<id>` both confirm the split.
+
+### Prohibited
+- Calling a pre-existing error "out-of-scope" without filing a cleanup task
+- Filing a cleanup task without documenting it in the impl-report
 
 ## Implementation Rules
 - Follow the plan strictly. Do not make changes not in the plan

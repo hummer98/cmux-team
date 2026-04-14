@@ -40,7 +40,30 @@
 - import パスが正しいか
 - 設定ファイルの更新が漏れていないか
 - **配線タスクの検証**: 新規コンポーネントが消費者ファイルから正しく参照されているか（`grep` で確認）
-- **TypeScript コンパイル**: `bun build` または型チェックでエラーがないか
+
+### 6. 型エラーゼロ化 — touched files (Critical)
+
+**ルール**: 本タスクで触ったファイルに型エラーがあれば無条件で blocker（critical）。件数ベースでの「悪化なし」判定や Minor 扱いは禁止する。
+
+**検査手順**:
+
+```bash
+TOUCHED=$(git diff main...HEAD --name-only -- '*.ts' '*.tsx' | tr '\n' '|' | sed 's/|$//')
+if [ -n "$TOUCHED" ]; then
+  bunx tsc --noEmit 2>&1 | grep -E "^($TOUCHED)" || true
+fi
+```
+
+**判定**:
+
+- 出力が空 → pass
+- 1 行でも出力される → **blocker (critical)**
+- ただし Implementer の impl-report に「該当ファイル・エラーは cleanup タスク T<id> に分離済み」と記載され、実際に `cmux-team show-task T<id>` で起票が確認できる場合のみ pass 扱いとする
+
+**禁止事項**:
+
+- 新規型エラーを「Minor 指摘」に丸めて pass させること
+- 全体の型エラー件数差分（件数ベース悪化判定）で pass 判断すること
 
 ## GO/NOGO 判定基準
 

@@ -60,6 +60,49 @@ plan.md のサブタスクを番号順に実行する。各サブタスクに対
 ### VERIFY → 全検証再実行
 - 新規検証と、変更に関連する既存の動作確認を再実行
 - TypeScript の場合: `bun build` または型チェックでコンパイルエラーがないことを確認
+- 触ったファイルについて詳細は下記『out-of-scope な既存型エラー発見時の手順』を参照
+
+## out-of-scope な既存型エラー発見時の手順
+
+touched files（本タスクで変更したファイル）内に out-of-scope と思われる既存の型エラーを発見した場合、以下の順で対応する。
+
+### ステップ 1: 本タスクで直せるか評価
+- 単純な型注釈追加・import 型追加・null チェック追加で解消できるなら本タスクで直す
+- 直すと計画書のスコープを大きく逸脱する（別システム・別モジュールに波及する）場合のみステップ 2 へ
+
+### ステップ 2: cleanup タスクに分離
+
+```bash
+cmux-team create-task \
+  --title "cleanup: <元タスク名> で発見した既存型エラー修正" \
+  --depends-on <current-task-id> \
+  --status ready \
+  --body "$(cat <<'EOF'
+## 発見経緯
+タスク T<current-id> の実装中、touched files 内に out-of-scope な既存型エラーを発見した。
+
+## 対象
+- ファイル: <path>
+- エラー: <tsc 出力をそのまま貼る>
+
+## 方針
+<どう直すかの案>
+EOF
+)"
+```
+
+### ステップ 3: impl-report への明記
+impl-report（{{OUTPUT_FILE}}）の `## Issues Encountered` セクションに以下を明記する:
+- 「cleanup タスク T<id> に分離」
+- 対象ファイルパス
+- エラー概要
+- 分離判断の理由
+
+Inspector はこの記載と `cmux-team show-task T<id>` の起票確認をもって、該当エラーを touched-files zero-errors チェックの例外として扱う。
+
+### 禁止事項
+- cleanup タスク起票なしに既存エラーを「out-of-scope」と呼んで無視すること
+- impl-report に記載せず cleanup タスクだけ作って済ませること
 
 ## 実装ルール
 - 計画書に厳密に従う。計画にない変更は行わない

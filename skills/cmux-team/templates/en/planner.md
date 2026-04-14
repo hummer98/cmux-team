@@ -50,7 +50,29 @@ Numbered work list considering implementation order. Each subtask should include
 - Edge cases
 - Test strategy
 
-### 6. Decision Log
+### 6. Pre-reading Existing Type Errors
+
+Before starting, check the existing type-error state for all files planned to be touched (listed in `3. Change Targets`).
+
+```bash
+bunx tsc --noEmit 2>&1 | grep -E "^(<pipe-joined planned files>)" || true
+```
+
+Then declare results in plan.md under the following two sections:
+
+#### 6.1 Errors fixed within this task's scope
+| File | Error | Approach |
+|------|-------|----------|
+| ... | ... | ... |
+
+#### 6.2 Errors split into follow-up (cleanup) tasks
+| File | Error | Reason for split | Planned cleanup task title |
+|------|-------|------------------|---------------------------|
+| ... | ... | ... | ... |
+
+If neither applies (planned files contain no `.ts` / `.tsx`, or no pre-existing errors exist), explicitly state "N/A".
+
+### 7. Decision Log
 
 Record design decisions made during planning.
 
