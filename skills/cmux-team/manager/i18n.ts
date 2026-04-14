@@ -113,6 +113,10 @@ Types and required/optional options:
     --task-id <id>          task ID (required)
     --task-file <path>      task file path (required)
 
+  TASK_UPDATED
+    --task-id <id>          task ID (required)
+    --task-file <path>      task file path (required)
+
   CONDUCTOR_DONE
     --surface <surface>     Conductor surface ID (required)
     --success <bool>        success/failure (optional, default true)
@@ -626,6 +630,10 @@ Usage:
 
 Types と必須/任意オプション:
   TASK_CREATED
+    --task-id <id>          タスク ID（必須）
+    --task-file <path>      タスクファイルパス（必須）
+
+  TASK_UPDATED
     --task-id <id>          タスク ID（必須）
     --task-file <path>      タスクファイルパス（必須）
 

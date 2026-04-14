@@ -592,6 +592,22 @@ async function writeFakeCmux(script: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
+describe("handleMessage: TASK_UPDATED", () => {
+  test("TASK_UPDATED は requestWakeup を発火させる", async () => {
+    const state = await createDaemon(testDir);
+    expect(state.wakeupPending).toBe(false);
+
+    await handleMessage(state, {
+      type: "TASK_UPDATED",
+      taskId: "183",
+      taskFile: ".team/tasks/183-example.md",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(state.wakeupPending).toBe(true);
+  });
+});
+
 describe("crashed → disconnected 遷移 (T121)", () => {
   // 各テストで fake cmux を設定・解除する
   // (resetConductor / monitorConductors が cmux コマンドを呼ぶため)

@@ -624,6 +624,15 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
+    case "TASK_UPDATED":
+      message = {
+        type: "TASK_UPDATED",
+        taskId: requireArg("task-id"),
+        taskFile: requireArg("task-file"),
+        timestamp: now,
+      };
+      break;
+
     case "CONDUCTOR_DONE":
       message = {
         type: "CONDUCTOR_DONE",
@@ -719,7 +728,7 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_CLEAR|SHUTDOWN>");
       process.exit(1);
   }
 
@@ -1765,6 +1774,7 @@ async function cmdUpdateTask(): Promise<void> {
   }
 
   // --status: task-state.json を更新
+  let notifiedTaskCreated = false;
   if (newStatus !== undefined) {
     taskState[taskId] = { ...taskState[taskId], status: newStatus };
     await saveTaskState(PROJECT_ROOT, taskState);
@@ -1777,7 +1787,19 @@ async function cmdUpdateTask(): Promise<void> {
         taskFile,
         timestamp: new Date().toISOString(),
       });
+      notifiedTaskCreated = true;
     }
+  }
+
+  // TASK_CREATED を送らなかった変更でも TUI 即時反映のため TASK_UPDATED を送る。
+  // title/body/depends-on の更新、および ready 以外への status 変更を対象にする。
+  if (!notifiedTaskCreated) {
+    await postMessage({
+      type: "TASK_UPDATED",
+      taskId,
+      taskFile,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   const parts: string[] = [];
@@ -1830,6 +1852,15 @@ async function cmdCloseTask(): Promise<void> {
       type: "CONDUCTOR_DONE",
       surface: conductor.surface,
       success: true,
+      timestamp: new Date().toISOString(),
+    });
+  } else {
+    // conductor が見つからない場合は CONDUCTOR_DONE による wakeup が発火しない
+    // TUI 即時反映のため TASK_UPDATED を送る
+    await postMessage({
+      type: "TASK_UPDATED",
+      taskId,
+      taskFile,
       timestamp: new Date().toISOString(),
     });
   }
@@ -2069,6 +2100,14 @@ async function cmdAbortTask(): Promise<void> {
     };
     await saveTaskState(PROJECT_ROOT, taskState);
     await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+    // conductor 不在のため CONDUCTOR_DONE は送れない。TUI 即時反映のため TASK_UPDATED を送る
+    const taskFilePath = await findTaskFile(taskId);
+    await postMessage({
+      type: "TASK_UPDATED",
+      taskId,
+      taskFile: taskFilePath ?? "",
+      timestamp: new Date().toISOString(),
+    });
     console.log(`OK aborted ${taskId} (no conductor found, state updated only)`);
     return;
   }
@@ -2248,6 +2287,14 @@ async function cmdDeleteTask(): Promise<void> {
   await saveTaskState(PROJECT_ROOT, taskState);
 
   await log("task_deleted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+
+  // TUI 即時反映のため TASK_UPDATED を送る
+  await postMessage({
+    type: "TASK_UPDATED",
+    taskId,
+    taskFile,
+    timestamp: new Date().toISOString(),
+  });
 
   console.log(`OK deleted ${taskId}`);
 }
