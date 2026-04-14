@@ -35,14 +35,29 @@ cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parall
 npm install -g @hummer98/cmux-team
 ```
 
-### About npm auto-update
+### About auto-update
 
-The daemon's npm auto-update is **OFF by default**. To enable it:
+The daemon **detects** new versions via `update-notifier` but does **not** install them directly. Install is delegated to an auto-created `--run-after-all` update task, executed by a Conductor.
 
-- Environment variable: `CMUX_TEAM_AUTO_UPDATE=1 cmux-team start`
-- Or add `{ "autoUpdate": true }` to `.team/config.json`
+Three modes (default: `off`):
 
-Precedence: env > config > default(OFF). We default to OFF because environments with multiple Node installations (Volta / nvm / Homebrew, etc.) have reported cases where auto-update overwrites an unintended version.
+| mode | behavior |
+|------|----------|
+| `off` | do nothing (no registry access) |
+| `notify` | detect every 12h and show a TUI banner; no install |
+| `task` | detect every 12h and auto-create an update task |
+
+Configuration (precedence: **env > config > default**):
+
+- `CMUX_TEAM_AUTO_UPDATE=off|notify|task` (also accepts `0|false` as off, `1|true` as task)
+- `.team/config.json`: `{ "autoUpdate": "off" | "notify" | "task" }` (legacy `true` → task, `false` → off)
+
+Related:
+- `NO_UPDATE_NOTIFIER=1` disables detection (standard update-notifier env var)
+- `cmux-team self-update` manually queues an update task
+- Boot log: `auto_update_config mode=<mode> source=<env|config|default>` (**breaking change from T186's `enabled=<bool>`**)
+
+Default is `off` because mixed Node environments (Volta / nvm / Homebrew) can otherwise overwrite unintended versions.
 
 ## Usage
 

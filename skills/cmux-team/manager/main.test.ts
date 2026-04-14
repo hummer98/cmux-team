@@ -8,8 +8,9 @@ import {
   validateSendAgentTarget,
   waitForAgentRegistered,
   resolveLayout,
-  resolveAutoUpdateEnabled,
+  resolveAutoUpdateMode,
 } from "./main";
+import { normalizeAutoUpdate } from "./schema";
 
 let testDir: string;
 
@@ -266,45 +267,120 @@ describe("resolveLayout (T176)", () => {
   });
 });
 
-describe("resolveAutoUpdateEnabled (T186)", () => {
-  test("env=1 → enabled, source=env（config を上書き）", () => {
-    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "1" }))
-      .toEqual({ enabled: true, source: "env" });
+describe("resolveAutoUpdateMode (T187)", () => {
+  test("env=1 → task, source=env（config を上書き）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "1" }))
+      .toEqual({ mode: "task", source: "env" });
   });
 
-  test("env=true → enabled, source=env", () => {
-    expect(resolveAutoUpdateEnabled({}, { CMUX_TEAM_AUTO_UPDATE: "true" }))
-      .toEqual({ enabled: true, source: "env" });
+  test("env=true → task, source=env", () => {
+    expect(resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "true" }))
+      .toEqual({ mode: "task", source: "env" });
   });
 
-  test("env=0 → disabled, source=env（config=true を上書き）", () => {
-    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "0" }))
-      .toEqual({ enabled: false, source: "env" });
+  test("env=task → task, source=env", () => {
+    expect(resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "task" }))
+      .toEqual({ mode: "task", source: "env" });
   });
 
-  test("env=false → disabled, source=env", () => {
-    expect(resolveAutoUpdateEnabled({}, { CMUX_TEAM_AUTO_UPDATE: "false" }))
-      .toEqual({ enabled: false, source: "env" });
+  test("env=notify → notify, source=env", () => {
+    expect(resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "notify" }))
+      .toEqual({ mode: "notify", source: "env" });
   });
 
-  test("env 未設定 + config=true → enabled, source=config", () => {
-    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, {}))
-      .toEqual({ enabled: true, source: "config" });
+  test("env=0 → off, source=env（config=true を上書き）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "0" }))
+      .toEqual({ mode: "off", source: "env" });
   });
 
-  test("env 未設定 + config=false → disabled, source=config", () => {
-    expect(resolveAutoUpdateEnabled({ autoUpdate: false }, {}))
-      .toEqual({ enabled: false, source: "config" });
+  test("env=false → off, source=env（config=true を上書き）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "false" }))
+      .toEqual({ mode: "off", source: "env" });
   });
 
-  test("env 空文字は未設定扱い → config にフォールバック", () => {
-    expect(resolveAutoUpdateEnabled({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "" }))
-      .toEqual({ enabled: true, source: "config" });
+  test("env=off → off, source=env", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "off" }))
+      .toEqual({ mode: "off", source: "env" });
   });
 
-  test("env 未設定 + config 未設定 → disabled, source=default", () => {
-    expect(resolveAutoUpdateEnabled({}, {}))
-      .toEqual({ enabled: false, source: "default" });
+  test("env 空文字は未設定扱い → config にフォールバック（後方互換 true→task）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "" }))
+      .toEqual({ mode: "task", source: "config" });
+  });
+
+  test("env 未設定 + config=true → task, source=config（後方互換）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: true }, {}))
+      .toEqual({ mode: "task", source: "config" });
+  });
+
+  test("env 未設定 + config=false → off, source=config（後方互換）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: false }, {}))
+      .toEqual({ mode: "off", source: "config" });
+  });
+
+  test("env 未設定 + config=\"notify\" → notify, source=config", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: "notify" }, {}))
+      .toEqual({ mode: "notify", source: "config" });
+  });
+
+  test("env 未設定 + config 未設定 → off, source=default", () => {
+    expect(resolveAutoUpdateMode({}, {}))
+      .toEqual({ mode: "off", source: "default" });
+  });
+
+  test("不正な env 値は throw", () => {
+    expect(() => resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "task-now" }))
+      .toThrow(/unknown CMUX_TEAM_AUTO_UPDATE/);
+  });
+
+  test("不正な config 値は throw（normalizeAutoUpdate 内）", () => {
+    expect(() => resolveAutoUpdateMode({ autoUpdate: "task-now" as any }, {}))
+      .toThrow(/unknown autoUpdate/);
+  });
+});
+
+describe("normalizeAutoUpdate (T187)", () => {
+  test("true → task", () => {
+    expect(normalizeAutoUpdate(true)).toBe("task");
+  });
+
+  test("false → off", () => {
+    expect(normalizeAutoUpdate(false)).toBe("off");
+  });
+
+  test("undefined → off", () => {
+    expect(normalizeAutoUpdate(undefined)).toBe("off");
+  });
+
+  test("null → off", () => {
+    expect(normalizeAutoUpdate(null)).toBe("off");
+  });
+
+  test("\"off\" → off", () => {
+    expect(normalizeAutoUpdate("off")).toBe("off");
+  });
+
+  test("\"notify\" → notify", () => {
+    expect(normalizeAutoUpdate("notify")).toBe("notify");
+  });
+
+  test("\"task\" → task", () => {
+    expect(normalizeAutoUpdate("task")).toBe("task");
+  });
+
+  test("大文字小文字混在も許容", () => {
+    expect(normalizeAutoUpdate("OFF")).toBe("off");
+    expect(normalizeAutoUpdate("Notify")).toBe("notify");
+    expect(normalizeAutoUpdate("TASK")).toBe("task");
+  });
+
+  test("不正な文字列は throw", () => {
+    expect(() => normalizeAutoUpdate("task-now")).toThrow(/unknown autoUpdate/);
+    expect(() => normalizeAutoUpdate("yes")).toThrow(/unknown autoUpdate/);
+  });
+
+  test("不正な型は throw", () => {
+    expect(() => normalizeAutoUpdate(123 as any)).toThrow(/unknown autoUpdate/);
   });
 });
 

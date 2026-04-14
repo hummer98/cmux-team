@@ -543,6 +543,7 @@ Usage:
   cmux-team artifacts open <id>                    open in markdown viewer
   cmux-team artifacts search <query>               full-text search
   cmux-team artifacts --validate                   validate frontmatter
+  cmux-team self-update                            manually queue an update task
 
 For details on each command: cmux-team <command> --help`,
 };
@@ -1065,6 +1066,7 @@ Usage:
   cmux-team artifacts open <id>                    Markdown ビューアで開く
   cmux-team artifacts search <query>               全文検索
   cmux-team artifacts --validate                   フロントマター検証
+  cmux-team self-update                            update タスクを手動起票
 
 各コマンドの詳細: cmux-team <command> --help`,
 };

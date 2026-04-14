@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (Breaking)
+- **auto-update を `update-notifier` ベースの 3 モード（`off | notify | task`）に再設計（T187）**。daemon 自身は install しなくなり、`task` モードでは `--run-after-all` の update タスク（frontmatter `kind: cmux-team-update`）を自動起票して Conductor に install を委ねる。検出間隔は 12h 固定。`NO_UPDATE_NOTIFIER=1` で無効化可能。`cmux-team self-update` サブコマンドを追加（手動起票）
+- **config `autoUpdate: true` の意味が「install 実行」から「update タスク起票」に変わる**（T186 から T187 への移行時に注意）。`true` → `task`、`false` → `off` と内部で正規化
+- **起動時ログのフォーマット変更**: `auto_update_config enabled=<bool> source=<src>` → `auto_update_config mode=<mode> source=<src>`
+- **削除ログイベント**: `npm_auto_update` / `npm_update_check_failed` / `npm_self_update_completed`（新イベント: `update_check_started` / `update_available` / `update_task_created` / `update_task_skipped_*` / `update_check_failed`）
+
+### Added
+- `update-notifier@^7.0.0` 依存追加（Bun 動作確認済み）
+- `dashboard.tsx` に update 通知バナー（黄色、ヘッダ直下）を追加。`notify` モードでは `cmux-team self-update` 誘導文言、`task` モードでは起票済み task ID を表示
+- `schema.ts` に `AutoUpdateMode` enum + `normalizeAutoUpdate()` ヘルパー
+- `task.ts` に `createTaskProgrammatic()` を新設（cmdCreateTask と daemon 内部起票の共通化）
+
 ## [3.44.1] - 2026-04-14
 
 ### Changed

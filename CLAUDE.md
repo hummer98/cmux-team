@@ -580,14 +580,29 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 
 複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
 
-### npm auto-update（デフォルト OFF）
+### auto-update（デフォルト OFF、3モード）
 
-daemon 稼働中の npm 自動更新はデフォルトで無効。複数 Node 環境（Volta / nvm / Homebrew など）が混在する環境で意図しないバージョンに上書きされる問題があるため。有効化するには以下のいずれか:
+daemon 稼働中の自動更新は `update-notifier` で検出だけ行い、**実際の install は daemon ではなく update タスクを起票して Conductor に委ねる**。複数 Node 環境（Volta / nvm / Homebrew など）で意図しないバージョンに上書きされる問題を回避するため、デフォルトは OFF。
 
-- 環境変数 `CMUX_TEAM_AUTO_UPDATE=1`（または `true`）を設定して `cmux-team start`
-- `.team/config.json` に `{ "autoUpdate": true }` を追加
+モード（`autoUpdate`）:
 
-優先順位: **env > config > default(OFF)**。無効時は `checkNpmUpdate()` が呼ばれず、npm registry への問い合わせ自体が発生しない。起動時に `auto_update_config enabled=<bool> source=<env|config|default>` ログで確認可能。
+| mode | 挙動 |
+|------|------|
+| `off`（デフォルト） | 何もしない。registry へのアクセスなし |
+| `notify` | 12h 周期で更新検出 → TUI バナーのみ表示。install はしない |
+| `task` | 12h 周期で更新検出 → `--run-after-all` update タスクを自動起票 |
+
+設定方法（優先順位: **env > config > default**）:
+
+- 環境変数 `CMUX_TEAM_AUTO_UPDATE`: `0|false|off` / `1|true|task` / `notify` を受け付ける（空文字は未設定扱い）
+- `.team/config.json` の `{ "autoUpdate": "off" | "notify" | "task" | true | false }`
+  - 後方互換: `true` → `task`、`false` → `off`
+
+関連:
+- `NO_UPDATE_NOTIFIER=1` で無効化（update-notifier 標準の環境変数）
+- `cmux-team self-update` で任意タイミングに update タスクを手動起票（既存 run_after_all / 同 latest タスクがあれば exit 0 でそれを返す）
+- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`（**T186 の `enabled=<bool>` から破壊的変更**）
+- update タスクの frontmatter には `kind: cmux-team-update` が付く（重複検出に使用）
 
 ## Artifacts（知見の記録）
 

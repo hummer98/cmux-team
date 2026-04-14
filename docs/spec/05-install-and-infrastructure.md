@@ -357,12 +357,18 @@ e2e-results/
 ```json
 {
   "models": { "master": "opus", "conductor": "opus", "agent": "opus" },
-  "envrcHookPromptSkipped": false
+  "envrcHookPromptSkipped": false,
+  "autoUpdate": "off"
 }
 ```
 
 - `models` — Master / Conductor / Agent のデフォルトモデル（`--model` CLI フラグで上書き可）
 - `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ
+- `autoUpdate` — auto-update モード（`"off" | "notify" | "task"`、後方互換: `true` → task、`false` → off、デフォルト `off`）。env `CMUX_TEAM_AUTO_UPDATE` で上書き可
+
+### auto-update（update-notifier ベース、T187）
+
+daemon は `update-notifier` v7 で新バージョンを検出するのみで、install は行わない。`task` モードは `--run-after-all` の update タスク（frontmatter `kind: cmux-team-update`）を 12h 周期で自動起票し、Conductor が `npm install -g @hummer98/cmux-team@<latest>` を実行する。`notify` モードは TUI バナー表示のみ。`off` は registry アクセスすら行わない。`NO_UPDATE_NOTIFIER=1` で無効化可能。`cmux-team self-update` で手動起票可。
 
 ### .envrc 対話提案（初回起動）
 

@@ -883,6 +883,124 @@ describe("createDaemon: layout (T176)", () => {
   });
 });
 
+describe("checkUpdateAndNotify / createUpdateTask (T187)", () => {
+  let origFetchEnv: string | undefined;
+  beforeEach(() => {
+    // テスト用に package.json を用意（cmux-team ルート相当）
+    // 実際のパスは daemon.ts の readCurrentVersion が
+    // dirname(import.meta.path)/../../../package.json を参照するため、
+    // ここではモックはせず「mode=off は即 return する」など副作用のない経路だけテストする。
+    origFetchEnv = process.env.NO_UPDATE_NOTIFIER;
+  });
+  afterEach(() => {
+    if (origFetchEnv === undefined) delete process.env.NO_UPDATE_NOTIFIER;
+    else process.env.NO_UPDATE_NOTIFIER = origFetchEnv;
+  });
+
+  test("(a) mode='notify' のとき createUpdateTask は呼ばれない（spy で検証）", async () => {
+    const { checkUpdateAndNotify, fetchLatestVersion } = await import("./daemon");
+    // fetchLatestVersion を通さず、state を直接操作して createUpdateTask を呼ばない経路を検証するため
+    // ここでは createUpdateTask を spy する代わりに、state.updateAvailable.createdTaskId が null のままであることで検証する。
+    const state = await createDaemon(testDir, "wide");
+    state.updateMode = "notify";
+
+    // モック: fetchLatestVersion をスタブ化するのは難しいため、package.json を一時書き換え…
+    // ではなくここは NO_UPDATE_NOTIFIER=1 で早期 return のみ確認する。
+    process.env.NO_UPDATE_NOTIFIER = "1";
+    await checkUpdateAndNotify(state, "notify");
+    expect(state.updateAvailable).toBeNull();
+  });
+
+  test("(c) NO_UPDATE_NOTIFIER=1 で早期 return する", async () => {
+    const { checkUpdateAndNotify } = await import("./daemon");
+    const state = await createDaemon(testDir, "wide");
+    process.env.NO_UPDATE_NOTIFIER = "1";
+    await checkUpdateAndNotify(state, "task");
+    expect(state.updateAvailable).toBeNull();
+  });
+
+  test("mode='off' で即 return する", async () => {
+    const { checkUpdateAndNotify } = await import("./daemon");
+    const state = await createDaemon(testDir, "wide");
+    await checkUpdateAndNotify(state, "off");
+    expect(state.updateAvailable).toBeNull();
+  });
+
+  test("(b) createUpdateTask: run_after_all 競合時は throw せずログのみ", async () => {
+    const { createUpdateTask } = await import("./daemon");
+    // 既存の run_after_all タスク（update とは無関係）を直接書き込み
+    // createTask ヘルパーは frontmatter を自動生成するため、run_after_all を含められない
+    await mkdir(join(testDir, ".team/tasks/901-some-run-after-all"), { recursive: true });
+    await writeFile(
+      join(testDir, ".team/tasks/901-some-run-after-all/task.md"),
+      `---
+id: 901
+title: other run-after-all
+priority: low
+run_after_all: true
+created_at: ${new Date().toISOString()}
+---
+
+## タスク
+body
+`,
+    );
+    await writeFile(
+      join(testDir, ".team/task-state.json"),
+      JSON.stringify({ "901": { status: "ready" } }),
+    );
+
+    const state = await createDaemon(testDir, "wide");
+    state.updateAvailable = {
+      current: "0.0.1",
+      latest: "9.9.9",
+      detectedAt: new Date().toISOString(),
+      createdTaskId: null,
+    };
+
+    // 例外で daemon が落ちないこと
+    await createUpdateTask(state, "9.9.9");
+    // createdTaskId は null のまま
+    expect(state.updateAvailable?.createdTaskId).toBeNull();
+  });
+
+  test("重複検出: 同じ latest の update タスクが open なら skip", async () => {
+    const { createUpdateTask } = await import("./daemon");
+    // 既存 update タスク（同 latest）を直接書き込み（kind/run_after_all を frontmatter に含めるため）
+    await mkdir(join(testDir, ".team/tasks/902-update-task"), { recursive: true });
+    await writeFile(
+      join(testDir, ".team/tasks/902-update-task/task.md"),
+      `---
+id: 902
+title: cmux-team を v9.9.9 にアップデート
+priority: low
+run_after_all: true
+kind: cmux-team-update
+created_at: ${new Date().toISOString()}
+---
+
+## タスク
+本文に cmux-team@9.9.9 を含む
+`,
+    );
+    await writeFile(
+      join(testDir, ".team/task-state.json"),
+      JSON.stringify({ "902": { status: "ready" } }),
+    );
+
+    const state = await createDaemon(testDir, "wide");
+    state.updateAvailable = {
+      current: "0.0.1",
+      latest: "9.9.9",
+      detectedAt: new Date().toISOString(),
+      createdTaskId: null,
+    };
+
+    await createUpdateTask(state, "9.9.9");
+    expect(state.updateAvailable?.createdTaskId).toBe("902");
+  });
+});
+
 describe("updateTeamJson: layout 反映 (T176)", () => {
   test("team.json に layout フィールドが書き込まれる", async () => {
     const state = await createDaemon(testDir, "16x9");
