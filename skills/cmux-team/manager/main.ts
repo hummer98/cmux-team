@@ -96,6 +96,8 @@ interface TeamConfig {
   layout?: LayoutMode;
   /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
   sleepPrevention?: boolean;
+  /** npm auto-update を有効化する（デフォルト: false）。env CMUX_TEAM_AUTO_UPDATE が優先 */
+  autoUpdate?: boolean;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -121,6 +123,26 @@ export function resolveLayout(
     throw new Error(`Unknown layout: ${raw} (expected "wide" or "16x9")`);
   }
   return raw;
+}
+
+/**
+ * npm auto-update の有効/無効を解決する。
+ * 優先順位: env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > false
+ * env 値の真偽判定: "1" | "true" のみ ON、それ以外（"0", "false" 等）は OFF。
+ * 空文字・未設定は未設定扱いで config にフォールバック。
+ */
+export function resolveAutoUpdateEnabled(
+  config: Pick<TeamConfig, "autoUpdate">,
+  env: NodeJS.ProcessEnv = process.env,
+): { enabled: boolean; source: "env" | "config" | "default" } {
+  const raw = env.CMUX_TEAM_AUTO_UPDATE;
+  if (raw !== undefined && raw !== "") {
+    return { enabled: raw === "1" || raw === "true", source: "env" };
+  }
+  if (config.autoUpdate !== undefined) {
+    return { enabled: config.autoUpdate === true, source: "config" };
+  }
+  return { enabled: false, source: "default" };
 }
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
@@ -233,6 +255,9 @@ async function cmdStart(): Promise<void> {
     ? false
     : (startConfig.sleepPrevention ?? true);
 
+  // npm auto-update 設定（env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > false）
+  const autoUpdate = resolveAutoUpdateEnabled(startConfig);
+
   const state = await createDaemon(PROJECT_ROOT, layout);
 
   // ソースファイル mtime 監視を初期化
@@ -252,6 +277,10 @@ async function cmdStart(): Promise<void> {
   await log(
     "daemon_started",
     `pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout} sleep_prevention=${sleepPrevention}`
+  );
+  await log(
+    "auto_update_config",
+    `enabled=${autoUpdate.enabled} source=${autoUpdate.source}`
   );
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
@@ -585,8 +614,9 @@ async function cmdStart(): Promise<void> {
       [...state.conductors.values()].some(c => c.status === "running" || c.agents.length > 0);
     updateCaffeinate(systemActive);
 
-    // npm 更新チェック（5分間隔、全 Conductor が idle のときのみ）
-    if (Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
+    // npm 更新チェック（opt-in: env CMUX_TEAM_AUTO_UPDATE=1 or config.autoUpdate=true。
+    // 5分間隔、全 Conductor が idle のときのみ）
+    if (autoUpdate.enabled && Date.now() - state.lastNpmCheckAt >= NPM_CHECK_INTERVAL) {
       const allIdle = [...state.conductors.values()].every(c => c.status === "idle");
       if (allIdle) {
         state.lastNpmCheckAt = Date.now();
