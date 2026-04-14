@@ -66,48 +66,80 @@ Default is `off` because mixed Node environments (Volta / nvm / Homebrew) can ot
 Start cmux, launch Claude Code inside it.
 
 ```
-You:    /cmux-team:start
+$ cmux-team start
   → Daemon starts with TUI dashboard
-  → Master pane auto-created
+  → Manager / Master panes created, Conductors spawned
   → Switch to Master pane to give tasks
 
 You:    Build a TODO app with React
 Claude: Task created.
-  → Daemon detects task → spawns Conductor
-  → Conductor spawns Agents in adjacent panes
+  → Daemon detects task → assigns to an idle Conductor
+  → Conductor spawns Agents as tabs in the same pane
   → Watch each agent working in real time
 
 You:    How's it going?
 Claude: (checks manager.log, cmux tree)
         Conductor-1: implementing (2/3 agents done)
 
-You:    Also clean up worktrees (TODO)
-Claude: → Sends TODO to queue via CLI
-       → Daemon spawns new Conductor in parallel
+You:    Also clean up worktrees
+Claude: → cmux-team create-task --title "..." --status ready
+       → Daemon assigns it to another idle Conductor in parallel
 ```
 
 ### Commands
 
 #### CLI Commands (run from terminal)
 
-| Command | What it does | When to use |
-|---------|-------------|-------------|
-| `cmux-team start` | Start daemon + Master + Conductors | Once per session |
-| `cmux-team status` | Show team status | Anytime |
-| `cmux-team stop` | Graceful shutdown | When done |
-| `cmux-team create-task` | Create a task | Task creation |
-| `cmux-team trace` | Search API traces | Debugging, analysis |
-| `cmux-team artifacts` | List / show / search artifacts | Knowledge management |
+See `cmux-team --help` for the full list. Common commands:
+
+**Lifecycle**
+| Command | What it does |
+|---------|-------------|
+| `cmux-team start` | Start daemon + Master + Conductors |
+| `cmux-team status` | Show team status |
+| `cmux-team stop` | Graceful shutdown |
+| `cmux-team --version` | Show version |
+
+**Task management**
+| Command | What it does |
+|---------|-------------|
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all]` | Create a task |
+| `cmux-team update-task --task-id <id> --status <s>` | Update task status |
+| `cmux-team close-task --task-id <id> [--journal <text>]` | Close a task |
+| `cmux-team abort-task --task-id <id>` | Abort a running task |
+| `cmux-team restart-task --task-id <id>` | Restart an assigned Conductor session |
+| `cmux-team delete-task --task-id <id>` | Delete a draft/ready task |
+| `cmux-team await-task --task-id <id> [--timeout <sec>]` | Wait for task completion |
+
+**Agent / Conductor**
+| Command | What it does |
+|---------|-------------|
+| `cmux-team spawn-conductor` | Spawn and register a single Conductor |
+| `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Spawn an Agent tab |
+| `cmux-team agents` | List running agents |
+| `cmux-team kill-agent --surface <s>` | Terminate an Agent |
+| `cmux-team send-agent --surface <s> <message>` | Send a message to Agent / Conductor |
+| `cmux-team conductor` | Boot Conductor role (proxy auto-resolved) |
+| `cmux-team spawn-master` | Boot Master role (proxy auto-resolved) |
+
+**Diagnostics**
+| Command | What it does |
+|---------|-------------|
+| `cmux-team trace-task <task-id>` | Show session history for a task |
+| `cmux-team artifacts [add\|show\|open\|search]` | Manage knowledge artifacts |
+| `cmux-team self-update` | Queue an update task manually |
 
 #### Slash Commands (run within Claude)
 
 | Command | What it does | When to use |
 |---------|-------------|-------------|
-| `/cmux-team:master` | Reload Master role | After `/clear` |
+| `/master` | Reload Master role | After `/clear` |
 | `/team-spec [summary]` | Brainstorm requirements | Deciding what to build |
-| `/team-task [action]` | Task management | Record decisions |
+| `/team-task [action]` | Task management | Create / list / close tasks |
 | `/team-archive [range]` | Archive closed tasks | Task cleanup |
 | `/artifact [type] [title]` | Save findings as artifact | Knowledge capture |
+| `/docs-sync [--dry-run\|--auto]` | Sync `docs/spec/` with implementation | Doc maintenance |
+| `/trace-task <task-id>` | Analyze a task's session history | Debugging, review |
 
 ## Architecture
 
@@ -132,11 +164,13 @@ Claude: → Sends TODO to queue via CLI
 
 The Manager is **not** a Claude Code session. It's a TypeScript program with a deterministic event loop:
 
-- **File queue** (`.team/queue/`) for communication (no `cmux send-key`)
+- **HTTP message queue** via the built-in proxy (`cmux-team send <TYPE>`) — event-driven, not polling
+- **File-based task state** (`.team/tasks/` + `task-state.json`)
 - **zod** schema validation for all messages
 - **ink** TUI dashboard
 - **Task dependency resolution** via `depends_on` field
 - **Priority sorting** (high > medium > low)
+- **Agent completion via fs.watch** — Agent's Stop / SessionEnd hook writes a done marker, Conductor awaits it with `cmux-team await-agent` (no busy polling, T181)
 
 ### Task Dependencies
 
@@ -153,28 +187,24 @@ depends_on: [10, 11, 12]  # waits for all to complete
 
 | Direction | Mechanism |
 |-----------|-----------|
-| Master → daemon | CLI (`main.ts send`) → `.team/queue/*.json` |
-| daemon → Conductor | `cmux new-split` + Claude Code launch |
-| Conductor → daemon | SessionEnd hook + `cmux list-status` polling |
+| Master → daemon | `cmux-team send <TYPE>` → HTTP message to proxy |
+| daemon → Conductor | `cmux send` (`/clear` + new prompt on a persistent Conductor pane) |
+| daemon ← Conductor | Done marker file (`.team/conductors/<id>/done`) + SESSION_* hook messages |
+| Conductor → Agent | `cmux-team send-agent` / `spawn-agent` (direct `cmux send` is blocked by hook) |
+| Conductor ← Agent | `cmux-team await-agent` (fs.watch on Agent done marker) |
 
 ## Traceability
 
 All API requests are automatically recorded through the built-in proxy when the daemon is running.
 
-### Searching Traces
+### Inspecting a Task's Sessions
 
 ```bash
-# Filter by task ID
-cmux-team trace --task 035
-
-# Full-text search (SQLite FTS5)
-cmux-team trace --search "error"
-
-# Show trace details (including request/response bodies)
-cmux-team trace --show 42
+# Show session history for a specific task (Conductor + Agents)
+cmux-team trace-task 035
 ```
 
-Traces are stored in `.team/traces/traces.db` with request/response bodies in `.team/logs/traces/bodies/`.
+Traces are stored in `.team/traces/traces.db` with request/response bodies in `.team/logs/traces/bodies/`. Metadata headers (`x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role`) are propagated so every API request can be correlated with its originating task.
 
 ## Troubleshooting
 
