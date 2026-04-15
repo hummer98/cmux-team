@@ -22,6 +22,19 @@ export interface TaskSessionRecord {
   event: "assigned" | "agent_spawned" | "closed" | "aborted";
 }
 
+export interface HookSignalRecord {
+  id: number;
+  timestamp: string;
+  type: string;
+  surface: string | null;
+  pid: number | null;
+  reason: string | null;
+  source: string | null;
+  question: string | null;
+  task_run_id: string | null;
+  payload_json: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS task_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,4 +190,33 @@ export function insertHookSignal(db: Database, message: QueueMessage): number {
     $payload_json: safeJson,
   });
   return Number(result.lastInsertRowid);
+}
+
+export function getHookSignals(
+  db: Database,
+  opts: { surface?: string; type?: string; taskRunId?: string; limit?: number }
+): HookSignalRecord[] {
+  const conditions: string[] = [];
+  const params: Record<string, any> = {};
+
+  if (opts.type) {
+    conditions.push("type = $type");
+    params.$type = opts.type;
+  }
+  if (opts.surface) {
+    conditions.push("surface = $surface");
+    params.$surface = opts.surface;
+  }
+  if (opts.taskRunId) {
+    conditions.push("task_run_id = $taskRunId");
+    params.$taskRunId = opts.taskRunId;
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = opts.limit ?? 50;
+
+  const stmt = db.prepare(
+    `SELECT * FROM hook_signals ${where} ORDER BY id DESC LIMIT ${limit}`
+  );
+  return stmt.all(params) as HookSignalRecord[];
 }

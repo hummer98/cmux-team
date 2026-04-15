@@ -421,6 +421,34 @@ Examples:
   cmux-team trace-task 141 --summary
 `,
 
+  help_trace_hooks: `
+cmux-team trace-hooks -- display hook signal history received by the daemon
+
+Usage:
+  cmux-team trace-hooks [options]
+
+Options:
+  --type <TYPE>          filter by hook type (e.g. SESSION_STARTED, SESSION_ENDED,
+                         SESSION_IDLE, SESSION_CLEAR, AGENT_SPAWNED, SESSION_ASK,
+                         CONDUCTOR_DONE)
+  --surface <surface>    filter by surface (accepts "surface:665", "665", "C[665]")
+  --task-run <id>        filter by task_run_id (e.g. "task-217-1776294106")
+  --limit <N>            max rows to display (default: 50, newest first)
+  --json                 emit JSON array instead of tabular output
+
+Examples:
+  cmux-team trace-hooks
+  cmux-team trace-hooks --type SESSION_ENDED --limit 20
+  cmux-team trace-hooks --surface C[665]
+  cmux-team trace-hooks --task-run task-217-1776294106 --json
+
+Notes:
+  - Reads from .team/traces/traces.db (hook_signals table)
+  - Rows are ordered by id DESC (newest first)
+  - DETAIL column shows non-null source/reason/task_run_id/question
+  - question is truncated to 60 chars; use --json to see full payload
+`,
+
   help_conductor: `
 cmux-team conductor -- launch Claude Code for Conductor (internal use)
 
@@ -532,6 +560,7 @@ Usage:
   cmux-team restart-task --task-id <id> [--journal <text>] restart an assigned or aborted task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
   cmux-team trace-task <task-id>              display session history for a task
+  cmux-team trace-hooks                        display hook signal history
   cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
@@ -941,6 +970,34 @@ Examples:
   cmux-team trace-task 141 --summary
 `,
 
+  help_trace_hooks: `
+cmux-team trace-hooks -- daemon が受信した hook シグナル履歴を表示
+
+Usage:
+  cmux-team trace-hooks [options]
+
+Options:
+  --type <TYPE>          hook type で絞り込み（SESSION_STARTED / SESSION_ENDED /
+                         SESSION_IDLE / SESSION_CLEAR / AGENT_SPAWNED / SESSION_ASK /
+                         CONDUCTOR_DONE など）
+  --surface <surface>    surface で絞り込み（"surface:665" / "665" / "C[665]" 受理）
+  --task-run <id>        task_run_id で絞り込み（例: "task-217-1776294106"）
+  --limit <N>            最大表示件数（デフォルト: 50、新しい順）
+  --json                 tabular の代わりに JSON 配列を出力
+
+Examples:
+  cmux-team trace-hooks
+  cmux-team trace-hooks --type SESSION_ENDED --limit 20
+  cmux-team trace-hooks --surface C[665]
+  cmux-team trace-hooks --task-run task-217-1776294106 --json
+
+Notes:
+  - .team/traces/traces.db の hook_signals テーブルから読み込みます
+  - id DESC（新しい順）で並びます
+  - DETAIL カラムには source/reason/task_run_id/question のうち値があるものだけ表示
+  - question は 60 文字で truncate されます。完全なデータは --json を使用
+`,
+
   help_conductor: `
 cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
 
@@ -1052,6 +1109,7 @@ Usage:
   cmux-team restart-task --task-id <id> [--journal <text>] assigned または aborted のタスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace-task <task-id>              タスクのセッション履歴を表示
+  cmux-team trace-hooks                        hook シグナル履歴を表示
   cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧

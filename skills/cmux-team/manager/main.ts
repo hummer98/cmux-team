@@ -20,6 +20,7 @@
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
  *   ./main.ts delete-task --task-id <id> [--journal <text>]
+ *   ./main.ts trace-hooks [--type <T>] [--surface <s>] [--task-run <id>] [--limit <N>] [--json]
  */
 
 import { join, dirname, basename } from "path";
@@ -37,7 +38,7 @@ import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { launchConductor } from "./conductor";
 import { createHash } from "crypto";
-import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "./trace-store";
+import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, type TaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
@@ -3152,6 +3153,85 @@ async function cmdTraceTask(): Promise<void> {
   }
 }
 
+function normalizeSurfaceArgForHooks(raw: string): string {
+  if (raw.startsWith("surface:")) return raw;
+  const m = raw.match(/^[CAMUS]?\[(\d+)\]$/) ?? raw.match(/^(\d+)$/);
+  if (m) return `surface:${m[1]}`;
+  return raw;
+}
+
+function formatSurfaceForHooks(surface: string | null): string {
+  if (!surface) return "-";
+  const id = surface.startsWith("surface:") ? surface.slice(8) : surface;
+  return `S[${id}]`;
+}
+
+function buildHookDetail(r: HookSignalRecord): string {
+  const parts: string[] = [];
+  if (r.source) parts.push(`source=${r.source}`);
+  if (r.reason) parts.push(`reason=${r.reason}`);
+  if (r.task_run_id) parts.push(`task_run=${r.task_run_id}`);
+  if (r.question) {
+    const q = r.question.length > 60 ? r.question.slice(0, 57) + "..." : r.question;
+    parts.push(`question="${q}"`);
+  }
+  return parts.join(" ") || "-";
+}
+
+async function cmdTraceHooks(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_trace_hooks"));
+
+  const typeFilter = getArg("type");
+  const taskRunFilter = getArg("task-run");
+  const surfaceRaw = getArg("surface");
+  const limitRaw = getArg("limit");
+  const asJson = hasFlag("json");
+
+  let limit = 50;
+  if (limitRaw !== undefined) {
+    const n = Number(limitRaw);
+    if (!Number.isFinite(n) || n <= 0) {
+      console.error(`Error: --limit must be a positive number (got: ${limitRaw})`);
+      process.exit(1);
+    }
+    limit = Math.floor(n);
+  }
+
+  let surfaceFilter: string | undefined;
+  if (surfaceRaw !== undefined) {
+    surfaceFilter = normalizeSurfaceArgForHooks(surfaceRaw);
+  }
+
+  const db = initDB(PROJECT_ROOT);
+  const rows = getHookSignals(db, {
+    type: typeFilter,
+    surface: surfaceFilter,
+    taskRunId: taskRunFilter,
+    limit,
+  });
+  db.close();
+
+  if (asJson) {
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+
+  if (rows.length === 0) {
+    console.log("No hook signals found.");
+    return;
+  }
+
+  console.log("TIMESTAMP                      TYPE              SURFACE          PID       DETAIL");
+  for (const r of rows) {
+    const ts = (r.timestamp ?? "").padEnd(30).slice(0, 30);
+    const type = (r.type ?? "").padEnd(17).slice(0, 17);
+    const surface = formatSurfaceForHooks(r.surface).padEnd(16).slice(0, 16);
+    const pid = (r.pid !== null ? String(r.pid) : "-").padEnd(9).slice(0, 9);
+    const detail = buildHookDetail(r);
+    console.log(`${ts} ${type} ${surface} ${pid} ${detail}`);
+  }
+}
+
 function deriveJsonlDir(worktreePath: string): string {
   const hash = createHash("sha256").update(worktreePath).digest("hex").slice(0, 16);
   return join(process.env.HOME ?? "~", ".claude/projects", hash);
@@ -3486,6 +3566,9 @@ switch (command) {
     break;
   case "trace-task":
     await cmdTraceTask();
+    break;
+  case "trace-hooks":
+    await cmdTraceHooks();
     break;
   case "conductor":
     await cmdConductor();
