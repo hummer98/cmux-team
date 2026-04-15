@@ -874,6 +874,7 @@ async function cmdSend(): Promise<void> {
       message = {
         type: "CONDUCTOR_DONE",
         surface: normalizedSurface!,
+        taskRunId: getArg("task-run-id"),
         success: getArg("success") !== "false",  // デフォルト true（後方互換）
         reason: getArg("reason"),
         exitCode: getArg("exit-code") ? Number(getArg("exit-code")) : undefined,
@@ -954,6 +955,7 @@ async function cmdSend(): Promise<void> {
       message = {
         type: "SESSION_CLEAR",
         surface: normalizedSurface!,
+        taskRunId: getArg("task-run-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -2371,6 +2373,7 @@ async function cmdCloseTask(): Promise<void> {
     await postMessage({
       type: "CONDUCTOR_DONE",
       surface: conductor.surface,
+      taskRunId: conductor.taskRunId,
       success: true,
       timestamp: new Date().toISOString(),
     });
@@ -2824,6 +2827,7 @@ async function cmdAbortTask(): Promise<void> {
   await postMessage({
     type: "CONDUCTOR_DONE",
     surface: conductor.surface,
+    taskRunId: conductor.taskRunId,
     success: false,
     reason: "aborted",
     timestamp: new Date().toISOString(),
@@ -2987,6 +2991,7 @@ async function cmdRestartTask(): Promise<void> {
   await postMessage({
     type: "CONDUCTOR_DONE",
     surface: conductor.surface,
+    taskRunId: conductor.taskRunId,
     success: false,
     reason: "restarted",
     timestamp: new Date().toISOString(),
