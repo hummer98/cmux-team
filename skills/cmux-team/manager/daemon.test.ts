@@ -1616,3 +1616,166 @@ describe("loadVersion (T192)", () => {
     expect(state.version).toBe("v?.?.?");
   });
 });
+
+describe("startMaster pid fallback (T201)", () => {
+  // テスト共通: marker (.team/master.surface) を書き、team.json を上書きする
+  const TEST_SURFACE = "surface:42";
+  const treeOutputWithSurface = [
+    "workspace workspace:1",
+    "  pane pane:7",
+    `    ${TEST_SURFACE}`,
+  ].join("\n");
+  const treeOutputWithoutSurface = [
+    "workspace workspace:1",
+    "  pane pane:7",
+    "    surface:99",
+  ].join("\n");
+
+  // テスト中は PATH を退避して cmux バイナリを見つからなくする
+  // （spawnMaster が実 cmux を呼んで実環境に surface を作る副作用を防ぐ）
+  let originalPath: string | undefined;
+  beforeEach(() => {
+    originalPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-cmux-team-test";
+  });
+  afterEach(() => {
+    if (originalPath !== undefined) process.env.PATH = originalPath;
+    else delete process.env.PATH;
+  });
+
+  async function writeMaster(pidField: number | null): Promise<void> {
+    await writeFile(join(testDir, ".team/master.surface"), TEST_SURFACE);
+    const masterObj: Record<string, unknown> = {};
+    if (pidField !== null) masterObj.pid = pidField;
+    await writeFile(
+      join(testDir, ".team/team.json"),
+      JSON.stringify({ phase: "init", master: masterObj, manager: {}, conductors: [] }),
+    );
+  }
+
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  // テスト終了時に spawn された pid watcher の interval を確実に止める
+  function stopWatchers(state: DaemonState): void {
+    if (state.masterPidWatcherInterval) {
+      clearInterval(state.masterPidWatcherInterval);
+      state.masterPidWatcherInterval = undefined;
+    }
+    state.running = false;
+  }
+
+  test("ケース 1: pid あり + プロセス生存 → master_restored via=pid、spawn しない", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    const { startMaster, createDaemon } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    __setTreeImpl(async () => "");
+    let state: DaemonState | null = null;
+    try {
+      await writeMaster(12345);
+      state = await createDaemon(testDir);
+
+      await startMaster(state);
+
+      expect(state.masterSurface).toBe(TEST_SURFACE);
+      expect(state.masterPid).toBe(12345);
+      expect(state.masterStatus).toBe("idle");
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_restored");
+      expect(logContent).toContain("via=pid");
+      expect(logContent).toContain("pid=12345");
+      expect(logContent).not.toContain("master_spawning");
+      expect(logContent).not.toContain("master_alive_via_surface_fallback");
+    } finally {
+      if (state) stopWatchers(state);
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+    }
+  });
+
+  test("ケース 2: pid あり + プロセス死亡 → spawn する", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    const { startMaster, createDaemon } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    __setTreeImpl(async () => "");
+    let state: DaemonState | null = null;
+    try {
+      await writeMaster(999999);
+      state = await createDaemon(testDir);
+
+      await startMaster(state);
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_check_failed");
+      expect(logContent).toContain("reason=pid_dead");
+      expect(logContent).toContain("master_spawning");
+      expect(logContent).not.toContain("master_alive_via_surface_fallback");
+    } finally {
+      if (state) stopWatchers(state);
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+    }
+  });
+
+  test("ケース 3: pid なし + surface 生存 → master_alive_via_surface_fallback / via=surface_fallback、spawn しない", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    const { startMaster, createDaemon } = await import("./daemon");
+    // フォールバック経路では isAlive は呼ばれないが、念のため設定
+    __setIsAliveImpl(() => true);
+    __setTreeImpl(async () => treeOutputWithSurface);
+    let state: DaemonState | null = null;
+    try {
+      await writeMaster(null);
+      state = await createDaemon(testDir);
+
+      await startMaster(state);
+
+      expect(state.masterSurface).toBe(TEST_SURFACE);
+      expect(state.masterPid).toBeUndefined();
+      expect(state.masterStatus).toBe("idle");
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_alive_via_surface_fallback");
+      expect(logContent).toContain("reason=team_json_pid_missing");
+      expect(logContent).toContain("master_restored");
+      expect(logContent).toContain("via=surface_fallback");
+      expect(logContent).toContain("pid=unknown");
+      expect(logContent).not.toContain("master_spawning");
+    } finally {
+      if (state) stopWatchers(state);
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+    }
+  });
+
+  test("ケース 4: pid なし + surface 不在 → master_check_failed reason=surface_missing → spawn する", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    const { startMaster, createDaemon } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    __setTreeImpl(async () => treeOutputWithoutSurface);
+    let state: DaemonState | null = null;
+    try {
+      await writeMaster(null);
+      state = await createDaemon(testDir);
+
+      await startMaster(state);
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_check_failed");
+      expect(logContent).toContain("reason=surface_missing");
+      expect(logContent).toContain("master_spawning");
+      expect(logContent).not.toContain("master_alive_via_surface_fallback");
+      expect(logContent).not.toContain("master_restored");
+    } finally {
+      if (state) stopWatchers(state);
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+    }
+  });
+});
