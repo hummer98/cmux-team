@@ -340,7 +340,13 @@ async function cmdStart(): Promise<void> {
     try {
       proxyHandle = await startProxy(PROJECT_ROOT, {
         getState: () => state,
-        onMessage: async (msg) => { await handleMessage(state, msg); },
+        onMessage: async (msg) => {
+          await handleMessage(state, msg);
+          // T205: handleMessage 後に team.json を同期 flush する。
+          // これにより「`cmux-team send X` が 200 OK を返した時点で team.json は最新」
+          // の不変条件が成立し、spawn-agent → await-agent のレースが解消する。
+          await updateTeamJson(state);
+        },
       });
       await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
       state.proxyPort = proxyHandle.port;
