@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.48.0] - 2026-04-15
+
+### Changed (Breaking — soft)
+- **`conductor-settings.json` を共通ファイル 1 個に集約（T206）**。これまで Conductor surface ごとに `.team/prompts/surface:NNN-settings.json` を生成していたが、ファイル内容は surface 独立であることが判明したため `.team/prompts/conductor-settings.json` 1 個に統合した。**既存の起動中 Conductor は古いファイルパスを `--settings` 引数として参照しているため、本バージョンに上げる場合は `cmux-team start` を full quit → restart する必要がある**。`/clear` だけでは復旧しない
+
+### Changed
+- **`cmux-team conductor` / `cmux-team resume` から `CMUX_SURFACE` 環境変数必須を撤廃（T206）**。env が未設定の場合は `cmux identify` の `caller.surface_ref` から自動解決する。手動デバッグ目的で `cmux-team conductor` を直接叩く運用が可能になった
+- **`--surface` CLI オプションが UUID 形式も受け付けるようになった（T206）**。`cmux send` / `cmux send-key` と同様、`surface:NNN` ref と UUID の両形式を受け付ける。内部で `cmux --id-format both --json tree` 経由で正規化される。対象: `send` / `send-agent` / `spawn-agent` / `await-agent` / `kill-agent`。`send --from-stdin`（hook 経由）は ref 契約のため正規化対象外
+
+### Removed
+- 旧 `.team/prompts/surface:NNN-settings.json` ファイルは `cmux-team start` が再生成しなくなる（既存ファイルは手動削除推奨だが、放置しても害はない）
+
 ## [3.47.1] - 2026-04-15
 
 ### Fixed

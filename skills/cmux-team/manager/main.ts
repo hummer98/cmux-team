@@ -194,6 +194,57 @@ function hasHelpFlag(): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
+const SURFACE_REF_RE = /^surface:\d+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `--surface` 引数を `surface:NNN` ref に正規化する（T206）。
+ *
+ * - `surface:NNN` 形式 → そのまま返す（cmux は呼ばない）
+ * - UUID 形式 → `cmux --id-format both --json tree` を呼んで逆引きする
+ * - 不正形式 → throw
+ *
+ * UUID は cmux 出力では大文字、ユーザー入力は小文字になりがちなので、
+ * 比較は `toLowerCase()` 同士で揃える。
+ *
+ * @throws 形式不一致 / cmux 接続失敗 / JSON parse 失敗 / 該当 surface が tree に存在しない
+ */
+export async function normalizeSurfaceArg(input: string): Promise<string> {
+  if (SURFACE_REF_RE.test(input)) return input;
+  if (!UUID_RE.test(input)) {
+    throw new Error(`Invalid --surface value: ${JSON.stringify(input)} (expected "surface:NNN" or UUID)`);
+  }
+  const target = input.toLowerCase();
+  let json: string;
+  try {
+    json = await cmux.tree(undefined, { json: true, idFormat: "both" });
+  } catch (e: any) {
+    throw new Error(`Failed to query cmux tree for UUID lookup: ${e?.message ?? e}`);
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(json);
+  } catch (e: any) {
+    throw new Error(`Failed to parse cmux tree JSON: ${e?.message ?? e}`);
+  }
+  for (const w of parsed?.windows ?? []) {
+    for (const ws of w?.workspaces ?? []) {
+      for (const p of ws?.panes ?? []) {
+        for (const s of p?.surfaces ?? []) {
+          const sid = typeof s?.id === "string" ? s.id.toLowerCase() : undefined;
+          if (sid && sid === target) {
+            const ref = s?.ref;
+            if (typeof ref === "string" && SURFACE_REF_RE.test(ref)) {
+              return ref;
+            }
+          }
+        }
+      }
+    }
+  }
+  throw new Error(`UUID ${input} not found in cmux tree (workspace mismatch or surface not registered?)`);
+}
+
 /** stdin を全部読み切って文字列で返す */
 async function readStdin(): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
@@ -685,6 +736,7 @@ async function cmdSend(): Promise<void> {
 
   // T181: JSON payload 全体を stdin で受け取るモード。
   // shell エスケープ問題（改行・クォート）を避けるため hook 側から使う。
+  // T206: hook は `${CMUX_SURFACE}` を ref 形式で渡す契約なので、ここでは UUID 正規化しない。
   if (hasFlag("from-stdin")) {
     const raw = await readStdin();
     let obj: unknown;
@@ -717,6 +769,40 @@ async function cmdSend(): Promise<void> {
 
   const type = args[1];
 
+  // T206: CLI 直接呼び出しの --surface / --conductor-surface は UUID 形式も受け付ける。
+  // switch に入る前に必要な surface だけ正規化しておき、I/O は最小化する（surface あたり 1 回）。
+  // 正規化失敗時は明確なエラーで exit 1 する（Critical C1 / Major M6）。
+  const SURFACE_REQUIRED_TYPES = new Set([
+    "CONDUCTOR_DONE",
+    "CONDUCTOR_REGISTERED",
+    "AGENT_SPAWNED",
+    "SESSION_STARTED",
+    "SESSION_ENDED",
+    "SESSION_ACTIVE",
+    "SESSION_IDLE",
+    "SESSION_ASK",
+    "SESSION_CLEAR",
+    "CONDUCTOR_SESSION",
+  ]);
+  let normalizedSurface: string | undefined;
+  let normalizedConductorSurface: string | undefined;
+  if (type && SURFACE_REQUIRED_TYPES.has(type)) {
+    try {
+      normalizedSurface = await normalizeSurfaceArg(requireArg("surface"));
+    } catch (e: any) {
+      console.error(`Error: ${e?.message ?? e}`);
+      process.exit(1);
+    }
+  }
+  if (type === "AGENT_SPAWNED") {
+    try {
+      normalizedConductorSurface = await normalizeSurfaceArg(requireArg("conductor-surface"));
+    } catch (e: any) {
+      console.error(`Error: ${e?.message ?? e}`);
+      process.exit(1);
+    }
+  }
+
   switch (type) {
     case "TASK_CREATED":
       message = {
@@ -739,7 +825,7 @@ async function cmdSend(): Promise<void> {
     case "CONDUCTOR_DONE":
       message = {
         type: "CONDUCTOR_DONE",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         success: getArg("success") !== "false",  // デフォルト true（後方互換）
         reason: getArg("reason"),
         exitCode: getArg("exit-code") ? Number(getArg("exit-code")) : undefined,
@@ -752,7 +838,7 @@ async function cmdSend(): Promise<void> {
     case "CONDUCTOR_REGISTERED":
       message = {
         type: "CONDUCTOR_REGISTERED",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         paneId: getArg("pane-id") ?? "",
         timestamp: now,
       };
@@ -761,8 +847,8 @@ async function cmdSend(): Promise<void> {
     case "AGENT_SPAWNED":
       message = {
         type: "AGENT_SPAWNED",
-        conductorSurface: requireArg("conductor-surface"),
-        surface: requireArg("surface"),
+        conductorSurface: normalizedConductorSurface!,
+        surface: normalizedSurface!,
         role: getArg("role"),
         taskTitle: getArg("task-title"),
         timestamp: now,
@@ -772,7 +858,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_STARTED":
       message = {
         type: "SESSION_STARTED",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         pid: Number(requireArg("pid")),
         sessionId: getArg("session-id"),
         timestamp: now,
@@ -782,7 +868,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_ENDED":
       message = {
         type: "SESSION_ENDED",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         reason: getArg("reason"),
         timestamp: now,
@@ -792,7 +878,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_ACTIVE":
       message = {
         type: "SESSION_ACTIVE",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -801,7 +887,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_IDLE":
       message = {
         type: "SESSION_IDLE",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -810,7 +896,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_ASK":
       message = {
         type: "SESSION_ASK",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         question: requireArg("question"),
         conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
@@ -821,7 +907,7 @@ async function cmdSend(): Promise<void> {
     case "SESSION_CLEAR":
       message = {
         type: "SESSION_CLEAR",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
@@ -831,7 +917,7 @@ async function cmdSend(): Promise<void> {
     case "CONDUCTOR_SESSION":
       message = {
         type: "CONDUCTOR_SESSION",
-        surface: requireArg("surface"),
+        surface: normalizedSurface!,
         sessionId: requireArg("session-id"),
         timestamp: now,
       };
@@ -1111,8 +1197,8 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
   return settingsPath;
 }
 
-export function generateConductorSettings(projectRoot: string, surface: string): string {
-  const conductorSettingsPath = join(projectRoot, `.team/prompts/${surface}-settings.json`);
+export function generateConductorSettings(projectRoot: string): string {
+  const conductorSettingsPath = join(projectRoot, ".team/prompts/conductor-settings.json");
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const conductorSettings: Record<string, any> = {
     hooks: {
@@ -1182,17 +1268,32 @@ export function generateConductorSettings(projectRoot: string, surface: string):
 }
 
 /**
+ * CMUX_SURFACE env → cmux identify の caller surface_ref の順で解決（T206）。
+ * どちらも失敗したら exit 1。
+ */
+async function resolveCallerSurfaceOrExit(): Promise<string> {
+  const env = process.env.CMUX_SURFACE;
+  if (env) return env;
+  try {
+    return await cmux.getCallerSurface();
+  } catch (e: any) {
+    console.error(
+      "Error: surface を解決できません。CMUX_SURFACE env を設定するか、" +
+      "cmux ペイン内から呼び出してください。" +
+      ` (cmux identify failed: ${e?.message ?? e})`
+    );
+    process.exit(1);
+  }
+}
+
+/**
  * cmux-team conductor
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
- * CMUX_SURFACE 環境変数が必須。
+ * CMUX_SURFACE 環境変数が未設定なら cmux identify から自動解決する。
  */
 async function cmdConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
-  const surface = process.env.CMUX_SURFACE;
-  if (!surface) {
-    console.error("Error: CMUX_SURFACE environment variable is required");
-    process.exit(1);
-  }
+  const surface = await resolveCallerSurfaceOrExit();
 
   // ロールプロンプトファイル生成
   const { generateConductorRolePrompt } = await import("./template");
@@ -1237,7 +1338,7 @@ async function cmdConductor(): Promise<void> {
   const taskPromptFile = getArg("task-prompt");
 
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT);
 
   // claude コマンド引数を組み立て
   const claudeArgs = [
@@ -1275,11 +1376,7 @@ async function cmdConductor(): Promise<void> {
  */
 async function cmdResume(): Promise<void> {
   if (hasHelpFlag()) showHelp("Usage: cmux-team resume <task-id>");
-  const surface = process.env.CMUX_SURFACE;
-  if (!surface) {
-    console.error("Error: CMUX_SURFACE environment variable is required");
-    process.exit(1);
-  }
+  const surface = await resolveCallerSurfaceOrExit();
   const taskId = args[1];
   if (!taskId) {
     console.error("Usage: cmux-team resume <task-id>");
@@ -1322,7 +1419,7 @@ async function cmdResume(): Promise<void> {
   const model = getModelForRole(config, "conductor", getArg("model"));
 
   // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT);
 
   // claude --resume で再開
   const { execFileSync } = require("child_process");
@@ -1417,7 +1514,13 @@ async function cmdSpawnConductor(): Promise<void> {
 
 async function cmdSpawnAgent(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_agent", { model: DEFAULT_MODEL }));
-  const conductorSurface = requireArg("conductor-surface");
+  let conductorSurface: string;
+  try {
+    conductorSurface = await normalizeSurfaceArg(requireArg("conductor-surface"));
+  } catch (e: any) {
+    console.error(`Error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
   const role = requireArg("role");
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
@@ -1623,7 +1726,13 @@ async function cmdAgents(): Promise<void> {
 
 async function cmdKillAgent(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_kill_agent"));
-  const surface = requireArg("surface");
+  let surface: string;
+  try {
+    surface = await normalizeSurfaceArg(requireArg("surface"));
+  } catch (e: any) {
+    console.error(`Error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
 
   // surface を閉じる（closeSurface は SESSION_ENDED を送信しないため、明示的に通知する）
   await cmux.closeSurface(surface);
@@ -1710,7 +1819,13 @@ export async function waitForAgentRegistered(
 
 async function cmdSendAgent(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_send_agent"));
-  const targetSurface = requireArg("surface");
+  let targetSurface: string;
+  try {
+    targetSurface = await normalizeSurfaceArg(requireArg("surface"));
+  } catch (e: any) {
+    console.error(`Error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
 
   // メッセージは positional 引数（複数個の場合は space で join）
   const flags = new Set(["--surface", "--no-return"]);
@@ -2179,7 +2294,13 @@ async function cmdAwaitAgent(): Promise<void> {
     ].join("\n"));
   }
 
-  const surface = requireArg("surface");
+  let surface: string;
+  try {
+    surface = await normalizeSurfaceArg(requireArg("surface"));
+  } catch (e: any) {
+    console.error(`Error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
   const timeoutSec = parseInt(getArg("timeout") ?? "600", 10);
 
   // team.json から agent の所属 Conductor を逆引き
