@@ -535,8 +535,17 @@ export async function initializeLayout(
         const restored: ConductorState[] = [];
         for (const c of conductors) {
           if (!c.surface) continue;
-          // T195: PID alive check で復元判定する
+          // T195: PID alive check で復元判定する。
+          // PID が死んでいるものは restored に含めない — 新規作成パスへフォールバックさせる。
+          // （full-quit 後の再起動で古い surface を死んだまま復元していたバグへの対策）
           const conductorAlive = typeof c.pid === "number" && cmux.isAlive(c.pid);
+          if (!conductorAlive) {
+            await log(
+              "conductor_restore_skipped",
+              `${formatSurface(c.surface, "C")} reason=pid_dead pid=${typeof c.pid === "number" ? c.pid : "null"}`
+            );
+            continue;
+          }
           const restoredAgents: AgentState[] = (c.agents ?? []).map((a: any) => ({
             surface: a.surface,
             role: a.role,
@@ -554,12 +563,9 @@ export async function initializeLayout(
             startedAt: c.startedAt ?? new Date().toISOString(),
             paneId: c.paneId,
             sessionId: c.sessionId,
-            pid: conductorAlive ? c.pid : undefined,
+            pid: c.pid,
             agents: restoredAgents,
-            status: conductorAlive
-              ? (c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle")
-              : "disconnected",
-            disconnectedAt: conductorAlive ? undefined : new Date().toISOString(),
+            status: c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle",
           };
           restored.push(restoredConductor);
         }
