@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.49.0] - 2026-04-16
+
+### Changed (Breaking — soft)
+- **statusline を proxy HTTP API 化（T211）**。`statusline.sh` は daemon の `POST /statusline` に stdin JSON をそのまま転送するだけの curl ラッパー（~15 行）に縮退し、描画ロジックは TypeScript (`skills/cmux-team/manager/statusline.ts`) に移植。DaemonState から master / conductor / agent / agent の親 conductor を直接逆引きし、surface ヘッダー単独で role 判定できるようになった。旧 bash 版と 1 バイト単位で一致する出力を維持しつつ、子プロセス fork（bash + jq × 5）を proxy 内部の純関数呼び出しに置き換えた
+- **Master UserPromptSubmit / Stop hook を `.claude/settings.json` から `master-settings.json` に移設（T211）**。旧実装では同ファイルが Agent / Conductor / Master すべての Claude セッションに適用されてしまい、Agent / Conductor の hook 発火時に Master 状態を `busy` に上書きする汚染バグがあった。Master 専用 settings に移して `cmdLaunchMaster` から `--settings` 経由で明示的に注入するように変更。Python スクリプト本体は `.team/prompts/master-hook-busy.py` / `master-hook-stop.py` として独立ファイル化し、embed エスケープ地獄を解消
+
+### Removed
+- **`CMUX_ROLE` 環境変数を完全削除（T211）**。旧 statusline.sh が bash 内で master / conductor / agent 分岐するために使っていたが、ロール判定は proxy 内部の DaemonState 逆引きに移行したため env ベースの伝搬は不要になった。`cmdConductor` / `cmdResume` / `cmdLaunchMaster` / `cmdSpawnAgent` の 4 箇所から除去。`.claude/settings.json` から `UserPromptSubmit` / `Stop` hook 定義（`CONDUCTOR_ID` guard 込み）も撤去し、`.team/tasks/` 保護 PreToolUse hook のみ残存
+
 ## [3.48.0] - 2026-04-15
 
 ### Added

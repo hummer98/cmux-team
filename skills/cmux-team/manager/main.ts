@@ -1195,6 +1195,173 @@ export function ensureAskDetectorScript(projectRoot: string): string {
   return scriptPath;
 }
 
+// --- T211: Master hook Python scripts ---
+
+/**
+ * Master UserPromptSubmit hook (T211)。
+ * ユーザーがプロンプトを送信した瞬間に proxy `/master-state` に
+ * `{status: "busy", prompt: "..."}` を POST し、Manager に Master の活動を通知する。
+ *
+ * 旧 `.claude/settings.json` ベース時は `CONDUCTOR_ID` guard で Agent/Conductor を除外していたが、
+ * T211 以降は `master-settings.json` 経由で Master セッションにのみ適用されるため guard 不要。
+ */
+const MASTER_HOOK_BUSY_SCRIPT = [
+  '#!/usr/bin/env python3',
+  '# cmux-team Master UserPromptSubmit hook (T211)',
+  '# stdin: Claude Code UserPromptSubmit hook の JSON payload',
+  '# 役割: proxy /master-state に {status: "busy", prompt} を POST する',
+  'import json',
+  'import os',
+  'import subprocess',
+  'import sys',
+  'import urllib.request',
+  '',
+  'try:',
+  '    payload = json.load(sys.stdin)',
+  'except Exception:',
+  '    sys.exit(0)',
+  '',
+  'prompt = (payload.get("prompt") or "")[:80]',
+  '',
+  'root = subprocess.run(',
+  '    ["git", "rev-parse", "--show-toplevel"],',
+  '    capture_output=True, text=True,',
+  ').stdout.strip()',
+  'if not root:',
+  '    sys.exit(0)',
+  '',
+  'port_file = os.path.join(root, ".team", "proxy-port")',
+  'try:',
+  '    port = open(port_file).read().strip()',
+  'except Exception:',
+  '    sys.exit(0)',
+  'if not port:',
+  '    sys.exit(0)',
+  '',
+  'data = json.dumps({"status": "busy", "prompt": prompt}).encode()',
+  'try:',
+  '    req = urllib.request.Request(',
+  '        f"http://127.0.0.1:{port}/master-state",',
+  '        data=data,',
+  '        headers={"Content-Type": "application/json"},',
+  '        method="POST",',
+  '    )',
+  '    urllib.request.urlopen(req, timeout=2)',
+  'except Exception:',
+  '    pass',
+  '',
+  'sys.exit(0)',
+  '',
+].join("\n");
+
+/**
+ * Master Stop hook (T211)。
+ * Master セッションのレスポンス完了時に proxy `/master-state` に
+ * `{status: "idle"}` を POST する。
+ */
+const MASTER_HOOK_STOP_SCRIPT = [
+  '#!/usr/bin/env python3',
+  '# cmux-team Master Stop hook (T211)',
+  '# 役割: proxy /master-state に {status: "idle"} を POST する',
+  'import json',
+  'import os',
+  'import subprocess',
+  'import sys',
+  'import urllib.request',
+  '',
+  'root = subprocess.run(',
+  '    ["git", "rev-parse", "--show-toplevel"],',
+  '    capture_output=True, text=True,',
+  ').stdout.strip()',
+  'if not root:',
+  '    sys.exit(0)',
+  '',
+  'port_file = os.path.join(root, ".team", "proxy-port")',
+  'try:',
+  '    port = open(port_file).read().strip()',
+  'except Exception:',
+  '    sys.exit(0)',
+  'if not port:',
+  '    sys.exit(0)',
+  '',
+  'data = json.dumps({"status": "idle"}).encode()',
+  'try:',
+  '    req = urllib.request.Request(',
+  '        f"http://127.0.0.1:{port}/master-state",',
+  '        data=data,',
+  '        headers={"Content-Type": "application/json"},',
+  '        method="POST",',
+  '    )',
+  '    urllib.request.urlopen(req, timeout=2)',
+  'except Exception:',
+  '    pass',
+  '',
+  'sys.exit(0)',
+  '',
+].join("\n");
+
+/**
+ * Master 用 Python hook スクリプトを `.team/prompts/` に冪等に書き出す (T211)。
+ * 戻り値は `{ busy, stop }` の絶対パス。
+ */
+export function ensureMasterHookScripts(projectRoot: string): { busy: string; stop: string } {
+  const dir = join(projectRoot, ".team/prompts");
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  const busy = join(dir, "master-hook-busy.py");
+  const stop = join(dir, "master-hook-stop.py");
+  writeFileSync(busy, MASTER_HOOK_BUSY_SCRIPT, { mode: 0o755 });
+  writeFileSync(stop, MASTER_HOOK_STOP_SCRIPT, { mode: 0o755 });
+  return { busy, stop };
+}
+
+/**
+ * Master 用 settings.json を生成する (T211)。
+ * - UserPromptSubmit hook: master-hook-busy.py を呼んで `/master-state` に busy を POST
+ * - Stop hook: master-hook-stop.py を呼んで `/master-state` に idle を POST
+ * - statusLine: statusline.sh (存在する場合のみ)
+ *
+ * これらの hook は旧 `.claude/settings.json` に置かれていたが、
+ * Agent/Conductor セッションにも適用されてしまう問題があったため、
+ * Master 専用の settings.json に移設して起動経路で明示的に差し込む。
+ */
+export function generateMasterSettings(projectRoot: string): string {
+  const settingsPath = join(projectRoot, ".team/prompts/master-settings.json");
+  const { busy, stop } = ensureMasterHookScripts(projectRoot);
+  const settings: Record<string, any> = {
+    hooks: {
+      UserPromptSubmit: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `python3 ${busy}`,
+            timeout: 5000,
+          }],
+        },
+      ],
+      Stop: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `python3 ${stop}`,
+            timeout: 5000,
+          }],
+        },
+      ],
+    },
+  };
+
+  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
+  if (existsSync(statuslineScript)) {
+    settings.statusLine = { type: "command", command: statuslineScript };
+  }
+
+  try { mkdirSync(join(projectRoot, ".team/prompts"), { recursive: true }); } catch {}
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  return settingsPath;
+}
+
 /**
  * Agent 用 settings.json を生成する。
  * - SessionStart hook: SESSION_STARTED 送信（T195: PID 追跡に使う）
@@ -1363,7 +1530,6 @@ async function cmdConductor(): Promise<void> {
   // cmux identify fallback 経路でも statusline.sh / hook が CMUX_SURFACE を
   // 取得できるよう defensive に明示設定する。
   process.env.CMUX_SURFACE = surface;
-  process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -1449,7 +1615,6 @@ async function cmdResume(): Promise<void> {
   process.env.PROJECT_ROOT = PROJECT_ROOT;
   // T210: 同上（cmdConductor 参照）— fallback 経路のための defensive export。
   process.env.CMUX_SURFACE = surface;
-  process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -1494,7 +1659,6 @@ async function cmdLaunchMaster(): Promise<void> {
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CMUX_ROLE = "master";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
@@ -1503,18 +1667,8 @@ async function cmdLaunchMaster(): Promise<void> {
   }
   await log("master_spawn_proxy", `port=${proxyPort ?? "none"}`);
 
-  // Master 用 settings.json 生成
-  const masterSettingsPath = join(PROJECT_ROOT, ".team/prompts/master-settings.json");
-  const statuslineScript = join(homedir(), ".claude", "statusline.sh");
-  const masterSettings: Record<string, any> = {};
-  if (existsSync(statuslineScript)) {
-    masterSettings.statusLine = {
-      type: "command",
-      command: statuslineScript,
-    };
-  }
-  try { mkdirSync(join(PROJECT_ROOT, ".team/prompts"), { recursive: true }); } catch {}
-  writeFileSync(masterSettingsPath, JSON.stringify(masterSettings, null, 2));
+  // Master 用 settings.json 生成 (T211: UserPromptSubmit/Stop hook を同梱)
+  const masterSettingsPath = generateMasterSettings(PROJECT_ROOT);
 
   // モデル解決
   const config = await loadConfig();
@@ -1652,7 +1806,6 @@ async function cmdSpawnAgent(): Promise<void> {
   // 環境変数をシェルに焼き付け
   const exportVars = [
     `ROLE=${role}`,
-    `CMUX_ROLE=agent`,
     `PROJECT_ROOT=${PROJECT_ROOT}`,
     `CMUX_SURFACE=${surface}`,
     `CMUX_NO_RENAME_TAB=1`,
