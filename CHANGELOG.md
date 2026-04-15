@@ -2,15 +2,27 @@
 
 ## [3.48.0] - 2026-04-15
 
+### Added
+- **`cmux-team restart-task` が `aborted` 状態のタスクからも実行できるようになった（T204）**。これまで `assigned` のみ許容していたが、内部で worktree / branch を冪等削除し `task-state.json` の resume フィールド（`worktreePath` / `taskRunId` / `conductorSlot` / `sessionId` / `abortedAt` / `assignedAt`）を剥がして `ready` に戻す `restartFromAborted()` 経路を追加。aborted で滞留したタスクの再投入が CLI 一発で行える
+
 ### Changed (Breaking — soft)
 - **`conductor-settings.json` を共通ファイル 1 個に集約（T206）**。これまで Conductor surface ごとに `.team/prompts/surface:NNN-settings.json` を生成していたが、ファイル内容は surface 独立であることが判明したため `.team/prompts/conductor-settings.json` 1 個に統合した。**既存の起動中 Conductor は古いファイルパスを `--settings` 引数として参照しているため、本バージョンに上げる場合は `cmux-team start` を full quit → restart する必要がある**。`/clear` だけでは復旧しない
 
 ### Changed
 - **`cmux-team conductor` / `cmux-team resume` から `CMUX_SURFACE` 環境変数必須を撤廃（T206）**。env が未設定の場合は `cmux identify` の `caller.surface_ref` から自動解決する。手動デバッグ目的で `cmux-team conductor` を直接叩く運用が可能になった
 - **`--surface` CLI オプションが UUID 形式も受け付けるようになった（T206）**。`cmux send` / `cmux send-key` と同様、`surface:NNN` ref と UUID の両形式を受け付ける。内部で `cmux --id-format both --json tree` 経由で正規化される。対象: `send` / `send-agent` / `spawn-agent` / `await-agent` / `kill-agent`。`send --from-stdin`（hook 経由）は ref 契約のため正規化対象外
+- **`paneId` の永続化を廃止し surface→pane を on-demand 解決に統一（T207）**。`ConductorState.paneId` / `ConductorRegisteredMessage.paneId` を schema から完全削除し、spawn-agent / resetConductor / onFullQuit すべてで `cmux tree` 経由のリアルタイム解決に切り替えた。dummy paneId 混入経路（手動 `CONDUCTOR_REGISTERED` で別 pane に Agent が生成される実害）を構造的に根絶。`cmux.ts` に `listSiblingSurfaces(surface, workspace?)` を新設し、`cmux tree` 1 回呼びで対象 surface の所属 pane → 同 pane 全 surface を 1-pass 集約。`cmux-team send --pane-id` 引数も廃止
+- **`SessionStart` hook の matcher を全ソース対応に変更（T203）**。Conductor / Agent 双方の hook を `matcher: ""` に変更し startup / resume / clear / compact すべてで発火するようにした。daemon の `SESSION_STARTED` ハンドラに sessionId 追従と `task-state.json` 同期更新を追加。`crypto.randomUUID()` による Conductor sessionId 自己生成と `CONDUCTOR_SESSION` メッセージ経路を撤廃
+
+### Fixed
+- **`startMaster` で v3.46→v3.47 マイグレーション環境の重複 spawn を修正（T201）**。team.json に `master.pid` が無い既存環境で daemon を再起動すると、`startMaster` が短絡評価で `alive=false` となり既存 Master を dead 判定して重複 spawn する不具合があった。pid 未登録時は `cmux.getPaneForSurface` による surface 生存確認にフォールバックする経路を追加。フォールバック経路では `state.masterPid` と `spawnMasterPidWatcher` を skip
+- **`/clear` 後の `cmux-team resume` 失敗を修正（T203）**。Claude Code の `/clear` が新 session-id を発行するが、`SESSION_STARTED` ハンドラが pid のみ更新し sessionId を触らないため、`task-state.json` には初回 UUID が凍結記録されて "No conversation found with session ID" で resume が失敗していた。`SessionStart` hook 経由で sessionId を daemon に push し assigned タスクの sessionId を上書きするよう修正
+- **`spawn-agent → await-agent` の team.json stale read レースを修正（T205）**。`handleMessage` は state を mutate するが `updateTeamJson` は tick ループでのみ呼ばれるため、`onMessage` 完了 → 200 OK → CLI が即 team.json を読む経路で "agent surface not registered in team.json" exit 1 が起きていた。`onMessage` ラッパ内で `handleMessage` 直後に `updateTeamJson` を同期実行し、「`cmux-team send X` が 200 OK を返した時点で team.json は最新」という不変条件を確立
+- **`classify-stop` を `stop_reason` ベースに置換し agent_monologue SKIP を削除（T208）**。Stop hook は `stop_reason === "end_turn"` 時のみ発火するため、「最後の assistant 行に tool_use が無い ＝ まだモノローグ中」という推測ロジックの前提自体が成立していなかった。A[191] 事例（Write 連打 → 最終ターン text-only 完了報告 → SKIP 判定で `await-agent` が永久ブロック）を踏まえ `classifyStopPayload()` を ASK / IDLE の 2 択に縮退
 
 ### Removed
 - 旧 `.team/prompts/surface:NNN-settings.json` ファイルは `cmux-team start` が再生成しなくなる（既存ファイルは手動削除推奨だが、放置しても害はない）
+- `cmux-team send --pane-id` 引数を削除（T207、上記 paneId 永続化廃止に伴う）
 
 ## [3.47.1] - 2026-04-15
 
