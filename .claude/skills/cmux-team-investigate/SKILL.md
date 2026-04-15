@@ -6,6 +6,7 @@ description: >
   別リポジトリの不具合・挙動を質問した場合、もしくは manager.log / trace DB の相関分析、
   特定 surface の挙動調査を求められた場合。
   Provides: 対象リポジトリ特定 → ログ収集 → trace DB 検索 → surface 直接参照 → 時系列相関 の 5 ステップ手順。
+  hook_signals テーブル（T216）と cmux-team trace-hooks サブコマンド（T217）による hook 受信の事後追跡もカバーする。
   対象プロジェクトの .team/ は読み取り専用で扱い、書き込みは行わない。
 ---
 
@@ -130,6 +131,88 @@ EOF
 > 会話を圧縮する。圧縮後の JSONL は `assistant` メッセージに `text` ブロックしか残らず、
 > `tool_use` ブロックはすべて失われる。コンパクション済みかどうかは行数（数十行以下）
 > や `tool_use` count がゼロかで判断できる。
+
+### hook_signals テーブルを参照する — 「どの hook が実際に発火したか」
+
+`task_sessions` がセッション索引であるのに対し、`hook_signals` テーブルは
+**Manager daemon が受信した全 hook シグナルの生ログ** である（T216「hook 全送信ポリシー」）。
+hook shell → daemon の受信が成立したかを Manager の分岐判定（`handleMessage`）前に
+確認できるため、「Conductor が idle に戻らない」「Agent の完了が検知されない」等の
+症状で最初に引くテーブル。
+
+記録される hook type の例: `SESSION_STARTED` / `SESSION_STOPPED` / `SESSION_ENDED` /
+`SESSION_IDLE` / `SESSION_CLEAR` / `AGENT_SPAWNED` / `SESSION_ASK` / `CONDUCTOR_DONE`。
+
+スキーマ（`skills/cmux-team/manager/trace-store.ts` の `CREATE TABLE IF NOT EXISTS hook_signals`）:
+
+```sql
+CREATE TABLE hook_signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL,
+  type TEXT NOT NULL,
+  surface TEXT,
+  pid INTEGER,
+  reason TEXT,
+  source TEXT,
+  question TEXT,
+  task_run_id TEXT,
+  payload_json TEXT NOT NULL
+);
+-- index: type / surface / timestamp
+```
+
+#### 方式 A: `cmux-team trace-hooks` サブコマンド（T217）
+
+別プロジェクトを対象にする場合は必ず対象 CWD で実行する。
+
+```bash
+# id DESC で新しい順に最大 50 件（デフォルト）
+( cd "$TARGET" && cmux-team trace-hooks )
+
+# hook type で絞り込み
+( cd "$TARGET" && cmux-team trace-hooks --type SESSION_ENDED --limit 20 )
+
+# surface で絞り込み（surface:665 / 665 / C[665] のいずれも受理）
+( cd "$TARGET" && cmux-team trace-hooks --surface 'C[665]' )
+
+# task_run_id で絞り込み、JSON 配列として出力
+( cd "$TARGET" && cmux-team trace-hooks --task-run task-042-1712345678 --json )
+```
+
+オプション: `--type <TYPE>` / `--surface <surface>` / `--task-run <id>` /
+`--limit <N>`（デフォルト 50、id DESC）/ `--json`。
+コマンド実装は `skills/cmux-team/manager/main.ts` の `cmdTraceHooks`。
+
+#### 方式 B: sqlite3 で直接 readonly 参照
+
+```bash
+# ある task_run の hook を時系列（古い順）で見る
+sqlite3 "file:$TARGET/.team/traces/traces.db?mode=ro" -readonly \
+  "SELECT timestamp, type, surface, pid, reason, task_run_id
+   FROM hook_signals
+   WHERE task_run_id='task-042-1712345678'
+   ORDER BY id ASC;"
+
+# ある surface で発火した hook を時系列で見る
+sqlite3 "file:$TARGET/.team/traces/traces.db?mode=ro" -readonly \
+  "SELECT timestamp, type, reason, source
+   FROM hook_signals
+   WHERE surface='surface:665'
+   ORDER BY id ASC;"
+```
+
+ロック回避は他テーブルと同じく `?mode=ro` URI または `cp` スナップショット方式を使う
+（「注意事項 → trace DB のロック」参照）。
+
+#### 調査手順の指針
+
+- **Conductor が idle に戻らない** → `type IN ('SESSION_IDLE','SESSION_CLEAR','SESSION_ENDED')` を対象 surface で絞り、hook が届いているか確認する
+- **Agent の完了が検知されない** → `type='CONDUCTOR_DONE'` または `type='SESSION_ENDED'` を task_run_id で絞る
+- **hook 自体が発火していない**（hook_signals に行が無い） → hook shell 側の問題。Claude Code 側の hook 設定と matcher を疑う
+- **hook は届いているが Manager が反応していない** → Manager の分岐判定（`handleMessage`）側の問題。`manager.log` と照合して原因を特定する
+
+`hook_signals` は Manager のフィルタ前の生ログなので、「hook が届いたか」と
+「Manager が正しく処理したか」を切り分けるためのプライマリソースとして扱う。
 
 ## Step 4: surface 直接参照
 
