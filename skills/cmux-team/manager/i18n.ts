@@ -368,7 +368,7 @@ Notes:
 `,
 
   help_restart_task: `
-cmux-team restart-task -- restart a running task (re-queues as ready)
+cmux-team restart-task -- restart an assigned or aborted task (re-queues as ready)
 
 Usage:
   cmux-team restart-task --task-id <id> [--journal <text>]
@@ -378,12 +378,13 @@ Options:
   --journal <text>        restart journal (optional, default: "Restarted: T{id} {title}")
 
 Examples:
-  cmux-team restart-task --task-id 035
+  cmux-team restart-task --task-id 035                                    # works for both assigned and aborted
   cmux-team restart-task --task-id 035 --journal "Conductor crashed, retrying"
 
 Notes:
-  - Only tasks in assigned (running) state can be restarted
-  - Performs the same cleanup as abort-task (stops agents, removes worktree)
+  - Only tasks in assigned or aborted state can be restarted
+  - For assigned: performs the same cleanup as abort-task (stops agents, removes worktree)
+  - For aborted: removes residual worktree/branch left over from the abort
   - Sets status back to ready instead of aborted
   - Sends TASK_CREATED notification for automatic re-assignment
 `,
@@ -530,7 +531,7 @@ Usage:
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team await-task --task-id <id> [--timeout <sec>]    wait for task completion
   cmux-team abort-task --task-id <id> [--journal <text>]  abort a running task
-  cmux-team restart-task --task-id <id> [--journal <text>] restart a running task
+  cmux-team restart-task --task-id <id> [--journal <text>] restart an assigned or aborted task
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
   cmux-team trace-task <task-id>              display session history for a task
   cmux-team conductor                          launch Conductor (auto-resolves proxy)
@@ -889,7 +890,7 @@ Notes:
 `,
 
   help_restart_task: `
-cmux-team restart-task -- 実行中タスクを再実行（ready に戻す）
+cmux-team restart-task -- assigned または aborted のタスクを再実行（ready に戻す）
 
 Usage:
   cmux-team restart-task --task-id <id> [--journal <text>]
@@ -899,12 +900,13 @@ Options:
   --journal <text>        再実行ジャーナル（任意、デフォルト: "再実行: T{id} {title}"）
 
 Examples:
-  cmux-team restart-task --task-id 035
+  cmux-team restart-task --task-id 035                                    # assigned / aborted どちらでも実行可
   cmux-team restart-task --task-id 035 --journal "Conductor がクラッシュしたため再実行"
 
 Notes:
-  - assigned（実行中）のタスクのみ再実行できます
-  - abort-task と同じクリーンアップを実行（エージェント停止、worktree 削除）
+  - assigned（実行中）または aborted のタスクを再実行できます
+  - assigned からは abort-task と同じクリーンアップを実行（エージェント停止、worktree 削除）
+  - aborted からは abort 時に残った worktree / ブランチの残骸のみ削除します
   - ステータスを aborted ではなく ready に戻します
   - TASK_CREATED 通知により自動再割り当てされます
 `,
@@ -1051,7 +1053,7 @@ Usage:
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team await-task --task-id <id> [--timeout <sec>]    タスク完了待ち
   cmux-team abort-task --task-id <id> [--journal <text>] 実行中タスクを中止
-  cmux-team restart-task --task-id <id> [--journal <text>] 実行中タスクを再実行
+  cmux-team restart-task --task-id <id> [--journal <text>] assigned または aborted のタスクを再実行
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace-task <task-id>              タスクのセッション履歴を表示
   cmux-team conductor                          Conductor 起動（proxy 自動解決）
