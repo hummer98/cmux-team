@@ -207,6 +207,16 @@ export const LAYOUT_MAX_CONDUCTORS: Record<LayoutMode, number> = {
   "16x9": 2,
 };
 
+// --- Main branch resolution (T213) ---
+
+export const MainBranchSource = z.enum(["config", "detected", "fallback"]);
+export type MainBranchSource = z.infer<typeof MainBranchSource>;
+
+export interface MainBranchResolution {
+  branch: string;
+  source: MainBranchSource;
+}
+
 // --- Auto update mode ---
 
 export const AutoUpdateMode = z.enum(["off", "notify", "task"]);

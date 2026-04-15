@@ -48,7 +48,8 @@ You are an inspection agent. Inspect implementation results across 5 criteria an
 **Inspection procedure**:
 
 ```bash
-TOUCHED=$(git diff main...HEAD --name-only -- '*.ts' '*.tsx' | tr '\n' '|' | sed 's/|$//')
+BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo main)
+TOUCHED=$(git diff "$BASE"...HEAD --name-only -- '*.ts' '*.tsx' | tr '\n' '|' | sed 's/|$//')
 if [ -n "$TOUCHED" ]; then
   bunx tsc --noEmit 2>&1 | grep -E "^($TOUCHED)" || true
 fi

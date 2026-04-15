@@ -89,6 +89,9 @@ export interface DaemonState {
   lastSidebarCategory: string | null;
   /** daemon プロセスが属する cmux-team パッケージのバージョン（例: "v3.45.0"）。T192 で追加 */
   version: string;
+  /** プロジェクトの主開発ブランチ（config.mainBranch で解決）。T213 で追加。
+   *  初期値は "main"。cmdStart が resolveMainBranch の結果で上書きする */
+  mainBranch: string;
 }
 
 /**
@@ -226,6 +229,7 @@ export async function createDaemon(
     lastSidebarStatus: null,
     lastSidebarCategory: null,
     version: "v?.?.?",
+    mainBranch: "main",
   };
 }
 
@@ -643,6 +647,7 @@ export async function initializeLayout(
     daemonSurface,
     resumePlan,
     state.layout,
+    state.mainBranch,
   );
   // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
   return assignments;
@@ -1253,7 +1258,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
 
     let updated: ConductorState;
     try {
-      updated = await assignTask(idleConductor, task.id, state.projectRoot);
+      updated = await assignTask(idleConductor, task.id, state.projectRoot, state.mainBranch);
     } catch (e: unknown) {
       if (e instanceof AssignTaskError) {
         if (e.kind === "task") {

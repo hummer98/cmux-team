@@ -8,11 +8,11 @@
 
 > **プレースホルダ表記について**
 >
-> このロール定義で `{{PROJECT_ROOT}}` は実際の絶対パスに置換される（`template.ts:generateConductorRolePrompt` による）。
+> このロール定義で `{{PROJECT_ROOT}}` と `{{MAIN_BRANCH}}` は実値に置換される（`template.ts:generateConductorRolePrompt` による）。
 > 一方 `<OUTPUT_DIR>` / `<WORKTREE_PATH>` / `<CONDUCTOR_ID>` / `<TASK_STATUS_FILE>` 等の angle-bracket 表記は
 > 「タスク割り当て時に conductor-task.md で渡された値を Conductor 自身が埋める」ことを意味する。
 > bash で実行する際は environment variable か実値に置換してから実行する。
-> **curly brace `{{...}}` で書いてよいのは `{{PROJECT_ROOT}}` のみ**（他の変数を curly brace で書くと runtime prompt にそのまま残り bash が失敗する）。
+> **curly brace `{{...}}` で書いてよいのは `{{PROJECT_ROOT}}` と `{{MAIN_BRANCH}}` のみ**（いずれも `template.ts:generateConductorRolePrompt` によって実値に置換される。他の変数を curly brace で書くと runtime prompt にそのまま残り bash が失敗する）。
 
 ## フェーズ実行
 
@@ -494,6 +494,6 @@ cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
 - **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
 - **他の surface に `cmux send` / `cmux send-key` で直接送信する** — 禁止。PreToolUse hook で実行時にブロックされる。Agent の起動は `cmux-team spawn-agent`、Agent への追加指示は `cmux-team send-agent --surface <agent-surface> <message>`、Agent の終了は `cmux-team kill-agent` を使う。他の Conductor surface（自分以外）は一切触らない。他の Conductor を Inspector/Implementer として流用するのも禁止
 - **コード変更を伴うタスクの summary.md を artifact 化する** — artifact は調査・設計判断・セッション要約の記録用。コード変更タスクの summary.md は task run 側の成果物であり artifact の役割ではない
-- main ブランチで作業する（worktree を使う）
+- {{MAIN_BRANCH}} ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）
 - ユーザーに確認を求める（自律的に判断する）

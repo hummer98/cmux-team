@@ -68,7 +68,9 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 
 ## Conductor Templates（3種）
 
-### conductor.md（フルプロトコル版）
+### conductor.md（フルプロトコル版・deprecated）
+
+**非推奨** — 現行ランタイムは `conductor-role.md` + `conductor-task.md` を使用する。このファイルは歴史的リファレンスとして残しているが、新しいテンプレート変数（`{{MAIN_BRANCH}}` など）は反映されないため、編集や再参照は避けること。
 
 Conductor のフルワークフロー定義。タスク分解 → Agent spawn → 監視 → 結果統合 → レビュー判断 → テスト → クリーンアップ。
 
@@ -85,7 +87,7 @@ Conductor のフルワークフロー定義。タスク分解 → Agent spawn �
 
 daemon がタスク割り当て時に使用する簡易テンプレート。タスク内容 + 作業ディレクトリ + 出力先 + 完了マーカーのみ。
 
-**テンプレート変数:** `{{TASK_CONTENT}}`, `{{WORKTREE_PATH}}`, `{{CONDUCTOR_ID}}`, `{{OUTPUT_DIR}}`, `{{TASK_STATUS_FILE}}`
+**テンプレート変数:** `{{TASK_CONTENT}}`, `{{WORKTREE_PATH}}`, `{{CONDUCTOR_ID}}`, `{{OUTPUT_DIR}}`, `{{TASK_STATUS_FILE}}`, `{{BASE_BRANCH}}`, `{{MAIN_BRANCH}}`
 
 ### conductor-role.md（汎用版）
 
@@ -105,7 +107,7 @@ conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報�
 
 **調査系タスクの summary artifact 化:** コード改変を伴わない調査・リサーチ系タスクでは、完了直前に `runs/<taskRunId>/summary.md` を artifact として登録する（`cmux-team artifacts add` 経由）。後続セッションが内容を参照できるようにするための必須ステップ。
 
-**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`（パス情報はタスク割り当て時に付与）
+**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`（パス情報はタスク割り当て時に付与）
 
 ---
 
@@ -411,7 +413,8 @@ Write to {{OUTPUT_FILE}}:
 | `{{OUTPUT_DIR}}` | conductor*, planner | 出力ディレクトリパス（planner は plan.md をここに保存） |
 | `{{TASK_CONTENT}}` | conductor-task, planner, design-reviewer, inspector | タスク定義の内容 |
 | `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
-| `{{BASE_BRANCH}}` | conductor-task | タスクの target ブランチ（未指定時は "main（デフォルト）"） |
+| `{{BASE_BRANCH}}` | conductor-task | タスクの target ブランチ（未指定時は `config.mainBranch` → 検出値 → `"main"` の順でフォールバック） |
+| `{{MAIN_BRANCH}}` | conductor-role, conductor-task | プロジェクトの主開発ブランチ名（`.team/config.json` の `mainBranch` または `git symbolic-ref refs/remotes/origin/HEAD` で自動検出。T213 で追加） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | サブ質問リスト |
 | `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |

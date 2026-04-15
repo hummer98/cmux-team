@@ -56,7 +56,8 @@ export async function generateMasterPrompt(
 }
 
 export async function generateConductorRolePrompt(
-  projectRoot: string
+  projectRoot: string,
+  mainBranch: string
 ): Promise<string> {
   const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-role.md"))) {
@@ -69,7 +70,9 @@ export async function generateConductorRolePrompt(
   const promptFile = join(promptsDir, "conductor-role.md");
 
   let content = await readFile(join(templateDir, "conductor-role.md"), "utf-8");
-  content = content.replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot);
+  content = content
+    .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
+    .replace(/\{\{MAIN_BRANCH\}\}/g, mainBranch);
 
   await writeFile(promptFile, content);
   await log("conductor_role_prompt_generated", `path=${promptFile}`);
@@ -84,7 +87,8 @@ export async function generateConductorTaskPrompt(
   worktreePath: string,
   outputDir: string,
   baseBranch?: string,
-  taskDir?: string
+  taskDir?: string,
+  mainBranch?: string
 ): Promise<string> {
   const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
@@ -106,13 +110,17 @@ export async function generateConductorTaskPrompt(
 
   let content = await readFile(join(templateDir, "conductor-task.md"), "utf-8");
 
+  // T213: 呼び出し側は state.mainBranch を渡す想定。未指定時は "main" にフォールバック
+  const resolvedMainBranch = mainBranch ?? "main";
+
   content = content
     .replace(/\{\{TASK_CONTENT\}\}/g, taskContent)
     .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
     .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
     .replace(/\{\{CONDUCTOR_ID\}\}/g, taskRunId)
-    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || (locale === "ja" ? "main（デフォルト）" : "main (default)"));
+    .replace(/\{\{MAIN_BRANCH\}\}/g, resolvedMainBranch)
+    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || resolvedMainBranch);
 
   await writeFile(promptFile, content);
   await log("conductor_task_prompt_generated", `taskRunId=${taskRunId} path=${promptFile}`);
