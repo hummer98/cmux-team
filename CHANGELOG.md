@@ -1,6 +1,10 @@
 # Changelog
 
-## [3.47.0] - 2026-04-16
+## [3.47.0] - 2026-04-15
+
+### Added
+- **Artifact 登録コマンドを move ベースに変更、Researcher ロールを新設（T198）**。`cmux-team artifacts add` がファイルを `.team/artifacts/` 配下に物理移動する挙動に統一され、外部パス（Conductor/Agent の出力ディレクトリ配下など）から直接 artifact 化できるようになった。併せて調査系タスク向けの Researcher サブエージェントロールを templates に追加し、ja/en テンプレートを同期
+- **touched-files zero-errors ルールを inspector / implementer / planner に追加（T197）**。タスクで触れた全ファイルがタスク完了時点で型エラー / lint エラー / テスト失敗をゼロにする要件を 3 ロールのテンプレートに明文化
 
 ### Changed (Breaking)
 - **Manager の Conductor/Agent/Master 生存監視を PID ベースに全面移行（T195）**。`cmux tree` / `cmux list-status` を使った周期ポーリングを廃止し、SessionStart hook が送る `SESSION_STARTED`（`--pid` 付き）で Manager が PID を受け取り、`spawnPidWatcher` / `spawnAgentPidWatcher` / `spawnMasterPidWatcher` が 1 秒間隔で `process.kill(pid, 0)`（`cmux.isAlive(pid)`）を呼んで生死判定する。cmux 側の SwiftUI メインスレッドデッドロック（A011）で Manager daemon がハングする問題を根治する
@@ -12,6 +16,10 @@
 ### Changed
 - **Conductor テンプレート書き換え**。`skills/cmux-team/templates/ja/conductor.md` / `en/conductor.md` の Agent 監視ループから `cmux list-status` 参照を削除し、`cmux-team await-agent` の exit code（0=completed/ask, 10=crashed, 2=timeout）を case 分岐で扱う手順に差し替えた
 - **ドキュメント同期**。`CLAUDE.md` / `skills/cmux-team/SKILL.md` / `docs/spec/01-skill-cmux-team.md` / `docs/spec/04-templates.md` / `.team/specs/requirements.md` から `cmux list-status` 参照を削除し、`cmux tree` の用途を「init 時の pane 逆引きのみ」と明記
+
+### Fixed
+- **`findTemplateDir` の探索順を project-local 優先に反転（T200）**。npm でグローバルインストールされた templates が project-local のテンプレート編集を上書きしてしまう問題を修正。これにより `skills/cmux-team/templates/` 配下の編集を再インストールなしで即反映できる
+- **dashboard Journal panel の surface 表記を修正（T196）**。`surface:NNN` の `surface:` prefix を strip して `[NNN]` の統一フォーマットで表示するよう修正
 
 ## [3.46.0] - 2026-04-15
 
