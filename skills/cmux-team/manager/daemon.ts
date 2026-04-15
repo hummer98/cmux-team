@@ -925,24 +925,21 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "SESSION_STOP": {
-      // T189: Stop hook からの生データを Manager 側で分類し、
-      // SESSION_ASK / SESSION_IDLE に合成して再入する（SKIP は副作用なし）。
+      // T189/T208: Stop hook の生データを分類し SESSION_ASK / SESSION_IDLE に
+      // 合成して再入する。Stop hook は end_turn 時にのみ発火するため、
+      // classifier の判定は ASK or IDLE の二択で副作用なしの SKIP は無い。
       if (!message.surface) {
         await log("session_stop_dropped", "reason=empty_surface");
         break;
       }
-      const isConductor = !!message.conductorId;
       const cls = classifyStopPayload(message.payload ?? {}, {
-        isConductor,
         readTranscriptTail: (p, bytes) => readTranscriptTail(p, bytes),
       });
       await log(
         "session_stop_classified",
-        `${formatSurface(message.surface, "C")} case=${cls.kind} is_conductor=${isConductor ? 1 : 0}` +
-          (cls.kind === "ASK" ? ` question=${truncate(cls.question, 60)}` : "") +
-          (cls.kind === "SKIP" ? ` reason=${cls.reason}` : "")
+        `${formatSurface(message.surface, "C")} case=${cls.kind}` +
+          (cls.kind === "ASK" ? ` question=${truncate(cls.question, 60)}` : "")
       );
-      if (cls.kind === "SKIP") break;
       // 合成メッセージは型安全に構築するため QueueMessage.parse は行わない（高速パス）
       const synthesized: QueueMessage = cls.kind === "ASK"
         ? {

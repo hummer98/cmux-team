@@ -83,7 +83,7 @@ export const SessionAskMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
-// T189: Stop hook からの生データ（Manager 側で ASK/IDLE/SKIP に分類する）
+// T189/T208: Stop hook からの生データ（Manager 側で ASK/IDLE に分類する）
 export const SessionStopMessage = z.object({
   type: z.literal("SESSION_STOP"),
   surface: z.string(),
