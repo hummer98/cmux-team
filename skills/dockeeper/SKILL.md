@@ -1,20 +1,25 @@
 ---
 name: dockeeper
 description: >
-  Use when synchronizing docs/ with the current implementation state.
-  Triggers: user says "docs を同期", "ドキュメント更新", "仕様書更新", "sync docs",
-  or /docs-sync command is invoked.
-  Provides: git log analysis, task-based diff detection, docs/spec/ update.
+  Use when synchronizing docs/ and README with the current implementation state.
+  Triggers: user says "docs を同期", "ドキュメント更新", "仕様書更新", "README 更新",
+  "sync docs", or /docs-sync command is invoked.
+  Provides: git log analysis, task-based diff detection, docs/spec/ + README.md / README.ja.md update.
 ---
 
 # dockeeper: ドキュメント同期
 
-`docs/spec/` を実装の現状に合わせて同期するスキル。
+`docs/spec/` と `README.md` / `README.ja.md` を実装の現状に合わせて同期するスキル。
 
 ## 役割
 
 実装が先行し、ドキュメントが追いついていないケースを検出して更新する。
 判断材料として `git log` と `.team/tasks/` の closed タスクを使う。
+
+対象は大きく 3 系統:
+- `docs/spec/*.md` — 統合仕様書（実装の「何を・なぜ」）
+- `README.md` / `README.ja.md` — ユーザー向けインストール・入門ガイド（英日対訳）
+- `skills/cmux-team-guide/SKILL.md` — ユーザー向けヘルプ・リファレンス（CLI コマンド一覧・TUI・トラブルシューティング）
 
 ## 同期手順
 
@@ -48,21 +53,24 @@ for tid, info in data.items():
 
 変更内容が曖昧なコミットは、対応するタスクファイル (`.team/tasks/Txxx-*.md`) を読んで補完する。
 
-### 4. docs/spec/ の各ファイルと照合
+### 4. docs/spec/ および README と照合
 
 対象ファイル:
 
 | ファイル | 内容 |
 |---------|------|
-| `00-project-overview.md` | プロジェクト概要・アーキテクチャ |
-| `01-skill-cmux-team.md` | cmux-team スキル仕様 |
-| `02-skill-cmux-agent-role.md` | cmux-agent-role スキル仕様 |
-| `03-commands.md` | スラッシュコマンド定義 |
-| `04-templates.md` | エージェントテンプレート仕様 |
-| `05-install-and-infrastructure.md` | インストール・インフラ構成 |
-| `06-implementation-tasks.md` | 実装タスク定義 |
+| `docs/spec/00-project-overview.md` | プロジェクト概要・アーキテクチャ |
+| `docs/spec/01-skill-cmux-team.md` | cmux-team スキル仕様 |
+| `docs/spec/02-skill-cmux-agent-role.md` | cmux-agent-role スキル仕様 |
+| `docs/spec/03-commands.md` | スラッシュコマンド定義 |
+| `docs/spec/04-templates.md` | エージェントテンプレート仕様 |
+| `docs/spec/05-install-and-infrastructure.md` | インストール・インフラ構成 |
+| `docs/spec/06-implementation-tasks.md` | 実装タスク定義 |
+| `README.md` | ユーザー向け入門ガイド（英語） |
+| `README.ja.md` | ユーザー向け入門ガイド（日本語） |
+| `skills/cmux-team-guide/SKILL.md` | ユーザー向けヘルプ・リファレンス |
 
-各ファイルを読み、収集した変更内容と照合して差異を検出する。
+各ファイルを読み、収集した変更内容と照合して差異を検出する。README は CLI コマンド一覧・インストール手順・機能一覧が実装と一致しているか特に重点的に確認する。英日は対訳関係を維持する。`skills/cmux-team-guide/SKILL.md` は CLI コマンド一覧・レイアウト説明・TUI キーボードショートカット・トラブルシューティングが実装と一致しているか確認する。
 
 ### 5. 更新または差分レポート出力
 
@@ -100,6 +108,8 @@ for tid, info in data.items():
 ## 注意事項
 
 - `docs/spec/` は「実装と同期された仕様書」。内部実装詳細は書かない
+- `README.md` / `README.ja.md` は「ユーザーが最初に読むドキュメント」。開発者向け内部仕様は入れない
+- 英日 README はセクション構造・見出し・記述順を揃える（対訳関係を維持）
 - 削除されたファイル・機能の記述は除去する
 - 既存の文体・構造を維持する（大幅なリフォーマットはしない）
 - 不明な変更は推測で書かず、差分レポートに「要確認」として記載する
