@@ -7,11 +7,13 @@ import {
   generateConductorSettings,
   generateAgentSettings,
   buildMessageFromHookInput,
+  normalizeSurfaceArg,
   validateSendAgentTarget,
   waitForAgentRegistered,
   resolveLayout,
   resolveAutoUpdateMode,
 } from "./main";
+import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
 
 let testDir: string;
@@ -29,7 +31,7 @@ afterEach(async () => {
 describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   test("PreToolUse hook が Bash matcher で追加される", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
@@ -42,7 +44,7 @@ describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   });
 
   test("hook の command に cmux, send, exit 2 と日本語エラー文が含まれる (R3)", async () => {
-    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const cmd: string = settings.hooks.PreToolUse[0].hooks[0].command;
     expect(cmd).toContain("cmux");
@@ -54,7 +56,7 @@ describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   });
 
   test("既存の SessionStart / Stop / SessionEnd hook が残存している (regression)", async () => {
-    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.hooks.SessionStart.length).toBe(1);
     expect(settings.hooks.Stop.length).toBe(1);
@@ -90,7 +92,7 @@ describe("PreToolUse hook 挙動 (§4.2)", () => {
   let script: string;
 
   beforeEach(async () => {
-    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     script = extractHookScript(settings);
   });
@@ -907,7 +909,7 @@ describe("SessionStart hook generation (T203)", () => {
 
   test("Conductor: matcher === '' で stdin pipe 方式の command を生成、--conductor-id を含まない (m2)", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.hooks.SessionStart.length).toBe(1);
     const entry = settings.hooks.SessionStart[0];
@@ -917,5 +919,98 @@ describe("SessionStart hook generation (T203)", () => {
     expect(cmd).toContain("--surface");
     expect(cmd).toContain("SESSION_STARTED");
     expect(cmd).not.toContain("--conductor-id");
+  });
+});
+
+// --- T206 normalizeSurfaceArg ---
+
+describe("normalizeSurfaceArg (T206)", () => {
+  // tree mock 用に毎回 spy を貼り、後始末する
+  let lastArgs: { workspace?: string; opts?: any } | undefined;
+
+  afterEach(() => {
+    cmux.__setTreeImpl(null);
+    lastArgs = undefined;
+  });
+
+  test("ref 形式はそのまま返す（cmux.tree を呼ばない）", async () => {
+    let calls = 0;
+    cmux.__setTreeImpl(async () => {
+      calls++;
+      return "{}";
+    });
+    expect(await normalizeSurfaceArg("surface:42")).toBe("surface:42");
+    expect(await normalizeSurfaceArg("surface:9999")).toBe("surface:9999");
+    expect(calls).toBe(0);
+  });
+
+  test("UUID 形式 → tree から逆引きして ref を返す（大文字小文字無視）", async () => {
+    cmux.__setTreeImpl(async (workspace?: string, opts?: any) => {
+      lastArgs = { workspace, opts };
+      return JSON.stringify({
+        windows: [{
+          workspaces: [{
+            panes: [{
+              surfaces: [
+                { id: "A5AC4F23-70D9-4B81-8958-168CD68CF8DF", ref: "surface:44" },
+                { id: "11111111-2222-3333-4444-555555555555", ref: "surface:99" },
+              ],
+            }],
+          }],
+        }],
+      });
+    });
+    // lowercase 入力でも一致する
+    expect(await normalizeSurfaceArg("a5ac4f23-70d9-4b81-8958-168cd68cf8df"))
+      .toBe("surface:44");
+    // uppercase 入力でも一致する
+    expect(await normalizeSurfaceArg("11111111-2222-3333-4444-555555555555"))
+      .toBe("surface:99");
+    // C1: tree 呼び出しは json + idFormat="both" で実施される
+    expect(lastArgs?.opts).toEqual({ json: true, idFormat: "both" });
+  });
+
+  test("UUID が tree に存在しない場合は throw", async () => {
+    cmux.__setTreeImpl(async () => JSON.stringify({
+      windows: [{
+        workspaces: [{
+          panes: [{
+            surfaces: [
+              { id: "A5AC4F23-70D9-4B81-8958-168CD68CF8DF", ref: "surface:44" },
+            ],
+          }],
+        }],
+      }],
+    }));
+    await expect(
+      normalizeSurfaceArg("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    ).rejects.toThrow(/not found in cmux tree/);
+  });
+
+  test("不正形式は throw（cmux.tree を呼ばない）", async () => {
+    let called = false;
+    cmux.__setTreeImpl(async () => {
+      called = true;
+      return "{}";
+    });
+    await expect(normalizeSurfaceArg("")).rejects.toThrow(/Invalid --surface/);
+    await expect(normalizeSurfaceArg("surface:abc")).rejects.toThrow(/Invalid --surface/);
+    await expect(normalizeSurfaceArg("foo")).rejects.toThrow(/Invalid --surface/);
+    await expect(normalizeSurfaceArg(" surface:42")).rejects.toThrow(/Invalid --surface/);
+    expect(called).toBe(false);
+  });
+
+  test("tree が JSON parse 不能な文字列を返した場合は throw", async () => {
+    cmux.__setTreeImpl(async () => "not json");
+    await expect(
+      normalizeSurfaceArg("a5ac4f23-70d9-4b81-8958-168cd68cf8df")
+    ).rejects.toThrow(/Failed to parse cmux tree JSON/);
+  });
+
+  test("空の windows でも throw（surface 未存在として扱う）", async () => {
+    cmux.__setTreeImpl(async () => JSON.stringify({ windows: [] }));
+    await expect(
+      normalizeSurfaceArg("a5ac4f23-70d9-4b81-8958-168cd68cf8df")
+    ).rejects.toThrow(/not found in cmux tree/);
   });
 });

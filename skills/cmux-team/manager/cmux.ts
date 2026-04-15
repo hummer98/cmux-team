@@ -126,20 +126,27 @@ export async function renameWorkspace(title: string, workspace?: string): Promis
 /** tree 呼び出しのタイムアウト（ミリ秒） */
 const TREE_TIMEOUT_MS = 5_000;
 
+export type TreeOpts = { json?: boolean; idFormat?: "refs" | "uuids" | "both" };
+
 /**
  * テストから tree の実体を差し替えるためのフック（R4）。
  * 未設定時は実 cmux コマンドを呼ぶ。テスト時は `__setTreeImpl()` で差し替える。
  */
-let treeImpl: ((workspace?: string) => Promise<string>) | null = null;
+let treeImpl: ((workspace?: string, opts?: TreeOpts) => Promise<string>) | null = null;
 
 /** テスト用: tree の実装を差し替える。`null` で元に戻す。 */
-export function __setTreeImpl(impl: ((workspace?: string) => Promise<string>) | null): void {
+export function __setTreeImpl(
+  impl: ((workspace?: string, opts?: TreeOpts) => Promise<string>) | null
+): void {
   treeImpl = impl;
 }
 
-export async function tree(workspace?: string): Promise<string> {
-  if (treeImpl) return treeImpl(workspace);
-  const args = ["tree"];
+export async function tree(workspace?: string, opts?: TreeOpts): Promise<string> {
+  if (treeImpl) return treeImpl(workspace, opts);
+  const args: string[] = [];
+  if (opts?.idFormat) args.push("--id-format", opts.idFormat);
+  if (opts?.json) args.push("--json");
+  args.push("tree");
   if (workspace) args.push("--workspace", workspace);
   const { stdout } = await runCmux(args, { timeout: TREE_TIMEOUT_MS });
   return stdout;

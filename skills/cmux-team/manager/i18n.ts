@@ -429,13 +429,14 @@ Usage:
   cmux-team conductor [--model <model>]
 
 Environment:
-  CMUX_SURFACE  Conductor surface ID (required, set by daemon)
+  CMUX_SURFACE  Conductor surface ID (optional; falls back to cmux identify caller.surface_ref)
 
 Options:
   --model <model>   model to use (default: config.models.conductor or "{model}")
 
 Notes:
-  - Internal command called automatically by daemon at startup
+  - Normally called by daemon at startup, but can be invoked manually
+    from a cmux pane for debugging (CMUX_SURFACE will be auto-detected)
   - Dynamically resolves logging proxy port and exec's Claude Code
   - Launched with --dangerously-skip-permissions
 `,
@@ -949,13 +950,14 @@ Usage:
   cmux-team conductor [--model <model>]
 
 Environment:
-  CMUX_SURFACE  Conductor の surface ID（必須、daemon が設定）
+  CMUX_SURFACE  Conductor の surface ID（任意。未指定時は cmux identify の caller.surface_ref から自動解決）
 
 Options:
   --model <model>   使用するモデル（デフォルト: config.models.conductor or "{model}"）
 
 Notes:
-  - daemon が起動時に自動的に呼び出す内部コマンドです
+  - 通常は daemon が起動時に自動的に呼び出す内部コマンドですが、
+    cmux ペイン内から手動で実行することもできます（CMUX_SURFACE は自動検出されます）
   - ロギングプロキシのポートを動的に解決して Claude Code を exec します
   - --dangerously-skip-permissions で起動されます
 `,
