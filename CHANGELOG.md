@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.47.1] - 2026-04-15
+
+### Fixed
+- **Manager daemon 再起動時に死亡 Conductor で `disconnected` 状態が固着する問題を修正**。restart 時に存在しない Conductor surface をそのまま復元していたため、生存確認が通らず `disconnected` でタスク割当不能のままスタックしていた。起動時にスキップして idle に戻すよう修正
+
 ## [3.47.0] - 2026-04-15
 
 ### Added
