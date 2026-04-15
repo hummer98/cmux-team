@@ -56,7 +56,6 @@ export const SessionEndedMessage = z.object({
 export const ConductorRegisteredMessage = z.object({
   type: z.literal("CONDUCTOR_REGISTERED"),
   surface: z.string(),
-  paneId: z.string(),
   timestamp: z.string().datetime(),
 });
 
@@ -165,7 +164,6 @@ export const ConductorState = z.object({
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
   status: "starting" | "idle" | "running" | "asking" | "disconnected";
-  paneId?: string;
   pidWatcherInterval?: ReturnType<typeof setInterval>;
 };
 

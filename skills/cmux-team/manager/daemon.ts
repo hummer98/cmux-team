@@ -561,7 +561,6 @@ export async function initializeLayout(
             worktreePath: c.worktreePath,
             outputDir: c.outputDir,
             startedAt: c.startedAt ?? new Date().toISOString(),
-            paneId: c.paneId,
             sessionId: c.sessionId,
             pid: c.pid,
             agents: restoredAgents,
@@ -833,13 +832,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     case "CONDUCTOR_REGISTERED": {
       state.conductors.set(message.surface, {
         surface: message.surface,
-        paneId: message.paneId,
         status: "starting",
         startedAt: message.timestamp,
         agents: [],
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
-      await log("conductor_registered", `${formatSurface(message.surface, "C")} pane=${message.paneId}`);
+      await log("conductor_registered", formatSurface(message.surface, "C"));
       break;
     }
 
@@ -1129,7 +1127,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         // T195: /clear で旧 Claude は死ぬ。次の SESSION_STARTED で新 pid が届くまで保留
         conductor.pid = undefined;
-        await resetConductor(conductor, state.projectRoot);
+        await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
       }
       // idle 時は何もしない（TUI チラつき防止）
       break;
@@ -1543,7 +1541,7 @@ async function forceCloseDisconnectedConductor(
   }
 
   // 3. resetConductor で worktree/branch/タブ名をクリーンアップ
-  await resetConductor(conductor, state.projectRoot);
+  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
 }
 
 async function handleConductorDone(
@@ -1567,7 +1565,7 @@ async function handleConductorDone(
   }
 
   // Conductor をリセットして idle に戻す
-  await resetConductor(conductor, state.projectRoot);
+  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
 }
 
 export async function updateTeamJson(state: DaemonState): Promise<void> {
@@ -1598,7 +1596,6 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
       startedAt: c.startedAt,
-      paneId: c.paneId,
       sessionId: c.sessionId,
       pid: c.pid,
       agents: c.agents.map((a) => ({

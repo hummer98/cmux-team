@@ -123,7 +123,6 @@ Types and required/optional options:
 
   CONDUCTOR_REGISTERED
     --surface <surface>     Conductor surface ID (required)
-    --pane-id <pane-id>     pane ID (optional)
 
   AGENT_SPAWNED
     --conductor-surface <s> Conductor surface ID (required)
@@ -643,7 +642,6 @@ Types と必須/任意オプション:
 
   CONDUCTOR_REGISTERED
     --surface <surface>     Conductor の surface ID（必須）
-    --pane-id <pane-id>     ペイン ID（任意）
 
   AGENT_SPAWNED
     --conductor-surface <s> Conductor の surface ID（必須）

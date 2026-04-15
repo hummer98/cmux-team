@@ -46,26 +46,6 @@ export class AssignTaskError extends Error {
   }
 }
 
-// --- paneId 取得ヘルパー ---
-
-async function getPaneIdForSurface(surface: string, workspace?: string): Promise<string | undefined> {
-  // cmux tree をパースして surface が属する pane を特定
-  try {
-    const output = await cmux.tree(workspace);
-    // tree 出力形式: pane:N の行の後に surface:M が続く
-    const lines = output.split("\n");
-    let currentPane: string | undefined;
-    for (const line of lines) {
-      const paneMatch = line.match(/(pane:\d+)/);
-      if (paneMatch) currentPane = paneMatch[1];
-      if (line.includes(surface) && currentPane) return currentPane;
-    }
-  } catch (e: any) {
-    await log("error", `getPaneIdForSurface failed: ${formatSurface(surface, "C")} ${e.message}`);
-  }
-  return undefined;
-}
-
 // --- launchConductor ---
 
 /** resume 復元の 1 件分 */
@@ -94,18 +74,16 @@ export interface ResumeAssignment {
  * - `cmux-team conductor` を起動（session-id は cmdConductor が自己生成）
  *   または `opts.resumeTaskId` 指定時は `cmux-team resume <id>` を起動
  * - タブ名を設定（resume 時は呼び出し元が T<id> に rename するためスキップ）
+ *
+ * T207: pane キャッシュ引数は廃止。pane 解決は呼び出し時には不要で、後段の
+ * spawn-agent / resetConductor が `cmux.getPaneForSurface` /
+ * `cmux.listSiblingSurfaces` を on-demand で呼ぶ。
  */
 export async function launchConductor(
   projectRoot: string,
   surface: string,
-  paneId?: string,
   opts?: { resumeTaskId?: string },
 ): Promise<void> {
-  // 0. paneId が未指定の場合（cmdSpawnConductor 経由等）、surface から解決する
-  if (!paneId) {
-    paneId = await getPaneIdForSurface(surface);
-  }
-
   // 1. CONDUCTOR_REGISTERED を HTTP API 経由で送信
   try {
     const portFile = join(projectRoot, ".team/proxy-port");
@@ -116,7 +94,6 @@ export async function launchConductor(
       body: JSON.stringify({
         type: "CONDUCTOR_REGISTERED",
         surface,
-        paneId: paneId ?? "",
         timestamp: new Date().toISOString(),
       }),
     });
@@ -160,8 +137,8 @@ export async function createConductorPanes(
   count: number,
   daemonSurface?: string,
   layout: LayoutMode = "wide",
-): Promise<{ surface: string; paneId?: string }[]> {
-  const panes: { surface: string; paneId?: string }[] = [];
+): Promise<string[]> {
+  const panes: string[] = [];
 
   if (layout === "16x9") {
     if (count > 2) {
@@ -178,12 +155,12 @@ export async function createConductorPanes(
       "down",
       daemonSurface ? { surface: daemonSurface } : undefined,
     );
-    panes.push({ surface: s1, paneId: await getPaneIdForSurface(s1) });
+    panes.push(s1);
 
     if (count >= 2) {
       // 2. Conductor-1 pane を右に split → Conductor-2 pane（下段を等幅 2 分割）
       const s2 = await cmux.newSplit("right", { surface: s1 });
-      panes.push({ surface: s2, paneId: await getPaneIdForSurface(s2) });
+      panes.push(s2);
     }
 
     return panes;
@@ -192,18 +169,18 @@ export async function createConductorPanes(
   // --- layout === "wide"（既存ロジック） ---
   // 1. daemon を右に split → Conductor-1 pane
   const s1 = await cmux.newSplit("right", daemonSurface ? { surface: daemonSurface } : undefined);
-  panes.push({ surface: s1, paneId: await getPaneIdForSurface(s1) });
+  panes.push(s1);
 
   if (count >= 2) {
     // 2. daemon を下に split → Conductor-2 pane
     const s2 = await cmux.newSplit("down", daemonSurface ? { surface: daemonSurface } : undefined);
-    panes.push({ surface: s2, paneId: await getPaneIdForSurface(s2) });
+    panes.push(s2);
   }
 
   if (count >= 3) {
     // 3. Conductor-1 を下に split → Conductor-3 pane
     const s3 = await cmux.newSplit("down", { surface: s1 });
-    panes.push({ surface: s3, paneId: await getPaneIdForSurface(s3) });
+    panes.push(s3);
   }
 
   return panes;
@@ -232,14 +209,14 @@ export async function initializeConductorSlots(
     //   resumePlan がある場合は panes の先頭から順に 1:1 で割り当てる
     //   （resumePlan は呼び出し元で taskId 昇順 sort 済みの前提）
     await log("conductor_claude_launching", "");
-    for (const [i, pane] of panes.entries()) {
+    for (const [i, surface] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
       if (resumeItem) {
-        await launchConductor(projectRoot, pane.surface, pane.paneId, {
+        await launchConductor(projectRoot, surface, {
           resumeTaskId: resumeItem.taskId,
         });
         assignments.push({
-          surface: pane.surface,
+          surface,
           taskId: resumeItem.taskId,
           taskRunId: resumeItem.taskRunId,
           worktreePath: resumeItem.worktreePath,
@@ -247,20 +224,19 @@ export async function initializeConductorSlots(
           taskTitle: resumeItem.taskTitle,
         });
       } else {
-        await launchConductor(projectRoot, pane.surface, pane.paneId);
+        await launchConductor(projectRoot, surface);
       }
     }
 
     // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え
-    for (const [i, pane] of panes.entries()) {
+    for (const [i, surface] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
-      if (!conductors.has(pane.surface)) {
-        await log("conductor_registered_fallback", formatSurface(pane.surface, "C"));
+      if (!conductors.has(surface)) {
+        await log("conductor_registered_fallback", formatSurface(surface, "C"));
         if (resumeItem) {
           // resume 割当済みの場合は running + taskId を最初からセット
-          conductors.set(pane.surface, {
-            surface: pane.surface,
-            paneId: pane.paneId,
+          conductors.set(surface, {
+            surface,
             status: "running",
             startedAt: new Date().toISOString(),
             agents: [],
@@ -271,9 +247,8 @@ export async function initializeConductorSlots(
             // sessionId なし — SessionStart hook で後から設定される
           });
         } else {
-          conductors.set(pane.surface, {
-            surface: pane.surface,
-            paneId: pane.paneId,
+          conductors.set(surface, {
+            surface,
             status: "starting",
             startedAt: new Date().toISOString(),
             agents: [],
@@ -501,23 +476,23 @@ export async function assignTask(
 
 export async function resetConductor(
   conductor: ConductorState,
-  projectRoot: string
+  projectRoot: string,
+  workspace?: string,
 ): Promise<void> {
   try {
-    // 1. タブ内のサブ surface を閉じる
-    if (conductor.paneId) {
-      try {
-        const surfaces = await cmux.listPaneSurfaces(conductor.paneId);
-        for (const s of surfaces) {
-          if (s !== conductor.surface) {
-            await cmux.closeSurface(s);
-          }
+    // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
+    //    cmux tree 1 回で Conductor の所属 pane と同 pane の全 surface を取得し、
+    //    Conductor 自身を除いた sibling surface を閉じる。
+    //    取得失敗時 / 結果 0 件時は agents の surface を個別に閉じる safety net に落ちる。
+    const siblings = await cmux.listSiblingSurfaces(conductor.surface, workspace);
+    if (siblings.length > 0) {
+      for (const s of siblings) {
+        if (s !== conductor.surface) {
+          await cmux.closeSurface(s);
         }
-      } catch (e: any) {
-        await log("error", `resetConductor listPaneSurfaces failed: paneId=${conductor.paneId} ${e.message}`);
       }
     } else {
-      // paneId なし → agents の surface を個別に閉じる
+      // safety net: tree 取得失敗 or sibling 0 件 → 既知の agents を個別に閉じる
       for (const agent of conductor.agents) {
         await cmux.closeSurface(agent.surface);
       }

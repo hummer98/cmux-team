@@ -51,20 +51,15 @@ export async function newSplit(
   return surface;
 }
 
-export async function newSurface(paneId?: string): Promise<string> {
+export async function newSurface(pane?: string): Promise<string> {
   const args = ["new-surface"];
-  if (paneId) args.push("--pane", paneId);
+  if (pane) args.push("--pane", pane);
   const { stdout } = await runCmux(args);
   const surface = stdout.trim().split(/\s+/)[1];
   if (!surface?.startsWith("surface:")) {
     throw new Error(`Failed to create surface: ${stdout}`);
   }
   return surface;
-}
-
-export async function listPaneSurfaces(paneId: string): Promise<string[]> {
-  const { stdout } = await runCmux(["list-pane-surfaces", "--pane", paneId]);
-  return stdout.trim().split(/\s+/).filter(s => s.startsWith("surface:"));
 }
 
 export async function send(
@@ -166,6 +161,46 @@ export async function getPaneForSurface(surface: string, workspace?: string): Pr
   } catch (e: any) {
     await log("error", `getPaneForSurface failed: ${formatSurface(surface, "S")} ${formatExecError(e)}`);
     return undefined;
+  }
+}
+
+/**
+ * 指定 surface が属する pane 内の全 surface を返す（自分自身を含む）。
+ *
+ * `cmux tree` を 1 回だけ呼び、(1) 対象 surface の所属 pane を特定し
+ * (2) 同 pane に属する全 surface を集める。`getPaneForSurface` と同じ
+ * line-by-line スキャン方式を採用し、tree 出力 1 回で両情報を引き出す。
+ *
+ * 失敗時 / 対象 surface が見つからない時は `[]` を返す。
+ */
+export async function listSiblingSurfaces(surface: string, workspace?: string): Promise<string[]> {
+  try {
+    const output = await tree(workspace);
+    const lines = output.split("\n");
+
+    // pass 1: 各 surface がどの pane に属するかを記録しつつ、対象 surface の pane を特定
+    const surfacesByPane = new Map<string, string[]>();
+    let currentPane: string | undefined;
+    let targetPane: string | undefined;
+    for (const line of lines) {
+      const paneMatch = line.match(/pane (pane:\d+)/);
+      if (paneMatch) currentPane = paneMatch[1];
+      const surfaceMatches = line.match(/surface:\d+/g);
+      if (surfaceMatches && currentPane) {
+        const list = surfacesByPane.get(currentPane) ?? [];
+        for (const s of surfaceMatches) {
+          if (!list.includes(s)) list.push(s);
+          if (s === surface) targetPane = currentPane;
+        }
+        surfacesByPane.set(currentPane, list);
+      }
+    }
+
+    if (!targetPane) return [];
+    return surfacesByPane.get(targetPane) ?? [];
+  } catch (e: any) {
+    await log("error", `listSiblingSurfaces failed: ${formatSurface(surface, "S")} ${formatExecError(e)}`);
+    return [];
   }
 }
 

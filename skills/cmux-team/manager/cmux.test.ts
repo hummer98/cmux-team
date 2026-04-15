@@ -32,7 +32,7 @@ async function writeFakeCmux(script: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
-import { send, setStatus, isAlive, __setIsAliveImpl } from "./cmux";
+import { send, setStatus, isAlive, __setIsAliveImpl, __setTreeImpl, listSiblingSurfaces } from "./cmux";
 
 describe("send / setStatus のエラー伝搬 (T163)", () => {
   test("send() 失敗時 Error.message に stderr が含まれる", async () => {
@@ -83,5 +83,42 @@ describe("isAlive (T195)", () => {
   test("実 kill(pid, 0): 架空 PID は dead", () => {
     // PID 2^22 付近の極端な値は OS 上でほぼ確実に存在しない
     expect(isAlive(4194303)).toBe(false);
+  });
+});
+
+describe("listSiblingSurfaces (T207)", () => {
+  afterEach(() => {
+    __setTreeImpl(null);
+  });
+
+  test("同 pane に複数 surface がある場合は sibling のみを返す", async () => {
+    // cmux tree 出力を模擬: pane:1 に surface:10/11、pane:2 に surface:20
+    const fake = [
+      "workspace workspace:1",
+      "  pane pane:1",
+      "    surface:10",
+      "    surface:11",
+      "  pane pane:2",
+      "    surface:20",
+    ].join("\n");
+    __setTreeImpl(async () => fake);
+
+    const siblings = await listSiblingSurfaces("surface:10");
+    // pane:1 所属の全 surface が返る（自分自身を含む ── 呼び出し側で除外する契約）
+    expect(siblings).toContain("surface:10");
+    expect(siblings).toContain("surface:11");
+    expect(siblings).not.toContain("surface:20");
+  });
+
+  test("対象 surface が存在しない場合は [] を返す", async () => {
+    const fake = [
+      "workspace workspace:1",
+      "  pane pane:1",
+      "    surface:10",
+    ].join("\n");
+    __setTreeImpl(async () => fake);
+
+    const siblings = await listSiblingSurfaces("surface:999");
+    expect(siblings).toEqual([]);
   });
 });
