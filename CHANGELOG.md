@@ -2,12 +2,24 @@
 
 ## [3.49.0] - 2026-04-16
 
+### Added
+- **`.team/config.json` に `mainBranch` フィールドを追加（T213）**。Conductor が worktree 作成時のベース・マージ先として使うブランチ名をプロジェクト毎に切り替え可能にした。`cmdStart` 実行時に `config` → `git symbolic-ref refs/remotes/origin/HEAD` → `"main"` の順で解決し、`.team/config.json` に書き戻す。Conductor には `CMUX_TEAM_MAIN_BRANCH` 環境変数経由で注入される。`main` 以外の主開発ブランチ（`master`, `trunk`, `develop` 等）を持つプロジェクトでも `cmux-team` がそのまま動作するようになった
+- **`CONDUCTOR_DONE` / `SESSION_CLEAR` / `SESSION_STARTED` に taskRunId 一致検証を導入（T219）**。hook 経由で届くメッセージの `taskRunId` と Manager が保持する assigned タスクの `taskRunId` を比較し、不一致の場合はメッセージを無視する。古い Conductor セッション（restart-task 前の残骸 hook）が新しいタスク実行に干渉するレースを構造的に排除
+
 ### Changed (Breaking — soft)
 - **statusline を proxy HTTP API 化（T211）**。`statusline.sh` は daemon の `POST /statusline` に stdin JSON をそのまま転送するだけの curl ラッパー（~15 行）に縮退し、描画ロジックは TypeScript (`skills/cmux-team/manager/statusline.ts`) に移植。DaemonState から master / conductor / agent / agent の親 conductor を直接逆引きし、surface ヘッダー単独で role 判定できるようになった。旧 bash 版と 1 バイト単位で一致する出力を維持しつつ、子プロセス fork（bash + jq × 5）を proxy 内部の純関数呼び出しに置き換えた
 - **Master UserPromptSubmit / Stop hook を `.claude/settings.json` から `master-settings.json` に移設（T211）**。旧実装では同ファイルが Agent / Conductor / Master すべての Claude セッションに適用されてしまい、Agent / Conductor の hook 発火時に Master 状態を `busy` に上書きする汚染バグがあった。Master 専用 settings に移して `cmdLaunchMaster` から `--settings` 経由で明示的に注入するように変更。Python スクリプト本体は `.team/prompts/master-hook-busy.py` / `master-hook-stop.py` として独立ファイル化し、embed エスケープ地獄を解消
+- **`ConductorState.conductorId` フィールドを schema から撤去（T210）**。surface ref で一意に識別できるため `conductorId` は冗長だった。`conductor-task.md` テンプレートの `{{CONDUCTOR_ID}}` 参照と Conductor hook 内の `CONDUCTOR_ID` 参照を全削除。`task-state.json` / `team.json` の schema 定義からも撤去。外部から `conductorId` を参照するカスタム hook / スクリプトがある場合は破壊的変更になる
+
+### Changed
+- **worktree 生成時の `.envrc` 書き出しと `direnv allow` 自動実行を削除（T212）**。`launchConductor` 起動時の env 注入に一本化されたため、worktree 固有の環境変数設定は不要になった。副作用として Conductor worktree が clean になり、`.gitignore` に `.envrc` を追加する必要もなくなった
+
+### Fixed
+- **Conductor 完了時の `CONDUCTOR_DONE` 二重送信を解消（T214）**。`conductor-role.md` の完了処理ステップ 12 が残っており、Stop hook 経由の CONDUCTOR_DONE と手動送信の CONDUCTOR_DONE が重複して届く状況だった。ステップ 12 を削除し、hook 経由の push に一本化
 
 ### Removed
 - **`CMUX_ROLE` 環境変数を完全削除（T211）**。旧 statusline.sh が bash 内で master / conductor / agent 分岐するために使っていたが、ロール判定は proxy 内部の DaemonState 逆引きに移行したため env ベースの伝搬は不要になった。`cmdConductor` / `cmdResume` / `cmdLaunchMaster` / `cmdSpawnAgent` の 4 箇所から除去。`.claude/settings.json` から `UserPromptSubmit` / `Stop` hook 定義（`CONDUCTOR_ID` guard 込み）も撤去し、`.team/tasks/` 保護 PreToolUse hook のみ残存
+- **`CONDUCTOR_ID` 環境変数参照を廃止（T210）**。Conductor hook / `conductor-task.md` テンプレートから `CONDUCTOR_ID` 参照を除去し、surface ref で識別する経路に統一
 
 ## [3.48.0] - 2026-04-15
 
