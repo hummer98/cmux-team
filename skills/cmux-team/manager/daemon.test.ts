@@ -1485,7 +1485,6 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     await handleMessage(state, {
       type: "SESSION_STOP",
       surface: "surface:c1",
-      conductorId: "task-010-xxx",
       pid: 123,
       timestamp: new Date().toISOString(),
       payload: { transcript_path: transcriptPath },

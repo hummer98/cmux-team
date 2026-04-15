@@ -12,6 +12,7 @@ import {
   waitForAgentRegistered,
   resolveLayout,
   resolveAutoUpdateMode,
+  ensureAskDetectorScript,
 } from "./main";
 import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
@@ -853,7 +854,6 @@ describe("cmdSend --from-stdin discriminator (C2 / T203)", () => {
     const stop = {
       type: "SESSION_STOP",
       surface: "surface:100",
-      conductorId: "",
       pid: 1234,
       timestamp: "2026-04-15T10:00:00.000Z",
       payload: { transcript_path: "/tmp/x.jsonl" },
@@ -919,6 +919,40 @@ describe("SessionStart hook generation (T203)", () => {
     expect(cmd).toContain("--surface");
     expect(cmd).toContain("SESSION_STARTED");
     expect(cmd).not.toContain("--conductor-id");
+  });
+
+  test("T210: Conductor SessionEnd(clear) hook は --conductor-id を含まない", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const clearHook = settings.hooks.SessionEnd.find(
+      (h: any) => h.matcher === "clear",
+    );
+    expect(clearHook).toBeDefined();
+    const cmd: string = clearHook.hooks[0].command;
+    expect(cmd).not.toContain("--conductor-id");
+    expect(cmd).not.toContain("$CONDUCTOR_ID");
+  });
+
+  test("T210: Conductor SessionEnd(logout|prompt_input_exit) hook は --conductor-id を含まない", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const logoutHook = settings.hooks.SessionEnd.find(
+      (h: any) => h.matcher === "logout|prompt_input_exit",
+    );
+    expect(logoutHook).toBeDefined();
+    const cmd: string = logoutHook.hooks[0].command;
+    expect(cmd).not.toContain("--conductor-id");
+    expect(cmd).not.toContain("$CONDUCTOR_ID");
+  });
+
+  test("T210: detect-ask.sh（DETECT_ASK_SCRIPT）は CONDUCTOR_ID を参照しない", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const scriptPath = ensureAskDetectorScript(testDir);
+    const content = await readFile(scriptPath, "utf-8");
+    expect(content).not.toContain("CONDUCTOR_ID");
+    expect(content).not.toContain("conductorId");
   });
 });
 

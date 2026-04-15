@@ -776,12 +776,9 @@ async function cmdSend(): Promise<void> {
       console.error(`Error: invalid JSON on stdin: ${e.message}`);
       process.exit(1);
     }
-    // T189: hook からの空文字 conductorId は undefined に正規化する。
-    // shell の `"${CONDUCTOR_ID:-}"` が空文字として出るケースを吸収。
     // SESSION_STOP の surface 空は早期 reject する（daemon 側でも二重防御あり）。
     if (obj && typeof obj === "object") {
       const o = obj as Record<string, unknown>;
-      if (o.conductorId === "") o.conductorId = undefined;
       if (o.type === "SESSION_STOP" && (typeof o.surface !== "string" || o.surface === "")) {
         console.error("Error: SESSION_STOP requires non-empty surface");
         process.exit(1);
@@ -926,7 +923,6 @@ async function cmdSend(): Promise<void> {
         type: "SESSION_ASK",
         surface: normalizedSurface!,
         question: requireArg("question"),
-        conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -936,7 +932,6 @@ async function cmdSend(): Promise<void> {
       message = {
         type: "SESSION_CLEAR",
         surface: normalizedSurface!,
-        conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -1117,7 +1112,7 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
  * stdin: Stop hook JSON payload（Claude Code 仕様）
  *
  * 役割は「forwarder」のみ:
- *   - payload から transcript_path を抽出し、surface/conductorId/pid/type を足して
+ *   - payload から transcript_path を抽出し、surface/pid/type を足して
  *     SESSION_STOP メッセージに整形、cmux-team send --from-stdin に流す
  *   - 分類（ASK/IDLE）は Manager (daemon) 側の classifyStopPayload が担う
  *
@@ -1131,15 +1126,13 @@ const DETECT_ASK_SCRIPT = [
   '',
   'PAYLOAD="$(cat)"',
   'SURFACE="${CMUX_SURFACE:-${SURFACE_OVERRIDE:-}}"',
-  'CONDUCTOR_ID="${CONDUCTOR_ID:-}"',
   'TS="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"',
   '',
   '# jq は preflight (checkJq) で必須扱い。不在時は hook もサイレント失敗する。',
   'TRANSCRIPT_PATH="$(printf %s "$PAYLOAD" | jq -r \'.transcript_path // empty\' 2>/dev/null || true)"',
   '',
-  'printf \'{"type":"SESSION_STOP","surface":%s,"conductorId":%s,"pid":%d,"timestamp":%s,"payload":{"transcript_path":%s}}\\n\' \\',
+  'printf \'{"type":"SESSION_STOP","surface":%s,"pid":%d,"timestamp":%s,"payload":{"transcript_path":%s}}\\n\' \\',
   '  "$(printf %s "$SURFACE" | jq -Rs .)" \\',
-  '  "$(printf %s "$CONDUCTOR_ID" | jq -Rs .)" \\',
   '  "$PPID" \\',
   '  "$(printf %s "$TS" | jq -Rs .)" \\',
   '  "$(printf %s "$TRANSCRIPT_PATH" | jq -Rs .)" \\',
@@ -1282,7 +1275,6 @@ export function generateConductorSettings(projectRoot: string): string {
           hooks: [{
             type: "command",
             // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
-            // m2: --conductor-id は SessionStartedMessage に対応フィールドが無いため削除。
             command: "bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
@@ -1303,7 +1295,7 @@ export function generateConductorSettings(projectRoot: string): string {
           matcher: "clear",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_CLEAR --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_CLEAR --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -1311,7 +1303,7 @@ export function generateConductorSettings(projectRoot: string): string {
           matcher: "logout|prompt_input_exit",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_ENDED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_ENDED --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -1367,7 +1359,10 @@ async function cmdConductor(): Promise<void> {
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CONDUCTOR_ID = surface;
+  // T210: 通常経路では cmux ペインから env として継承されるため no-op だが、
+  // cmux identify fallback 経路でも statusline.sh / hook が CMUX_SURFACE を
+  // 取得できるよう defensive に明示設定する。
+  process.env.CMUX_SURFACE = surface;
   process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
@@ -1452,7 +1447,8 @@ async function cmdResume(): Promise<void> {
 
   // 環境変数を設定（cmdConductor と同等）
   process.env.PROJECT_ROOT = PROJECT_ROOT;
-  process.env.CONDUCTOR_ID = surface;
+  // T210: 同上（cmdConductor 参照）— fallback 経路のための defensive export。
+  process.env.CMUX_SURFACE = surface;
   process.env.CMUX_ROLE = "conductor";
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";

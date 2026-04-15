@@ -78,7 +78,6 @@ export const SessionAskMessage = z.object({
   surface: z.string(),
   question: z.string(),
   pid: z.number().optional(),
-  conductorId: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -86,7 +85,6 @@ export const SessionAskMessage = z.object({
 export const SessionStopMessage = z.object({
   type: z.literal("SESSION_STOP"),
   surface: z.string(),
-  conductorId: z.string().optional(),
   pid: z.number(),
   timestamp: z.string().datetime(),
   payload: z.object({
@@ -97,7 +95,6 @@ export const SessionStopMessage = z.object({
 export const SessionClearMessage = z.object({
   type: z.literal("SESSION_CLEAR"),
   surface: z.string(),
-  conductorId: z.string().optional(),
   pid: z.number().optional(),
   timestamp: z.string().datetime(),
 });

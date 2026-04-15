@@ -150,7 +150,6 @@ Types and required/optional options:
 
   SESSION_CLEAR
     --surface <surface>     surface ID (required)
-    --conductor-id <id>     Conductor ID (optional)
     --pid <number>          process ID (optional)
 
   SHUTDOWN
@@ -670,7 +669,6 @@ Types と必須/任意オプション:
 
   SESSION_CLEAR
     --surface <surface>     surface ID（必須）
-    --conductor-id <id>     Conductor ID（任意）
     --pid <number>          プロセス ID（任意）
 
   SHUTDOWN
