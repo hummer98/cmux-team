@@ -22,6 +22,8 @@ import { notifyStateChanged } from "./eventBus";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
 import type { AgentState, ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
+import type { Database } from "bun:sqlite";
+import { initDB, insertHookSignal } from "./trace-store";
 
 export interface TaskSummary {
   id: string;
@@ -92,6 +94,8 @@ export interface DaemonState {
   /** プロジェクトの主開発ブランチ（config.mainBranch で解決）。T213 で追加。
    *  初期値は "main"。cmdStart が resolveMainBranch の結果で上書きする */
   mainBranch: string;
+  /** T216: hook 全送信を記録する trace DB ハンドル。initInfra で遅延初期化 */
+  traceDb: Database | null;
 }
 
 /**
@@ -230,6 +234,7 @@ export async function createDaemon(
     lastSidebarCategory: null,
     version: "v?.?.?",
     mainBranch: "main",
+    traceDb: null,
   };
 }
 
@@ -455,6 +460,14 @@ export async function initInfra(state: DaemonState): Promise<void> {
       ) + "\n"
     );
     await log("team_json_created", `path=${teamJson}`);
+  }
+
+  // T216: trace DB を開いて state に格納（hook_signals テーブル含む）
+  try {
+    state.traceDb = initDB(root);
+  } catch (e: any) {
+    await log("trace_db_init_failed", `${e?.message ?? e}`);
+    state.traceDb = null;
   }
 }
 
@@ -692,6 +705,16 @@ export async function tick(state: DaemonState): Promise<void> {
 }
 
 export async function handleMessage(state: DaemonState, message: QueueMessage): Promise<void> {
+  // T216: hook 全送信ポリシー — ルーティング分岐の前に全シグナルを trace DB に記録する。
+  //       失敗しても daemon を落とさないよう try/catch で包む。
+  if (state.traceDb) {
+    try {
+      insertHookSignal(state.traceDb, message);
+    } catch (e: any) {
+      await log("hook_signal_insert_failed", `type=${message.type} ${e?.message ?? e}`);
+    }
+  }
+
   switch (message.type) {
     case "TASK_CREATED": {
       let title = "";
@@ -898,6 +921,16 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "SESSION_ENDED": {
+      // T216: reason=other は Claude Code の曖昧な終了通知（/clear 直後など）を含むため
+      //       state 遷移の根拠にしない。insertHookSignal での記録のみで終わらせる。
+      //       真の死亡検知は spawnPidWatcher (PID) に委ねる。
+      if (message.reason === "other") {
+        await log(
+          "session_ended_other_ignored",
+          `${formatSurface(message.surface, "S")} reason=other — recorded only, no state transition`
+        );
+        break;
+      }
       // Master surface チェック
       if (message.surface === state.masterSurface) {
         state.masterStatus = "disconnected";

@@ -42,8 +42,8 @@ import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, type T
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -1204,6 +1204,20 @@ export function buildMessageFromHookInput(
     return SessionStartedMessageSchema.parse(message);
   }
 
+  if (type === "SESSION_ENDED") {
+    // T216: hook 全送信ポリシー — Claude Code の実 reason（logout/prompt_input_exit/other）を
+    //       hook stdin から抽出し、そのまま daemon に転送する。hook 側では分岐させない。
+    const reason = typeof obj.reason === "string" ? obj.reason : undefined;
+    const message: SessionEndedMessage = {
+      type: "SESSION_ENDED",
+      surface: opts.surface,
+      pid: opts.pid,
+      reason,
+      timestamp: opts.now,
+    };
+    return SessionEndedMessageSchema.parse(message);
+  }
+
   throw new Error(`unsupported hook message type: ${type}`);
 }
 
@@ -1423,10 +1437,11 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
       ],
       SessionEnd: [
         {
+          // T216: hook 全送信ポリシー — 実 reason は --from-stdin の JSON から Manager が抽出する。
           matcher: "logout|prompt_input_exit|other",
           hooks: [{
             type: "command",
-            command: `bash -c 'cmux-team send SESSION_ENDED --surface "${surface}" --pid "$PPID" --reason "session_end" 2>/dev/null || true'`,
+            command: `bash -c 'cmux-team send SESSION_ENDED --from-stdin --surface "${surface}" --pid "$PPID" 2>/dev/null || true'`,
             timeout: 5000,
           }],
         },
@@ -1491,10 +1506,12 @@ export function generateConductorSettings(projectRoot: string): string {
           }],
         },
         {
-          matcher: "logout|prompt_input_exit",
+          // T216: hook 全送信ポリシー — 全 reason (logout/prompt_input_exit/other) を Manager に転送する。
+          // 実 reason は --from-stdin の JSON から buildMessageFromHookInput が抽出する。
+          matcher: "logout|prompt_input_exit|other",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_ENDED --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --reason \"session_end\" 2>/dev/null || true'",
+            command: "bash -c 'cmux-team send SESSION_ENDED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
