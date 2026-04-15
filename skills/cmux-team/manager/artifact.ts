@@ -1,7 +1,7 @@
 /**
  * アーティファクトファイルのパース・検索
  */
-import { readdir, readFile, writeFile, mkdir } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join, basename } from "path";
 
@@ -157,9 +157,19 @@ export interface AddArtifactOpts {
 }
 
 /**
- * 既存ファイルをアーティファクトとして登録
+ * 既存ファイルをアーティファクトとして登録（move 動作）。
+ *
+ * srcPath の内容を読み取り、フロントマターを付与した上で
+ * `{projectRoot}/.team/artifacts/<id>-<slug>.md` に書き出し、
+ * 書き出し成功後に srcPath を削除する。
+ *
+ * srcPath の削除に失敗した場合は CLI 全体としては成功扱いにし、
+ * 呼び出し側にはログ警告だけを返す（二重管理防止がメインゴールで、
+ * srcPath の残存は手動で回収可能なため）。
  */
-export async function addArtifact(opts: AddArtifactOpts): Promise<{ id: string; destPath: string }> {
+export async function addArtifact(
+  opts: AddArtifactOpts,
+): Promise<{ id: string; destPath: string; unlinkWarning?: string }> {
   const id = await nextArtifactId(opts.projectRoot);
   const content = await readFile(opts.srcPath, "utf-8");
   const now = new Date().toISOString();
@@ -214,5 +224,12 @@ export async function addArtifact(opts: AddArtifactOpts): Promise<{ id: string; 
   const destPath = join(artifactsDir, destFileName);
   await writeFile(destPath, output, "utf-8");
 
-  return { id, destPath };
+  let unlinkWarning: string | undefined;
+  try {
+    await unlink(opts.srcPath);
+  } catch (e: any) {
+    unlinkWarning = `unlink failed: ${e?.message ?? e}`;
+  }
+
+  return { id, destPath, unlinkWarning };
 }

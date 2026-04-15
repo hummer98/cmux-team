@@ -2812,8 +2812,9 @@ async function cmdArtifacts(): Promise<void> {
       process.exit(1);
     }
     const tagsRaw = getArg("tags");
+    const projectRootOverride = getArg("project-root");
     const result = await addArtifact({
-      projectRoot: PROJECT_ROOT,
+      projectRoot: projectRootOverride ?? PROJECT_ROOT,
       srcPath: absPath,
       type: getArg("type"),
       title: getArg("title"),
@@ -2821,6 +2822,10 @@ async function cmdArtifacts(): Promise<void> {
       tags: tagsRaw ? tagsRaw.split(",").map(s => s.trim()) : undefined,
     });
     console.log(t("artifact_added", { id: result.id, path: result.destPath }));
+    if (result.unlinkWarning) {
+      console.error(`warning: source file not removed (${result.unlinkWarning}). Please remove ${absPath} manually.`);
+      await log("artifact_add_unlink_failed", `src=${absPath} dest=${result.destPath} reason=${result.unlinkWarning}`);
+    }
     return;
   }
 

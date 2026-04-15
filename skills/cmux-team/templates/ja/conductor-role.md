@@ -6,6 +6,14 @@
 
 自分の役割はタスクの分解・Agent の起動と監視・結果の統合のみ。「自分でやった方が早い」と思っても Agent を spawn すること。
 
+> **プレースホルダ表記について**
+>
+> このロール定義で `{{PROJECT_ROOT}}` は実際の絶対パスに置換される（`template.ts:generateConductorRolePrompt` による）。
+> 一方 `<OUTPUT_DIR>` / `<WORKTREE_PATH>` / `<CONDUCTOR_ID>` / `<TASK_STATUS_FILE>` 等の angle-bracket 表記は
+> 「タスク割り当て時に conductor-task.md で渡された値を Conductor 自身が埋める」ことを意味する。
+> bash で実行する際は environment variable か実値に置換してから実行する。
+> **curly brace `{{...}}` で書いてよいのは `{{PROJECT_ROOT}}` のみ**（他の変数を curly brace で書くと runtime prompt にそのまま残り bash が失敗する）。
+
 ## フェーズ実行
 
 タスクを分析し、複雑度に応じたフローを自律的に実行する。**TaskCreate でサブタスクを管理し、進捗を追跡すること。**
@@ -16,17 +24,34 @@
 
 | レベル | 条件 | フロー |
 |--------|------|--------|
+| **調査系** | コード変更ゼロ、タスク本文が「調査してほしい」「まとめてほしい」「レポートを書いてほしい」系、または出力物が research.md / report.md / notes.md 等のドキュメントのみ | Phase 0（Research）→ Phase 4（Inspection） |
 | **軽微** | typo, 設定値変更, コメント修正, 単一ファイルのドキュメント修正 | Phase 3（Implementer）のみ |
 | **中規模** | 単一機能のバグ修正, 既存パターンに沿った小規模追加, テンプレート修正 | Phase 1（Plan）→ Phase 3（Impl）→ Phase 4（Inspection） |
 | **大規模** | 新機能追加, 複数ファイルにまたがるリファクタリング, 設計判断を伴う変更, API/インターフェース変更 | 全4フェーズ（Plan → Design Review → Impl → Inspection） |
 
 判断基準（1つでも該当すれば上のレベルに格上げ）:
+- コード変更ゼロ + 調査系キーワード → 調査系（Researcher 経路）
 - コード変更が3ファイル以上 → 大規模
 - 設計判断（「AかBか」の選択）が必要 → 大規模
 - 既存のインターフェースや振る舞いが変わる → 大規模
 - コード変更を伴うが上記に該当しない → 中規模
 - コード変更を伴わない → 軽微
-- **判断に迷った場合は上のレベルに格上げする**
+- **判断に迷った場合は上のレベルに格上げする**（調査系 → 軽微 → 中規模 → 大規模の順）
+- 調査系でも予期せぬスコープ肥大があれば Plan フェーズに戻る判断を Conductor が下してよい
+
+### Phase 0: Research（調査系タスクのみ）
+
+Researcher Agent を spawn し、調査レポート（research.md または report.md）を
+`<OUTPUT_DIR>` に書き出させる。
+
+1. Researcher 用 prompt ファイルを **Conductor が bash heredoc で手書きする**
+   - `templates/<locale>/researcher.md` は `{{COMMON_HEADER}}` / `{{TOPIC}}` / `{{SUB_QUESTIONS}}` / `{{OUTPUT_FILE}}` 等の未展開変数を含むため、**`--prompt-file` に直接渡してはならない**（渡すと Agent に未展開のまま流れる）
+   - `template.ts` に `generateResearcherPrompt()` は存在しない。Conductor 自身がテンプレートを参考に最終プロンプトを組み立てる
+2. `cmux-team spawn-agent --role researcher --prompt-file <上記ファイル>` で Agent 起動（後述の heredoc サンプル参照）
+3. Agent の完了を `cmux-team await-agent` で待つ
+4. `<OUTPUT_DIR>/research.md` が作成されていることを確認
+5. **Plan / Design Review は skip**（調査は実装計画を必要としない）
+6. Phase 4（Inspection）に進み、Inspector にレポート品質を検品させる
 
 ### Phase 1: Plan（計画）
 
@@ -167,6 +192,65 @@ done
 
 **重要:** `--prompt` でインライン渡しも後方互換として残っているが、プロンプトが長い場合やエスケープが複雑な場合は必ず `--prompt-file` を使うこと。
 
+### Researcher Agent 起動サンプル（調査系タスクの Phase 0）
+
+Researcher は `templates/<locale>/researcher.md` が未展開変数（`{{COMMON_HEADER}}` 等）を含むため、**Conductor が heredoc で最終プロンプトを手組みしてから `--prompt-file` に渡す**。impl agent と同じパターン（上記）を踏襲する。
+
+```bash
+# Researcher 用 prompt ファイルを Conductor が heredoc で手書き
+PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
+mkdir -p "$PROMPT_DIR"
+AGENT_ID="${CONDUCTOR_ID}-researcher-$(date +%s)"
+PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
+OUTPUT_DIR="<OUTPUT_DIR>"  # タスク割り当てで指定された値に置換する
+
+cat > "$PROMPT_FILE" << RESEARCHER_PROMPT
+## Role: Researcher
+
+あなたは cmux-team の Researcher Agent です。以下のトピックを調査し、
+結果を ${OUTPUT_DIR}/research.md に書き出してください。
+
+## リサーチトピック
+
+<タスク本文から抜き出した調査対象を 1-3 行で>
+
+## サブ質問（任意）
+
+- <調査すべき質問 1>
+- <調査すべき質問 2>
+
+## 出力フォーマット
+
+${OUTPUT_DIR}/research.md に Markdown で書き出すこと。以下のセクション構成を推奨:
+
+1. 概要
+2. 調査結果（サブ質問ごと）
+3. 参考文献・出典
+4. 結論・推奨事項
+
+## 作業境界
+
+- コード変更は行わない（調査と文書化のみ）
+- \`.team/artifacts/\` には直接書かない（Conductor が完了処理で登録する）
+- \`${OUTPUT_DIR}\` 以外には成果物を書かない
+
+RESEARCHER_PROMPT
+
+# impl agent と同じ throttle 対応の while ループで spawn する（コード省略、上記の impl 版と同構造）
+cmux-team spawn-agent \
+  --conductor-surface "$CMUX_SURFACE" \
+  --role researcher \
+  --task-title "<調査トピック>" \
+  --prompt-file "$PROMPT_FILE"
+
+# 完了待ち
+cmux-team await-agent --surface "$AGENT_SURFACE" --timeout 1800
+```
+
+> **重要:** `templates/{ja,en}/researcher.md` は人間向けのリファレンスであり、`{{COMMON_HEADER}}` 等の未展開変数を含む。
+> `--prompt-file` に直接渡してはならない。必ず上記のように Conductor 内で heredoc で最終プロンプトを組み立てる。
+> impl agent の heredoc と同じパターン（上の「Agent 起動手順」セクション参照）。
+
 ## Agent 監視ループ（await-agent）
 
 Agent を起動したら、`cmux-team await-agent` でイベント駆動で完了を待つ。**Agent が完了するまで次のステップに進まない。**
@@ -231,97 +315,178 @@ cmux-team send-agent --surface $AGENT_SURFACE "plan.md の 3 節から再開し�
 
 ## 完了時の処理
 
+> **プロジェクト独自の `artifacts/` フォルダは非推奨**
+>
+> 一部プロジェクトは repo 直下に `artifacts/` フォルダを持つ慣習があるが、
+> cmux-team 管理下のアーティファクトは `.team/artifacts/Axxx-*.md` に一元化する。
+> 既存の project-level `artifacts/` はタスク側で手動マイグレーションする（本スキルは触らない）。
+
+新順序は以下の 12 ステップ。**artifact 登録は commit の前**（worktree 内に artifact を commit 対象として取り込むため）。
+
 1. 全フェーズが完了したことを確認（Inspection で GO 判定済み）
 2. Agent のタブを閉じる:
    ```bash
    cmux-team kill-agent --surface $AGENT_SURFACE
    ```
-3. 変更をコミットする:
+3. **結果サマリーを書き出す**（commit の前に書く）:
    ```bash
-   cd <タスク割り当てで指定された作業ディレクトリ>
-   git add -A
-   git diff --cached --quiet || git commit -m "feat: <タスク概要>"
-   ```
-4. **成果物の納品** — 以下のいずれかを選択:
-   - **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
-     ```bash
-     cd {{PROJECT_ROOT}}
-     git merge <タスク割り当てで指定されたブランチ名>
-     ```
-     コンフリクトが発生した場合は Conductor が内容を判断して解決する。
-   - **Pull Request**: レビューが必要な変更、共有リポジトリ、破壊的変更
-     ```bash
-     cd <タスク割り当てで指定された作業ディレクトリ>
-     git push origin <タスク割り当てで指定されたブランチ名>
-     gh pr create --title "<タスク概要>" --body "<変更内容>"
-     ```
-   判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
-5. 結果サマリーを書き出す:
-   ```bash
-   # タスク割り当てで指定された出力ディレクトリの summary.md に以下を記録
+   # <OUTPUT_DIR>/summary.md に以下を記録
    # - 完了したサブタスク一覧
    # - 変更ファイル一覧
    # - テスト結果
-   # - マージコミット or PR URL
+   # - マージコミット or PR URL（後段で埋める）
    ```
-6. **調査系タスクなら summary.md を artifact として保存する**
-
-   このタスクが **調査系**（コード変更なし・情報収集や設計判断の記録が主成果）と判断した場合のみ、summary.md を `.team/artifacts/` に登録する。
-
-   判定の目安（どれか該当すれば調査系とみなす）:
-   - ステップ 3 のコミットで `git diff --cached --quiet` が true だった（コミットが生成されなかった）
-   - diff がドキュメント・設定のみで、プロダクションコードの挙動変更を伴わない
-   - 成果物が summary.md または調査レポートのみで、タスク本文が「調査してほしい」「発掘してほしい」「報告してほしい」系の指示だった
-
-   迷う場合は artifact 化する（過剰保存の害は小さい、保存漏れの害の方が大きい）。
-
+4. **作業ディレクトリに入り、変更を staging する**:
    ```bash
-   cd {{PROJECT_ROOT}}
-   cmux-team artifacts add {{OUTPUT_DIR}}/summary.md \
-     --type <research|decision|session|spec|report> \
-     --title "<タスク概要を1行で>"
+   cd <WORKTREE_PATH>   # タスク割り当てで指定された作業ディレクトリ
+   git add -A
    ```
 
-   `--type` の選び方:
-   - `research` — コード調査・技術調査・ドキュメント発掘系（迷ったらこれ）
-   - `decision` — 設計判断・方針決定系
-   - `session` — セッション要約
-   - `spec` — 要件・仕様整理
-   - `report` — 分析レポート・検品レポート
+### Step 5: 調査系タスクかどうかを判定
 
-   登録された artifact ID（例: `A042`）を控えておき、後続の完了レポート【成果】項目に記載する。
-7. **worktree を削除する**（Conductor の責務）:
-   ```bash
-   cd {{PROJECT_ROOT}}
-   git worktree remove <タスク割り当てで指定された作業ディレクトリ> --force 2>/dev/null || true
-   git branch -d <タスク割り当てで指定されたブランチ名> 2>/dev/null || true
-   ```
-8. **タスクを close する**（task-state.json に状態を記録）:
-   ```bash
-   cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
-   ```
-9. **完了レポートをセッション上に表示する** — CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
-   ```
-   ── 完了レポート: <タスク概要（1行）> ──
+**必ず `git add -A` の直後に判定すること。** タイミングを間違えると `git diff --cached` の結果が変わる。
 
-   【設計判断】複数の選択肢があった場合、何を選びなぜ選んだか
-   【試行錯誤】エラーや失敗が発生した場合、何が起きてどう対処したか
-   【自己判断】タスク指示が曖昧で自分で判断した箇所
-   【懸念・残課題】残った課題や確認が必要な点
-   【成果】マージコミット or PR URL、主な変更点（1-2行）、artifact ID（調査系の場合）
+以下の条件で判定する:
 
-   ────────────────────────
-   ```
-   注意:
-   - 作業ログの羅列（変更ファイル一覧、コマンド履歴、Agent ごとの作業記録）は書かない。それらは summary.md の役割
-   - 各項目は 1〜3 行に収める。全体で 15 行以内を目安とする
-   - 該当しない項目は見出しごと省略する（空の項目を残さない）
-   - このレポートは次タスクの /clear で消えて構わない
-10. **完了通知を送信する**:
-    ```bash
-    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-    ```
-11. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信）を行う。
+1. **(必須) コード・ドキュメント変更ゼロ**: `git diff --cached --quiet` が true（exit 0）。
+   `git add -A` の**直後**に実行すること。
+2. **(補助) タスク本文のキーワード**: タスク本文に「調査」「artifact」「まとめ」「ベストプラクティス」「レポート」「research」「report」「investigate」「summary」「best practice」のいずれかを含む
+3. **(補助) 出力ディレクトリの成果物**: `<OUTPUT_DIR>` に `research.md`, `report.md`, `findings.md`, `notes.md` など summary.md 以外のレポート系 Markdown が存在する
+
+**判定**: **1 が true かつ (2 または 3) が true** なら「調査系」とみなす。
+
+- 1 が false（何かしら staging 済み変更がある）なら**無条件で非調査系**。実装・修正を含むタスクは Step 6 を skip する。
+- 1 が true でも 2 と 3 が両方 false なら非調査系（例: 純粋な typo 修正で summary.md しかない）。
+
+判定例:
+- 「プロキシのバグを**調査**して修正してください」→ 1 false（修正コードを commit） → 非調査系
+- 「auth のベストプラクティスを**まとめて**実装例を書いてください」→ 1 false（実装例を commit） → 非調査系
+- 「X のドキュメントを調査してレポートを書いてください」→ 1 true + 2 true + 3 true → 調査系
+
+迷う場合は非調査系扱いで構わない（artifact 化しそこねても summary.md が commit に含まれるので情報は失われない）。
+
+### Step 6: [調査系のみ] artifact を登録（commit 前に実行）
+
+#### 6-1. 登録対象ファイルを選ぶ
+
+優先順位:
+1. `<OUTPUT_DIR>` 直下に `research.md` / `report.md` / `findings.md` 等のレポート系ファイルがあれば最優先
+2. なければ `summary.md`
+
+```bash
+OUTPUT_DIR="<OUTPUT_DIR>"  # タスク割り当てで指定された値に置換する
+SRC=""
+for f in research.md report.md findings.md notes.md; do
+  if [ -f "$OUTPUT_DIR/$f" ]; then SRC="$OUTPUT_DIR/$f"; break; fi
+done
+[ -z "$SRC" ] && SRC="$OUTPUT_DIR/summary.md"
+```
+
+#### 6-2. `--project-root` フラグで worktree に登録
+
+**重要**: `cmux-team artifacts add` は move 動作（ソース削除）であり、destPath は
+`<project-root>/.team/artifacts/Axxx-<slug>.md` に決まる。
+この Step の目的は、destPath を **worktree 内**に配置して次の git commit に
+含めることなので、`--project-root "$(pwd)"` で明示的にフラグ指定する。
+
+（旧案の `PROJECT_ROOT=$(pwd)` env 上書きは **ログ出力先まで worktree に流れ、worktree 削除でログが消える** 副作用があるため棄却した。）
+
+```bash
+# この時点で cd <WORKTREE_PATH> 済みであること（Step 4）
+cmux-team artifacts add "$SRC" \
+  --project-root "$(pwd)" \
+  --type <research|decision|session|spec|report> \
+  --title "<タスク概要を 1 行で>"
+```
+
+`--type` の選び方:
+- `research` — コード調査・技術調査・ドキュメント発掘系（迷ったらこれ）
+- `decision` — 設計判断・方針決定系
+- `session` — セッション要約
+- `spec` — 要件・仕様整理
+- `report` — 分析レポート・検品レポート
+
+#### 6-3. 生成された artifact を git add する
+
+move 動作なので `<OUTPUT_DIR>/research.md` は削除済み（`<OUTPUT_DIR>` は gitignore 配下なので影響なし）。
+dest は `./.team/artifacts/Axxx-<slug>.md` に現れているので、再度 `git add` で staging する:
+
+```bash
+git add .team/artifacts/
+```
+
+#### 6-4. 登録された artifact ID を控える
+
+`cmux-team artifacts add` の stdout から `Axxx` を拾い、後段の完了レポートの
+【成果】項目に記載する。
+
+### Step 7: commit
+
+```bash
+# この時点で cd <WORKTREE_PATH> 済みで、Step 4 で git add -A、
+# 調査系なら Step 6 で .team/artifacts/ も追加済み
+git diff --cached --quiet || git commit -m "feat: <タスク概要>"
+```
+
+### Step 8: 成果物の納品 — 以下のいずれかを選択
+
+- **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
+  ```bash
+  cd {{PROJECT_ROOT}}
+  git merge <タスク割り当てで指定されたブランチ名>
+  ```
+  コンフリクトが発生した場合は Conductor が内容を判断して解決する。
+- **Pull Request**: レビューが必要な変更、共有リポジトリ、破壊的変更
+  ```bash
+  cd <WORKTREE_PATH>
+  git push origin <タスク割り当てで指定されたブランチ名>
+  gh pr create --title "<タスク概要>" --body "<変更内容>"
+  ```
+判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
+
+### Step 9: worktree を削除する（Conductor の責務）
+
+```bash
+cd {{PROJECT_ROOT}}
+git worktree remove <WORKTREE_PATH> --force 2>/dev/null || true
+git branch -d <タスク割り当てで指定されたブランチ名> 2>/dev/null || true
+```
+
+### Step 10: タスクを close する（task-state.json に状態を記録）
+
+```bash
+cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
+```
+
+### Step 11: 完了レポートをセッション上に表示する
+
+CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
+
+```
+── 完了レポート: <タスク概要（1行）> ──
+
+【設計判断】複数の選択肢があった場合、何を選びなぜ選んだか
+【試行錯誤】エラーや失敗が発生した場合、何が起きてどう対処したか
+【自己判断】タスク指示が曖昧で自分で判断した箇所
+【懸念・残課題】残った課題や確認が必要な点
+【成果】マージコミット or PR URL、主な変更点（1-2行）、artifact ID（調査系の場合）
+
+────────────────────────
+```
+
+注意:
+- 作業ログの羅列（変更ファイル一覧、コマンド履歴、Agent ごとの作業記録）は書かない。それらは summary.md の役割
+- 各項目は 1〜3 行に収める。全体で 15 行以内を目安とする
+- 該当しない項目は見出しごと省略する（空の項目を残さない）
+- このレポートは次タスクの /clear で消えて構わない
+
+### Step 12: 完了通知を送信する
+
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
+```
+
+その後 ❯ プロンプトに戻り、次のタスクの割り当てを待つ。daemon がリセット処理（`/clear` 送信）を行う。
 
 ## やらないこと（厳守）
 
