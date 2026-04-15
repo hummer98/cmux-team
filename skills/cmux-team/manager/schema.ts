@@ -130,6 +130,7 @@ export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessa
 export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
 export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
+export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
 
 // --- Agent 状態 ---
 

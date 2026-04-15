@@ -1778,3 +1778,90 @@ describe("startMaster pid fallback (T201)", () => {
     }
   });
 });
+
+// --- T216: SESSION_ENDED reason=other は state を触らない ---
+
+describe("handleMessage: SESSION_ENDED reason=other (T216)", () => {
+  test("reason=other では conductor.status が遷移しない", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { ConductorState } = await import("./schema");
+    void ConductorState;
+
+    const state = await createDaemon(testDir);
+    const conductor = {
+      surface: "surface:200",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-042-1712345678",
+      taskId: "42",
+      taskTitle: "t216-test",
+      agents: [],
+      status: "running" as const,
+      pid: 99999,
+    };
+    state.conductors.set(conductor.surface, conductor as any);
+
+    await handleMessage(state, {
+      type: "SESSION_ENDED",
+      surface: "surface:200",
+      reason: "other",
+      timestamp: new Date().toISOString(),
+    });
+
+    // running のまま（disconnected に遷移しない）
+    expect(conductor.status).toBe("running");
+    expect((conductor as any).pid).toBe(99999);
+    expect((conductor as any).disconnectedAt).toBeUndefined();
+  });
+
+  test("reason=logout では従来通り disconnected に遷移する (regression)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor = {
+      surface: "surface:201",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-043-1712345678",
+      taskId: "43",
+      taskTitle: "t216-regression",
+      agents: [],
+      status: "running" as const,
+      pid: 88888,
+    };
+    state.conductors.set(conductor.surface, conductor as any);
+
+    await handleMessage(state, {
+      type: "SESSION_ENDED",
+      surface: "surface:201",
+      reason: "logout",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect((conductor as any).status).toBe("disconnected");
+    expect((conductor as any).pid).toBeUndefined();
+    expect((conductor as any).disconnectedAt).toBeDefined();
+  });
+
+  test("reason=prompt_input_exit も従来通り disconnected に遷移する (regression)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor = {
+      surface: "surface:202",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-044-1712345678",
+      taskId: "44",
+      taskTitle: "t216-regression-2",
+      agents: [],
+      status: "running" as const,
+      pid: 77777,
+    };
+    state.conductors.set(conductor.surface, conductor as any);
+
+    await handleMessage(state, {
+      type: "SESSION_ENDED",
+      surface: "surface:202",
+      reason: "prompt_input_exit",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect((conductor as any).status).toBe("disconnected");
+  });
+});

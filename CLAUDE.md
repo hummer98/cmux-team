@@ -467,6 +467,31 @@ Manager がやらないこと:
 - **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
 - **起床トリガー**: `[TASK_CREATED]` 通知で再起動
 
+### hook 全送信ポリシー（T216）
+
+hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager に転送する**。
+フィルタリング・ルーティング・state 遷移判定は **Manager 側（daemon.ts handleMessage）で
+のみ** 行う。hook の shell スクリプトには分岐ロジックを持たせない。
+
+**根拠:**
+- hook 側でフィルタすると、後からデバッグする際に「hook は発火したか」が追跡不能
+- trace DB の `hook_signals` テーブルに全シグナルが記録されるため、事後解析が可能
+- matcher は Claude Code 側の regex 仕様に依存するため、cmux-team 固有の判定を載せると脆くなる
+
+**実装上の不変条件:**
+- `handleMessage` の入口（switch 分岐より前）で必ず `insertHookSignal` を呼ぶ
+- SessionEnd の `reason=other` は記録のみ行い state 遷移しない
+  （`/clear` 等の曖昧な終了を disconnected と誤判定しないため）
+- hook shell は `cmux-team send ... --from-stdin` で stdin JSON を
+  そのまま転送する。hook 内で `--reason` をハードコードしない
+
+**運用上の注意（hook_signals GC）:**
+- `hook_signals` テーブルの自動 GC は未実装。DB が膨張した場合は手動で古い行を削除する:
+  ```bash
+  sqlite3 .team/traces/traces.db "DELETE FROM hook_signals WHERE timestamp < '2026-01-01'"
+  ```
+- 将来的に CLI サブコマンド化する可能性あり
+
 ## 通信プロトコル
 
 ### ファイルベース通信

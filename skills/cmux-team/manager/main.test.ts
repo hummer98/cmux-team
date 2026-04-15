@@ -784,8 +784,37 @@ describe("buildMessageFromHookInput (T203)", () => {
 
   test("異常: 未対応 type で throw", () => {
     expect(() =>
-      buildMessageFromHookInput("SESSION_ENDED", JSON.stringify({}), opts),
+      buildMessageFromHookInput("TASK_CREATED", JSON.stringify({}), opts),
     ).toThrow(/unsupported hook message type/);
+  });
+
+  // T216: SESSION_ENDED hook branch — reason を stdin JSON から抽出する
+  test("T216: SESSION_ENDED — reason=logout を stdin から抽出", () => {
+    const raw = JSON.stringify({ reason: "logout" });
+    const msg = buildMessageFromHookInput("SESSION_ENDED", raw, opts);
+    expect(msg.type).toBe("SESSION_ENDED");
+    if (msg.type === "SESSION_ENDED") {
+      expect(msg.reason).toBe("logout");
+      expect(msg.surface).toBe("surface:100");
+      expect(msg.pid).toBe(12345);
+      expect(msg.timestamp).toBe(opts.now);
+    }
+  });
+
+  test("T216: SESSION_ENDED — reason=other を stdin から抽出", () => {
+    const raw = JSON.stringify({ reason: "other" });
+    const msg = buildMessageFromHookInput("SESSION_ENDED", raw, opts);
+    if (msg.type === "SESSION_ENDED") {
+      expect(msg.reason).toBe("other");
+    }
+  });
+
+  test("T216: SESSION_ENDED — reason 無し JSON は undefined のまま通す", () => {
+    const raw = JSON.stringify({});
+    const msg = buildMessageFromHookInput("SESSION_ENDED", raw, opts);
+    if (msg.type === "SESSION_ENDED") {
+      expect(msg.reason).toBeUndefined();
+    }
   });
 });
 
@@ -936,12 +965,12 @@ describe("SessionStart hook generation (T203)", () => {
     expect(cmd).not.toContain("$CONDUCTOR_ID");
   });
 
-  test("T210: Conductor SessionEnd(logout|prompt_input_exit) hook は --conductor-id を含まない", async () => {
+  test("T210: Conductor SessionEnd(logout|prompt_input_exit|other) hook は --conductor-id を含まない", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
     const settingsPath = generateConductorSettings(testDir);
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const logoutHook = settings.hooks.SessionEnd.find(
-      (h: any) => h.matcher === "logout|prompt_input_exit",
+      (h: any) => h.matcher === "logout|prompt_input_exit|other",
     );
     expect(logoutHook).toBeDefined();
     const cmd: string = logoutHook.hooks[0].command;
@@ -955,6 +984,43 @@ describe("SessionStart hook generation (T203)", () => {
     const content = await readFile(scriptPath, "utf-8");
     expect(content).not.toContain("CONDUCTOR_ID");
     expect(content).not.toContain("conductorId");
+  });
+
+  test("T216: Conductor SessionEnd(logout|prompt_input_exit|other) hook は --from-stdin 方式で reason ハードコードを含まない", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    const otherHook = settings.hooks.SessionEnd.find(
+      (h: any) => h.matcher === "logout|prompt_input_exit|other",
+    );
+    expect(otherHook).toBeDefined();
+    const cmd: string = otherHook.hooks[0].command;
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("cmux-team send SESSION_ENDED");
+    expect(cmd).not.toContain("--reason");
+    expect(cmd).not.toContain('"session_end"');
+
+    // regression: "clear" matcher は残っていること
+    const clearHook = settings.hooks.SessionEnd.find(
+      (h: any) => h.matcher === "clear",
+    );
+    expect(clearHook).toBeDefined();
+  });
+
+  test("T216: Agent SessionEnd(logout|prompt_input_exit|other) hook は --from-stdin 方式で reason ハードコードを含まない", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateAgentSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const hook = settings.hooks.SessionEnd.find(
+      (h: any) => h.matcher === "logout|prompt_input_exit|other",
+    );
+    expect(hook).toBeDefined();
+    const cmd: string = hook.hooks[0].command;
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("cmux-team send SESSION_ENDED");
+    expect(cmd).not.toContain("--reason");
+    expect(cmd).not.toContain('"session_end"');
   });
 });
 
