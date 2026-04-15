@@ -21,6 +21,7 @@ export const ConductorDoneMessage = z.object({
   sessionId: z.string().optional(),
   transcriptPath: z.string().optional(),
   surface: z.string(),
+  taskRunId: z.string().optional(),
   success: z.boolean(),
   reason: z.string().optional(),
   exitCode: z.number().optional(),
@@ -95,6 +96,7 @@ export const SessionStopMessage = z.object({
 export const SessionClearMessage = z.object({
   type: z.literal("SESSION_CLEAR"),
   surface: z.string(),
+  taskRunId: z.string().optional(),
   pid: z.number().optional(),
   timestamp: z.string().datetime(),
 });

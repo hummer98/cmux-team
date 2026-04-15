@@ -735,6 +735,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         );
         break;
       }
+      // T219: 既存 no_task ガードの後ろに配置 — ここまで到達時点で conductor.taskRunId は truthy.
+      //       late_cleanup パスでも走る: disconnected 時の新タスク再 assign 後に残った stale シグナルを弾く.
+      //       片方 undefined は旧クライアント互換のためスキップ（D3）.
+      if (
+        message.taskRunId &&
+        conductor.taskRunId &&
+        message.taskRunId !== conductor.taskRunId
+      ) {
+        await log(
+          "conductor_done_stale",
+          `${formatSurface(message.surface, "C")} message_task_run_id=${message.taskRunId} current_task_run_id=${conductor.taskRunId} reason=stale_task_run_id`
+        );
+        break;
+      }
       if (conductor.status !== "running") {
         await log(
           "conductor_done_late_cleanup",
@@ -808,7 +822,19 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           try {
             const ts = await loadTaskState(state.projectRoot);
             const cur = ts[conductor.taskId];
+            // T219: 先頭で stale guard。両方 taskRunId が立っており不一致なら書き込みスキップ.
+            //       hook 配布物は taskRunId を知らない（D2）ため、daemon 内部の突合のみで検証する.
             if (
+              cur &&
+              conductor.taskRunId &&
+              cur.taskRunId &&
+              cur.taskRunId !== conductor.taskRunId
+            ) {
+              await log(
+                "task_session_update_skipped",
+                `${formatSurface(message.surface, "C")} task_id=${conductor.taskId} task_state_task_run_id=${cur.taskRunId} conductor_task_run_id=${conductor.taskRunId} reason=stale_task_run_id`
+              );
+            } else if (
               cur &&
               cur.status === "assigned" &&
               cur.sessionId !== message.sessionId
@@ -1128,6 +1154,22 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T195: pid 更新は SESSION_STARTED の責務に統一。SESSION_CLEAR で pid を触らない
         notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
         await log(event, `${formatSurface(message.surface, "C")} via=SESSION_CLEAR`);
+      }
+      // T219: running 分岐の先頭で taskRunId 一致検証。
+      //       destructive な task-state 書き換え + resetConductor の直前で stale を弾く.
+      //       disconnected/starting → idle 復帰分岐は destructive でないためガードしない（D7）.
+      if (
+        conductor &&
+        conductor.status === "running" &&
+        message.taskRunId &&
+        conductor.taskRunId &&
+        message.taskRunId !== conductor.taskRunId
+      ) {
+        await log(
+          "session_clear_stale",
+          `${formatSurface(message.surface, "C")} message_task_run_id=${message.taskRunId} current_task_run_id=${conductor.taskRunId} reason=stale_task_run_id`
+        );
+        break;
       }
       if (conductor && conductor.status === "running") {
         // ユーザー手動 /clear → タスク abort + idle リセット
