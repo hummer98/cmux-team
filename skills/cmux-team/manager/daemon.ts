@@ -474,7 +474,24 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
           await log("master_check_error", `team.json read failed: ${e.message}`);
         }
 
-        const alive = restoredMasterPid != null && await isMasterAlive(state.projectRoot);
+        // pid あり: 通常の PID 経路（T195 以降の標準）
+        // pid なし: surface 生存確認にフォールバック（v3.46.0 → v3.47.0 マイグレーション互換）
+        let alive = false;
+        let aliveVia: "pid" | "surface_fallback" | null = null;
+        if (restoredMasterPid != null) {
+          alive = await isMasterAlive(state.projectRoot);
+          if (alive) aliveVia = "pid";
+        } else {
+          const pane = await cmux.getPaneForSurface(surface, state.workspace ?? undefined);
+          alive = pane !== undefined;
+          if (alive) {
+            aliveVia = "surface_fallback";
+            await log(
+              "master_alive_via_surface_fallback",
+              `${formatSurface(surface, "U")} pane=${pane} reason=team_json_pid_missing`
+            );
+          }
+        }
         if (alive) {
           // proxy ポート変化時: 旧 Master を close して再 spawn
           if (state.proxyPortChanged) {
@@ -484,14 +501,22 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
             // fall-through して下の spawn コードへ
           } else {
             state.masterSurface = surface;
-            state.masterPid = restoredMasterPid;
+            state.masterPid = restoredMasterPid;  // フォールバック経路では undefined のまま
             state.masterStatus = "idle";
-            spawnMasterPidWatcher(state, restoredMasterPid!);
-            await log("master_restored", `${formatSurface(surface, "U")} pid=${restoredMasterPid}`);
+            if (restoredMasterPid != null) {
+              spawnMasterPidWatcher(state, restoredMasterPid);
+            }
+            await log(
+              "master_restored",
+              `${formatSurface(surface, "U")}${restoredMasterPid != null ? ` pid=${restoredMasterPid}` : " pid=unknown"} via=${aliveVia}`
+            );
             return;
           }
         }
-        await log("master_check_failed", `${formatSurface(surface, "U")} alive=false`);
+        await log(
+          "master_check_failed",
+          `${formatSurface(surface, "U")} alive=false reason=${restoredMasterPid != null ? "pid_dead" : "surface_missing"}`
+        );
       }
     }
   } catch (e: any) {
