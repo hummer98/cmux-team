@@ -218,7 +218,7 @@ daemon 停止時に `cmux clear-status` でクリアする。
 ### メッセージング
 
 - daemon の HTTP プロキシが受け口を兼ね、CLI（`cmux-team send <TYPE>`）から POST されたメッセージを受信
-- メッセージ種別: `TASK_CREATED`, `TASK_UPDATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `CONDUCTOR_SESSION`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_ASK`, `SESSION_CLEAR`, `SHUTDOWN`
+- メッセージ種別: `TASK_CREATED`, `TASK_UPDATED`, `CONDUCTOR_REGISTERED`, `CONDUCTOR_DONE`, `AGENT_SPAWNED`, `SESSION_STARTED`, `SESSION_ENDED`, `SESSION_ACTIVE`, `SESSION_IDLE`, `SESSION_ASK`, `SESSION_STOP`, `SESSION_CLEAR`, `SHUTDOWN`
 - Zod バリデーション（不正メッセージはスキップ）
 - `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
 
@@ -247,7 +247,7 @@ daemon 停止時に `cmux clear-status` でクリアする。
 | `conductorSlot` | Conductor の surface ID（例: `"surface:5"`） |
 | `sessionId` | Conductor の Claude セッション ID |
 
-これらは daemon 再起動時の resume ロジックで使用される。`sessionId` は Conductor 初回起動時に `crypto.randomUUID()` で発行され、タスク割り当てやリセットで変更されない（常駐セッションのため）。
+これらは daemon 再起動時の resume ロジックで使用される。`sessionId` は Claude Code の SessionStart hook（`source: startup|resume|clear|compact`）から `SESSION_STARTED` メッセージとして daemon に push され、`/clear` 等で session が切り替わるたびに最新値で更新される（T203）。
 
 ### テンプレート検索順序
 

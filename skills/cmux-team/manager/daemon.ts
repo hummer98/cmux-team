@@ -752,7 +752,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
-        // starting / disconnected → idle に復帰
+        // n1: 既存の starting/disconnected → idle 遷移ロジックは残す
         if (conductor.status === "starting" || conductor.status === "disconnected") {
           const prevStatus = conductor.status;
           conductor.status = "idle";
@@ -761,14 +761,47 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             formatSurface(message.surface, "C")
           );
         }
+        // T203: SessionStart hook 経由で受信した sessionId を最新値に追従
+        const prevSessionId = conductor.sessionId;
+        if (message.sessionId) conductor.sessionId = message.sessionId;
         conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-started-conductor");
         spawnPidWatcher(state, conductor, message.pid);
 
+        // T203 C3: assigned タスクに対する /clear シミュレーションで task-state.json も同期更新
+        // /clear → SessionStart hook 到達までの間に scanTasks が古い sessionId を書く race を補正する。
+        if (
+          message.sessionId &&
+          prevSessionId !== message.sessionId &&
+          conductor.taskId
+        ) {
+          try {
+            const ts = await loadTaskState(state.projectRoot);
+            const cur = ts[conductor.taskId];
+            if (
+              cur &&
+              cur.status === "assigned" &&
+              cur.sessionId !== message.sessionId
+            ) {
+              ts[conductor.taskId] = { ...cur, sessionId: message.sessionId };
+              await saveTaskState(state.projectRoot, ts);
+              await log(
+                "task_session_updated",
+                `${formatSurface(message.surface, "C")} task_id=${conductor.taskId} session_id=${message.sessionId} source=${message.source ?? "-"}`
+              );
+            }
+          } catch (e: any) {
+            await log(
+              "error",
+              `task-state update failed on session_started: ${e?.message ?? e}`
+            );
+          }
+        }
+
         await log(
           "session_started",
-          `${formatSurface(message.surface, "C")} pid=${message.pid}`
+          `${formatSurface(message.surface, "C")} pid=${message.pid} session_id=${message.sessionId ?? "-"} source=${message.source ?? "-"}`
         );
         break;
       }
@@ -778,12 +811,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       for (const c of state.conductors.values()) {
         const agent = c.agents.find(a => a.surface === message.surface);
         if (agent) {
+          // T203: Agent も同様に最新 sessionId を反映
+          if (message.sessionId) agent.sessionId = message.sessionId;
           agent.pid = message.pid;
           spawnAgentPidWatcher(state, c, agent, message.pid);
           notifyStateChanged("daemon.ts:handleMessage:session-started-agent");
           await log(
             "session_started",
-            `${formatPair(c.surface, message.surface, "C", "A")} pid=${message.pid}`
+            `${formatPair(c.surface, message.surface, "C", "A")} pid=${message.pid} session_id=${message.sessionId ?? "-"} source=${message.source ?? "-"}`
           );
           agentMatched = true;
           break;
@@ -805,24 +840,6 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
       await log("conductor_registered", `${formatSurface(message.surface, "C")} pane=${message.paneId}`);
-      break;
-    }
-
-    case "CONDUCTOR_SESSION": {
-      const conductor = findConductor(state, message.surface);
-      if (conductor) {
-        conductor.sessionId = message.sessionId;
-        notifyStateChanged("daemon.ts:handleMessage:conductor-session");
-        await log(
-          "conductor_session",
-          `${formatSurface(message.surface, "C")} session_id=${message.sessionId}`
-        );
-      } else {
-        await log(
-          "conductor_session_ignored",
-          `${formatSurface(message.surface, "C")} reason=conductor_not_found`
-        );
-      }
       break;
     }
 
@@ -1293,7 +1310,7 @@ export async function __testSpawnPidWatcherTick(
   conductor.pid = undefined;
   notifyStateChanged("daemon.ts:spawnPidWatcher:conductor-disconnected");
   // sessionId は保持する（resume で必要）。
-  // Conductor 再起動時に CONDUCTOR_SESSION メッセージで新しい値に上書きされる。
+  // Conductor 再起動時に SessionStart hook (T203) で最新値に上書きされる。
   await log(
     "session_ended",
     `${formatSurface(conductor.surface, "C")} pid=${pid} status=disconnected reason=pid_watcher`

@@ -268,7 +268,7 @@ export async function initializeConductorSlots(
             taskRunId: resumeItem.taskRunId,
             worktreePath: resumeItem.worktreePath,
             taskTitle: resumeItem.taskTitle,
-            // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
+            // sessionId なし — SessionStart hook で後から設定される
           });
         } else {
           conductors.set(pane.surface, {
@@ -277,7 +277,7 @@ export async function initializeConductorSlots(
             status: "starting",
             startedAt: new Date().toISOString(),
             agents: [],
-            // sessionId なし — CONDUCTOR_SESSION メッセージで後から設定される
+            // sessionId なし — SessionStart hook で後から設定される
           });
         }
       }
@@ -467,7 +467,7 @@ export async function assignTask(
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
     conductor.status = "running";
-    // sessionId は初回起動時に発行済み — タスク割り当てで変更しない
+    // sessionId は SessionStart hook で最新値に追従する
     notifyStateChanged("conductor.ts:assignTask:status-running");
 
     await log(
@@ -554,7 +554,7 @@ export async function resetConductor(
     // disconnected 状態から reset される経路（forceCloseDisconnectedConductor 等）で
     // 古い disconnectedAt が残ることを防ぐ (Minor 3)
     conductor.disconnectedAt = undefined;
-    // sessionId は初回起動時に発行済み — reset で消さない（常駐セッション）
+    // sessionId は SessionStart hook で最新値に追従するため reset では触らない
     notifyStateChanged("conductor.ts:resetConductor:status-idle");
 
     await log("conductor_reset", formatSurface(conductor.surface, "C"));

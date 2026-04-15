@@ -67,7 +67,7 @@ description: >
 | `cmux-team status` | ステータス表示（team.json + ログ末尾） |
 | `cmux-team stop` | graceful shutdown（SHUTDOWN メッセージ送信） |
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
-| `cmux-team send <TYPE>` | 内部メッセージ通知（`TASK_CREATED / TASK_UPDATED / CONDUCTOR_DONE / CONDUCTOR_REGISTERED / CONDUCTOR_SESSION / AGENT_SPAWNED / SESSION_STARTED / SESSION_ENDED / SESSION_ACTIVE / SESSION_IDLE / SESSION_ASK / SESSION_CLEAR / SHUTDOWN`。ほとんどは Claude セッションの Stop/SessionEnd hook が送信する） |
+| `cmux-team send <TYPE>` | 内部メッセージ通知（`TASK_CREATED / TASK_UPDATED / CONDUCTOR_DONE / CONDUCTOR_REGISTERED / AGENT_SPAWNED / SESSION_STARTED / SESSION_ENDED / SESSION_ACTIVE / SESSION_IDLE / SESSION_ASK / SESSION_STOP / SESSION_CLEAR / SHUTDOWN`。ほとんどは Claude セッションの SessionStart/Stop/SessionEnd hook が送信する） |
 | `cmux-team send-agent` | Agent/Conductor surface へメッセージ送信（`--surface` 必須、`<message>` positional、`--no-return` 任意）。Conductor → 他 surface 操作はこの CLI 経由に限定され、`cmux send` の直接呼び出しは hook でブロックされる |
 | `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`）。`/rate-limit` API でスロットル中はブロックされ exit code 75 を返す |

@@ -1044,6 +1044,214 @@ describe("Agent SESSION_STARTED (T195)", () => {
   });
 });
 
+describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
+  test("Conductor: sessionId が state に反映される", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "starting",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:c1",
+      pid: 11111,
+      sessionId: "uuid-A",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.sessionId).toBe("uuid-A");
+    expect(conductor.pid).toBe(11111);
+    expect(conductor.status).toBe("idle"); // n1: starting → idle 遷移は維持
+  });
+
+  test("Conductor: 2 回目の sessionId は上書きされる（/clear シナリオ）", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c2",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      sessionId: "uuid-1",
+      pid: 22222,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:c2",
+      pid: 22223,
+      sessionId: "uuid-2",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.sessionId).toBe("uuid-2");
+    expect(conductor.pid).toBe(22223);
+
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("Conductor: sessionId 無しメッセージは既存値を保つ（後方互換）", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c3",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      sessionId: "uuid-keep",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:c3",
+      pid: 33333,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.sessionId).toBe("uuid-keep");
+
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("Agent: sessionId が agent state に反映される", async () => {
+    const state = await createDaemon(testDir);
+    const agent = {
+      surface: "surface:a2",
+      spawnedAt: new Date().toISOString(),
+    };
+    const conductor: ConductorState = {
+      surface: "surface:c4",
+      startedAt: new Date().toISOString(),
+      agents: [agent],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:a2",
+      pid: 44444,
+      sessionId: "uuid-agent",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    const updated = conductor.agents.find(a => a.surface === "surface:a2");
+    expect(updated?.sessionId).toBe("uuid-agent");
+    expect(updated?.pid).toBe(44444);
+
+    if (updated?.pidWatcherInterval) {
+      clearInterval(updated.pidWatcherInterval);
+      updated.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("C3: assigned タスクを持つ Conductor の /clear で task-state.json.sessionId が更新される", async () => {
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const state = await createDaemon(testDir);
+
+    // 事前条件: task-state.json に assigned + 旧 sessionId
+    const initialTs = await loadTaskState(testDir);
+    initialTs["T999"] = {
+      status: "assigned",
+      sessionId: "uuid-old",
+      worktreePath: join(testDir, ".worktrees/task-999"),
+    } as any;
+    await saveTaskState(testDir, initialTs);
+
+    const conductor: ConductorState = {
+      surface: "surface:c5",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      taskId: "T999",
+      sessionId: "uuid-old",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:c5",
+      pid: 55556,
+      sessionId: "uuid-new",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.sessionId).toBe("uuid-new");
+    const updatedTs = await loadTaskState(testDir);
+    expect((updatedTs["T999"] as any).sessionId).toBe("uuid-new");
+
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("C3: 同一 sessionId を受信した場合は task-state.json を書き換えない（冪等性）", async () => {
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const state = await createDaemon(testDir);
+
+    const initialTs = await loadTaskState(testDir);
+    initialTs["T888"] = {
+      status: "assigned",
+      sessionId: "uuid-same",
+      worktreePath: join(testDir, ".worktrees/task-888"),
+    } as any;
+    await saveTaskState(testDir, initialTs);
+
+    // ファイルの mtime 比較で「書き換えていない」ことを確認するため取得
+    const beforeStat = await import("fs/promises").then(m =>
+      m.stat(join(testDir, ".team/task-state.json"))
+    );
+
+    const conductor: ConductorState = {
+      surface: "surface:c6",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      taskId: "T888",
+      sessionId: "uuid-same",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:c6",
+      pid: 66666,
+      sessionId: "uuid-same",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    const afterStat = await import("fs/promises").then(m =>
+      m.stat(join(testDir, ".team/task-state.json"))
+    );
+    // mtime が変わっていない（書き直されていない）
+    expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+
+    const ts = await loadTaskState(testDir);
+    expect((ts["T888"] as any).sessionId).toBe("uuid-same");
+
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+});
+
 // --- T176: layout モード ---
 
 import { updateTeamJson } from "./daemon";

@@ -5,6 +5,8 @@ import { join } from "path";
 import { spawn } from "child_process";
 import {
   generateConductorSettings,
+  generateAgentSettings,
+  buildMessageFromHookInput,
   validateSendAgentTarget,
   waitForAgentRegistered,
   resolveLayout,
@@ -685,4 +687,235 @@ describe("cmdAwaitAgent — done marker race (T181 §12.1)", () => {
     const { existsSync: ex } = await import("fs");
     expect(ex(doneFile)).toBe(false);
   }, 15000);
+});
+
+// --- T203: buildMessageFromHookInput 単体テスト ---
+
+describe("buildMessageFromHookInput (T203)", () => {
+  const opts = {
+    surface: "surface:100",
+    pid: 12345,
+    now: "2026-04-15T10:00:00.000Z",
+  };
+
+  test("正常: SESSION_STARTED + source=startup の hook JSON を変換", () => {
+    const raw = JSON.stringify({
+      session_id: "uuid-1",
+      source: "startup",
+      hook_event_name: "SessionStart",
+      cwd: "/tmp/x",
+      transcript_path: "/tmp/y.jsonl",
+    });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+    expect(msg).toEqual({
+      type: "SESSION_STARTED",
+      surface: "surface:100",
+      pid: 12345,
+      sessionId: "uuid-1",
+      source: "startup",
+      timestamp: "2026-04-15T10:00:00.000Z",
+    });
+  });
+
+  test("正常: source=clear も pass される", () => {
+    const raw = JSON.stringify({ session_id: "uuid-2", source: "clear" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+    expect(msg.type).toBe("SESSION_STARTED");
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.sessionId).toBe("uuid-2");
+      expect(msg.source).toBe("clear");
+    }
+  });
+
+  test("正常: session_id 無しでも sessionId: undefined で通る（後方互換）", () => {
+    const raw = JSON.stringify({ source: "startup" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.sessionId).toBeUndefined();
+      expect(msg.source).toBe("startup");
+    }
+  });
+
+  test("m3: 余分なフィールドは無視される", () => {
+    const raw = JSON.stringify({
+      session_id: "uuid-3",
+      source: "resume",
+      foo: "bar",
+      conductor_id: "C1",  // 余分
+      pid: 99999,           // hook 入力側の余分なキー（CLI 引数の pid を優先）
+    });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.sessionId).toBe("uuid-3");
+      expect(msg.source).toBe("resume");
+      expect(msg.pid).toBe(12345);
+      expect(msg.surface).toBe("surface:100");
+      expect((msg as any).foo).toBeUndefined();
+      expect((msg as any).conductor_id).toBeUndefined();
+    }
+  });
+
+  test("source は startup/resume/clear/compact 全て pass する", () => {
+    for (const s of ["startup", "resume", "clear", "compact"] as const) {
+      const raw = JSON.stringify({ session_id: "u", source: s });
+      const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+      if (msg.type === "SESSION_STARTED") {
+        expect(msg.source).toBe(s);
+      }
+    }
+  });
+
+  test("異常: 無効 JSON で throw", () => {
+    expect(() =>
+      buildMessageFromHookInput("SESSION_STARTED", "{not json", opts),
+    ).toThrow(/invalid hook JSON/);
+  });
+
+  test("異常: object でない JSON で throw", () => {
+    expect(() =>
+      buildMessageFromHookInput("SESSION_STARTED", "42", opts),
+    ).toThrow(/must be an object/);
+  });
+
+  test("異常: 未対応 type で throw", () => {
+    expect(() =>
+      buildMessageFromHookInput("SESSION_ENDED", JSON.stringify({}), opts),
+    ).toThrow(/unsupported hook message type/);
+  });
+});
+
+// --- T203: cmdSend --from-stdin discriminator 回帰 (C2) ---
+//
+// T189 SESSION_STOP forwarder は `cmux-team send --from-stdin`（type 引数なし）で起動する。
+// args[1] === "--from-stdin" になる場合に新パスへ誤って入らず、旧 QueueMessageSchema パスで処理される
+// ことを CLI subprocess 経由で検証する。
+
+describe("cmdSend --from-stdin discriminator (C2 / T203)", () => {
+  let server: Server;
+  let receivedMessages: any[];
+  let port: number;
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  beforeEach(async () => {
+    receivedMessages = [];
+    server = createServer((req, res) => {
+      if (req.url === "/api/messages" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk.toString(); });
+        req.on("end", () => {
+          try {
+            receivedMessages.push(JSON.parse(body));
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+          } catch {
+            res.writeHead(400);
+            res.end();
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+    const addr = server.address();
+    port = typeof addr === "object" && addr ? addr.port : 0;
+    await mkdir(join(testDir, ".team"), { recursive: true });
+    await writeFile(join(testDir, ".team/proxy-port"), String(port));
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  async function runSendStdin(
+    stdinJson: string,
+    cliArgs: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["run", MAIN_TS, ...cliArgs], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      proc.stdin.write(stdinJson);
+      proc.stdin.end();
+    });
+  }
+
+  test("send --from-stdin（type 引数なし）は旧 QueueMessageSchema パスへ落ちる（T189 forwarder 互換）", async () => {
+    const stop = {
+      type: "SESSION_STOP",
+      surface: "surface:100",
+      conductorId: "",
+      pid: 1234,
+      timestamp: "2026-04-15T10:00:00.000Z",
+      payload: { transcript_path: "/tmp/x.jsonl" },
+    };
+    const r = await runSendStdin(JSON.stringify(stop), ["send", "--from-stdin"]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.length).toBe(1);
+    expect(receivedMessages[0].type).toBe("SESSION_STOP");
+    expect(receivedMessages[0].surface).toBe("surface:100");
+    expect(receivedMessages[0].pid).toBe(1234);
+  }, 15000);
+
+  test("send SESSION_STARTED --from-stdin --surface ... は新 hook 解釈パスへ入る", async () => {
+    const hookJson = {
+      session_id: "uuid-real",
+      source: "clear",
+      hook_event_name: "SessionStart",
+    };
+    const r = await runSendStdin(JSON.stringify(hookJson), [
+      "send",
+      "SESSION_STARTED",
+      "--from-stdin",
+      "--surface",
+      "surface:300",
+      "--pid",
+      "9999",
+    ]);
+    expect(r.code).toBe(0);
+    expect(receivedMessages.length).toBe(1);
+    expect(receivedMessages[0].type).toBe("SESSION_STARTED");
+    expect(receivedMessages[0].surface).toBe("surface:300");
+    expect(receivedMessages[0].pid).toBe(9999);
+    expect(receivedMessages[0].sessionId).toBe("uuid-real");
+    expect(receivedMessages[0].source).toBe("clear");
+  }, 15000);
+});
+
+// --- T203: SessionStart hook の matcher / command 回帰 ---
+
+describe("SessionStart hook generation (T203)", () => {
+  test("Agent: matcher === '' で stdin pipe 方式の command を生成", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateAgentSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.hooks.SessionStart.length).toBe(1);
+    const entry = settings.hooks.SessionStart[0];
+    expect(entry.matcher).toBe("");
+    const cmd: string = entry.hooks[0].command;
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--surface");
+    expect(cmd).toContain("SESSION_STARTED");
+  });
+
+  test("Conductor: matcher === '' で stdin pipe 方式の command を生成、--conductor-id を含まない (m2)", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.hooks.SessionStart.length).toBe(1);
+    const entry = settings.hooks.SessionStart[0];
+    expect(entry.matcher).toBe("");
+    const cmd: string = entry.hooks[0].command;
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--surface");
+    expect(cmd).toContain("SESSION_STARTED");
+    expect(cmd).not.toContain("--conductor-id");
+  });
 });
