@@ -3,7 +3,7 @@
  */
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
-import { existsSync, writeFileSync } from "fs";
+import { existsSync } from "fs";
 import { readFile, mkdir, readdir, rm, stat, copyFile } from "fs/promises";
 import { join, relative, dirname } from "path";
 import { loadTaskState } from "./task";
@@ -345,28 +345,11 @@ export async function assignTask(
         });
     }
 
-    // .envrc を生成（source_up で親の .envrc を継承）
-    const envrcSrc = join(projectRoot, '.envrc');
-    if (existsSync(envrcSrc)) {
-      writeFileSync(join(worktreePath, '.envrc'), 'source_up\n');
-      await log("envrc_generated", `worktree=${worktreePath}`);
-    }
-
     // worktree ブートストラップ
     if (existsSync(join(worktreePath, "package.json"))) {
       await execFile("npm", ["install"], { cwd: worktreePath }).catch(async (e: any) => {
         await log("error", `npm install failed in worktree: path=${worktreePath} ${formatExecError(e)}`);
       });
-    }
-
-    // direnv allow（.envrc が存在する場合のみ）
-    if (existsSync(join(worktreePath, ".envrc"))) {
-      try {
-        await execFile("direnv", ["allow"], { cwd: worktreePath });
-        await log("direnv_allowed", `worktree=${worktreePath}`);
-      } catch (e: any) {
-        await log("error", `direnv allow failed: worktree=${worktreePath} ${formatExecError(e)}`);
-      }
     }
 
     // --- 3. Conductor プロンプト生成 ---

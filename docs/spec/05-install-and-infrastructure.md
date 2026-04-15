@@ -37,7 +37,7 @@ npm install -g @hummer98/cmux-team
 - **SessionStart**: cmux 環境外での起動時にタブ名をリネーム
 - **PreToolUse (Write|Edit)**: `team.json` と `task-state.json` への直接編集をブロック（daemon 管理ファイルの保護）
 
-Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。Agent spawn 時は `spawn-agent` CLI 内で、Master 起動時は `spawn-master` CLI 内でそれぞれ設定される。
+Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。Agent spawn 時は `spawn-agent` CLI 内で、Master 起動時は `spawn-master` CLI 内でそれぞれ設定される。これが authoritative な注入経路であり、`cmux-team` 経由の spawn では `.envrc` / `direnv` への依存は不要。
 
 ---
 
@@ -154,7 +154,7 @@ while (state.running):
 
 daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、`cmux tree` / `validateSurface` には常に workspace を渡して別ワークスペースの surface ID と混同しないようにする。起動時にワークスペース名を `basename(PROJECT_ROOT)`（起動フォルダ名）に自動設定する（`cmux rename-workspace`）。
 
-Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。また、プロジェクトルートに `.envrc` が存在する場合、worktree 内に `source_up` の `.envrc` を自動生成し、direnv による OAuth トークン等の環境変数を worktree に継承する。
+Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。`CMUX_CLAUDE_HOOKS_DISABLED=1` は Conductor / Agent / Master の spawn 時に explicit な `export` として注入されるため、worktree 側での `.envrc` 生成や `direnv` 実行は行わない。
 
 #### assigned タスクの resume
 
@@ -384,13 +384,15 @@ e2e-results/
 ```
 
 - `models` — Master / Conductor / Agent のデフォルトモデル（`--model` CLI フラグで上書き可）
-- `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ
+- `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ（`claude` 直接起動時向けの optional 機能。`cmux-team` 経由の spawn には不要）
 - `autoUpdate` — auto-update モード（`"off" | "notify" | "task"`、後方互換: `true` → task、`false` → off、デフォルト `off`）。env `CMUX_TEAM_AUTO_UPDATE` で上書き可
 
 ### auto-update（update-notifier ベース、T187）
 
 daemon は `update-notifier` v7 で新バージョンを検出するのみで、install は行わない。`task` モードは `--run-after-all` の update タスク（frontmatter `kind: cmux-team-update`）を 12h 周期で自動起票し、Conductor が `npm install -g @hummer98/cmux-team@<latest>` を実行する。`notify` モードは TUI バナー表示のみ。`off` は registry アクセスすら行わない。`NO_UPDATE_NOTIFIER=1` で無効化可能。`cmux-team self-update` で手動起票可。
 
-### .envrc 対話提案（初回起動）
+### .envrc 対話提案（初回起動、optional）
 
-プロジェクトルートに `.envrc` が存在し、かつ `CMUX_CLAUDE_HOOKS_DISABLED=1` が未設定の場合、初回 `cmux-team start` 時にユーザーへ追記を提案する。承諾すると `.envrc` 末尾にエントリーを追記し、`direnv allow` の実行と再起動を促す。断る場合は `config.json` の `envrcHookPromptSkipped: true` で以降スキップする。
+**この機能は `claude` を直接起動するユーザー向けの optional な親切機能であり、`cmux-team start` 経由の spawn 経路には不要である。** `cmux-team` は Conductor / Agent / Master spawn 時に `CMUX_CLAUDE_HOOKS_DISABLED=1` を explicit な `export` として直接注入するため、`.envrc` / `direnv` に依存しない。
+
+`claude` コマンドを自分で直接起動する場合（cmux-team 外での利用）は、プロジェクトルートに `.envrc` が存在し、かつ `CMUX_CLAUDE_HOOKS_DISABLED=1` が未設定の場合に限り、初回 `cmux-team start` 時にユーザーへ追記を提案する。承諾すると `.envrc` 末尾にエントリーを追記し、`direnv allow` の実行と再起動を促す。断る場合は `config.json` の `envrcHookPromptSkipped: true` で以降スキップする。worktree 内の `.envrc` 自動生成（`source_up`）は T212 で廃止済み。

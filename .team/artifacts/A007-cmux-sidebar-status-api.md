@@ -105,7 +105,7 @@ echo '{}' | cmux claude-hook prompt-submit
 
 環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` を設定すると、`cmux claude-hook` の呼び出しが全てスキップされ、`claude_code` キーの自動ステータス更新が無効になる。
 
-cmux-team では Conductor/Agent spawn 時にこの環境変数を設定し、サブエージェントが個別にサイドバーステータスを書き換えないようにしている（T130 で実装）。
+cmux-team では Conductor/Agent spawn 時にこの環境変数を explicit な `export` として直接注入し、サブエージェントが個別にサイドバーステータスを書き換えないようにしている（T130 で実装）。T212 で worktree への `.envrc` (`source_up`) 自動生成経路は削除され、spawn 時の `export` が authoritative な注入経路となった。
 
 ```bash
 # 無効化
