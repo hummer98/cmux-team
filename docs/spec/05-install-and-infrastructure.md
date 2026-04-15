@@ -13,7 +13,7 @@ npm install -g @hummer98/cmux-team
 `postinstall` スクリプトにより:
 1. `bun install` で manager/ の依存関係を解決
 2. `claude plugin add hummer98/cmux-team` で Plugin を登録
-3. `skills/cmux-team/manager/statusline.sh` を `~/.claude/statusline.sh` にコピー（ロール別ステータスライン用）
+3. `skills/cmux-team/manager/statusline.sh` を `~/.claude/statusline.sh` にコピー（proxy `POST /statusline` に stdin を転送する curl ラッパー、T211）
 
 ### 2. Claude Code Plugin
 
@@ -100,7 +100,8 @@ skills/cmux-team/manager/
 ├── i18n.ts          # 日英ロケール切替
 ├── dashboard.tsx    # React (ink) TUI ダッシュボード
 ├── e2e.ts           # E2E テストランナー
-├── statusline.sh    # ロール別 statusline スクリプト（postinstall で ~/.claude/ に配置）
+├── statusline.sh    # statusline curl wrapper（postinstall で ~/.claude/ に配置、proxy POST /statusline に転送）
+├── statusline.ts    # statusline フォーマッタ本体（T211、proxy から呼び出される純関数群）
 ├── *.test.ts        # ユニットテスト（daemon / proxy / task / cmux / eventBus など）
 ├── package.json     # 依存: ink, react, zod, update-notifier, @rezi-ui/core, @rezi-ui/node
 └── tsconfig.json
@@ -191,7 +192,7 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - 既存プロセスが生きていれば再利用
 - daemon の auto-restart 後にポートが変わった場合は Master セッションを自動再接続
 - レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
-- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信）
+- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信）, `POST /statusline`（T211、Claude Code の statusline 描画。`X-Cmux-Surface` ヘッダーで対象 surface を識別し、DaemonState から master/conductor/agent のロールを逆引きして 1 行文字列を返す）
 
 #### 5h レート制限スロットリング
 

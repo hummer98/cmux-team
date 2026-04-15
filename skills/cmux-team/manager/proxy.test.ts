@@ -224,4 +224,185 @@ describe("proxy", () => {
     expect(res3.status).toBe(404);
     handle.stop();
   });
+
+  // --- T211 POST /statusline エンドポイント ---
+  describe("POST /statusline (T211)", () => {
+    // branch 解決を安定させるため workspace は存在しない dir に固定
+    const NO_GIT = "/nonexistent-dir-for-cmux-proxy-test";
+    const statuslineState = () => ({
+      running: true,
+      bootPhase: "ready" as const,
+      masterStatus: "idle" as const,
+      masterSurface: "surface:100",
+      conductors: new Map<string, any>([
+        [
+          "surface:200",
+          {
+            surface: "surface:200",
+            taskId: "042",
+            taskTitle: "Test task",
+            status: "running",
+            agents: [
+              { surface: "surface:300", role: "researcher", taskTitle: "Test task" },
+            ],
+          },
+        ],
+        [
+          "surface:201",
+          { surface: "surface:201", status: "idle", agents: [] },
+        ],
+      ]),
+      taskList: [
+        { id: "001", status: "ready", title: "A" },
+        { id: "002", status: "assigned", title: "B" },
+      ],
+      // proxy.ts は state をそのまま GET /state にも流すため、他のフィールドも空で用意
+      lastUpdate: new Date(),
+    });
+
+    async function postStatusline(port: number, surface: string | null, body = '{"model":"claude-opus-4-6","context_window":{"used_percentage":42},"workspace":{"current_dir":"' + NO_GIT + '"}}') {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        // ASCII fallback 固定（テストが NF glyph に依存しないようにする）
+        "X-Cmux-Nerd-Font": "0",
+      };
+      if (surface !== null) headers["X-Cmux-Surface"] = surface;
+      return await fetch(`http://127.0.0.1:${port}/statusline`, {
+        method: "POST",
+        headers,
+        body,
+      });
+    }
+
+    test("master surface で ASCII fallback テキストを返す", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:100");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")?.replace(/\s+/g, "")).toBe("text/plain;charset=utf-8");
+      const text = await res.text();
+      expect(text).toBe("\u2666 Master |  opus-4-6 | ctx 42% | T:2 |  ");
+      handle.stop();
+    });
+
+    test("conductor busy で T042 タイトルを含む", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:200");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toBe("\u2666 T042 Test task |  | ctx 42% |  opus-4-6");
+      handle.stop();
+    });
+
+    test("conductor idle で idle セクションを返す", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:201");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toBe("\u2666 idle | ctx 42% |  opus-4-6");
+      handle.stop();
+    });
+
+    test("agent で T042 + role 名を返す", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:300");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toBe("\u25B8 researcher | T042 | ctx 42%");
+      handle.stop();
+    });
+
+    test("X-Cmux-Surface ヘッダー無し → 400", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, null);
+      expect(res.status).toBe(400);
+      handle.stop();
+    });
+
+    test("X-Cmux-Surface 空文字 → 400", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "");
+      expect(res.status).toBe(400);
+      handle.stop();
+    });
+
+    test("getState 未設定 → 503", async () => {
+      const handle = await start(testDir);
+      const res = await postStatusline(handle.port, "surface:100");
+      expect(res.status).toBe(503);
+      handle.stop();
+    });
+
+    test("存在しない surface → 200 + 空ボディ", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:9999");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toBe("");
+      handle.stop();
+    });
+
+    test("X-Cmux-Nerd-Font=0 で ASCII fallback、X-Cmux-Statusline-Color=1 で ANSI 色", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await fetch(`http://127.0.0.1:${handle.port}/statusline`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cmux-Surface": "surface:100",
+          "X-Cmux-Nerd-Font": "0",
+          "X-Cmux-Statusline-Color": "1",
+        },
+        body: JSON.stringify({
+          model: "claude-opus-4-6",
+          context_window: { used_percentage: 42 },
+          workspace: { current_dir: NO_GIT },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain("\u2666 Master");
+      expect(text).toContain("\x1b[36m"); // cyan
+      expect(text).toContain("\x1b[0m");  // reset
+      handle.stop();
+    });
+
+    test("末尾に改行を含めない", async () => {
+      const handle = await start(testDir, { getState: () => statuslineState() });
+      const res = await postStatusline(handle.port, "surface:100");
+      const text = await res.text();
+      expect(text.endsWith("\n")).toBe(false);
+      handle.stop();
+    });
+  });
+
+  // --- T211 Phase 3: Agent 汚染 regression: .claude/settings.json の構造検証 ---
+  // Phase 3 で Master hook を master-settings.json に移設した後の regression guard。
+  describe("`.claude/settings.json` structural regression (T211)", () => {
+    test("UserPromptSubmit / Stop hook は .claude/settings.json に存在しない", async () => {
+      const repoRoot = join(import.meta.dir, "..", "..", "..");
+      const settingsPath = join(repoRoot, ".claude/settings.json");
+      const raw = await readFile(settingsPath, "utf-8");
+      const settings = JSON.parse(raw);
+      const upsList = settings?.hooks?.UserPromptSubmit;
+      const stopList = settings?.hooks?.Stop;
+      // hook が存在しない、または空配列であることを要求する
+      expect(upsList == null || (Array.isArray(upsList) && upsList.length === 0)).toBe(true);
+      expect(stopList == null || (Array.isArray(stopList) && stopList.length === 0)).toBe(true);
+    });
+
+    test("PreToolUse の .team/tasks/ 保護 hook は残っている", async () => {
+      const repoRoot = join(import.meta.dir, "..", "..", "..");
+      const settingsPath = join(repoRoot, ".claude/settings.json");
+      const raw = await readFile(settingsPath, "utf-8");
+      const settings = JSON.parse(raw);
+      const preToolUse = settings?.hooks?.PreToolUse;
+      expect(Array.isArray(preToolUse)).toBe(true);
+      expect(preToolUse.length).toBeGreaterThan(0);
+      // いずれかの hook コマンドに `.team/tasks/` 保護メッセージが含まれる
+      const joined = preToolUse
+        .flatMap((e: any) => (e.hooks ?? []).map((h: any) => h.command ?? ""))
+        .join(" ");
+      expect(joined).toContain(".team/tasks/");
+      expect(joined).toContain("直接書き込みは禁止");
+    });
+  });
 });

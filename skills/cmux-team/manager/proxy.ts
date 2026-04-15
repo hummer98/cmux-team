@@ -10,6 +10,7 @@ import { join } from "path";
 import { log } from "./logger";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
+import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
@@ -195,6 +196,44 @@ export async function start(
             resetRemaining,
           }), { headers: jsonHeaders });
         }
+      }
+
+      // statusline 描画エンドポイント (T211)
+      // bash 版 `statusline.sh` の代替。wrapper が Claude Code の
+      // statusline JSON (stdin) をそのまま POST し、surface ヘッダーから
+      // role を解決して 1 行テキストを返す。
+      if (req.method === "POST" && url.pathname === "/statusline") {
+        const textHeaders = { "Content-Type": "text/plain; charset=utf-8" };
+        const surface = req.headers.get("x-cmux-surface") ?? "";
+        if (!surface) {
+          return new Response(JSON.stringify({ error: "surface required" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (!opts?.getState) {
+          return new Response(JSON.stringify({ error: "state unavailable" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const nfRaw = req.headers.get("x-cmux-nerd-font");
+        const nerdFont = nfRaw == null ? true : !(nfRaw === "0" || nfRaw.toLowerCase() === "false");
+        const colorRaw = req.headers.get("x-cmux-statusline-color");
+        const color = colorRaw != null && (colorRaw === "1" || colorRaw.toLowerCase() === "true");
+
+        let input: StatuslineInput = {};
+        try {
+          const raw = await req.text();
+          if (raw) input = JSON.parse(raw) as StatuslineInput;
+        } catch {
+          // 壊れた JSON は空 input として扱う（描画は続行）
+          input = {};
+        }
+
+        const state = opts.getState() as StatuslineState;
+        const body = formatStatusline(input, state, { surface, nerdFont, color });
+        return new Response(body, { status: 200, headers: textHeaders });
       }
 
       // Master 状態更新エンドポイント

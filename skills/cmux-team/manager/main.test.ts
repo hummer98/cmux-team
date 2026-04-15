@@ -6,6 +6,8 @@ import { spawn } from "child_process";
 import {
   generateConductorSettings,
   generateAgentSettings,
+  generateMasterSettings,
+  ensureMasterHookScripts,
   buildMessageFromHookInput,
   normalizeSurfaceArg,
   validateSendAgentTarget,
@@ -953,6 +955,68 @@ describe("SessionStart hook generation (T203)", () => {
     const content = await readFile(scriptPath, "utf-8");
     expect(content).not.toContain("CONDUCTOR_ID");
     expect(content).not.toContain("conductorId");
+  });
+});
+
+// --- T211: generateMasterSettings ---
+
+describe("generateMasterSettings (T211)", () => {
+  test("settings.json に UserPromptSubmit / Stop hook が含まれる", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.UserPromptSubmit)).toBe(true);
+    expect(settings.hooks.UserPromptSubmit.length).toBe(1);
+    expect(settings.hooks.UserPromptSubmit[0].matcher).toBe("");
+    const busyCmd: string = settings.hooks.UserPromptSubmit[0].hooks[0].command;
+    expect(busyCmd).toContain("python3");
+    expect(busyCmd).toContain("master-hook-busy.py");
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].timeout).toBe(5000);
+
+    expect(Array.isArray(settings.hooks.Stop)).toBe(true);
+    expect(settings.hooks.Stop.length).toBe(1);
+    expect(settings.hooks.Stop[0].matcher).toBe("");
+    const stopCmd: string = settings.hooks.Stop[0].hooks[0].command;
+    expect(stopCmd).toContain("python3");
+    expect(stopCmd).toContain("master-hook-stop.py");
+    expect(settings.hooks.Stop[0].hooks[0].timeout).toBe(5000);
+  });
+
+  test("Python hook スクリプトが生成され、実行可能な形式である", async () => {
+    const { busy, stop } = ensureMasterHookScripts(testDir);
+    expect(busy).toContain(".team/prompts/master-hook-busy.py");
+    expect(stop).toContain(".team/prompts/master-hook-stop.py");
+
+    const busyContent = await readFile(busy, "utf-8");
+    expect(busyContent.startsWith("#!/usr/bin/env python3")).toBe(true);
+    expect(busyContent).toContain('"status": "busy"');
+    expect(busyContent).toContain("/master-state");
+    // T211: Master 専用 settings に移設したため CONDUCTOR_ID guard は不要
+    expect(busyContent).not.toContain("CONDUCTOR_ID");
+
+    const stopContent = await readFile(stop, "utf-8");
+    expect(stopContent.startsWith("#!/usr/bin/env python3")).toBe(true);
+    expect(stopContent).toContain('"status": "idle"');
+    expect(stopContent).toContain("/master-state");
+    expect(stopContent).not.toContain("CONDUCTOR_ID");
+  });
+
+  test("冪等: 複数回呼び出しても settings が上書きされるだけ", async () => {
+    const path1 = generateMasterSettings(testDir);
+    const path2 = generateMasterSettings(testDir);
+    expect(path1).toBe(path2);
+    const content = await readFile(path2, "utf-8");
+    JSON.parse(content); // parse error にならなければ OK
+  });
+});
+
+// --- T211 Phase 4: CMUX_ROLE 削除 regression ---
+
+describe("T211 Phase 4: CMUX_ROLE 完全削除 regression", () => {
+  test("main.ts 内に `CMUX_ROLE` 参照が残っていない", async () => {
+    const mainPath = join(import.meta.dir, "main.ts");
+    const src = await readFile(mainPath, "utf-8");
+    expect(src).not.toContain("CMUX_ROLE");
   });
 });
 
