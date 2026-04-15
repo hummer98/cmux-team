@@ -10,7 +10,7 @@
 ```bash
 cd {{WORKTREE_PATH}}
 ```
-main ブランチに直接変更を加えてはならない。
+{{MAIN_BRANCH}} ブランチに直接変更を加えてはならない。
 
 ブランチ名: `{{CONDUCTOR_ID}}/task`
 

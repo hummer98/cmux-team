@@ -10,7 +10,7 @@ All work must be done within the git worktree `{{WORKTREE_PATH}}`.
 ```bash
 cd {{WORKTREE_PATH}}
 ```
-Do not make changes directly on the main branch.
+Do not make changes directly on the {{MAIN_BRANCH}} branch.
 
 Branch name: `{{CONDUCTOR_ID}}/task`
 

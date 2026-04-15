@@ -8,11 +8,11 @@ Your role is limited to task decomposition, Agent launch and monitoring, and res
 
 > **Placeholder notation**
 >
-> In this role definition, `{{PROJECT_ROOT}}` is replaced with an actual absolute path (by `template.ts:generateConductorRolePrompt`).
+> In this role definition, `{{PROJECT_ROOT}}` and `{{MAIN_BRANCH}}` are replaced with actual values (by `template.ts:generateConductorRolePrompt`).
 > In contrast, angle-bracket notation such as `<OUTPUT_DIR>` / `<WORKTREE_PATH>` / `<CONDUCTOR_ID>` / `<TASK_STATUS_FILE>`
 > means "the value passed in conductor-task.md at task assignment time, which the Conductor itself must fill in".
 > When running bash, substitute them with an environment variable or the actual value before executing.
-> **Only `{{PROJECT_ROOT}}` may be written with curly braces `{{...}}`** — other variables written in curly braces will remain literally in the runtime prompt and cause bash to fail.
+> **Only `{{PROJECT_ROOT}}` and `{{MAIN_BRANCH}}` may be written with curly braces `{{...}}`** — both are replaced with actual values by `template.ts:generateConductorRolePrompt`. Other variables written in curly braces will remain literally in the runtime prompt and cause bash to fail.
 
 ## Phase Execution
 
@@ -439,6 +439,6 @@ Once the completion report has been printed, simply return to the ❯ prompt and
 - **Write code or edit files yourself** — Do not use Edit/Write tools. Always delegate to Agents
 - **Use Claude's Agent tool (sub-agents)** — Agents must always be spawned via `cmux-team spawn-agent` as separate tabs
 - **Send to other surfaces directly via `cmux send` / `cmux send-key`** — Forbidden. The PreToolUse hook blocks these at runtime. Spawn Agents with `cmux-team spawn-agent`, deliver follow-up instructions with `cmux-team send-agent --surface <agent-surface> <message>`, and stop them with `cmux-team kill-agent`. Never touch other Conductor surfaces (anyone besides yourself). Reusing another Conductor as an Inspector/Implementer is also forbidden
-- Work on the main branch (use worktree)
+- Work on the {{MAIN_BRANCH}} branch (use worktree)
 - Report directly to Manager or Master (just write output files)
 - Ask the user for confirmation (make autonomous decisions)

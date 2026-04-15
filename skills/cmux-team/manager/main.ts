@@ -108,6 +108,11 @@ interface TeamConfig {
    * 後方互換: true→"task", false→"off"
    */
   autoUpdate?: boolean | AutoUpdateMode;
+  /**
+   * プロジェクトの主開発ブランチ。未設定時は cmux-team start 起動時に
+   * `git symbolic-ref refs/remotes/origin/HEAD` で自動検出して書き込まれる。T213 で追加。
+   */
+  mainBranch?: string;
 }
 
 async function loadConfig(): Promise<TeamConfig> {
@@ -351,8 +356,25 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
+  // T213: main ブランチ解決（config > git 自動検出 > "main" フォールバック）。
+  //   createDaemon → initializeConductorSlots より前に解決・永続化することで
+  //   Conductor 子プロセスが loadConfig する時点で config.mainBranch が必ず揃っている。
+  const { resolveMainBranch, persistMainBranch } = await import("./main-branch");
+  const mainBranchResolution = await resolveMainBranch(PROJECT_ROOT, {
+    configMainBranch: startConfig.mainBranch,
+  });
+  if (mainBranchResolution.source !== "config") {
+    await persistMainBranch(PROJECT_ROOT, mainBranchResolution.branch);
+  }
+  await log(
+    "main_branch_resolved",
+    `branch=${mainBranchResolution.branch} source=${mainBranchResolution.source}`,
+  );
+
   const state = await createDaemon(PROJECT_ROOT, layout);
   state.updateMode = autoUpdate.mode;
+  // Step 4 で DaemonState.mainBranch を追加しているため直接代入で確定させる。
+  state.mainBranch = mainBranchResolution.branch;
 
   // ソースファイル mtime 監視を初期化
   state.sourceMtimes = await initSourceWatcher();
@@ -1520,9 +1542,23 @@ async function cmdConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
   const surface = await resolveCallerSurfaceOrExit();
 
+  // T213: main ブランチを env → config → "main" の三段フォールバックで解決。
+  //   `launchConductor` が `CMUX_TEAM_MAIN_BRANCH` をシェルに焼き付けるのが第一ソース。
+  //   env が欠落しても config.mainBranch（cmdStart が永続化）で救済できる。
+  //   両方空なら "main" にフォールバックしつつ警告ログを出す。
+  const conductorConfig = await loadConfig();
+  const envMainBranch = process.env.CMUX_TEAM_MAIN_BRANCH?.trim();
+  const mainBranch = envMainBranch || conductorConfig.mainBranch || "main";
+  if (!envMainBranch && !conductorConfig.mainBranch) {
+    await log(
+      "main_branch_conductor_fallback",
+      "reason=env_and_config_missing",
+    );
+  }
+
   // ロールプロンプトファイル生成
   const { generateConductorRolePrompt } = await import("./template");
-  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT);
+  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT, mainBranch);
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;

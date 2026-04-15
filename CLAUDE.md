@@ -203,6 +203,7 @@ cmux-team/
 | `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`） |
 | `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
 | `{{PROJECT_ROOT}}` | conductor-role | プロジェクトルートの絶対パス |
+| `{{MAIN_BRANCH}}` | conductor-role, conductor-task | プロジェクトの主開発ブランチ名（`.team/config.json` の `mainBranch` または `git symbolic-ref refs/remotes/origin/HEAD` で自動検出。T213 で追加） |
 
 ### Agent ロール固有変数
 
@@ -554,6 +555,32 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 - **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
 - 優先順位: CLI 引数 > `.team/config.json` > デフォルト（`wide`）
 - `CMUX_TEAM_MAX_CONDUCTORS` で Conductor 数を上書き可能。`16x9` で 2 超を指定すると警告ログ出力で 2 にクランプ
+
+## プロジェクト設定（.team/config.json）
+
+daemon 起動時に参照される永続設定。`cmux-team start` 実行時に必要なフィールドが自動補完される。
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `layout` | `"wide" \| "16x9"` | レイアウトモード（CLI `--layout` 引数で上書き可能） |
+| `autoUpdate` | `"off" \| "notify" \| "task"` | 自動更新モード（`CMUX_TEAM_AUTO_UPDATE` env で上書き可能） |
+| `mainBranch` | `string` | プロジェクトの主開発ブランチ名（T213 で追加） |
+
+### `mainBranch` の優先順位
+
+Conductor が worktree 作成時のベース・マージ先として使うブランチ名。以下の優先順位で解決される:
+
+1. **`CMUX_TEAM_MAIN_BRANCH` 環境変数** — `cmdConductor` 起動時に env から取得（daemon が `launchConductor` で注入）
+2. **`.team/config.json` の `mainBranch`** — `cmdStart` 時に解決・永続化された値
+3. **`"main"` フォールバック** — env も config も未設定の場合
+
+`cmdStart` 実行時は以下の順で `mainBranch` を決定する（config が既にあればそれを優先）:
+
+1. `.team/config.json` に `mainBranch` があればそれを採用（source=`config`）
+2. なければ `git symbolic-ref refs/remotes/origin/HEAD` で検出（source=`detected`）
+3. 検出も失敗すれば `"main"` にフォールバック（source=`fallback`）
+
+source が `config` 以外の場合のみ結果を `.team/config.json` に書き戻し、`main_branch_resolved branch=<name> source=<config|detected|fallback>` をログ出力する。初回起動後は常に config 経路が使われる。
 
 ## git worktree（概要）
 

@@ -82,7 +82,7 @@ export interface ResumeAssignment {
 export async function launchConductor(
   projectRoot: string,
   surface: string,
-  opts?: { resumeTaskId?: string },
+  opts?: { resumeTaskId?: string; mainBranch?: string },
 ): Promise<void> {
   // 1. CONDUCTOR_REGISTERED を HTTP API 経由で送信
   try {
@@ -104,7 +104,13 @@ export async function launchConductor(
   // 2. 環境変数をシェルに焼き付け
   //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
-  await cmux.send(surface, `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
+  //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdConductor が env → config → "main"
+  //       の三段フォールバックで解決するための一次ソース（race の構造的排除）
+  const mainBranchEnv = (opts?.mainBranch ?? "main").trim() || "main";
+  await cmux.send(
+    surface,
+    `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1 CMUX_TEAM_MAIN_BRANCH=${mainBranchEnv}\n`,
+  );
   await sleep(500);
 
   // 3. Claude 起動
@@ -195,6 +201,7 @@ export async function initializeConductorSlots(
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
   layout: LayoutMode = "wide",
+  mainBranch: string = "main",
 ): Promise<ResumeAssignment[]> {
   const assignments: ResumeAssignment[] = [];
   try {
@@ -214,6 +221,7 @@ export async function initializeConductorSlots(
       if (resumeItem) {
         await launchConductor(projectRoot, surface, {
           resumeTaskId: resumeItem.taskId,
+          mainBranch,
         });
         assignments.push({
           surface,
@@ -224,7 +232,7 @@ export async function initializeConductorSlots(
           taskTitle: resumeItem.taskTitle,
         });
       } else {
-        await launchConductor(projectRoot, surface);
+        await launchConductor(projectRoot, surface, { mainBranch });
       }
     }
 
@@ -270,7 +278,8 @@ export async function initializeConductorSlots(
 export async function assignTask(
   conductor: ConductorState,
   taskId: string,
-  projectRoot: string
+  projectRoot: string,
+  mainBranch: string = "main",
 ): Promise<ConductorState> {
   const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
   const worktreePath = join(projectRoot, ".worktrees", taskRunId);
@@ -373,7 +382,8 @@ export async function assignTask(
         worktreePath,
         outputDir,
         baseBranch,
-        taskDir
+        taskDir,
+        mainBranch
       );
     } catch (e: any) {
       throw new AssignTaskError("task", `prompt generation failed: ${e.message}`, e);
