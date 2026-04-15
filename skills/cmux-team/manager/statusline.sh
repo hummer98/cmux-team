@@ -89,7 +89,7 @@ case "${CMUX_ROLE:-}" in
     TASK_TITLE=""
     # team.json からタスク情報を動的に取得（1回の jq 呼び出し）
     if [[ -n "${PROJECT_ROOT:-}" ]] && [[ -f "${PROJECT_ROOT}/.team/team.json" ]]; then
-      read -r TASK_ID TASK_TITLE <<< $(jq -r --arg s "${CONDUCTOR_ID:-}" \
+      read -r TASK_ID TASK_TITLE <<< $(jq -r --arg s "${CMUX_SURFACE:-}" \
         '.conductors[]? | select(.surface == $s) | [.taskId // "", .taskTitle // ""] | @tsv' \
         "${PROJECT_ROOT}/.team/team.json" 2>/dev/null) || true
     fi
