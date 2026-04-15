@@ -6,3 +6,6 @@ logs/
 queue/
 task-state.json
 tasks/*.status.json
+traces/
+debug/dump.jsonl
+debug/otel-dump.jsonl
