@@ -273,7 +273,7 @@ cmux-team send-agent --surface $AGENT_SURFACE "resume from plan.md section 3"
 > cmux-team-managed artifacts are centralised under `.team/artifacts/Axxx-*.md`.
 > Existing project-level `artifacts/` directories should be migrated manually at the task level (this skill does not touch them).
 
-The new order is the 12 steps below. **Artifact registration happens before the commit** so that the artifact lands inside the worktree and is picked up by the same commit.
+The new order is the 11 steps below. **Artifact registration happens before the commit** so that the artifact lands inside the worktree and is picked up by the same commit.
 
 1. Confirm all phases are complete (GO verdict from Inspection)
 2. Close Agent tabs:
@@ -412,7 +412,7 @@ cmux-team close-task --task-id <TASK_ID> --journal "<one-line Japanese summary>"
 
 ### Step 11: Display the completion report on the session
 
-Before CONDUCTOR_DONE, output key takeaways in the following format. Omit sections that don't apply, and write concisely for applicable sections:
+Output key takeaways in the following format. Omit sections that don't apply, and write concisely for applicable sections:
 
 ```
 ── Completion Report: <task summary (1 line)> ──
@@ -432,13 +432,7 @@ Notes:
 - Omit sections entirely if not applicable (do not leave empty sections)
 - This report will be cleared by /clear for the next task
 
-### Step 12: Send the completion notification
-
-```bash
-cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-```
-
-Then return to the ❯ prompt and wait for the next task assignment. The daemon will perform reset processing (send `/clear`).
+Once the completion report has been printed, simply return to the ❯ prompt and wait. `close-task` already sends the completion notification to the daemon, so no extra send is required. The daemon will reset the session (send `/clear`).
 
 ## What NOT to Do (Strictly Enforced)
 

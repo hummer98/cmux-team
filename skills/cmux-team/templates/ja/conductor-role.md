@@ -321,7 +321,7 @@ cmux-team send-agent --surface $AGENT_SURFACE "plan.md の 3 節から再開し�
 > cmux-team 管理下のアーティファクトは `.team/artifacts/Axxx-*.md` に一元化する。
 > 既存の project-level `artifacts/` はタスク側で手動マイグレーションする（本スキルは触らない）。
 
-新順序は以下の 12 ステップ。**artifact 登録は commit の前**（worktree 内に artifact を commit 対象として取り込むため）。
+新順序は以下の 11 ステップ。**artifact 登録は commit の前**（worktree 内に artifact を commit 対象として取り込むため）。
 
 1. 全フェーズが完了したことを確認（Inspection で GO 判定済み）
 2. Agent のタブを閉じる:
@@ -460,7 +460,7 @@ cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリ�
 
 ### Step 11: 完了レポートをセッション上に表示する
 
-CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
+以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
 
 ```
 ── 完了レポート: <タスク概要（1行）> ──
@@ -480,13 +480,7 @@ CONDUCTOR_DONE の前に、以下の形式で勘所を出力する。該当し�
 - 該当しない項目は見出しごと省略する（空の項目を残さない）
 - このレポートは次タスクの /clear で消えて構わない
 
-### Step 12: 完了通知を送信する
-
-```bash
-cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-```
-
-その後 ❯ プロンプトに戻り、次のタスクの割り当てを待つ。daemon がリセット処理（`/clear` 送信）を行う。
+完了レポートを出力したら、あとは ❯ プロンプトに戻って待機する。`close-task` が daemon に完了通知を送っているので追加の送信操作は不要。daemon がリセット処理（`/clear` 送信）を行う。
 
 ## やらないこと（厳守）
 
