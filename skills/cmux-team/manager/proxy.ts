@@ -240,30 +240,6 @@ export async function start(
       const taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
       const conductorSurface = req.headers.get("x-cmux-conductor-id") || opts?.conductorSurface;
       const role = req.headers.get("x-cmux-role") || opts?.role;
-      const sessionId = req.headers.get("x-claude-code-session-id") || undefined;
-
-      // Agent の sessionId を daemon state に反映
-      if (sessionId && conductorSurface && opts?.getState) {
-        const st = opts.getState();
-        const conductors: Map<string, any> | undefined = st.conductors;
-        if (conductors) {
-          // conductorSurface または taskRunId で Conductor を検索（daemon.ts の findConductor と同じロジック）
-          let conductor = conductors.get(conductorSurface);
-          if (!conductor) {
-            for (const c of conductors.values()) {
-              if (c.taskRunId === conductorSurface) { conductor = c; break; }
-            }
-          }
-          if (conductor?.agents) {
-            const agent = role
-              ? conductor.agents.find((a: any) => a.role === role)
-              : conductor.agents[0];
-            if (agent && !agent.sessionId) {
-              agent.sessionId = sessionId;
-            }
-          }
-        }
-      }
 
       // リクエストボディを読み取り（転送用 + サイズ計測用）
       const reqBody = req.body ? await req.arrayBuffer() : null;

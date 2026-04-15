@@ -40,8 +40,8 @@ import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic } from 
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
-import type { QueueMessage, LayoutMode, AutoUpdateMode } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema } from "./schema";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -685,8 +685,29 @@ async function cmdSend(): Promise<void> {
 
   // T181: JSON payload 全体を stdin で受け取るモード。
   // shell エスケープ問題（改行・クォート）を避けるため hook 側から使う。
+  // T203: type 引数を伴う場合は Claude Code hook 入力 JSON として解釈し、
+  //        --surface / --pid と合成して QueueMessage を組み立てる。
   if (hasFlag("from-stdin")) {
     const raw = await readStdin();
+    // C2: args[1] が "--xxx" 系フラグなら type 未指定とみなして旧パスへ
+    // （T189 SESSION_STOP forwarder は `send --from-stdin` 形式で呼ぶため）
+    const typeArg = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    if (typeArg) {
+      // 新パス: hook JSON → 引数と合成して QueueMessage を作る
+      try {
+        message = buildMessageFromHookInput(typeArg, raw, {
+          surface: requireArg("surface"),
+          pid: Number(requireArg("pid")),
+          now,
+        });
+      } catch (e: any) {
+        console.error(`Error: ${e.message}`);
+        process.exit(1);
+      }
+      await postMessageAndExit(message);
+      return;
+    }
+    // 旧パス: stdin を QueueMessage として直接 parse（T189 互換）
     let obj: unknown;
     try {
       obj = JSON.parse(raw);
@@ -828,21 +849,12 @@ async function cmdSend(): Promise<void> {
       };
       break;
 
-    case "CONDUCTOR_SESSION":
-      message = {
-        type: "CONDUCTOR_SESSION",
-        surface: requireArg("surface"),
-        sessionId: requireArg("session-id"),
-        timestamp: now,
-      };
-      break;
-
     case "SHUTDOWN":
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|CONDUCTOR_SESSION|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
       process.exit(1);
   }
 
@@ -1045,6 +1057,47 @@ const DETECT_ASK_SCRIPT = [
 ].join("\n");
 
 /**
+ * Claude Code hook の stdin JSON を type 別の QueueMessage に組み立てる純関数。
+ * T203: SessionStart hook 経由で sessionId を daemon に届けるためのパス。
+ *
+ * @param type 組み立てる QueueMessage の type（現状 SESSION_STARTED のみ対応）
+ * @param rawJson Claude Code が hook の stdin に渡す JSON 文字列
+ * @param opts CLI 引数から取得したコンテキスト（surface, pid, now）
+ */
+export function buildMessageFromHookInput(
+  type: string,
+  rawJson: string,
+  opts: { surface: string; pid: number; now: string }
+): QueueMessage {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (e: any) {
+    throw new Error(`invalid hook JSON: ${e.message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("hook JSON must be an object");
+  }
+  const obj = parsed as Record<string, unknown>;
+
+  if (type === "SESSION_STARTED") {
+    const sessionId = typeof obj.session_id === "string" ? obj.session_id : undefined;
+    const source = typeof obj.source === "string" ? obj.source : undefined;
+    const message: SessionStartedMessage = {
+      type: "SESSION_STARTED",
+      surface: opts.surface,
+      pid: opts.pid,
+      sessionId,
+      source: source as SessionStartedMessage["source"],
+      timestamp: opts.now,
+    };
+    return SessionStartedMessageSchema.parse(message);
+  }
+
+  throw new Error(`unsupported hook message type: ${type}`);
+}
+
+/**
  * detect-ask.sh を .team/prompts/ に冪等に書き出し、そのパスを返す。
  * Conductor/Agent の Stop hook が共通で呼び出す。
  * T189 以降は forwarder（SESSION_STOP を Manager に転送するだけ）。
@@ -1070,10 +1123,13 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
     hooks: {
       SessionStart: [
         {
-          matcher: "startup",
+          // T203: matcher: "" は全 source 許容（Claude Code は "" / 4 値のみ受け付ける）。
+          // /clear / /compact / resume / startup どれでも発火させて daemon に最新 sessionId を届ける。
+          matcher: "",
           hooks: [{
             type: "command",
-            command: `bash -c 'cmux-team send SESSION_STARTED --surface "${surface}" --pid "$PPID" 2>/dev/null || true'`,
+            // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
+            command: `bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface "${surface}" --pid "$PPID" 2>/dev/null || true'`,
             timeout: 5000,
           }],
         },
@@ -1128,10 +1184,13 @@ export function generateConductorSettings(projectRoot: string, surface: string):
       ],
       SessionStart: [
         {
-          matcher: "startup",
+          // T203: 全 source 許容（"" / startup / resume / clear / compact のうち "" のみ全捕捉可能）。
+          matcher: "",
           hooks: [{
             type: "command",
-            command: "bash -c 'cmux-team send SESSION_STARTED --conductor-id \"$CONDUCTOR_ID\" --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
+            // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
+            // m2: --conductor-id は SessionStartedMessage に対応フィールドが無いため削除。
+            command: "bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -1213,26 +1272,8 @@ async function cmdConductor(): Promise<void> {
   const config = await loadConfig();
   const model = getModelForRole(config, "conductor", getArg("model"));
 
-  // sessionId を自己生成し daemon に通知
-  const sessionId = crypto.randomUUID();
-  try {
-    const portFile = join(PROJECT_ROOT, ".team/proxy-port");
-    if (existsSync(portFile)) {
-      const port = (await readFile(portFile, "utf-8")).trim();
-      await fetch(`http://localhost:${port}/api/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "CONDUCTOR_SESSION",
-          surface,
-          sessionId,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-    }
-  } catch {
-    // daemon 未起動時は無視（Claude 起動は続行）
-  }
+  // T203: sessionId は Claude 自身に発行させる。
+  // SessionStart hook が新しい session_id を daemon に push するため CLI 側で固定しない。
 
   const taskPromptFile = getArg("task-prompt");
 
@@ -1246,7 +1287,6 @@ async function cmdConductor(): Promise<void> {
     "--model", model,
     "--append-system-prompt-file", rolePromptFile,
   ];
-  claudeArgs.push("--session-id", sessionId);
 
   // 初期プロンプトを決定
   //   taskPromptFile 指定時のみチャット入力として push する。

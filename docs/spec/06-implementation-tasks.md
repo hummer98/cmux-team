@@ -226,7 +226,7 @@ v3.35〜v3.38 で実施された主要改善:
 ### セッション復旧・永続化
 - **worktree `.envrc` 生成（T127）** — `source_up` で親の `.envrc` を継承し、direnv 環境変数（OAuth トークン等）を worktree に引き継ぐ
 - **`resume` コマンド（T128）** — daemon 再起動時に `task-state.json` の assigned タスクを `claude --resume` で自動復旧
-- **Conductor `--session-id`（T132）** — Conductor 起動時に `crypto.randomUUID()` でセッション ID を発行し、resume 可能にする
+- **~~Conductor `--session-id`（T132）~~ → T203 で撤回** — `crypto.randomUUID()` 自己発行は `/clear` 後の再生成に追従できず resume が壊れていたため、Claude Code の SessionStart hook（`source: startup|resume|clear|compact`）から `SESSION_STARTED` メッセージ経由で daemon が sessionId を一元管理する方式に置き換え
 - **resume 多重起動防止** — 既に同一タスクを実行中の Conductor がある場合はスキップ
 
 ### レート制限・スロットリング
@@ -260,7 +260,7 @@ v3.39.0〜v3.43.0 で実施された主要改善:
 - **trace DB をタスク-セッション索引に再設計（T144）**
 
 ### Conductor 統合・環境改善
-- **Conductor `--session-id` 引数を撤廃し自己生成方式に**
+- **Conductor `--session-id` 引数を撤廃し自己生成方式に** → さらに T203 で自己生成も撤廃し、SessionStart hook 経由の daemon 一元管理に置き換え
 - **statusline ロール別カスタム** — Master は open タスク数、Conductor/Agent は役割別表示
 - **Conductor 完了時に要約レポート表示**
 - **slot-id 引数廃止・`CMUX_SURFACE` 環境変数に統一**
