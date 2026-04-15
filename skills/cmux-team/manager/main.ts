@@ -26,6 +26,8 @@ import { join, dirname, basename } from "path";
 import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
@@ -36,7 +38,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, type TaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
@@ -82,6 +84,8 @@ function findLatestMainTs(): string {
 const PROJECT_ROOT = findProjectRoot();
 process.env.PROJECT_ROOT = PROJECT_ROOT;
 process.chdir(PROJECT_ROOT);
+
+const execFileAsync = promisify(execFile);
 
 // --- config ---
 const DEFAULT_MODEL = "opus";
@@ -2655,6 +2659,73 @@ async function cmdAbortTask(): Promise<void> {
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
 
+/**
+ * aborted 状態のタスクを ready に戻す。残骸 worktree / branch を冪等削除し、
+ * task-state.json から resume 用フィールドを剥がす。Conductor は紐付いていないため
+ * team.json は引かず CONDUCTOR_DONE も送らない。
+ */
+async function restartFromAborted(
+  taskId: string,
+  stale: TaskState,
+  title: string,
+  journal: string,
+  taskFile: string | undefined,
+): Promise<void> {
+  if (stale.worktreePath && existsSync(stale.worktreePath)) {
+    try {
+      await execFileAsync(
+        "git",
+        ["worktree", "remove", stale.worktreePath, "--force"],
+        { cwd: PROJECT_ROOT },
+      );
+    } catch (e) {
+      await log(
+        "cleanup_failed",
+        `restart-task aborted worktree remove: path=${stale.worktreePath} ${formatExecError(e)}`,
+      );
+    }
+  }
+  if (stale.taskRunId) {
+    const branch = `${stale.taskRunId}/task`;
+    try {
+      await execFileAsync("git", ["branch", "-D", branch], { cwd: PROJECT_ROOT });
+    } catch (e) {
+      await log(
+        "cleanup_failed",
+        `restart-task aborted branch delete: branch=${branch} ${formatExecError(e)}`,
+      );
+    }
+  }
+
+  const ts = await loadTaskState(PROJECT_ROOT);
+  ts[taskId] = {
+    ...ts[taskId],
+    status: "ready",
+    journal: `[restart] ${journal}`,
+  };
+  delete ts[taskId].assignedAt;
+  delete ts[taskId].abortedAt;
+  delete ts[taskId].worktreePath;
+  delete ts[taskId].taskRunId;
+  delete ts[taskId].conductorSlot;
+  delete ts[taskId].sessionId;
+  await saveTaskState(PROJECT_ROOT, ts);
+
+  await log(
+    "task_restarted",
+    `task_id=${taskId}${title ? ` title=${title}` : ""} from=aborted journal_summary=${journal}`,
+  );
+
+  await postMessage({
+    type: "TASK_CREATED",
+    taskId,
+    taskFile: taskFile ?? "",
+    timestamp: new Date().toISOString(),
+  });
+
+  console.log(`OK restarted ${taskId} (was aborted, re-queued as ready)`);
+}
+
 async function cmdRestartTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_restart_task"));
   const taskId = requireArg("task-id");
@@ -2672,9 +2743,14 @@ async function cmdRestartTask(): Promise<void> {
   // 1. タスク状態を確認
   const taskState = await loadTaskState(PROJECT_ROOT);
   const currentStatus = taskState[taskId]?.status;
-  if (currentStatus !== "assigned") {
-    console.error(`Error: task ${taskId} is not assigned (current status: ${currentStatus ?? "unknown"}). Only assigned tasks can be restarted.`);
+  if (currentStatus !== "assigned" && currentStatus !== "aborted") {
+    console.error(`Error: task ${taskId} is not assigned or aborted (current status: ${currentStatus ?? "unknown"}). Only assigned or aborted tasks can be restarted.`);
     process.exit(1);
+  }
+
+  if (currentStatus === "aborted") {
+    await restartFromAborted(taskId, taskState[taskId]!, title, journal, taskFile);
+    return;
   }
 
   // 2. team.json から該当 Conductor を特定
@@ -2695,6 +2771,10 @@ async function cmdRestartTask(): Promise<void> {
       journal: `[restart] ${journal}`,
     };
     delete taskState[taskId].assignedAt;
+    delete taskState[taskId].worktreePath;
+    delete taskState[taskId].taskRunId;
+    delete taskState[taskId].conductorSlot;
+    delete taskState[taskId].sessionId;
     await saveTaskState(PROJECT_ROOT, taskState);
     await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal} no_conductor=true`);
     await postMessage({
@@ -2717,6 +2797,10 @@ async function cmdRestartTask(): Promise<void> {
     journal: `[restart] ${journal}`,
   };
   delete taskState[taskId].assignedAt;
+  delete taskState[taskId].worktreePath;
+  delete taskState[taskId].taskRunId;
+  delete taskState[taskId].conductorSlot;
+  delete taskState[taskId].sessionId;
   await saveTaskState(PROJECT_ROOT, taskState);
 
   await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
