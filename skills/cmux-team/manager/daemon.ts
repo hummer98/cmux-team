@@ -969,7 +969,6 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             type: "SESSION_ASK",
             surface: message.surface,
             question: cls.question,
-            conductorId: message.conductorId,
             pid: message.pid,
             timestamp: message.timestamp,
           }

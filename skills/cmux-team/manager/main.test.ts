@@ -854,7 +854,6 @@ describe("cmdSend --from-stdin discriminator (C2 / T203)", () => {
     const stop = {
       type: "SESSION_STOP",
       surface: "surface:100",
-      conductorId: "",
       pid: 1234,
       timestamp: "2026-04-15T10:00:00.000Z",
       payload: { transcript_path: "/tmp/x.jsonl" },

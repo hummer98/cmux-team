@@ -776,12 +776,9 @@ async function cmdSend(): Promise<void> {
       console.error(`Error: invalid JSON on stdin: ${e.message}`);
       process.exit(1);
     }
-    // T189: hook からの空文字 conductorId は undefined に正規化する。
-    // shell の `"${CONDUCTOR_ID:-}"` が空文字として出るケースを吸収。
     // SESSION_STOP の surface 空は早期 reject する（daemon 側でも二重防御あり）。
     if (obj && typeof obj === "object") {
       const o = obj as Record<string, unknown>;
-      if (o.conductorId === "") o.conductorId = undefined;
       if (o.type === "SESSION_STOP" && (typeof o.surface !== "string" || o.surface === "")) {
         console.error("Error: SESSION_STOP requires non-empty surface");
         process.exit(1);
@@ -926,7 +923,6 @@ async function cmdSend(): Promise<void> {
         type: "SESSION_ASK",
         surface: normalizedSurface!,
         question: requireArg("question"),
-        conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -936,7 +932,6 @@ async function cmdSend(): Promise<void> {
       message = {
         type: "SESSION_CLEAR",
         surface: normalizedSurface!,
-        conductorId: getArg("conductor-id"),
         pid: getArg("pid") ? Number(getArg("pid")) : undefined,
         timestamp: now,
       };
@@ -1117,7 +1112,7 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
  * stdin: Stop hook JSON payload（Claude Code 仕様）
  *
  * 役割は「forwarder」のみ:
- *   - payload から transcript_path を抽出し、surface/conductorId/pid/type を足して
+ *   - payload から transcript_path を抽出し、surface/pid/type を足して
  *     SESSION_STOP メッセージに整形、cmux-team send --from-stdin に流す
  *   - 分類（ASK/IDLE）は Manager (daemon) 側の classifyStopPayload が担う
  *
@@ -1280,7 +1275,6 @@ export function generateConductorSettings(projectRoot: string): string {
           hooks: [{
             type: "command",
             // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
-            // m2: --conductor-id は SessionStartedMessage に対応フィールドが無いため削除。
             command: "bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
