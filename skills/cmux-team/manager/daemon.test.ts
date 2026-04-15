@@ -1496,7 +1496,7 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     expect(conductor.askQuestion).toBeUndefined();
   });
 
-  test("Agent / Case B (SKIP=monologue) → writeAgentDone が呼ばれない", async () => {
+  test("T208: Agent text-only end_turn → writeAgentDone(completed) が呼ばれる", async () => {
     const state = await createDaemon(testDir);
     const conductor: ConductorState = {
       surface: "surface:c1",
@@ -1518,12 +1518,52 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
       payload: { transcript_path: transcriptPath },
     });
 
-    // done マーカーは作られていない（SKIP のため）
+    // T208: text-only でも IDLE 経由で done マーカー (status=completed) が書かれる
     const doneFile = join(
       testDir,
       ".team/conductors/surface_c1/agent-done/surface_a1.done",
     );
-    expect(existsSync(doneFile)).toBe(false);
+    expect(existsSync(doneFile)).toBe(true);
+    const body = await readFile(doneFile, "utf-8");
+    expect(body).toContain("status=completed");
+  });
+
+  test("T208 A[191] 再現: 多数 tool_use → 最後 text-only end_turn でも writeAgentDone が呼ばれる", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    const turns: any[] = [];
+    for (let i = 0; i < 40; i++) {
+      turns.push({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Write", input: { i } }] },
+      });
+    }
+    turns.push({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "plan.md を出力しました。" }] },
+    });
+    const transcriptPath = await writeTranscript(turns);
+
+    await handleMessage(state, {
+      type: "SESSION_STOP",
+      surface: "surface:a1",
+      pid: 42613,
+      timestamp: new Date().toISOString(),
+      payload: { transcript_path: transcriptPath },
+    });
+
+    const doneFile = join(
+      testDir,
+      ".team/conductors/surface_c1/agent-done/surface_a1.done",
+    );
+    expect(existsSync(doneFile)).toBe(true);
   });
 
   test("空 surface は早期 drop（副作用なし）", async () => {

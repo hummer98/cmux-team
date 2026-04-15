@@ -12,9 +12,8 @@ function makeAssistant(content: any[]): any {
   return { type: "assistant", message: { content } };
 }
 
-function makeCtx(transcript: string | null, isConductor = false) {
+function makeCtx(transcript: string | null) {
   return {
-    isConductor,
     readTranscriptTail: () => transcript,
   };
 }
@@ -29,12 +28,12 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result).toEqual({ kind: "ASK", question: "どの方式にする?" });
   });
 
-  test("2. Case A (Conductor) — Conductor でも AskUserQuestion を拾う", () => {
+  test("2. ASK は呼び出し側コンテキストに依存しない", () => {
     const transcript = makeTranscript([
       makeAssistant([
         { type: "text", text: "どうする?" },
@@ -43,30 +42,19 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, true),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") expect(result.question).toBe("どうする?");
   });
 
-  test("3. Case B (Agent monologue) — text のみ", () => {
+  test("4. text のみは IDLE（呼び出し側コンテキスト不問）", () => {
     const transcript = makeTranscript([
       makeAssistant([{ type: "text", text: "考え中..." }]),
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
-    );
-    expect(result).toEqual({ kind: "SKIP", reason: "agent_monologue" });
-  });
-
-  test("4. Conductor の text のみは IDLE（Case B skip しない）", () => {
-    const transcript = makeTranscript([
-      makeAssistant([{ type: "text", text: "考え中..." }]),
-    ]);
-    const result = classifyStopPayload(
-      { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, true),
+      makeCtx(transcript),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -80,7 +68,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -94,7 +82,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -102,7 +90,7 @@ describe("classifyStopPayload", () => {
   test("7. transcript_path 不在は IDLE", () => {
     const result = classifyStopPayload(
       {},
-      makeCtx("should-not-be-read", false),
+      makeCtx("should-not-be-read"),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -110,7 +98,7 @@ describe("classifyStopPayload", () => {
   test("8. transcript 読込失敗 (null) は IDLE", () => {
     const result = classifyStopPayload(
       { transcript_path: "/tmp/nope" },
-      makeCtx(null, false),
+      makeCtx(null),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -129,7 +117,7 @@ describe("classifyStopPayload", () => {
     const transcript = lines.join("\n") + "\n";
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") expect(result.question).toBe("q?");
@@ -145,10 +133,10 @@ describe("classifyStopPayload", () => {
     const transcript = lines.join("\n") + "\n";
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
-    // 直前の assistant 行（text のみ） → Agent では SKIP
-    expect(result).toEqual({ kind: "SKIP", reason: "agent_monologue" });
+    // 直前の assistant 行（text のみ） → T208 以降は IDLE
+    expect(result).toEqual({ kind: "IDLE" });
   });
 
   test("10. assistant 行なし (user だけ) は IDLE", () => {
@@ -158,7 +146,7 @@ describe("classifyStopPayload", () => {
     ].join("\n");
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result).toEqual({ kind: "IDLE" });
   });
@@ -173,7 +161,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") expect(result.question.length).toBe(QUESTION_CHAR_LIMIT);
@@ -189,7 +177,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") expect(result.question).toBe("bbb");
@@ -204,7 +192,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") expect(result.question).toBe("行1\n行2\n行3");
@@ -220,7 +208,7 @@ describe("classifyStopPayload", () => {
     ]);
     const result = classifyStopPayload(
       { transcript_path: "/tmp/t.jsonl" },
-      makeCtx(transcript, false),
+      makeCtx(transcript),
     );
     expect(result.kind).toBe("ASK");
     if (result.kind === "ASK") {
@@ -230,5 +218,30 @@ describe("classifyStopPayload", () => {
       // 「あ」は BMP 内の 1 code unit なので絶対壊れない。
       expect(result.question).toBe("あ".repeat(QUESTION_CHAR_LIMIT));
     }
+  });
+
+  test("15. T208: 多数の tool_use の後、最後のターンが text-only end_turn でも IDLE（A[191] 再現）", () => {
+    // A[191] 縮退版: 40 ターンの tool_use のあと、最後の 1 ターンだけ text-only。
+    // Stop hook は最後の end_turn でしか発火しないため、classifier が見るのは最後の 1 行のみ。
+    const earlyTurns = Array.from({ length: 40 }, (_, i) =>
+      makeAssistant([{ type: "tool_use", name: "Write", input: { i } }]),
+    );
+    const lastTurn = makeAssistant([{ type: "text", text: "plan.md を出力しました。" }]);
+    const transcript = makeTranscript([...earlyTurns, lastTurn]);
+
+    const result = classifyStopPayload(
+      { transcript_path: "/tmp/t.jsonl" },
+      makeCtx(transcript),
+    );
+    expect(result).toEqual({ kind: "IDLE" });
+  });
+
+  test("16. 空 content の assistant 行は IDLE", () => {
+    const transcript = makeTranscript([makeAssistant([])]);
+    const result = classifyStopPayload(
+      { transcript_path: "/tmp/t.jsonl" },
+      makeCtx(transcript),
+    );
+    expect(result).toEqual({ kind: "IDLE" });
   });
 });

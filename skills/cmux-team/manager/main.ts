@@ -1121,7 +1121,7 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
  * 役割は「forwarder」のみ:
  *   - payload から transcript_path を抽出し、surface/conductorId/pid/type を足して
  *     SESSION_STOP メッセージに整形、cmux-team send --from-stdin に流す
- *   - 分類（ASK/IDLE/SKIP）は Manager (daemon) 側の classifyStopPayload が担う
+ *   - 分類（ASK/IDLE）は Manager (daemon) 側の classifyStopPayload が担う
  *
  * jq は preflight (checkJq) で必須扱いのため fallback 分岐は持たない。
  */

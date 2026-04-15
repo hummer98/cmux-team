@@ -1,31 +1,34 @@
 /**
- * T189: Stop hook payload 分類ロジック（Manager 側に集約）
+ * T208: Stop hook payload 分類ロジック（Manager 側に集約）
  *
- * 旧 DETECT_ASK_SCRIPT (bash + jq + python3 fallback) の役割を純粋関数として切り出す。
- * shell 側は transcript_path を抽出するだけの forwarder に縮退する。
+ * Stop hook は `stop_reason === "end_turn"` の時にしか発火しないため、
+ * classifier に到達する時点で「最後の assistant 行は必ずターン完了済み」である。
+ * したがってモノローグ判定は不要であり、ここでは
+ *   - AskUserQuestion を含むか (ASK)
+ *   - それ以外 (IDLE)
+ * の二択に縮退している。
+ *
+ * 旧 SKIP（agent モノローグ）パスは T204/A[191] 事例（Write 連打 → 最終ターンで
+ * text-only な完了報告で永久ブロック）を踏まえて T208 で削除した。
  *
  * 入力:
  *   - payload: Stop hook JSON payload から `transcript_path` のみ抽出した形
  *   - ctx:
- *       isConductor: Conductor 判定（Case B skip の除外に使う）
  *       readTranscriptTail: transcript ファイル末尾 N bytes を読む関数（DI）
  *
  * 判定順序:
- *   1. transcript_path 不在 / 読込失敗 → IDLE（fail-safe）
- *   2. 末尾から逆順に assistant 行を探し、見つけた最初の行を対象にする
- *   3. content[] 内の AskUserQuestion tool_use 件数と tool_use/tool_result 件数をカウント
- *   4. ask > 0 → ASK（question は最後の text 要素全文を chars で切り詰め）
- *   5. tool 件数 === 0 && !isConductor → SKIP (agent_monologue)
- *   6. それ以外 → IDLE
+ *   1. transcript_path 不在 / 読込失敗 / assistant 行なし → IDLE（fail-safe）
+ *   2. 末尾から逆順に assistant 行を探し、最初に見つかった行を対象にする
+ *   3. content[] 内に AskUserQuestion tool_use が 1 件以上あれば ASK
+ *      （question は最後の text 要素全文を chars で切り詰め）
+ *   4. それ以外は IDLE
  */
 
 export type StopClassification =
   | { kind: "ASK"; question: string }
-  | { kind: "IDLE" }
-  | { kind: "SKIP"; reason: "agent_monologue" };
+  | { kind: "IDLE" };
 
 export interface ClassifyContext {
-  isConductor: boolean;
   readTranscriptTail: (path: string, bytes: number) => string | null;
 }
 
@@ -78,21 +81,15 @@ export function classifyStopPayload(
 
   const content = assistant.message?.content ?? [];
   let askCount = 0;
-  let toolCount = 0;
   let lastText = "";
   for (const c of content) {
     if (!c || typeof c !== "object") continue;
     if (c.type === "tool_use" && c.name === "AskUserQuestion") askCount++;
-    if (c.type === "tool_use" || c.type === "tool_result") toolCount++;
     if (c.type === "text" && typeof c.text === "string") lastText = c.text;
   }
 
   if (askCount > 0) {
-    const question = lastText.slice(0, QUESTION_CHAR_LIMIT);
-    return { kind: "ASK", question };
-  }
-  if (toolCount === 0 && !ctx.isConductor) {
-    return { kind: "SKIP", reason: "agent_monologue" };
+    return { kind: "ASK", question: lastText.slice(0, QUESTION_CHAR_LIMIT) };
   }
   return { kind: "IDLE" };
 }
