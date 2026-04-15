@@ -517,12 +517,11 @@ async function cmdStart(): Promise<void> {
       }
 
       // 2. 全 Conductor surface を close（Agent タブも含む）
+      //    T207: Conductor の所属 pane を on-demand 解決し、同 pane の全 surface を一括 close
       for (const [, conductor] of state.conductors) {
-        if (conductor.paneId) {
-          const surfaces = await cmux.listPaneSurfaces(conductor.paneId).catch(() => [] as string[]);
-          for (const s of surfaces) {
-            await cmux.closeSurface(s).catch(() => {});
-          }
+        const siblings = await cmux.listSiblingSurfaces(conductor.surface, state.workspace ?? undefined);
+        for (const s of siblings) {
+          await cmux.closeSurface(s).catch(() => {});
         }
         await cmux.closeSurface(conductor.surface).catch(() => {});
       }
@@ -869,7 +868,6 @@ async function cmdSend(): Promise<void> {
       message = {
         type: "CONDUCTOR_REGISTERED",
         surface: normalizedSurface!,
-        paneId: getArg("pane-id") ?? "",
         timestamp: now,
       };
       break;
@@ -1584,14 +1582,12 @@ async function cmdSpawnAgent(): Promise<void> {
 
   // team.json から conductor 情報を前倒しで解決（throttle ログでも taskId を参照するため）
   let worktreePath: string | undefined;
-  let paneId: string | undefined;
   let taskId: string | undefined;
   try {
     const teamJson = JSON.parse(await readFile(join(PROJECT_ROOT, ".team/team.json"), "utf-8"));
     const conductors: any[] = teamJson.conductors ?? [];
     const conductor = conductors.find((c: any) => c.surface === conductorSurface);
     worktreePath = conductor?.worktreePath;
-    paneId = conductor?.paneId;
     taskId = conductor?.taskId;
     if (!taskTitle) taskTitle = conductor?.taskTitle;
   } catch {}
@@ -1632,18 +1628,15 @@ async function cmdSpawnAgent(): Promise<void> {
   }
 
   // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
-
-  // フォールバック: cmux tree から paneId を解決
+  //   T207: 対象 pane はキャッシュせず、cmux tree から on-demand 解決する。
+  //   解決失敗時は undefined のまま newSurface に渡し、cmux 側のデフォルト pane に
+  //   作成 → 失敗時は new-split right のフォールバック経路に乗せる。
   const callerWorkspace = await cmux.getCallerWorkspace();
-  if (!paneId) {
-    try {
-      paneId = await cmux.getPaneForSurface(conductorSurface, callerWorkspace);
-    } catch {}
-  }
+  const targetPane = await cmux.getPaneForSurface(conductorSurface, callerWorkspace);
 
   let surface: string;
   try {
-    surface = await cmux.newSurface(paneId);
+    surface = await cmux.newSurface(targetPane);
   } catch {
     surface = await cmux.newSplit("right");
   }
