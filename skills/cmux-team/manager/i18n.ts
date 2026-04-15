@@ -456,14 +456,14 @@ Notes:
 `,
 
   help_artifacts: `
-cmux-team artifacts -- manage artifacts
+cmux-team artifacts -- manage artifacts (add moves the file, not copy)
 
 Usage:
   cmux-team artifacts [subcommand] [options]
 
 Subcommands:
   (none)                  list artifacts (default)
-  add <file>             add a file as an artifact
+  add <file>             move a file into .team/artifacts/ (source is removed on success)
   show <id>              show artifact content
   open <id>              open artifact in markdown viewer
   search <query>         full-text search artifacts
@@ -477,6 +477,7 @@ Options:
   --title <title>         (add) artifact title
   --task <id>             (add) related task ID
   --tags <tag1,tag2>      (add) comma-separated tags
+  --project-root <path>   (add) override project root (destination .team/artifacts/ lives under this)
 
 Examples:
   cmux-team artifacts
@@ -534,7 +535,7 @@ Usage:
   cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
-  cmux-team artifacts add <file>                   add a file as an artifact
+  cmux-team artifacts add <file>                   move a file into .team/artifacts/
   cmux-team artifacts show <id>                    show artifact
   cmux-team artifacts open <id>                    open in markdown viewer
   cmux-team artifacts search <query>               full-text search
@@ -975,14 +976,14 @@ Notes:
 `,
 
   help_artifacts: `
-cmux-team artifacts -- アーティファクト管理
+cmux-team artifacts -- アーティファクト管理（add は move 動作）
 
 Usage:
   cmux-team artifacts [subcommand] [options]
 
 Subcommands:
   (なし)                  アーティファクト一覧表示（デフォルト）
-  add <file>             ファイルをアーティファクトとして追加
+  add <file>             ファイルを .team/artifacts/ に **移動** する（成功時にソース削除）
   show <id>              アーティファクトの内容を表示
   open <id>              Markdown ビューアでアーティファクトを開く
   search <query>         アーティファクトを全文検索
@@ -996,6 +997,7 @@ Options:
   --title <title>         (add) アーティファクトのタイトル
   --task <id>             (add) 関連タスク ID
   --tags <tag1,tag2>      (add) カンマ区切りのタグ
+  --project-root <path>   (add) プロジェクトルートを上書き（dest の .team/artifacts/ がここ基準になる）
 
 Examples:
   cmux-team artifacts
@@ -1053,7 +1055,7 @@ Usage:
   cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
-  cmux-team artifacts add <file>                   ファイルをアーティファクトとして追加
+  cmux-team artifacts add <file>                   ファイルを .team/artifacts/ に移動
   cmux-team artifacts show <id>                    アーティファクト表示
   cmux-team artifacts open <id>                    Markdown ビューアで開く
   cmux-team artifacts search <query>               全文検索
