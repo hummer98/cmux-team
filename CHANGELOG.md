@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.50.0] - 2026-04-16
+
+### Added
+- **`cmux-team trace-hooks` サブコマンド追加（T217）**。Manager daemon が受け取った hook シグナル（SessionStart / Stop / SessionEnd 等）を trace DB (`.team/traces/traces.db`) の `hook_signals` テーブルから一覧・検索できる CLI を追加。タスク実行中に「hook が発火したのか届かなかったのか」を事後追跡でき、Conductor / Agent の state 遷移のデバッグが容易になる
+
+### Changed
+- **hook 全送信ポリシーに一本化（T216）**。これまで hook 側の shell スクリプトで matcher 条件や reason による分岐を持たせていたが、hook は全イベントを Manager に転送し、フィルタリング・ルーティング・state 遷移判定は Manager 側（`daemon.ts handleMessage`）でのみ行う設計に統合。`handleMessage` 入口で必ず `insertHookSignal` を呼び、後からデバッグする際に「hook は発火したか」を追跡可能にした。SessionEnd の `reason=other` は記録のみで state 遷移しない（`/clear` 等の曖昧な終了を disconnected と誤判定しないため）
+- **`cmux-team-investigate` スキルに hook シグナル追跡手段を追記（T218）**。別プロジェクトの `.team/` 調査時に `trace-hooks` を使って hook 発火履歴を確認する手順を追加
+
+### Fixed
+- **`.claude-plugin/plugin.json` から不要な SessionStart hook 定義を削除（T221）**。plugin install 時に重複した hook が登録される副作用を解消
+
 ## [3.49.0] - 2026-04-16
 
 ### Added
