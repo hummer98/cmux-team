@@ -43,6 +43,7 @@ import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, type T
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
+import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
 
@@ -331,6 +332,21 @@ async function cmdStart(): Promise<void> {
   if (!preflight.ok) {
     printPreflightIssues(preflight);
     process.exit(1);
+  }
+
+  // --- direnv allow fail-fast チェック ---
+  // .envrc が未 allow のまま daemon を起動すると CLAUDE_CODE_OAUTH_TOKEN 等が
+  // ロードされず Conductor / Agent が意図しない認証経路で立ち上がるため、
+  // preflight 直後・loadConfig より前で止める。
+  const direnvStatus = await checkDirenvAllowed(PROJECT_ROOT);
+  if (direnvStatus === "not_allowed") {
+    console.error(formatDirenvNotAllowedMessage(PROJECT_ROOT));
+    await log("direnv_not_allowed", "command=start");
+    process.exit(1);
+  }
+  if (direnvStatus === "no_direnv") {
+    await log("direnv_not_found", "command=start");
+    console.warn("[cmux-team] direnv が見つかりません — .envrc の環境変数は反映されません");
   }
 
   // layout 解決（CLI --layout > config.json > "wide"）
@@ -1813,6 +1829,17 @@ async function cmdSpawnAgent(): Promise<void> {
     console.error("Error: --prompt or --prompt-file is required");
     process.exit(1);
   }
+
+  // --- direnv allow fail-fast チェック ---
+  // cmdStart と同じく、.envrc が未 allow なら Agent を spawn せず即 exit する。
+  // 引数検証を全てパスした後・throttle ガードより前で実行する。
+  const direnvStatus = await checkDirenvAllowed(PROJECT_ROOT);
+  if (direnvStatus === "not_allowed") {
+    console.error(formatDirenvNotAllowedMessage(PROJECT_ROOT));
+    await log("direnv_not_allowed", `command=spawn-agent role=${role}`);
+    process.exit(1);
+  }
+  // no_direnv / no_envrc / ok は続行（spawn-agent 側では警告表示は行わない）
 
   // --- 1. プロキシポート読み取り + 生存確認 ---
   const proxyPort = await resolveProxyPort();
