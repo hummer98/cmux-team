@@ -12,11 +12,13 @@ import { createNodeApp, type NodeApp } from "@rezi-ui/node";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DaemonState, TaskSummary } from "./daemon";
-import type { ConductorState, RateLimitInfo } from "./schema";
+import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
 import { onStateChanged } from "./eventBus";
+import { buildRateLimitDisplay, type RateLimitColor } from "./rate-limit-display";
+import { isStale } from "./rate-limit-persistence";
 import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
@@ -186,77 +188,16 @@ function compactElapsed(startIso: string, endIso?: string): string {
   return m > 0 ? `${h}h${m}m` : `${h}h`;
 }
 
-/** リセットまでの残り時間を 1d4h / 3h12m / 45m 形式で整形（最大2単位） */
-function formatResetRemaining(resetIso: string | null): string {
-  if (!resetIso) return "";
-  // unified ヘッダーは unix timestamp（秒）の数値文字列で返る
-  const asNum = Number(resetIso);
-  const resetMs = !isNaN(asNum) && asNum > 1e9 ? asNum * 1000 : new Date(resetIso).getTime();
-  if (isNaN(resetMs)) return "";
-  const sec = Math.floor((resetMs - Date.now()) / 1000);
-  if (sec <= 0) return "0m";
-  if (sec < 60) return "<1m";
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86400) {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    return m > 0 ? `${h}h${m}m` : `${h}h`;
-  }
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  return h > 0 ? `${d}d${h}h` : `${d}d`;
-}
+const RATE_LIMIT_COLOR_MAP: Record<RateLimitColor, number> = {
+  green: GREEN,
+  yellow: YELLOW,
+  red: RED,
+  gray: GRAY,
+};
 
-/** 使用率のプログレスバーを1グループ生成（残り時間は別パーツでグレー表示、group=true でグループ先頭マーク） */
-function buildUtilizationBar(label: string, utilization: number, resetIso: string | null): { parts: Array<{ text: string; color: typeof GREEN; group?: boolean }> } {
-  const pct = Math.round(utilization * 100);
-  const barWidth = 10;
-  const filled = Math.round((pct / 100) * barWidth);
-  const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
-  const color = pct >= 90 ? RED : pct >= 70 ? YELLOW : GREEN;
-  const parts: Array<{ text: string; color: typeof GREEN; group?: boolean }> = [
-    { text: `${label}: ${pct}% ${bar}`, color, group: true },
-  ];
-  const remaining = formatResetRemaining(resetIso);
-  if (remaining) {
-    parts.push({ text: remaining, color: GRAY });
-  }
-  return { parts };
-}
-
-/** レート制限の表示文字列を生成（各パーツが個別の色を持つ） */
-function buildRateLimitDisplay(rateLimit: RateLimitInfo | null): { parts: Array<{ text: string; color: typeof GREEN }> } {
-  if (!rateLimit) {
-    return { parts: [{ text: "Rate: --", color: GRAY }] };
-  }
-
-  // unified データがある場合: 5h/7d 使用率を表示
-  if (rateLimit.unified5hUtilization != null || rateLimit.unified7dUtilization != null) {
-    const parts: Array<{ text: string; color: typeof GREEN }> = [];
-    const forceRed = rateLimit.unifiedStatus === "rate_limited";
-
-    if (rateLimit.unified5hUtilization != null) {
-      const h5 = buildUtilizationBar("5h", rateLimit.unified5hUtilization, rateLimit.unified5hReset);
-      parts.push(...h5.parts.map(p => ({ text: p.text, color: forceRed && p.color !== GRAY ? RED : p.color })));
-    }
-    if (rateLimit.unified7dUtilization != null) {
-      const d7 = buildUtilizationBar("7d", rateLimit.unified7dUtilization, rateLimit.unified7dReset);
-      parts.push(...d7.parts.map(p => ({ text: p.text, color: forceRed && p.color !== GRAY ? RED : p.color })));
-    }
-
-    return { parts };
-  }
-
-  // フォールバック: 従来の TPM 表示
-  if (rateLimit.tokensLimit === 0) {
-    return { parts: [{ text: "Rate: --", color: GRAY }] };
-  }
-  const pct = Math.round((rateLimit.tokensRemaining / rateLimit.tokensLimit) * 100);
-  const barWidth = 10;
-  const filled = Math.round((pct / 100) * barWidth);
-  const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
-  const color = pct >= 50 ? GREEN : pct >= 20 ? YELLOW : RED;
-  return { parts: [{ text: `TPM: ${pct}% ${bar}`, color }] };
+/** rate-limit-display の RateLimitColor を Rezi の RGB 値にマップする */
+function mapRateLimitColor(color: RateLimitColor): number {
+  return RATE_LIMIT_COLOR_MAP[color];
 }
 
 // --- ログ・ジャーナル解析 ---
@@ -914,8 +855,10 @@ export async function startDashboard(
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
-    // スロットリング判定
-    const isThrottled = (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+    // スロットリング判定（stale な観測値はガードで除外する）
+    const isThrottled =
+      !isStale(daemon.rateLimit) &&
+      (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
 
     const headerParts = [
       !daemon.running ? "STOPPED"
@@ -960,7 +903,7 @@ export async function startDashboard(
           const rl = buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
-          const rightText = rl.parts.map((p: any, i: number) => (i > 0 && p.group ? "  " : "") + p.text).join("");
+          const rightText = rl.parts.map((p, i) => (i > 0 && p.group ? "  " : "") + p.text).join("");
           const fill = "─".repeat(Math.max(1, 80 - left.length - rightText.length));
 
           // スロットリング中: headerSubtitle 部分を赤色で表示
@@ -972,16 +915,16 @@ export async function startDashboard(
               ui.text(` ${fill} `, { dim: true }),
               ...rl.parts.flatMap((p, i) => [
                 ...(i > 0 ? [ui.text("  ", { dim: true })] : []),
-                ui.text(p.text, { style: { fg: p.color } }),
+                ui.text(p.text, { style: { fg: mapRateLimitColor(p.color) } }),
               ]),
             ]);
           }
 
           return ui.row({ gap: 0 }, [
             ui.text(`${left} ${fill} `, { dim: true }),
-            ...rl.parts.flatMap((p: any, i: number) => [
+            ...rl.parts.flatMap((p, i) => [
               ...(i > 0 && p.group ? [ui.text("  ", { dim: true })] : []),
-              ui.text(p.text, { style: { fg: p.color } }),
+              ui.text(p.text, { style: { fg: mapRateLimitColor(p.color) } }),
             ]),
           ]);
         })(),

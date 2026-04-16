@@ -46,6 +46,7 @@ import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
+import { persistRateLimit, loadRateLimit, isStale } from "./rate-limit-persistence";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -403,6 +404,19 @@ async function cmdStart(): Promise<void> {
   await initInfra(state);
   await log("infra_ready");
 
+  // T227: `.team/rate-limit.json` から前回セッションの RateLimitInfo を復元する。
+  // daemon_started ログ前に復元しておくことで、dashboard 初回描画から値が出る。
+  const restoredRateLimit = await loadRateLimit(PROJECT_ROOT);
+  if (restoredRateLimit) {
+    state.rateLimit = restoredRateLimit;
+    await log(
+      "rate_limit_restored",
+      `unified5h=${restoredRateLimit.unified5hUtilization} unified7d=${restoredRateLimit.unified7dUtilization} stale=${isStale(restoredRateLimit)}`
+    );
+  } else {
+    await log("rate_limit_restored", "empty");
+  }
+
   // .envrc に CMUX_CLAUDE_HOOKS_DISABLED を追記するか対話確認
   // proxy 起動・TUI 起動より前で同期実行する（Ink TUI が stdin/stdout を奪うため）
   await ensureEnvrcHookPrompt(PROJECT_ROOT);
@@ -493,6 +507,15 @@ async function cmdStart(): Promise<void> {
     updateCaffeinate(false);
     if (state.workspace) {
       await cmux.clearStatus("claude_code", state.workspace);
+    }
+    // T227: proxy 側 fire-and-forget が in-flight の可能性があるため、
+    // shutdown 時に最新の rateLimit を必ず flush する（shutdown はブロック許容）
+    if (state.rateLimit) {
+      try {
+        await persistRateLimit(PROJECT_ROOT, state.rateLimit);
+      } catch (e: any) {
+        await log("rate_limit_persist_failed", `shutdown: ${e.message}`);
+      }
     }
     await log("daemon_stopped");
     await updateTeamJson(state);
