@@ -110,13 +110,14 @@ cmux-team delete-task --task-id 42 --journal "理由"
 | `cmux-team update-task` | タスク更新（`--task-id`, `--status`, `--title`, `--body`, `--depends-on`） |
 | `cmux-team close-task` | タスククローズ（`--task-id`, `--journal`, `--force`） |
 | `cmux-team abort-task` | タスク中止（`--task-id`, `--journal`） |
-| `cmux-team restart-task` | 実行中タスクの再実行（assigned → ready に戻す）（`--task-id`, `--journal`） |
+| `cmux-team restart-task` | `assigned` / `aborted` タスクの Conductor セッションを再起動（status を `ready` に戻し worktree / sessionId 等の割り当て情報をクリア、T204 で `aborted` からの再開にも対応）（`--task-id`, `--journal`） |
 | `cmux-team delete-task` | タスク削除（`--task-id`, `--journal`） |
 | `cmux-team spawn-agent` | Agent 起動（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface`） |
 | `cmux-team conductor` | Conductor 用 Claude Code を起動（内部用。`--model` でモデル指定可能） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
+| `cmux-team trace-hooks` | hook シグナル履歴検索（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 |
 | `cmux-team artifacts` | アーティファクト管理（サブコマンド: `add`, `show`, `open`, `search`。オプション: `--validate`） |
 | `cmux-team resume` | assigned タスクの Conductor セッションを再開 |
 

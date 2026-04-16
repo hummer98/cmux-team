@@ -127,11 +127,12 @@ skills/cmux-team/manager/
 | `abort-task` | 実行中タスクの中止（sub-agent 停止 → Conductor 停止 → worktree 削除 → `aborted` 遷移 → Conductor 再起動） |
 | `delete-task` | draft/ready タスクの削除（`deleted` 遷移、journal 記録）。`assigned` のタスクは `abort-task` を使う |
 | `trace` | トレースDB 検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
+| `trace-hooks` | `hook_signals` テーブル検索・表示（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 |
 | `conductor` | Conductor 情報表示 |
 | `spawn-master` | Master surface 起動 |
 | `artifacts` | アーティファクト一覧・検索・追加（`add`）・表示（`show`）・Markdown ビューア（`open`） |
 | `resume` | assigned タスクの Conductor セッションを `claude --resume` で再開 |
-| `restart-task` | assigned タスクの Conductor セッションを再起動（タスク自体は assigned のまま維持） |
+| `restart-task` | `assigned` / `aborted` タスクの Conductor セッションを再起動（T204 で `aborted` からの再開にも対応。status は `ready` に戻され、worktree / taskRunId / sessionId 等の割り当て情報はクリアされる。`aborted` の場合は残存 worktree も強制削除） |
 | `await-task` | タスク完了を fs.watch で待機（カンマ区切りで複数指定可、`--timeout` サポート） |
 | `await-agent` | Agent 完了/ask/crash を done マーカーの fs.watch で待機（T181、Conductor から使用） |
 | `send-agent` | Agent/Conductor surface へメッセージ送信（`--surface`, positional message, `--no-return`）。Conductor → 他 surface 操作の唯一の入口 |
@@ -380,13 +381,15 @@ e2e-results/
 {
   "models": { "master": "opus", "conductor": "opus", "agent": "opus" },
   "envrcHookPromptSkipped": false,
-  "autoUpdate": "off"
+  "autoUpdate": "off",
+  "mainBranch": "main"
 }
 ```
 
 - `models` — Master / Conductor / Agent のデフォルトモデル（`--model` CLI フラグで上書き可）
 - `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ（`claude` 直接起動時向けの optional 機能。`cmux-team` 経由の spawn には不要）
 - `autoUpdate` — auto-update モード（`"off" | "notify" | "task"`、後方互換: `true` → task、`false` → off、デフォルト `off`）。env `CMUX_TEAM_AUTO_UPDATE` で上書き可
+- `mainBranch` — プロジェクトの主開発ブランチ名（T213）。Conductor が worktree のベース・マージ先として使用する。解決順位は env `CMUX_TEAM_MAIN_BRANCH` > `config.mainBranch` > `git symbolic-ref refs/remotes/origin/HEAD` による自動検出 > fallback `"main"`。`cmux-team start` は解決結果を `main_branch_resolved branch=<name> source=<config|detected|fallback>` としてログ出力し、source が `config` 以外の場合のみ `.team/config.json` に書き戻す（初回起動後は常に `config` 経路）
 
 ### auto-update（update-notifier ベース、T187）
 
