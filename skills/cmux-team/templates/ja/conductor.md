@@ -210,9 +210,9 @@ Reviewer 完了後、`{{OUTPUT_DIR}}/review.md` を確認する:
 - **Approved** → テスト実行に進む
 - **Changes Requested** → 指摘内容を元に修正 Agent を再起動し、修正後に再レビュー（最大 2 回まで）
 
-Reviewer のタブは確認後に閉じる:
+Reviewer のタブは確認後に閉じる（正常終了なので close-agent）:
 ```bash
-cmux-team kill-agent --surface $REVIEWER_SURFACE
+cmux-team close-agent --surface $REVIEWER_SURFACE
 ```
 
 ### レビューをスキップする場合
@@ -222,9 +222,9 @@ cmux-team kill-agent --surface $REVIEWER_SURFACE
 ## 完了時の処理
 
 1. 全 Agent が完了し、テストがパスしたことを確認
-2. Agent のタブを閉じる:
+2. Agent のタブを閉じる（正常完了なので close-agent）:
    ```bash
-   cmux-team kill-agent --surface $AGENT_SURFACE
+   cmux-team close-agent --surface $AGENT_SURFACE
    ```
 3. 変更をコミットする:
    ```bash

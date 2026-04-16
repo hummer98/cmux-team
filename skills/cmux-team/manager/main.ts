@@ -13,6 +13,7 @@
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
  *   ./main.ts kill-agent --surface <s>
+ *   ./main.ts close-agent --surface <s>
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>]
  *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
@@ -2132,6 +2133,31 @@ async function cmdKillAgent(): Promise<void> {
   console.log(`OK killed ${surface}`);
 }
 
+async function cmdCloseAgent(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_close_agent"));
+  let surface: string;
+  try {
+    surface = await normalizeSurfaceArg(requireArg("surface"));
+  } catch (e: any) {
+    console.error(`Error: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+
+  // surface を閉じる（closeSurface は SESSION_ENDED を送信しないため、明示的に通知する）
+  await cmux.closeSurface(surface);
+
+  // daemon に SESSION_ENDED を通知して agents リストから削除させる。
+  // reason="close-agent" により daemon 側で status="completed" として done マーカーが書かれる。
+  await postMessage({
+    type: "SESSION_ENDED",
+    surface,
+    reason: "close-agent",
+    timestamp: new Date().toISOString(),
+  });
+
+  console.log(`OK closed ${surface}`);
+}
+
 /**
  * `cmdSendAgent` で使用する検証結果の型。
  * reason は理由別ログ/エラーメッセージの分岐に使う。
@@ -3673,6 +3699,9 @@ switch (command) {
     break;
   case "kill-agent":
     await cmdKillAgent();
+    break;
+  case "close-agent":
+    await cmdCloseAgent();
     break;
   case "send-agent":
     await cmdSendAgent();

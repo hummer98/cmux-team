@@ -210,9 +210,9 @@ After Reviewer completes, check `{{OUTPUT_DIR}}/review.md`:
 - **Approved** → Proceed to test execution
 - **Changes Requested** → Re-launch fix Agent based on findings, then re-review after fixes (maximum 2 rounds)
 
-Close the Reviewer tab after review:
+Close the Reviewer tab after review (normal completion, so use close-agent):
 ```bash
-cmux-team kill-agent --surface $REVIEWER_SURFACE
+cmux-team close-agent --surface $REVIEWER_SURFACE
 ```
 
 ### When Skipping Review
@@ -222,9 +222,9 @@ If there are no code changes (documentation/config files only), skip the review 
 ## Completion Procedures
 
 1. Confirm all Agents have completed and tests pass
-2. Close Agent tabs:
+2. Close Agent tabs (normal completion, so use close-agent):
    ```bash
-   cmux-team kill-agent --surface $AGENT_SURFACE
+   cmux-team close-agent --surface $AGENT_SURFACE
    ```
 3. Commit changes:
    ```bash
