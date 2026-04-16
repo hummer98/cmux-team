@@ -172,3 +172,7 @@ tags: [tag1, tag2]      # 任意
 **Arguments:** `$ARGUMENTS` = タスク ID（例: `T141`, `141`）
 
 **allowed-tools:** `Bash, Read, Glob, Grep`
+
+**関連 CLI サブコマンド（詳細は `05-install-and-infrastructure.md` の CLI サブコマンド表を参照）:**
+- `cmux-team trace` — API トレース全体の検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`）
+- `cmux-team trace-hooks` — trace DB の `hook_signals` テーブルを検索・表示（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 で追加
