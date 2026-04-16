@@ -121,7 +121,7 @@ export interface EnsureOptions {
   /** テスト用に askYNQuestion を差し替える */
   ask?: (prompt: string) => Promise<Answer>;
   /** テスト用に process.env / process.stdin の状態を差し替える */
-  envOverride?: { CMUX_TEAM_NO_PROMPT?: string };
+  envOverride?: { CMUX_TEAM_NO_PROMPT?: string; CMUX_CLAUDE_HOOKS_DISABLED?: string };
   /** テスト用に stdin TTY 判定を差し替える */
   isTTY?: boolean;
   /** テスト用に direnv の検出結果を差し替える */
@@ -141,6 +141,13 @@ export async function ensureEnvrcHookPrompt(
   if (noPromptEnv) {
     await log("envrc_check_skipped", "reason=env CMUX_TEAM_NO_PROMPT");
     return { action: "noop_env_silenced", warnings };
+  }
+
+  const hooksDisabledEnv =
+    options.envOverride?.CMUX_CLAUDE_HOOKS_DISABLED ?? process.env.CMUX_CLAUDE_HOOKS_DISABLED;
+  if (hooksDisabledEnv) {
+    await log("envrc_check_skipped", "reason=already_in_env");
+    return { action: "noop_already_set", warnings };
   }
 
   const isTTY = options.isTTY ?? Boolean(process.stdin.isTTY);
@@ -163,7 +170,7 @@ export async function ensureEnvrcHookPrompt(
     return { action: "noop_no_envrc", warnings };
   }
   if (envrcContent.includes("CMUX_CLAUDE_HOOKS_DISABLED")) {
-    await log("envrc_check_skipped", "reason=already_set");
+    await log("envrc_check_skipped", "reason=already_in_envrc");
     return { action: "noop_already_set", warnings };
   }
 

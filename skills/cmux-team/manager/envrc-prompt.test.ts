@@ -8,6 +8,7 @@ import { ensureEnvrcHookPrompt, appendExportLine, type Answer } from "./envrc-pr
 let testDir: string;
 let savedNoPrompt: string | undefined;
 let savedProjectRoot: string | undefined;
+let savedHooksDisabled: string | undefined;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "cmux-envrc-test-"));
@@ -15,6 +16,8 @@ beforeEach(async () => {
   delete process.env.CMUX_TEAM_NO_PROMPT;
   savedProjectRoot = process.env.PROJECT_ROOT;
   process.env.PROJECT_ROOT = testDir;
+  savedHooksDisabled = process.env.CMUX_CLAUDE_HOOKS_DISABLED;
+  delete process.env.CMUX_CLAUDE_HOOKS_DISABLED;
 });
 
 afterEach(async () => {
@@ -28,6 +31,11 @@ afterEach(async () => {
     process.env.PROJECT_ROOT = savedProjectRoot;
   } else {
     delete process.env.PROJECT_ROOT;
+  }
+  if (savedHooksDisabled !== undefined) {
+    process.env.CMUX_CLAUDE_HOOKS_DISABLED = savedHooksDisabled;
+  } else {
+    delete process.env.CMUX_CLAUDE_HOOKS_DISABLED;
   }
 });
 
@@ -79,6 +87,27 @@ describe("ensureEnvrcHookPrompt - gating", () => {
       ask: ttyAsk("Y"),
     });
     expect(r.action).toBe("noop_no_tty");
+  });
+
+  test("CMUX_CLAUDE_HOOKS_DISABLED=1 (envOverride) なら noop_already_set", async () => {
+    await writeFile(join(testDir, ".envrc"), "source_up\n");
+    const r = await ensureEnvrcHookPrompt(testDir, {
+      ...baseOpts,
+      envOverride: { CMUX_CLAUDE_HOOKS_DISABLED: "1" },
+      ask: ttyAsk("Y"),
+    });
+    expect(r.action).toBe("noop_already_set");
+    const content = await readFile(join(testDir, ".envrc"), "utf-8");
+    expect(content).toBe("source_up\n");
+  });
+
+  test("process.env.CMUX_CLAUDE_HOOKS_DISABLED=1 (直接) なら noop_already_set", async () => {
+    await writeFile(join(testDir, ".envrc"), "source_up\n");
+    process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
+    const r = await ensureEnvrcHookPrompt(testDir, { ...baseOpts, ask: ttyAsk("Y") });
+    expect(r.action).toBe("noop_already_set");
+    const content = await readFile(join(testDir, ".envrc"), "utf-8");
+    expect(content).toBe("source_up\n");
   });
 });
 
