@@ -13,14 +13,14 @@ import {
   type ResumePlanItem,
   type ResumeAssignment,
 } from "./conductor";
-import { spawnMaster, isMasterAlive } from "./master";
+import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic } from "./task";
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
-import type { AgentState, ConductorState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
+import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal } from "./trace-store";
@@ -42,11 +42,10 @@ export interface TaskSummary {
 export interface DaemonState {
   running: boolean;
   bootPhase: "infra" | "conductors" | "master" | "ready";
-  masterSurface: string | null;
-  masterPid: number | undefined;
-  masterStatus: "idle" | "running" | "disconnected";
-  masterDisconnectedAt: string | undefined;
-  masterPrompt: string | undefined;
+  /** 複数 Master を surface で索引する（T229）。
+   *  単一 Master 時代の masterSurface / masterPid / masterStatus 等は廃止し、
+   *  全状態を MasterState 単位で保持する。永続化は `.team/masters/<surface>.json`。 */
+  masters: Map<string, MasterState>;
   conductors: Map<string, ConductorState>;
   projectRoot: string;
   pollInterval: number;
@@ -80,8 +79,6 @@ export interface DaemonState {
   wakeupPending: boolean;
   /** fs.watch の async iterator を決定論的に停止するための AbortController */
   fileWatcherAbort: AbortController | null;
-  /** Master PID ウォッチャーの interval */
-  masterPidWatcherInterval?: ReturnType<typeof setInterval>;
   /** proxy ポートが前回起動時から変化したか（Master 再起動トリガー） */
   proxyPortChanged: boolean;
   /** daemon が稼働しているワークスペース（他 workspace の surface との混同を防ぐ） */
@@ -205,11 +202,7 @@ export async function createDaemon(
   return {
     running: true,
     bootPhase: "infra",
-    masterSurface: null,
-    masterPid: undefined,
-    masterStatus: "disconnected",
-    masterDisconnectedAt: undefined,
-    masterPrompt: undefined,
+    masters: new Map(),
     conductors: new Map(),
     projectRoot,
     pollInterval: Number(process.env.CMUX_TEAM_POLL_INTERVAL ?? 10_000),
@@ -398,7 +391,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
       [
         "# セッション固有（追跡不要）",
         "team.json",
-        "master.surface",
+        "masters/",
         "proxy-port",
         "rate-limit.json",
         "logs/",
@@ -424,28 +417,60 @@ export async function initInfra(state: DaemonState): Promise<void> {
     // T227: 既存 .gitignore に rate-limit.json 行がなければ追記する（冪等）
     try {
       const current = await readFile(gitignore, "utf-8");
-      const hasEntry = current
-        .split("\n")
-        .some((line) => {
-          const t = line.trim();
-          return t === "rate-limit.json" && !line.trimStart().startsWith("#");
-        });
-      if (!hasEntry) {
-        // proxy-port の直後に挿入、なければ末尾に追記
-        const lines = current.split("\n");
+      const lines = current.split("\n");
+      let changed = false;
+      const added: string[] = [];
+
+      // T227: rate-limit.json の追加
+      const hasRateLimit = lines.some((line) => {
+        const t = line.trim();
+        return t === "rate-limit.json" && !line.trimStart().startsWith("#");
+      });
+      if (!hasRateLimit) {
         const proxyPortIdx = lines.findIndex((l) => l.trim() === "proxy-port");
-        let next: string;
         if (proxyPortIdx >= 0) {
-          const head = lines.slice(0, proxyPortIdx + 1);
-          const tail = lines.slice(proxyPortIdx + 1);
-          next = [...head, "rate-limit.json", ...tail].join("\n");
+          lines.splice(proxyPortIdx + 1, 0, "rate-limit.json");
         } else {
-          next = current.endsWith("\n")
-            ? current + "rate-limit.json\n"
-            : current + "\nrate-limit.json\n";
+          lines.push("rate-limit.json");
         }
-        await writeFile(gitignore, next);
-        await log("team_gitignore_migrated", `path=${gitignore} added=rate-limit.json`);
+        changed = true;
+        added.push("rate-limit.json");
+      }
+
+      // T229: master.surface → masters/ への置換
+      const masterSurfaceIdx = lines.findIndex(
+        (l) => l.trim() === "master.surface" && !l.trimStart().startsWith("#")
+      );
+      const hasMastersDir = lines.some((line) => {
+        const t = line.trim();
+        return t === "masters/" && !line.trimStart().startsWith("#");
+      });
+      if (masterSurfaceIdx >= 0) {
+        if (hasMastersDir) {
+          lines.splice(masterSurfaceIdx, 1);
+        } else {
+          lines[masterSurfaceIdx] = "masters/";
+        }
+        changed = true;
+        added.push("masters/");
+      } else if (!hasMastersDir) {
+        // rate-limit.json の後ろ、もしくは proxy-port の後ろに追加
+        const anchorIdx = lines.findIndex(
+          (l) => l.trim() === "rate-limit.json" || l.trim() === "proxy-port"
+        );
+        if (anchorIdx >= 0) {
+          lines.splice(anchorIdx + 1, 0, "masters/");
+        } else {
+          lines.push("masters/");
+        }
+        changed = true;
+        added.push("masters/");
+      }
+
+      if (changed) {
+        const tail = current.endsWith("\n") && lines[lines.length - 1] !== "" ? "\n" : "";
+        await writeFile(gitignore, lines.join("\n") + tail);
+        await log("team_gitignore_migrated", `path=${gitignore} added=${added.join(",")}`);
       }
     } catch (e: any) {
       await log("error", `gitignore migration failed: ${e.message}`);
@@ -483,7 +508,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
           project: "",
           phase: "init",
           architecture: "4-tier",
-          master: {},
+          masters: [],
           manager: {},
           conductors: [],
         },
@@ -501,87 +526,232 @@ export async function initInfra(state: DaemonState): Promise<void> {
     await log("trace_db_init_failed", `${e?.message ?? e}`);
     state.traceDb = null;
   }
+
+  // T229: 旧 `.team/master.surface` + team.json.master → `.team/masters/<surface>.json` への片道移行
+  try {
+    await migrateMasterLayout(state);
+  } catch (e: any) {
+    await log("error", `migrateMasterLayout failed: ${e?.message ?? e}`);
+  }
+}
+
+/**
+ * 旧単一 Master 時代の `.team/master.surface` / `team.json.master` を
+ * 新レイアウト `.team/masters/<surface>.json` に一度だけ移行する（T229）。
+ *
+ * - `.team/masters/` が既に非空: 新レイアウト運用中とみなし何もしない
+ * - `.team/master.surface` が存在: surface を読み、team.json.master.pid があれば採用
+ *   して `.team/masters/<normalized>.json` を作成 → master.surface を削除
+ * - 旧ファイルが無ければ何もしない（新規プロジェクト）
+ */
+export async function migrateMasterLayout(state: DaemonState): Promise<void> {
+  const root = state.projectRoot;
+  const markerPath = join(root, ".team/master.surface");
+  const mastersDir = join(root, ".team/masters");
+
+  // 既に新レイアウトへ移行済みなら noop
+  try {
+    const entries = await readdir(mastersDir);
+    if (entries.some((e) => e.endsWith(".json"))) {
+      // 旧 marker が残っていれば削除だけはする（冪等性のため）
+      if (existsSync(markerPath)) {
+        try {
+          const { unlink } = await import("fs/promises");
+          await unlink(markerPath);
+          await log("master_layout_migrated", "cleaned_legacy_marker=true");
+        } catch {}
+      }
+      return;
+    }
+  } catch {
+    // mastersDir が無い場合は続行
+  }
+
+  if (!existsSync(markerPath)) return;
+
+  let surface: string;
+  try {
+    surface = (await readFile(markerPath, "utf-8")).trim();
+  } catch {
+    return;
+  }
+  if (!surface) return;
+
+  // team.json.master.pid を拾う（PID があれば引き継ぐ）
+  let pid: number | undefined;
+  try {
+    const teamJsonPath = join(root, ".team/team.json");
+    if (existsSync(teamJsonPath)) {
+      const tj = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+      const p = tj?.master?.pid;
+      if (typeof p === "number") pid = p;
+    }
+  } catch {
+    // 読み失敗は致命的ではない。pid 不在として進める（restoreMasters が discard する）
+  }
+
+  const payload: MasterState = {
+    surface,
+    pid,
+    status: "idle",
+    startedAt: new Date().toISOString(),
+  };
+  try {
+    await persistMasterFile(root, payload);
+    await log(
+      "master_layout_migrated",
+      `${formatSurface(surface, "U")}${pid != null ? ` pid=${pid}` : " pid=unknown"} from=master.surface`
+    );
+  } catch (e: any) {
+    await log("error", `master_layout_migrate_persist_failed: ${e?.message ?? e}`);
+    return;
+  }
+  // 旧 marker を削除
+  try {
+    const { unlink } = await import("fs/promises");
+    await unlink(markerPath);
+  } catch (e: any) {
+    await log("error", `master_layout_migrate_unlink_failed: ${e?.message ?? e}`);
+  }
+}
+
+/**
+ * `.team/masters/` 配下の既存 Master を PID で生存確認して復元する（T229）。
+ *
+ * - pid 記録あり & isAlive → `state.masters` に登録 + PID watcher 起動
+ * - pid 記録なし or pid dead → ファイル削除（discard）
+ *
+ * 復元件数が 0 の場合は false を返す。呼び出し側は新規 spawn を検討する。
+ */
+async function restoreMasters(state: DaemonState): Promise<number> {
+  const files = await listMasterFiles(state.projectRoot);
+  let restored = 0;
+  for (const { path, state: m } of files) {
+    // pid 必須。未記録は v3.46.0 以前の互換値が残っている可能性があり discard。
+    if (typeof m.pid !== "number") {
+      await log(
+        "master_restore_discarded",
+        `${formatSurface(m.surface, "U")} reason=pid_missing path=${path}`
+      );
+      try {
+        await deleteMasterFile(state.projectRoot, m.surface);
+      } catch {}
+      continue;
+    }
+    if (!cmux.isAlive(m.pid)) {
+      await log(
+        "master_restore_discarded",
+        `${formatSurface(m.surface, "U")} pid=${m.pid} reason=pid_dead`
+      );
+      try {
+        await deleteMasterFile(state.projectRoot, m.surface);
+      } catch {}
+      continue;
+    }
+    // 生存: state に登録し PID watcher を起動
+    const restoredState: MasterState = {
+      surface: m.surface,
+      pid: m.pid,
+      status: "idle",
+      startedAt: m.startedAt,
+      prompt: m.prompt,
+    };
+    state.masters.set(m.surface, restoredState);
+    spawnMasterPidWatcher(state, m.surface, m.pid);
+    await log(
+      "master_restored",
+      `${formatSurface(m.surface, "U")} pid=${m.pid} via=pid`
+    );
+    restored++;
+  }
+  return restored;
+}
+
+/**
+ * Master を 1 つ起動する（T229）。
+ * 内部ヘルパー: state.masters に未登録のものを spawn → register → persist まで行う。
+ */
+async function spawnAndRegisterMaster(
+  state: DaemonState,
+  daemonSurface?: string,
+): Promise<MasterState | null> {
+  await log("master_spawning");
+  const spawned = await spawnMaster(daemonSurface);
+  if (!spawned) {
+    await log("master_spawn_failed");
+    return null;
+  }
+  const master: MasterState = {
+    surface: spawned.surface,
+    status: "idle",
+    startedAt: spawned.startedAt,
+  };
+  state.masters.set(master.surface, master);
+  try {
+    await persistMasterFile(state.projectRoot, master);
+  } catch (e: any) {
+    await log(
+      "error",
+      `persistMasterFile failed (spawnAndRegisterMaster): ${e?.message ?? e}`
+    );
+  }
+  await log("master_started", formatSurface(master.surface, "U"));
+  return master;
 }
 
 export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {
-  // マーカーファイルから既存 Master を検出（T195: PID ベース復旧）
-  const markerPath = join(state.projectRoot, ".team/master.surface");
-  const teamJsonPath = join(state.projectRoot, ".team/team.json");
-  let restoredMasterPid: number | undefined;
+  // 既存の Master を PID ベースで復元
+  let restored = 0;
   try {
-    if (existsSync(markerPath)) {
-      const surface = (await readFile(markerPath, "utf-8")).trim();
-      if (surface) {
-        // team.json から master.pid を読む（isMasterAlive が参照するのと同じソース）
-        try {
-          if (existsSync(teamJsonPath)) {
-            const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-            const pid = teamJson?.master?.pid;
-            if (typeof pid === "number") restoredMasterPid = pid;
-          }
-        } catch (e: any) {
-          await log("master_check_error", `team.json read failed: ${e.message}`);
-        }
-
-        // pid あり: 通常の PID 経路（T195 以降の標準）
-        // pid なし: surface 生存確認にフォールバック（v3.46.0 → v3.47.0 マイグレーション互換）
-        let alive = false;
-        let aliveVia: "pid" | "surface_fallback" | null = null;
-        if (restoredMasterPid != null) {
-          alive = await isMasterAlive(state.projectRoot);
-          if (alive) aliveVia = "pid";
-        } else {
-          const pane = await cmux.getPaneForSurface(surface, state.workspace ?? undefined);
-          alive = pane !== undefined;
-          if (alive) {
-            aliveVia = "surface_fallback";
-            await log(
-              "master_alive_via_surface_fallback",
-              `${formatSurface(surface, "U")} pane=${pane} reason=team_json_pid_missing`
-            );
-          }
-        }
-        if (alive) {
-          // proxy ポート変化時: 旧 Master を close して再 spawn
-          if (state.proxyPortChanged) {
-            await log("master_respawn_proxy_changed", `${formatSurface(surface, "U")} newPort=${state.proxyPort}`);
-            await cmux.closeSurface(surface).catch(() => {});
-            state.proxyPortChanged = false;  // フラグリセット
-            // fall-through して下の spawn コードへ
-          } else {
-            state.masterSurface = surface;
-            state.masterPid = restoredMasterPid;  // フォールバック経路では undefined のまま
-            state.masterStatus = "idle";
-            if (restoredMasterPid != null) {
-              spawnMasterPidWatcher(state, restoredMasterPid);
-            }
-            await log(
-              "master_restored",
-              `${formatSurface(surface, "U")}${restoredMasterPid != null ? ` pid=${restoredMasterPid}` : " pid=unknown"} via=${aliveVia}`
-            );
-            return;
-          }
-        }
-        await log(
-          "master_check_failed",
-          `${formatSurface(surface, "U")} alive=false reason=${restoredMasterPid != null ? "pid_dead" : "surface_missing"}`
-        );
-      }
-    }
+    restored = await restoreMasters(state);
   } catch (e: any) {
-    await log("master_check_error", e.message);
+    await log("master_check_error", e?.message ?? String(e));
   }
 
-  // Master spawn
-  await log("master_spawning");
-  const master = await spawnMaster(state.projectRoot, daemonSurface);
-  if (master) {
-    state.masterSurface = master.surface;
-    state.masterStatus = "idle";
-    await log("master_started", formatSurface(master.surface, "U"));
-  } else {
-    await log("master_spawn_failed");
+  // proxy ポート変更時は全 Master を再起動
+  if (state.proxyPortChanged && restored > 0) {
+    for (const surface of [...state.masters.keys()]) {
+      await log(
+        "master_respawn_proxy_changed",
+        `${formatSurface(surface, "U")} newPort=${state.proxyPort}`
+      );
+      await removeMaster(state, surface, "proxy_port_changed");
+      await cmux.closeSurface(surface).catch(() => {});
+    }
+    state.proxyPortChanged = false;
+    restored = 0;
   }
+
+  // 復元 0 件なら新規 spawn（cmdStart の外部挙動は 1 つ立ち上げ）
+  if (restored === 0) {
+    await spawnAndRegisterMaster(state, daemonSurface);
+  }
+}
+
+/**
+ * Master 1 つを state と永続ファイルから取り除く共通処理（T229）。
+ * pidWatcherInterval も確実に停止する。
+ */
+export async function removeMaster(
+  state: DaemonState,
+  surface: string,
+  reason: string,
+): Promise<void> {
+  const master = state.masters.get(surface);
+  if (master?.pidWatcherInterval) {
+    clearInterval(master.pidWatcherInterval);
+  }
+  state.masters.delete(surface);
+  try {
+    await deleteMasterFile(state.projectRoot, surface);
+  } catch (e: any) {
+    await log(
+      "error",
+      `deleteMasterFile failed: ${formatSurface(surface, "U")} reason=${reason} err=${e?.message ?? e}`
+    );
+  }
+  await log("master_removed", `${formatSurface(surface, "U")} reason=${reason}`);
+  notifyStateChanged(`daemon.ts:removeMaster:${reason}`);
 }
 
 export async function initializeLayout(
@@ -839,12 +1009,21 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "SESSION_STARTED": {
       // Master surface チェック
-      if (message.surface === state.masterSurface) {
-        state.masterPid = message.pid;
-        state.masterStatus = "idle";
-        state.masterDisconnectedAt = undefined;
+      const master = state.masters.get(message.surface);
+      if (master) {
+        master.pid = message.pid;
+        master.status = "idle";
+        master.disconnectedAt = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-started-master");
-        spawnMasterPidWatcher(state, message.pid);
+        spawnMasterPidWatcher(state, message.surface, message.pid);
+        try {
+          await persistMasterFile(state.projectRoot, master);
+        } catch (e: any) {
+          await log(
+            "error",
+            `persistMasterFile failed (session_started): ${e?.message ?? e}`
+          );
+        }
         await log("master_session_started", `${formatSurface(message.surface, "U")} pid=${message.pid}`);
         break;
       }
@@ -984,13 +1163,27 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       // Master surface チェック
-      if (message.surface === state.masterSurface) {
-        state.masterStatus = "disconnected";
-        state.masterDisconnectedAt = message.timestamp;
-        state.masterPid = undefined;
-        notifyStateChanged("daemon.ts:handleMessage:session-ended-master");
-        await log("master_session_ended", `${formatSurface(message.surface, "U")}${message.reason ? ` reason=${message.reason}` : ""}`);
-        break;
+      {
+        const master = state.masters.get(message.surface);
+        if (master) {
+          master.status = "disconnected";
+          master.disconnectedAt = message.timestamp;
+          master.pid = undefined;
+          notifyStateChanged("daemon.ts:handleMessage:session-ended-master");
+          try {
+            await persistMasterFile(state.projectRoot, master);
+          } catch (e: any) {
+            await log(
+              "error",
+              `persistMasterFile failed (session_ended): ${e?.message ?? e}`
+            );
+          }
+          await log(
+            "master_session_ended",
+            `${formatSurface(message.surface, "U")}${message.reason ? ` reason=${message.reason}` : ""}`
+          );
+          break;
+        }
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
@@ -1041,13 +1234,24 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "SESSION_ACTIVE": {
       // Master surface チェック
-      if (message.surface === state.masterSurface) {
-        state.masterStatus = "running";
-        state.masterDisconnectedAt = undefined;
-        if (message.pid) state.masterPid = message.pid;
-        notifyStateChanged("daemon.ts:handleMessage:session-active-master");
-        await log("master_session_active", formatSurface(message.surface, "U"));
-        break;
+      {
+        const master = state.masters.get(message.surface);
+        if (master) {
+          master.status = "running";
+          master.disconnectedAt = undefined;
+          if (message.pid) master.pid = message.pid;
+          notifyStateChanged("daemon.ts:handleMessage:session-active-master");
+          try {
+            await persistMasterFile(state.projectRoot, master);
+          } catch (e: any) {
+            await log(
+              "error",
+              `persistMasterFile failed (session_active): ${e?.message ?? e}`
+            );
+          }
+          await log("master_session_active", formatSurface(message.surface, "U"));
+          break;
+        }
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
@@ -1102,13 +1306,24 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "SESSION_IDLE": {
       // Master surface チェック
-      if (message.surface === state.masterSurface) {
-        state.masterStatus = "idle";
-        state.masterDisconnectedAt = undefined;
-        if (message.pid) state.masterPid = message.pid;
-        notifyStateChanged("daemon.ts:handleMessage:session-idle-master");
-        await log("master_session_idle", formatSurface(message.surface, "U"));
-        break;
+      {
+        const master = state.masters.get(message.surface);
+        if (master) {
+          master.status = "idle";
+          master.disconnectedAt = undefined;
+          if (message.pid) master.pid = message.pid;
+          notifyStateChanged("daemon.ts:handleMessage:session-idle-master");
+          try {
+            await persistMasterFile(state.projectRoot, master);
+          } catch (e: any) {
+            await log(
+              "error",
+              `persistMasterFile failed (session_idle): ${e?.message ?? e}`
+            );
+          }
+          await log("master_session_idle", formatSurface(message.surface, "U"));
+          break;
+        }
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
@@ -1182,7 +1397,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     case "SESSION_ASK": {
       // T181: AskUserQuestion 検出時の処理
       // 1) Master は対象外
-      if (message.surface === state.masterSurface) {
+      if (state.masters.has(message.surface)) {
         await log("master_session_ask_ignored", `${formatSurface(message.surface, "U")}`);
         break;
       }
@@ -1233,6 +1448,11 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "SESSION_CLEAR": {
+      // Master の /clear は state 遷移を発生させない（Conductor と違い reset は不要）。
+      if (state.masters.has(message.surface)) {
+        await log("master_session_clear_ignored", `${formatSurface(message.surface, "U")}`);
+        break;
+      }
       const conductor = findConductor(state, message.surface);
       if (conductor && (conductor.status === "disconnected" || conductor.status === "starting")) {
         const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
@@ -1570,34 +1790,54 @@ export function spawnAgentPidWatcher(
  */
 export async function __testSpawnMasterPidWatcherTick(
   state: DaemonState,
+  surface: string,
   pid: number
-): Promise<"alive" | "dead" | "stopped" | "stale"> {
+): Promise<"alive" | "dead" | "stopped" | "stale" | "gone"> {
   if (!state.running) return "stopped";
   if (cmux.isAlive(pid)) return "alive";
-  if (state.masterPid !== pid) return "stale";
-  state.masterStatus = "disconnected";
-  state.masterDisconnectedAt = new Date().toISOString();
-  state.masterPid = undefined;
+  const master = state.masters.get(surface);
+  if (!master) return "gone";
+  if (master.pid !== pid) return "stale";
+  master.status = "disconnected";
+  master.disconnectedAt = new Date().toISOString();
+  master.pid = undefined;
   notifyStateChanged("daemon.ts:spawnMasterPidWatcher:master-disconnected");
+  try {
+    await persistMasterFile(state.projectRoot, master);
+  } catch (e: any) {
+    await log(
+      "error",
+      `persistMasterFile failed (pid_watcher): ${e?.message ?? e}`
+    );
+  }
   await log(
     "master_session_ended",
-    `${formatSurface(state.masterSurface, "U")} pid=${pid} reason=pid_watcher`
+    `${formatSurface(surface, "U")} pid=${pid} reason=pid_watcher`
   );
   return "dead";
 }
 
-export function spawnMasterPidWatcher(state: DaemonState, pid: number): void {
-  if (state.masterPidWatcherInterval) {
-    clearInterval(state.masterPidWatcherInterval);
+export function spawnMasterPidWatcher(
+  state: DaemonState,
+  surface: string,
+  pid: number,
+): void {
+  const master = state.masters.get(surface);
+  if (master?.pidWatcherInterval) {
+    clearInterval(master.pidWatcherInterval);
+    master.pidWatcherInterval = undefined;
   }
   const checkInterval = setInterval(async () => {
-    const result = await __testSpawnMasterPidWatcherTick(state, pid);
+    const result = await __testSpawnMasterPidWatcherTick(state, surface, pid);
     if (result !== "alive") {
       clearInterval(checkInterval);
-      state.masterPidWatcherInterval = undefined;
+      const current = state.masters.get(surface);
+      if (current && current.pidWatcherInterval === checkInterval) {
+        current.pidWatcherInterval = undefined;
+      }
     }
   }, 1000);
-  state.masterPidWatcherInterval = checkInterval;
+  if (master) master.pidWatcherInterval = checkInterval;
 }
 
 /** starting 状態のタイムアウト（秒） */
@@ -1730,14 +1970,14 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
     const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-    // master surface が null の場合は既存値を保持（reload 時に消さない）
-    if (state.masterSurface) {
-      teamJson.master = {
-        surface: state.masterSurface,
-        status: state.masterStatus,
-        pid: state.masterPid,
-      };
-    }
+    // T229: 複数 Master を masters 配列で表現する。旧 master フィールドは必ず削除。
+    teamJson.masters = [...state.masters.values()].map((m) => ({
+      surface: m.surface,
+      status: m.status,
+      pid: m.pid,
+      startedAt: m.startedAt,
+    }));
+    delete teamJson.master;
     teamJson.manager = {
       pid: process.pid,
       type: "typescript",

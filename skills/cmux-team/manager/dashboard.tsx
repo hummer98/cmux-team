@@ -336,42 +336,47 @@ function sectionTitle(label: string) {
 // --- ビュー構築 ---
 
 function buildMasterSection(state: DaemonState) {
-  if (!state.masterSurface) {
+  const masters = [...state.masters.values()];
+  if (masters.length === 0) {
     return ui.row({ gap: 1 }, [
       ui.text("○", { style: { fg: GRAY } }),
       ui.text("not spawned", { style: { fg: GRAY } }),
     ]);
   }
 
-  const surfaceLabel = `[${state.masterSurface.replace("surface:", "")}]`;
-  const status = state.masterStatus ?? "idle";
+  // 複数 Master 表示: 各 Master を縦に並べる。1 つのみの場合も同じ経路で出す。
+  const rows = masters.map((m) => {
+    const surfaceLabel = `[${m.surface.replace("surface:", "")}]`;
+    const status = m.status ?? "idle";
 
-  if (status === "disconnected") {
-    return ui.row({ gap: 1 }, [
-      ui.text("⚠", { style: { fg: YELLOW } }),
-      ui.text(surfaceLabel),
-      ui.text("disconnected", { style: { fg: YELLOW } }),
-    ]);
-  }
-
-  if (status === "running") {
-    const frame = SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length];
-    spinnerTick++;
-    const children = [
-      ui.text(frame!, { style: { fg: YELLOW } }),
-      ui.text(surfaceLabel),
-    ];
-    if (state.masterPrompt) {
-      children.push(ui.text(state.masterPrompt, { style: { fg: GRAY } }));
+    if (status === "disconnected") {
+      return ui.row({ gap: 1 }, [
+        ui.text("⚠", { style: { fg: YELLOW } }),
+        ui.text(surfaceLabel),
+        ui.text("disconnected", { style: { fg: YELLOW } }),
+      ]);
     }
-    return ui.row({ gap: 1 }, children);
-  }
 
-  // idle
-  return ui.row({ gap: 1 }, [
-    ui.text("●", { style: { fg: GREEN } }),
-    ui.text(surfaceLabel),
-  ]);
+    if (status === "running") {
+      const frame = SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length];
+      const children = [
+        ui.text(frame!, { style: { fg: YELLOW } }),
+        ui.text(surfaceLabel),
+      ];
+      if (m.prompt) {
+        children.push(ui.text(m.prompt, { style: { fg: GRAY } }));
+      }
+      return ui.row({ gap: 1 }, children);
+    }
+
+    // idle
+    return ui.row({ gap: 1 }, [
+      ui.text("●", { style: { fg: GREEN } }),
+      ui.text(surfaceLabel),
+    ]);
+  });
+  if (masters.some((m) => m.status === "running")) spinnerTick++;
+  return rows.length === 1 ? rows[0]! : ui.column({ gap: 0 }, rows);
 }
 
 function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
@@ -1294,7 +1299,7 @@ export async function startDashboard(
     try {
       const daemon = getState();
       const needsAnimation =
-        daemon.masterStatus === "running" ||
+        [...daemon.masters.values()].some(m => m.status === "running") ||
         [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting");
 
       if (needsAnimation) {

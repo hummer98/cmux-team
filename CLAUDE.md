@@ -536,6 +536,8 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
 
 daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
 
+`team.json.masters` は **配列**で、複数の Master 稼働を許容する（T229）。各要素は `{ surface, status, startedAt, pid?, lastPromptPreview?, lastPromptAt? }` のサブセット。旧 `team.json.master`（単一オブジェクト）は廃止済み。`masters[0]` への単純な依存は避け、複数 Master 前提で扱うこと。
+
 ### 進捗情報の取得方法（Master 向け）
 
 status.json は廃止。Master は以下の真のソースから直接情報を取得する:
@@ -543,6 +545,7 @@ status.json は廃止。Master は以下の真のソースから直接情報を�
 | 情報 | 真のソース | 取得方法 |
 |------|-----------|---------|
 | Manager の状態 | `.team/logs/manager.log` | `cat .team/logs/manager.log` または `cmux-team status` |
+| 稼働中 Master | `.team/team.json` | `jq .masters .team/team.json` |
 | 稼働中 Conductor | `.team/team.json` | `jq .conductors .team/team.json` |
 | open task 数 | task-state.json | `cat .team/task-state.json`（status で絞り込み） |
 | 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
@@ -711,11 +714,13 @@ type: research          # research | decision | session | spec | report
 title: "タイトル"
 created: <ISO 8601>
 updated: <ISO 8601>     # 任意 — 更新時に付与
-author: master          # master | conductor-N | agent-xxx
+author: surface:100     # 作成した surface ID（T229 で "master" 等の固定ラベルから surface 文字列へ破壊的変更）
 task: T038              # 任意 — 関連タスク
 tags: [tag1, tag2]      # 任意
 ---
 ```
+
+> **T229 破壊的変更:** `author` は従来 `master` / `conductor-N` / `agent-xxx` の固定ラベルを使用していたが、複数 Master 時代に備え surface ID 文字列（例: `surface:100`）に変更された。`/artifact` コマンド経由で作成する場合は自動的に呼び出し元の `CMUX_SURFACE` が設定される。既存 artifact の `author` 値は保持される（マイグレーション不要）。
 
 ### 参照方法
 

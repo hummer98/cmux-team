@@ -146,7 +146,12 @@ describe("proxy", () => {
   test("GET /state が DaemonState 相当の JSON を返す", async () => {
     const mockState = {
       running: true,
-      masterSurface: "surface:1",
+      masters: new Map([
+        [
+          "surface:1",
+          { surface: "surface:1", status: "idle", startedAt: "2026-03-29T00:00:00Z" },
+        ],
+      ]),
       conductors: new Map([
         ["surface:2", { taskId: "001", surface: "surface:2", agents: [] }],
       ]),
@@ -166,7 +171,8 @@ describe("proxy", () => {
 
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.running).toBe(true);
-    expect(body.masterSurface).toBe("surface:1");
+    expect(Array.isArray(body.masters)).toBe(true);
+    expect((body.masters as any[])[0].surface).toBe("surface:1");
     expect(body.lastUpdate).toBe("2026-03-29T00:00:00.000Z");
     expect((body.conductors as Record<string, any>)["surface:2"].surface).toBe("surface:2");
     handle.stop();
@@ -233,8 +239,12 @@ describe("proxy", () => {
     const statuslineState = () => ({
       running: true,
       bootPhase: "ready" as const,
-      masterStatus: "idle" as const,
-      masterSurface: "surface:100",
+      masters: new Map<string, any>([
+        [
+          "surface:100",
+          { surface: "surface:100", status: "idle", startedAt: "2026-03-29T00:00:00Z" },
+        ],
+      ]),
       conductors: new Map<string, any>([
         [
           "surface:200",
@@ -402,8 +412,22 @@ describe("proxy", () => {
       });
     }
 
-    test("status=busy で state.masterStatus が running になり notifyStateChanged が発火する", async () => {
-      const mockState: any = { masterStatus: "idle" };
+    function buildMasterMockState(overrides: Partial<{ status: "idle" | "running" | "disconnected"; prompt: string | undefined }> = {}) {
+      const master = {
+        surface: "surface:100",
+        status: overrides.status ?? "idle",
+        startedAt: "2026-03-29T00:00:00Z",
+        prompt: overrides.prompt,
+      };
+      return {
+        masters: new Map([["surface:100", master]]),
+        master,
+      };
+    }
+
+    test("status=busy で master.status が running になり notifyStateChanged が発火する", async () => {
+      const { masters, master } = buildMasterMockState();
+      const mockState: any = { masters };
       const handle = await start(testDir, { getState: () => mockState });
 
       let emitCount = 0;
@@ -411,17 +435,17 @@ describe("proxy", () => {
 
       const res = await postMasterState(handle.port, { status: "busy", prompt: "調査開始" });
       expect(res.status).toBe(200);
-      expect(mockState.masterStatus).toBe("running");
-      expect(mockState.masterPrompt).toBe("調査開始");
-      // notifyStateChanged が /master-state ハンドラ内で 1 回以上呼ばれる
+      expect(master.status).toBe("running");
+      expect(master.prompt).toBe("調査開始");
       expect(emitCount).toBeGreaterThanOrEqual(1);
 
       unsub();
       handle.stop();
     });
 
-    test("status=idle で state.masterStatus が idle + masterPrompt クリア", async () => {
-      const mockState: any = { masterStatus: "running", masterPrompt: "前のプロンプト" };
+    test("status=idle で master.status が idle + prompt クリア", async () => {
+      const { masters, master } = buildMasterMockState({ status: "running", prompt: "前のプロンプト" });
+      const mockState: any = { masters };
       const handle = await start(testDir, { getState: () => mockState });
 
       let emitCount = 0;
@@ -429,8 +453,8 @@ describe("proxy", () => {
 
       const res = await postMasterState(handle.port, { status: "idle" });
       expect(res.status).toBe(200);
-      expect(mockState.masterStatus).toBe("idle");
-      expect(mockState.masterPrompt).toBeUndefined();
+      expect(master.status).toBe("idle");
+      expect(master.prompt).toBeUndefined();
       expect(emitCount).toBeGreaterThanOrEqual(1);
 
       unsub();
@@ -438,13 +462,13 @@ describe("proxy", () => {
     });
 
     test("manager.log に master_state status=<...> が 1 行記録される", async () => {
-      const mockState: any = { masterStatus: "idle" };
+      const { masters } = buildMasterMockState();
+      const mockState: any = { masters };
       const handle = await start(testDir, { getState: () => mockState });
 
       const res = await postMasterState(handle.port, { status: "busy", prompt: "research topic X" });
       expect(res.status).toBe(200);
 
-      // ログは非同期書き込みなので少し待つ
       await new Promise((r) => setTimeout(r, 50));
 
       const logPath = join(testDir, ".team/logs/manager.log");
@@ -458,7 +482,8 @@ describe("proxy", () => {
     });
 
     test("prompt のみ更新でも notifyStateChanged が呼ばれる", async () => {
-      const mockState: any = { masterStatus: "running" };
+      const { masters, master } = buildMasterMockState({ status: "running" });
+      const mockState: any = { masters };
       const handle = await start(testDir, { getState: () => mockState });
 
       let emitCount = 0;
@@ -466,7 +491,7 @@ describe("proxy", () => {
 
       const res = await postMasterState(handle.port, { prompt: "追加プロンプト" });
       expect(res.status).toBe(200);
-      expect(mockState.masterPrompt).toBe("追加プロンプト");
+      expect(master.prompt).toBe("追加プロンプト");
       expect(emitCount).toBeGreaterThanOrEqual(1);
 
       unsub();
@@ -475,13 +500,55 @@ describe("proxy", () => {
 
     test("listener 数が /master-state ハンドラ呼び出し後も増えない（副作用で bus リスナー登録しない）", async () => {
       const before = __listenerCountForTest();
-      const mockState: any = { masterStatus: "idle" };
+      const { masters } = buildMasterMockState();
+      const mockState: any = { masters };
       const handle = await start(testDir, { getState: () => mockState });
 
       await postMasterState(handle.port, { status: "busy" });
       await postMasterState(handle.port, { status: "idle" });
 
       expect(__listenerCountForTest()).toBe(before);
+      handle.stop();
+    });
+
+    test("複数 Master + surface 未指定 → 400 + master_state_surface_ambiguous ログ", async () => {
+      const masters = new Map([
+        ["surface:100", { surface: "surface:100", status: "idle" as const, startedAt: "2026-03-29T00:00:00Z" }],
+        ["surface:200", { surface: "surface:200", status: "idle" as const, startedAt: "2026-03-29T00:00:00Z" }],
+      ]);
+      const mockState: any = { masters };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      const res = await postMasterState(handle.port, { status: "busy" });
+      expect(res.status).toBe(400);
+
+      await new Promise((r) => setTimeout(r, 50));
+      const logPath = join(testDir, ".team/logs/manager.log");
+      const content = await readFile(logPath, "utf-8");
+      expect(content).toContain("master_state_surface_ambiguous");
+
+      handle.stop();
+    });
+
+    test("複数 Master + surface 明示 → 該当 Master のみ更新", async () => {
+      const m1: { surface: string; status: string; startedAt: string } = {
+        surface: "surface:100", status: "idle", startedAt: "2026-03-29T00:00:00Z",
+      };
+      const m2: { surface: string; status: string; startedAt: string } = {
+        surface: "surface:200", status: "idle", startedAt: "2026-03-29T00:00:00Z",
+      };
+      const masters = new Map([
+        ["surface:100", m1],
+        ["surface:200", m2],
+      ]);
+      const mockState: any = { masters };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      const res = await postMasterState(handle.port, { status: "busy", surface: "surface:200" });
+      expect(res.status).toBe(200);
+      expect(m1.status).toBe("idle");
+      expect(m2.status).toBe("running");
+
       handle.stop();
     });
   });

@@ -23,8 +23,12 @@ export interface StatuslineInput {
 export interface StatuslineState {
   running?: boolean;
   bootPhase?: "infra" | "conductors" | "master" | "ready";
-  masterStatus?: "idle" | "running" | "disconnected";
-  masterSurface?: string | null;
+  /** T229: 複数 Master をサポート。proxy.ts が Map→Array で渡す */
+  masters?: Array<{
+    surface: string;
+    status?: "idle" | "running" | "disconnected";
+    pid?: number;
+  }>;
   conductors: Map<string, StatuslineConductor>;
   taskList?: Array<{ id: string; status: string; title: string }>;
 }
@@ -167,7 +171,7 @@ export function openTaskCount(state: StatuslineState): number {
 
 /** surface → master / conductor / agent / unknown のロール判定 */
 export function resolveRole(surface: string, state: StatuslineState): StatuslineRole {
-  if (state.masterSurface && state.masterSurface === surface) {
+  if ((state.masters ?? []).some((m) => m.surface === surface)) {
     return { kind: "master" };
   }
   const cond = state.conductors.get(surface);

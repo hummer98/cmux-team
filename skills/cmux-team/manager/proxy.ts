@@ -145,9 +145,18 @@ export async function start(
           const serialized = {
             ...state,
             conductors: Object.fromEntries(state.conductors),
+            // T229: 複数 Master を配列化してシリアライズ（Map は JSON 不可）
+            masters: [...(state.masters?.values() ?? [])].map((m) => ({
+              surface: m.surface,
+              status: m.status,
+              pid: m.pid,
+              startedAt: m.startedAt,
+              disconnectedAt: m.disconnectedAt,
+              prompt: m.prompt,
+            })),
             lastUpdate: state.lastUpdate instanceof Date ? state.lastUpdate.toISOString() : state.lastUpdate,
           };
-          return new Response(JSON.stringify({ ...serialized, masterPrompt: state.masterPrompt }), { headers: jsonHeaders });
+          return new Response(JSON.stringify(serialized), { headers: jsonHeaders });
         }
 
         if (url.pathname === "/tasks") {
@@ -235,7 +244,16 @@ export async function start(
           input = {};
         }
 
-        const state = opts.getState() as StatuslineState;
+        const rawState = opts.getState();
+        // T229: daemon の state.masters は Map。statusline は Array を要求するので変換。
+        const state: StatuslineState = {
+          ...rawState,
+          masters: [...(rawState.masters?.values() ?? [])].map((m) => ({
+            surface: m.surface,
+            status: m.status,
+            pid: m.pid,
+          })),
+        };
         const body = formatStatusline(input, state, { surface, nerdFont, color });
         return new Response(body, { status: 200, headers: textHeaders });
       }
@@ -247,19 +265,56 @@ export async function start(
       if (req.method === "POST" && url.pathname === "/master-state") {
         if (!opts?.getState) return new Response("Not Found", { status: 404 });
         try {
-          const body = await req.json() as { status?: string; prompt?: string };
+          const body = await req.json() as { status?: string; prompt?: string; surface?: string };
           const state = opts.getState();
+          // T229: surface を body で指定。未指定 & 単一 Master なら auto-resolve。
+          // 複数 Master で未指定なら曖昧としてログに残して何もしない。
+          let targetSurface: string | undefined = body.surface;
+          if (!targetSurface) {
+            const surfaces = [...state.masters.keys()];
+            if (surfaces.length === 1) {
+              targetSurface = surfaces[0];
+            } else if (surfaces.length > 1) {
+              log(
+                "master_state_surface_ambiguous",
+                `masters=${surfaces.length} status=${body.status ?? "?"}`
+              ).catch(() => {});
+              return new Response(
+                JSON.stringify({ error: "surface required when multiple masters" }),
+                { status: 400, headers: { "Content-Type": "application/json" } },
+              );
+            } else {
+              return new Response(
+                JSON.stringify({ error: "no masters" }),
+                { status: 404, headers: { "Content-Type": "application/json" } },
+              );
+            }
+          }
+          const master = state.masters.get(targetSurface!);
+          if (!master) {
+            log(
+              "master_state_surface_unknown",
+              `surface=${targetSurface} status=${body.status ?? "?"}`
+            ).catch(() => {});
+            return new Response(
+              JSON.stringify({ error: "unknown master surface" }),
+              { status: 404, headers: { "Content-Type": "application/json" } },
+            );
+          }
           if (body.status === "busy") {
-            state.masterStatus = "running";
+            master.status = "running";
           } else if (body.status === "idle") {
-            state.masterStatus = "idle";
-            state.masterPrompt = undefined;
+            master.status = "idle";
+            master.prompt = undefined;
           }
           if (body.prompt != null) {
-            state.masterPrompt = body.prompt.slice(0, 80);
+            master.prompt = body.prompt.slice(0, 80);
           }
           const promptTrim = (body.prompt ?? "").slice(0, 40).replace(/\s+/g, " ");
-          log("master_state", `status=${body.status ?? "?"} prompt=${promptTrim}`).catch(() => {});
+          log(
+            "master_state",
+            `surface=${targetSurface} status=${body.status ?? "?"} prompt=${promptTrim}`
+          ).catch(() => {});
           if (body.status === "busy") {
             notifyStateChanged("proxy.ts:/master-state:busy");
           } else if (body.status === "idle") {
