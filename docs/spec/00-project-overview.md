@@ -6,6 +6,8 @@ Claude Code + cmux によるマルチエージェント開発オーケストレ�
 **Master（ユーザー対話）→ Manager（TypeScript daemon）→ Conductor（タスク実行）→ Agent（実作業）**
 の4層構造で、開発タスクを自律的に遂行する。
 
+Master は共有ストア（`.team/` と Manager daemon）への CLI クライアントであり、並行して複数の Master が動作することを許容する（T229 で基盤整備、T230 で完成予定）。Master 間は直接通信せず、`task-state.json` / `manager.log` 等の共有状態を経由して協調する。
+
 ## Core Concept
 
 ```

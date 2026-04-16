@@ -588,9 +588,9 @@ async function cmdStart(): Promise<void> {
         await cmux.closeSurface(conductor.surface).catch(() => {});
       }
 
-      // 3. Master surface を close
-      if (state.masterSurface) {
-        await cmux.closeSurface(state.masterSurface).catch(() => {});
+      // 3. Master surface を close（T229: 複数 Master 対応）
+      for (const surface of [...state.masters.keys()]) {
+        await cmux.closeSurface(surface).catch(() => {});
       }
 
       await log("full_quit_completed");
@@ -776,7 +776,7 @@ async function cmdStart(): Promise<void> {
     }
     // caffeinate 制御: Master/Conductor/Agent のいずれかが稼働中ならスリープ抑止
     const systemActive =
-      state.masterStatus === "running" ||
+      [...state.masters.values()].some(m => m.status === "running") ||
       [...state.conductors.values()].some(c => c.status === "running" || c.agents.length > 0);
     updateCaffeinate(systemActive);
 
@@ -1052,7 +1052,13 @@ async function cmdStatus(): Promise<void> {
   const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
   const pid = teamJson.manager?.pid;
   const alive = pid && isProcessAlive(pid);
-  const masterSurface = teamJson.master?.surface;
+  // T229: team.json.masters (配列) を読む。旧 team.json.master (オブジェクト) との後方互換も保つ。
+  type MasterRow = { surface: string; status?: string; pid?: number };
+  const masters: MasterRow[] = Array.isArray(teamJson.masters)
+    ? teamJson.masters as MasterRow[]
+    : teamJson.master?.surface
+      ? [{ surface: teamJson.master.surface as string, status: teamJson.master.status, pid: teamJson.master.pid }]
+      : [];
   const conductors: Array<{ taskId: string; taskTitle?: string; surface: string }> = teamJson.conductors || [];
   const logLines = getArg("log") || "10";
 
@@ -1062,11 +1068,16 @@ async function cmdStatus(): Promise<void> {
   console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
 
   // --- Master ---
-  console.log(`─ Master ${"─".repeat(50)}`);
-  if (masterSurface) {
-    console.log(`  ● [${masterSurface.replace("surface:", "")}]`);
-  } else {
+  const mastersHeader = masters.length <= 1 ? "Master" : `Masters ${masters.length}`;
+  console.log(`─ ${mastersHeader} ${"─".repeat(Math.max(0, 58 - mastersHeader.length))}`);
+  if (masters.length === 0) {
     console.log(`  ○ not spawned`);
+  } else {
+    for (const m of masters) {
+      const st = m.status === "disconnected" ? "⚠" : m.status === "running" ? "◐" : "●";
+      const statusLabel = m.status ? ` ${m.status}` : "";
+      console.log(`  ${st} [${m.surface.replace("surface:", "")}]${statusLabel}`);
+    }
   }
 
   // --- Conductors ---
@@ -2307,6 +2318,8 @@ async function cmdCreateTask(): Promise<void> {
       runAfterAll,
       kind: kind || undefined,
       sectionHeader: t("task_section_header"),
+      // T229: 作成元 surface を CMUX_SURFACE から拾い createdBy として記録する
+      createdBy: process.env.CMUX_SURFACE,
     });
   } catch (e: any) {
     if (e?.code === "RUN_AFTER_ALL_CONFLICT") {

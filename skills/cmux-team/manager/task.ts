@@ -20,6 +20,8 @@ export interface TaskMeta {
   taskDir?: string;  // フォルダ構造の場合のディレクトリパス
   /** タスク種別（frontmatter kind フィールド）。例: "cmux-team-update" */
   kind?: string;
+  /** T229: 作成元 surface（`surface:NNN`）。frontmatter `created_by` 由来 */
+  createdBy?: string;
 }
 
 export interface TaskState {
@@ -29,6 +31,8 @@ export interface TaskState {
   abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
   deletedAt?: string; // ISO 8601 — delete 時のタイムスタンプ
   journal?: string;   // 完了時/中止時/削除時のサマリー
+  /** T229: 作成元 surface（`surface:NNN`）。複数 Master のどちらが作成したかを示す。 */
+  createdBy?: string;
   // resume 用情報（assignTask 時に記録）
   worktreePath?: string;    // git worktree の絶対パス
   taskRunId?: string;       // task-NNN-TIMESTAMP 形式の実行 ID
@@ -55,6 +59,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
   const createdAt = unquote(fm.match(/^created_at:\s*(.+)$/m)?.[1]?.trim() ?? "");
   const baseBranch = unquote(fm.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim() ?? "");
   const kind = unquote(fm.match(/^kind:\s*(.+)$/m)?.[1]?.trim() ?? "");
+  const createdBy = unquote(fm.match(/^created_by:\s*(.+)$/m)?.[1]?.trim() ?? "");
 
   // depends_on: [033, 034] or depends_on: 033
   let dependsOn: string[] = [];
@@ -88,6 +93,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     createdAt,
     baseBranch: baseBranch || undefined,
     kind: kind || undefined,
+    createdBy: createdBy || undefined,
   };
 }
 
@@ -273,6 +279,8 @@ export async function createTaskProgrammatic(
     kind?: string;
     /** tasks セクションのヘッダ（i18n 用）。デフォルト "タスク内容" */
     sectionHeader?: string;
+    /** T229: 作成元 surface（`surface:NNN`）。frontmatter に `created_by:` として埋め込む */
+    createdBy?: string;
   },
 ): Promise<{ id: string; filePath: string; dirName: string; relPath: string }> {
   const title = opts.title;
@@ -338,6 +346,7 @@ export async function createTaskProgrammatic(
     frontmatterLines.push(`depends_on: [${dependsOn.join(", ")}]`);
   }
   if (kind) frontmatterLines.push(`kind: ${kind}`);
+  if (opts.createdBy) frontmatterLines.push(`created_by: ${opts.createdBy}`);
   frontmatterLines.push(`created_at: ${new Date().toISOString()}`);
 
   const content = `---
@@ -351,7 +360,9 @@ ${body}
 
   // task-state.json 更新
   const taskState = await loadTaskState(projectRoot);
-  taskState[newId] = { status };
+  const entry: TaskState = { status };
+  if (opts.createdBy) entry.createdBy = opts.createdBy;
+  taskState[newId] = entry;
   await saveTaskState(projectRoot, taskState);
 
   const relPath = `.team/tasks/${dirName}/task.md`;

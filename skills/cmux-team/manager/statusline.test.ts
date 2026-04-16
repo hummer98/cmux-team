@@ -31,8 +31,7 @@ function baseState(overrides: Partial<StatuslineState> = {}): StatuslineState {
   return {
     running: true,
     bootPhase: "ready",
-    masterStatus: "idle",
-    masterSurface: "surface:100",
+    masters: [{ surface: "surface:100", status: "idle" }],
     conductors: new Map([
       [
         "surface:200",
@@ -235,8 +234,8 @@ describe("resolveRole", () => {
     expect(role.kind).toBe("unknown");
   });
 
-  test("masterSurface === null のケースも unknown にならず conductor 等を解決", () => {
-    const state = baseState({ masterSurface: null });
+  test("masters 0 件でも unknown にならず conductor 等を解決", () => {
+    const state = baseState({ masters: [] });
     const role = resolveRole("surface:200", state);
     expect(role.kind).toBe("conductor");
   });

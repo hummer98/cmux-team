@@ -144,6 +144,21 @@ export interface AgentState {
   pidWatcherInterval?: ReturnType<typeof setInterval>;
 }
 
+// --- Master 状態 ---
+
+export const MasterStateSchema = z.object({
+  surface: z.string(),
+  pid: z.number().optional(),
+  status: z.enum(["idle", "running", "disconnected"]),
+  startedAt: z.string().datetime(),
+  disconnectedAt: z.string().datetime().optional(),
+  prompt: z.string().optional(),
+});
+
+export type MasterState = z.infer<typeof MasterStateSchema> & {
+  pidWatcherInterval?: ReturnType<typeof setInterval>;
+};
+
 // --- Conductor 状態 ---
 
 export const ConductorState = z.object({

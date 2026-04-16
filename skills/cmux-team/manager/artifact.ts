@@ -177,31 +177,31 @@ export async function addArtifact(
   const srcFileName = basename(opts.srcPath);
   const existing = parseArtifactMeta(content, srcFileName, opts.srcPath);
 
+  const defaultAuthor = process.env.CMUX_SURFACE ?? "unknown";
+
   let meta: Partial<ArtifactMeta>;
   let body: string;
 
   if (existing) {
-    // フロントマターあり: 既存値をベースに CLI オプションで上書き
     meta = {
       id,
       type: opts.type ?? existing.type,
       title: opts.title ?? existing.title,
       created: existing.created || now,
       updated: now,
-      author: existing.author || "master",
+      author: existing.author || defaultAuthor,
       task: opts.task ?? existing.task,
       tags: opts.tags ?? existing.tags,
     };
     body = existing.body;
   } else {
-    // フロントマターなし: 新規生成
     const nameWithoutExt = srcFileName.replace(/\.[^.]+$/, "").replace(/-/g, " ");
     meta = {
       id,
       type: opts.type ?? "research",
       title: opts.title ?? nameWithoutExt,
       created: now,
-      author: "master",
+      author: defaultAuthor,
       task: opts.task,
       tags: opts.tags,
     };

@@ -83,7 +83,7 @@ npm postinstall スクリプト。
 skills/cmux-team/manager/
 ├── main.ts          # CLI エントリーポイント（多数のサブコマンド、cmux-team --help 参照）
 ├── daemon.ts        # イベント駆動ステートマシン + メインループ
-├── master.ts        # Master surface 起動
+├── master.ts        # Master surface 起動 + `.team/masters/<normalized>.json` の永続化（T229）
 ├── conductor.ts     # Conductor ライフサイクル管理
 ├── task.ts          # タスクファイルパース + 依存解決
 ├── proxy.ts         # API ロギングプロキシ
@@ -193,7 +193,7 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - 既存プロセスが生きていれば再利用
 - daemon の auto-restart 後にポートが変わった場合は Master セッションを自動再接続
 - レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
-- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信）, `POST /statusline`（T211、Claude Code の statusline 描画。`X-Cmux-Surface` ヘッダーで対象 surface を識別し、DaemonState から master/conductor/agent のロールを逆引きして 1 行文字列を返す）
+- デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信。T229 以降は optional `surface` を body に受け付ける。未指定時は Master が 1 個の場合のみ自動解決、2 個以上は `master_state_surface_ambiguous` をログして 400 を返す）, `POST /statusline`（T211、Claude Code の statusline 描画。`X-Cmux-Surface` ヘッダーで対象 surface を識別し、DaemonState から master/conductor/agent のロールを逆引きして 1 行文字列を返す）
 
 #### 5h レート制限スロットリング
 
@@ -348,7 +348,7 @@ CLI 引数 > `.team/config.json` > デフォルト（`wide`）。
 ```
 # セッション固有（追跡不要）
 team.json
-master.surface
+masters/
 proxy-port
 rate-limit.json
 logs/
@@ -377,6 +377,20 @@ e2e-results/
 - `specs/` — 要件・設計ドキュメント
 - `artifacts/` — 知見の記録
 - `task-state.json` — タスク状態（resume で参照）
+
+### .team/masters/（T229 — 複数 Master 基盤）
+
+`.team/masters/<normalized>.json` は個々の Master インスタンスの永続状態。旧 `.team/master.surface`（surface 文字列のみの単一マーカー）は廃止され、Master の登録・PID・ステータスを **per-surface の JSON ファイル** に分解して保存する。
+
+- **ファイル名**: `<normalizeSurfaceForPath(surface)>.json`。`normalizeSurfaceForPath` は surface 中のコロン `:` のみを `_` に置換する（ハイフン等はそのまま保持）。空文字入力は throw
+- **ファイル内容**: `MasterStateSchema`（Zod 検証）。`surface` / `pid?` / `status: "idle"|"running"|"disconnected"` / `startedAt: ISO8601` / `disconnectedAt?` / `prompt?`
+- **真のソース**: ファイル名は一意キーとしてのみ扱い、`surface` フィールド本体は JSON 内容から取得する。ファイル名の衝突は後勝ち（`master_file_conflict` ログ）
+- **ライフサイクル**:
+  - `spawnMaster` 成功直後（`pid: undefined`）
+  - `SESSION_STARTED` 受信時に pid を確定し、`persistMasterFile` で再書き込み
+  - `removeMaster(state, surface, reason)` で `state.masters` から削除すると同時に `deleteMasterFile` でファイルも削除
+- **daemon 再起動時の復元**: `startMaster` が `.team/masters/*.json` を列挙して PID 生存を `process.kill(pid, 0)` で確認し、生きているものだけを `state.masters` に登録。pid 欠落 / dead / JSON 破損のファイルは `unlink` して `master_restore_discarded` / `master_file_corrupted` をログ
+- **旧形式からのマイグレーション**: `initInfra` の末尾で `migrateMasterLayout` が `.team/master.surface` と `team.json.master.pid` を読み、`.team/masters/<normalized>.json` に統合する（1 回限り、冪等）。`.team/.gitignore` の `master.surface` 行も `masters/` に自動書き換えられる
 
 ### .team/rate-limit.json（T227）
 

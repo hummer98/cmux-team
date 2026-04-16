@@ -277,7 +277,7 @@ async function startDaemon(): Promise<void> {
   await sleep(10_000);
   try {
     const team = await readTeamJson();
-    masterSurface = team.master?.surface;
+    masterSurface = team.masters?.[0]?.surface ?? team.master?.surface;
     if (masterSurface) {
       console.log(`  master surface: ${masterSurface}`);
     } else {
