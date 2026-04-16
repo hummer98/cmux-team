@@ -1074,6 +1074,67 @@ describe("generateMasterSettings (T211)", () => {
     const content = await readFile(path2, "utf-8");
     JSON.parse(content); // parse error にならなければ OK
   });
+
+  // T175: Master の稼働中ステータスを TUI に反映するため、
+  // Conductor と同じ SessionStart / SessionEnd hook を Master にも適用する。
+  // これにより daemon は SESSION_STARTED で masterPid を確立し、
+  // spawnMasterPidWatcher を起動できるようになる。
+  test("T175: settings.hooks.SessionStart が cmux-team send SESSION_STARTED --from-stdin を呼ぶ", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.SessionStart)).toBe(true);
+    expect(settings.hooks.SessionStart.length).toBe(1);
+    expect(settings.hooks.SessionStart[0].matcher).toBe("");
+    const cmd: string = settings.hooks.SessionStart[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send SESSION_STARTED");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(settings.hooks.SessionStart[0].hooks[0].timeout).toBe(5000);
+  });
+
+  test("T175: settings.hooks.SessionEnd が logout|prompt_input_exit|other matcher で SESSION_ENDED を送る", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.SessionEnd)).toBe(true);
+    expect(settings.hooks.SessionEnd.length).toBe(1);
+    expect(settings.hooks.SessionEnd[0].matcher).toBe("logout|prompt_input_exit|other");
+    const cmd: string = settings.hooks.SessionEnd[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send SESSION_ENDED");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(cmd).not.toContain("--reason");
+    expect(settings.hooks.SessionEnd[0].hooks[0].timeout).toBe(5000);
+  });
+
+  test("T175: Master は /clear でセッション継続するため SessionEnd matcher に clear を含めない", async () => {
+    // Conductor は clear matcher を持つが Master は持たない (D2)
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const matchers: string[] = (settings.hooks.SessionEnd ?? []).map(
+      (h: any) => h.matcher,
+    );
+    expect(matchers.some((m) => m === "clear")).toBe(false);
+    expect(matchers.some((m) => m.includes("clear"))).toBe(false);
+  });
+
+  test("T175: UserPromptSubmit / Stop hook は既存のまま残る（regression guard）", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.UserPromptSubmit)).toBe(true);
+    expect(settings.hooks.UserPromptSubmit.length).toBe(1);
+    const busyCmd: string = settings.hooks.UserPromptSubmit[0].hooks[0].command;
+    expect(busyCmd).toContain("master-hook-busy.py");
+
+    expect(Array.isArray(settings.hooks.Stop)).toBe(true);
+    expect(settings.hooks.Stop.length).toBe(1);
+    const stopCmd: string = settings.hooks.Stop[0].hooks[0].command;
+    expect(stopCmd).toContain("master-hook-stop.py");
+  });
 });
 
 // --- T211 Phase 4: CMUX_ROLE 削除 regression ---

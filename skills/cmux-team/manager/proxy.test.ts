@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { start } from "./proxy";
+import { onStateChanged, __resetBusForTest, __listenerCountForTest } from "./eventBus";
 
 let testDir: string;
 
@@ -370,6 +371,117 @@ describe("proxy", () => {
       const res = await postStatusline(handle.port, "surface:100");
       const text = await res.text();
       expect(text.endsWith("\n")).toBe(false);
+      handle.stop();
+    });
+  });
+
+  // --- T175: POST /master-state ---
+  describe("POST /master-state (T175)", () => {
+    let origProjectRoot: string | undefined;
+
+    beforeEach(() => {
+      origProjectRoot = process.env.PROJECT_ROOT;
+      process.env.PROJECT_ROOT = testDir;
+      __resetBusForTest();
+    });
+
+    afterEach(() => {
+      if (origProjectRoot !== undefined) {
+        process.env.PROJECT_ROOT = origProjectRoot;
+      } else {
+        delete process.env.PROJECT_ROOT;
+      }
+      __resetBusForTest();
+    });
+
+    async function postMasterState(port: number, body: Record<string, any>) {
+      return await fetch(`http://127.0.0.1:${port}/master-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    test("status=busy で state.masterStatus が running になり notifyStateChanged が発火する", async () => {
+      const mockState: any = { masterStatus: "idle" };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      let emitCount = 0;
+      const unsub = onStateChanged(() => { emitCount++; });
+
+      const res = await postMasterState(handle.port, { status: "busy", prompt: "調査開始" });
+      expect(res.status).toBe(200);
+      expect(mockState.masterStatus).toBe("running");
+      expect(mockState.masterPrompt).toBe("調査開始");
+      // notifyStateChanged が /master-state ハンドラ内で 1 回以上呼ばれる
+      expect(emitCount).toBeGreaterThanOrEqual(1);
+
+      unsub();
+      handle.stop();
+    });
+
+    test("status=idle で state.masterStatus が idle + masterPrompt クリア", async () => {
+      const mockState: any = { masterStatus: "running", masterPrompt: "前のプロンプト" };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      let emitCount = 0;
+      const unsub = onStateChanged(() => { emitCount++; });
+
+      const res = await postMasterState(handle.port, { status: "idle" });
+      expect(res.status).toBe(200);
+      expect(mockState.masterStatus).toBe("idle");
+      expect(mockState.masterPrompt).toBeUndefined();
+      expect(emitCount).toBeGreaterThanOrEqual(1);
+
+      unsub();
+      handle.stop();
+    });
+
+    test("manager.log に master_state status=<...> が 1 行記録される", async () => {
+      const mockState: any = { masterStatus: "idle" };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      const res = await postMasterState(handle.port, { status: "busy", prompt: "research topic X" });
+      expect(res.status).toBe(200);
+
+      // ログは非同期書き込みなので少し待つ
+      await new Promise((r) => setTimeout(r, 50));
+
+      const logPath = join(testDir, ".team/logs/manager.log");
+      const content = await readFile(logPath, "utf-8");
+      const masterStateLines = content.split("\n").filter((l) => l.includes("master_state"));
+      expect(masterStateLines.length).toBeGreaterThanOrEqual(1);
+      expect(masterStateLines[0]).toContain("status=busy");
+      expect(masterStateLines[0]).toContain("prompt=");
+
+      handle.stop();
+    });
+
+    test("prompt のみ更新でも notifyStateChanged が呼ばれる", async () => {
+      const mockState: any = { masterStatus: "running" };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      let emitCount = 0;
+      const unsub = onStateChanged(() => { emitCount++; });
+
+      const res = await postMasterState(handle.port, { prompt: "追加プロンプト" });
+      expect(res.status).toBe(200);
+      expect(mockState.masterPrompt).toBe("追加プロンプト");
+      expect(emitCount).toBeGreaterThanOrEqual(1);
+
+      unsub();
+      handle.stop();
+    });
+
+    test("listener 数が /master-state ハンドラ呼び出し後も増えない（副作用で bus リスナー登録しない）", async () => {
+      const before = __listenerCountForTest();
+      const mockState: any = { masterStatus: "idle" };
+      const handle = await start(testDir, { getState: () => mockState });
+
+      await postMasterState(handle.port, { status: "busy" });
+      await postMasterState(handle.port, { status: "idle" });
+
+      expect(__listenerCountForTest()).toBe(before);
       handle.stop();
     });
   });

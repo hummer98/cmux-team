@@ -8,6 +8,7 @@
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
 import { log } from "./logger";
+import { notifyStateChanged } from "./eventBus";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
@@ -237,6 +238,9 @@ export async function start(
       }
 
       // Master 状態更新エンドポイント
+      // T175: master-hook-busy.py / master-hook-stop.py から POST される。
+      // state 書き換え後に notifyStateChanged で TUI 即時 refresh をトリガし、
+      // 受信内容を manager.log に 1 行残して動作検証可能にする。
       if (req.method === "POST" && url.pathname === "/master-state") {
         if (!opts?.getState) return new Response("Not Found", { status: 404 });
         try {
@@ -250,6 +254,15 @@ export async function start(
           }
           if (body.prompt != null) {
             state.masterPrompt = body.prompt.slice(0, 80);
+          }
+          const promptTrim = (body.prompt ?? "").slice(0, 40).replace(/\s+/g, " ");
+          log("master_state", `status=${body.status ?? "?"} prompt=${promptTrim}`).catch(() => {});
+          if (body.status === "busy") {
+            notifyStateChanged("proxy.ts:/master-state:busy");
+          } else if (body.status === "idle") {
+            notifyStateChanged("proxy.ts:/master-state:idle");
+          } else if (body.prompt != null) {
+            notifyStateChanged("proxy.ts:/master-state:prompt");
           }
           return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
         } catch {

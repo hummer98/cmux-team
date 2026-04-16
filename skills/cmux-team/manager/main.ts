@@ -1368,6 +1368,18 @@ export function generateMasterSettings(projectRoot: string): string {
   const { busy, stop } = ensureMasterHookScripts(projectRoot);
   const settings: Record<string, any> = {
     hooks: {
+      // T175: SessionStart hook で daemon に masterPid を渡し spawnMasterPidWatcher を起動する。
+      // Conductor の SessionStart hook と完全に同じ command パターン (main.ts:1478-1489)。
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
       UserPromptSubmit: [
         {
           matcher: "",
@@ -1384,6 +1396,18 @@ export function generateMasterSettings(projectRoot: string): string {
           hooks: [{
             type: "command",
             command: `python3 ${stop}`,
+            timeout: 5000,
+          }],
+        },
+      ],
+      // T175: SessionEnd hook で Master kill / ターミナル終了を検知。
+      // Master は /clear でもセッション継続するため matcher に clear を含めない (D2)。
+      SessionEnd: [
+        {
+          matcher: "logout|prompt_input_exit|other",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send SESSION_ENDED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -1709,18 +1733,25 @@ async function cmdResume(): Promise<void> {
  */
 async function cmdLaunchMaster(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_master", { model: DEFAULT_MODEL }));
+  // T175: Master の SessionStart/SessionEnd hook が `${CMUX_SURFACE}` を展開するため
+  // cmux pane env 継承が壊れた経路 (cmux identify fallback) でも surface が解決されるよう
+  // Conductor (cmdConductor) と同じく defensive に明示設定する。
+  const surface = await resolveCallerSurfaceOrExit();
+
   // プロンプト生成
   const { generateMasterPrompt } = await import("./template");
   await generateMasterPrompt(PROJECT_ROOT);
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
+  process.env.CMUX_SURFACE = surface;
   process.env.CMUX_NO_RENAME_TAB = "1";
   process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
   const proxyPort = await resolveProxyPort();
   if (proxyPort) {
     process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   }
+  await log("master_spawn_surface", formatSurface(surface, "U"));
   await log("master_spawn_proxy", `port=${proxyPort ?? "none"}`);
 
   // Master 用 settings.json 生成 (T211: UserPromptSubmit/Stop hook を同梱)
