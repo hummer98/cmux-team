@@ -24,6 +24,7 @@ import type { AgentState, ConductorState, QueueMessage, RateLimitInfo, LayoutMod
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal } from "./trace-store";
+import { isStale } from "./rate-limit-persistence";
 
 export interface TaskSummary {
   id: string;
@@ -399,6 +400,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
         "team.json",
         "master.surface",
         "proxy-port",
+        "rate-limit.json",
         "logs/",
         "output/",
         "prompts/",
@@ -418,6 +420,36 @@ export async function initInfra(state: DaemonState): Promise<void> {
       ].join("\n")
     );
     await log("team_gitignore_created", `path=${gitignore}`);
+  } else {
+    // T227: 既存 .gitignore に rate-limit.json 行がなければ追記する（冪等）
+    try {
+      const current = await readFile(gitignore, "utf-8");
+      const hasEntry = current
+        .split("\n")
+        .some((line) => {
+          const t = line.trim();
+          return t === "rate-limit.json" && !line.trimStart().startsWith("#");
+        });
+      if (!hasEntry) {
+        // proxy-port の直後に挿入、なければ末尾に追記
+        const lines = current.split("\n");
+        const proxyPortIdx = lines.findIndex((l) => l.trim() === "proxy-port");
+        let next: string;
+        if (proxyPortIdx >= 0) {
+          const head = lines.slice(0, proxyPortIdx + 1);
+          const tail = lines.slice(proxyPortIdx + 1);
+          next = [...head, "rate-limit.json", ...tail].join("\n");
+        } else {
+          next = current.endsWith("\n")
+            ? current + "rate-limit.json\n"
+            : current + "\nrate-limit.json\n";
+        }
+        await writeFile(gitignore, next);
+        await log("team_gitignore_migrated", `path=${gitignore} added=rate-limit.json`);
+      }
+    } catch (e: any) {
+      await log("error", `gitignore migration failed: ${e.message}`);
+    }
   }
 
   // config.json（デフォルト生成）
@@ -1310,7 +1342,10 @@ export async function scanTasks(state: DaemonState): Promise<void> {
   }
 
   // === スロットリングガード ===
-  const throttled5h = (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+  // stale（リセット時刻を過ぎた復元値）はガードしない。次の API 応答を待つ。
+  const throttled5h =
+    !isStale(state.rateLimit) &&
+    (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
   if (throttled5h && allExecutable.length > 0) {
     const util = state.rateLimit!.unified5hUtilization!;
     const reset = state.rateLimit!.unified5hReset;
@@ -1767,8 +1802,11 @@ function computeSidebarStatus(
   }
 
   // 2. スロットリング
-  const throttled = (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
-    || state.rateLimit?.unifiedStatus === "rate_limited";
+  // stale な復元値では throttle 判定を行わない（§2-4）
+  const throttled =
+    !isStale(state.rateLimit) &&
+    ((state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
+      || state.rateLimit?.unifiedStatus === "rate_limited");
   if (throttled) {
     const remaining = formatResetRemaining(state.rateLimit?.unified5hReset ?? null);
     return {

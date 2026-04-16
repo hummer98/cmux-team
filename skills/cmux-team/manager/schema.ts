@@ -169,30 +169,36 @@ export type ConductorState = z.infer<typeof ConductorState> & {
 
 // --- レート制限情報 ---
 
-export interface RateLimitInfo {
+/**
+ * RateLimitInfo の Zod スキーマ。
+ * `.team/rate-limit.json` への永続化・復元時に `safeParse` でフィールド健全性を検証する。
+ */
+export const RateLimitInfoSchema = z.object({
   /** tokens remaining（分単位ウィンドウ） */
-  tokensRemaining: number;
+  tokensRemaining: z.number(),
   /** tokens limit（分単位ウィンドウ） */
-  tokensLimit: number;
+  tokensLimit: z.number(),
   /** tokens reset（ISO 8601） */
-  tokensReset: string;
+  tokensReset: z.string(),
   /** input tokens remaining */
-  inputTokensRemaining: number;
+  inputTokensRemaining: z.number(),
   /** output tokens remaining */
-  outputTokensRemaining: number;
+  outputTokensRemaining: z.number(),
   /** unified 5h 使用率（0.0-1.0、null = ヘッダーなし） */
-  unified5hUtilization: number | null;
+  unified5hUtilization: z.number().nullable(),
   /** unified 7d 使用率（0.0-1.0、null = ヘッダーなし） */
-  unified7dUtilization: number | null;
+  unified7dUtilization: z.number().nullable(),
   /** unified 5h リセット時刻（unix timestamp 文字列、null = ヘッダーなし） */
-  unified5hReset: string | null;
+  unified5hReset: z.string().nullable(),
   /** unified 7d リセット時刻（unix timestamp 文字列、null = ヘッダーなし） */
-  unified7dReset: string | null;
+  unified7dReset: z.string().nullable(),
   /** unified ステータス（allowed/rate_limited、null = ヘッダーなし） */
-  unifiedStatus: string | null;
+  unifiedStatus: z.string().nullable(),
   /** 最終更新時刻 */
-  updatedAt: string;
-}
+  updatedAt: z.string(),
+});
+
+export type RateLimitInfo = z.infer<typeof RateLimitInfoSchema>;
 
 // --- スロットリング閾値 ---
 

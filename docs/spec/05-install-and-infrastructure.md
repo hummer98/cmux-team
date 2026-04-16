@@ -350,6 +350,7 @@ CLI 引数 > `.team/config.json` > デフォルト（`wide`）。
 team.json
 master.surface
 proxy-port
+rate-limit.json
 logs/
 output/
 prompts/
@@ -369,11 +370,24 @@ e2e-results/
 
 `output/`, `prompts/`, `queue/` はタスク中心フォルダ集約への移行で実体としては未使用だが、過去バージョンとの互換のため引き続き ignore に列挙されている。`team.json` は daemon が自動更新する派生物のため追跡しない（以前は追跡対象だったが v3.41 以降で無視に変更）。`task-state.json` は resume に必要なため追跡する。
 
+`rate-limit.json` は T227 で追加された RateLimitInfo スナップショット（下記参照）。`initInfra` は既存 `.team/.gitignore` に `rate-limit.json` 行が無ければ自動で追記し（`team_gitignore_migrated` をログ）、二重追記は行わない（冪等）。
+
 追跡するもの:
 - `tasks/` — タスクディレクトリ集約（`TNNN-slug/task.md` ＋ `runs/<taskRunId>/`）
 - `specs/` — 要件・設計ドキュメント
 - `artifacts/` — 知見の記録
 - `task-state.json` — タスク状態（resume で参照）
+
+### .team/rate-limit.json（T227）
+
+daemon の `state.rateLimit`（最後に観測した Anthropic API の 5h/7d 使用率）を永続化するスナップショット。再起動直後の dashboard に前回値を復元し、次の API 応答が来るまでの空白を埋めるために使う。
+
+- **書き込み**: `proxy.ts` が Anthropic レスポンスヘッダーから `RateLimitInfo` を抽出したタイミングで、`.team/rate-limit.json.tmp` に書き出して `rename` する atomic write（fire-and-forget）。失敗時は `rate_limit_persist_failed` ログを残して続行し、API レスポンスは絶対にブロックしない。
+- **shutdown 時**: SIGINT/SIGTERM で最後にもう一度 flush（ブロック許容、失敗はログのみ）。
+- **読み込み**: `cmux-team start` の `initInfra` 直後に `loadRateLimit()` が `RateLimitInfoSchema.safeParse()` で検証し、失敗（ファイル不在 / 破損 JSON / 型不一致 / 必須欠落）は null フォールバック。成功時は `rate_limit_restored unified5h=<pct> unified7d=<pct> stale=<bool>`、失敗時は `rate_limit_restored empty` をログに記録。
+- **stale 概念**: `unified5hReset` / `unified7dReset` のいずれかが未来にある間は non-stale、両方過去 or 両方 null or 片方過去+片方 null は stale と判定する（OR 判定）。stale なデータではスロットル判定を無効化し、dashboard は該当行を GRAY 化して末尾に `(stale)` ラベルを付与する。
+- **対象ファイル**: スロットル判定が入る 5 箇所（`dashboard.tsx` の isThrottled / forceRed、`proxy.ts` の `/rate-limit` エンドポイント、`daemon.ts` の tick スロットルガードとサイドバーステータス）すべてで `isStale()` ガードが適用される。
+- **`.gitignore` 管理**: 新規生成時は `rate-limit.json` を含めて書き込み。既存 `.gitignore` は `initInfra` が行単位でチェックして不足時のみ追記する（冪等）。
 
 ### .team/config.json（初回起動時に自動生成）
 

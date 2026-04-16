@@ -113,6 +113,14 @@ cmux-team trace-task 035            # 特定タスクのセッション履歴（
 
 > 旧 `cmux-team trace --task / --search / --show` は `trace-task` に集約された（commit `0641ac9`）。全文検索 CLI は現在なく、`.team/traces/traces.db` を直接参照する必要がある。
 
+### 2a. Dashboard のレート制限表示（T227）
+
+dashboard ヘッダー右端に `5h: X% ████░░░░░░` / `7d: Y% ██░░░░░░░░` を表示する。値は Anthropic API レスポンスヘッダー（`anthropic-ratelimit-unified-5h-utilization` 等）から取得し、`.team/rate-limit.json` にスナップショットとして永続化される。
+
+- **復元**: `cmux-team start` 時に `.team/rate-limit.json` を読み込み、next API 応答が来るまでは前回値を表示する。ファイル不在・破損・型不一致は null フォールバックで `Rate: --` 表示。
+- **stale 表示**: `unified5hReset` / `unified7dReset` のいずれかが未来にある間は通常表示。両方過去 or 両方 null or 片方過去+片方 null の場合は **全パーツを GRAY にし末尾に `(stale)` を付加する**。新しい API 応答が来ると stale ラベルは消え、最新値で上書きされる。
+- **throttle 判定**: `unified5hUtilization >= 90%` または `unifiedStatus === "rate_limited"` でスロットル中とみなしヘッダーを `⏸ THROTTLED`（赤 / blink）にする。ただし **stale な復元値ではスロットル判定を一切行わない**（dashboard 表示のみならず、daemon の tick によるタスク割当抑止・サイドバーステータス・proxy の `/rate-limit` エンドポイント全てに適用）。stale 中はタスクを通常通り割り当て、次の API 応答で throttle 状態を再確認する。
+
 ### 3. cmux 操作リファレンス
 
 **環境変数:**

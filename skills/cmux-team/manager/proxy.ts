@@ -12,6 +12,7 @@ import { notifyStateChanged } from "./eventBus";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
+import { persistRateLimit, isStale } from "./rate-limit-persistence";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
@@ -177,9 +178,11 @@ export async function start(
           }
           const state = opts.getState();
           const rl = state.rateLimit;
-          // dashboard.tsx:882 準拠: utilization >= threshold && running && bootPhase === "ready"
+          // dashboard.tsx 準拠: utilization >= threshold && running && bootPhase === "ready"
+          // stale な復元値ではスロットル判定を無効化する（§2-4）
           const throttled =
-            (rl?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
+            !isStale(rl)
+            && (rl?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
             && !!state.running
             && state.bootPhase === "ready";
           const rawReset5h = rl?.unified5hReset ?? null;
@@ -322,7 +325,13 @@ export async function start(
         // レート制限ヘッダーを DaemonState に反映
         if (opts?.getState) {
           const rl = extractRateLimit(upstreamRes.headers);
-          if (rl) opts.getState().rateLimit = rl;
+          if (rl) {
+            opts.getState().rateLimit = rl;
+            // 再起動時の stale 判定に使うため `.team/rate-limit.json` へ非同期永続化
+            persistRateLimit(projectRoot, rl).catch((e: any) =>
+              log("rate_limit_persist_failed", e.message).catch(() => {})
+            );
+          }
         }
 
         // streaming: tee して片方をログに使う
@@ -357,7 +366,12 @@ export async function start(
       // レート制限ヘッダーを DaemonState に反映
       if (opts?.getState) {
         const rl = extractRateLimit(upstreamRes.headers);
-        if (rl) opts.getState().rateLimit = rl;
+        if (rl) {
+          opts.getState().rateLimit = rl;
+          persistRateLimit(projectRoot, rl).catch((e: any) =>
+            log("rate_limit_persist_failed", e.message).catch(() => {})
+          );
+        }
       }
 
       const entry: TraceEntry = {
