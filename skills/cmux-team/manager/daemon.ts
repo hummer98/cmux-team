@@ -941,6 +941,26 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "CONDUCTOR_REGISTERED": {
+      // T228: idempotent merge — 既存 state があれば skip（taskId/agents 等を破壊しないため）。
+      //   cmdConductor / cmdResume 自身が POST する self-register 方式に変わったため、
+      //   resume 経路では initializeConductorSlots が pre-set した state が既に存在する。
+      if (state.conductors.has(message.surface)) {
+        const existing = state.conductors.get(message.surface)!;
+        await log(
+          "conductor_register_skipped",
+          `${formatSurface(message.surface, "C")} reason=already_registered existing_status=${existing.status} existing_pid=${existing.pid ?? "null"}`,
+        );
+        break;
+      }
+      // 新規登録: soft cap（state.conductors.size >= state.maxConductors）を超過する場合は
+      //   warning ログを出してから登録を続行する。hard cap にはしない（任意 surface から
+      //   Conductor を追加できるのが本変更の目的）。
+      if (state.conductors.size >= state.maxConductors) {
+        await log(
+          "conductor_register_over_cap",
+          `${formatSurface(message.surface, "C")} current=${state.conductors.size} max=${state.maxConductors}`,
+        );
+      }
       state.conductors.set(message.surface, {
         surface: message.surface,
         status: "starting",

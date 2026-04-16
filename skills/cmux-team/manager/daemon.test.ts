@@ -1865,3 +1865,119 @@ describe("handleMessage: SESSION_ENDED reason=other (T216)", () => {
     expect((conductor as any).status).toBe("disconnected");
   });
 });
+
+describe("handleMessage: CONDUCTOR_REGISTERED (T228)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  test("新規 surface → state.conductors に set される（status=starting, agents=[]）", async () => {
+    const state = await createDaemon(testDir);
+    expect(state.conductors.size).toBe(0);
+
+    const ts = new Date().toISOString();
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:100",
+      timestamp: ts,
+    });
+
+    expect(state.conductors.size).toBe(1);
+    const c = state.conductors.get("surface:100");
+    expect(c).toBeDefined();
+    expect(c!.surface).toBe("surface:100");
+    expect(c!.status).toBe("starting");
+    expect(c!.startedAt).toBe(ts);
+    expect(c!.agents).toEqual([]);
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("conductor_registered");
+  });
+
+  test("既存あり + 同 surface 2 回目 → skip ログ、status/taskId/agents が破壊されない", async () => {
+    const state = await createDaemon(testDir);
+    // 事前に running + taskId + agents を持つ conductor を配置
+    const initialAgents = [
+      { surface: "surface:200", startedAt: new Date().toISOString() },
+    ];
+    state.conductors.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      startedAt: "2026-04-17T00:00:00.000Z",
+      taskId: "042",
+      taskRunId: "task-042-1712345678",
+      taskTitle: "preserved-title",
+      worktreePath: "/tmp/worktree-042",
+      agents: initialAgents as any,
+      pid: 12345,
+    } as any);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:100",
+      timestamp: new Date().toISOString(),
+    });
+
+    // 既存 state が破壊されないこと
+    const c = state.conductors.get("surface:100")!;
+    expect(c.status).toBe("running");
+    expect(c.taskId).toBe("042");
+    expect(c.taskRunId).toBe("task-042-1712345678");
+    expect(c.taskTitle).toBe("preserved-title");
+    expect(c.worktreePath).toBe("/tmp/worktree-042");
+    expect(c.agents).toEqual(initialAgents as any);
+    expect(c.pid).toBe(12345);
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("conductor_register_skipped");
+    expect(logContent).toContain("reason=already_registered");
+    expect(logContent).toContain("existing_status=running");
+    expect(logContent).toContain("existing_pid=12345");
+  });
+
+  test("state.conductors.size >= state.maxConductors 超過 → warning ログは出るが登録成功", async () => {
+    const state = await createDaemon(testDir);
+    // wide デフォルト = 3。3 つ登録してから 4 つ目を追加する
+    state.conductors.set("surface:1", {
+      surface: "surface:1",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+    state.conductors.set("surface:2", {
+      surface: "surface:2",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+    state.conductors.set("surface:3", {
+      surface: "surface:3",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+    expect(state.conductors.size).toBe(3);
+    expect(state.maxConductors).toBe(3);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:4",
+      timestamp: new Date().toISOString(),
+    });
+
+    // 登録自体は成功している
+    expect(state.conductors.size).toBe(4);
+    expect(state.conductors.has("surface:4")).toBe(true);
+    const c4 = state.conductors.get("surface:4")!;
+    expect(c4.status).toBe("starting");
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("conductor_register_over_cap");
+    expect(logContent).toContain("current=3");
+    expect(logContent).toContain("max=3");
+  });
+});

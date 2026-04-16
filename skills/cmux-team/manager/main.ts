@@ -1146,6 +1146,52 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
 }
 
 /**
+ * Conductor 実行プロセスが自身を daemon に登録する（T228）。
+ * proxy-port が読み取れない / proxy が死んでいる / POST が失敗するいずれの
+ * 場合も fail-fast（exit 1）する。daemon 不在で claude だけ起動しても
+ * タスク割当も SessionStart hook の state 更新も機能しないため。
+ *
+ * postMessage は「daemon 未起動時は黙って skip」するため、fail-fast と
+ * 矛盾する。ここでは使わない。
+ */
+async function registerSelfAsConductor(surface: string): Promise<void> {
+  const port = await resolveProxyPort();
+  if (!port) {
+    console.error(
+      "daemon が起動していません (.team/proxy-port 不在 / proxy 死亡 / 壊れた proxy-port ファイル)。",
+    );
+    console.error("cmux-team start を先に実行してください。");
+    console.error(
+      "壊れた proxy-port ファイルの場合は `.team/proxy-port` を削除して `cmux-team start` をやり直してください。",
+    );
+    process.exit(1);
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "CONDUCTOR_REGISTERED",
+        surface,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) {
+      console.error(
+        `CONDUCTOR_REGISTERED POST failed: status=${res.status} surface=${surface}`,
+      );
+      process.exit(1);
+    }
+  } catch (e: any) {
+    console.error(
+      `CONDUCTOR_REGISTERED POST failed: ${e?.message ?? e} surface=${surface}`,
+    );
+    process.exit(1);
+  }
+  await log("conductor_self_register", formatSurface(surface, "C"));
+}
+
+/**
  * conductor-settings.json を生成する共通ヘルパー。
  * cmdConductor と cmdResume の両方から使用される。
  * @returns 生成したファイルの絶対パス
@@ -1625,6 +1671,10 @@ async function cmdConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
   const surface = await resolveCallerSurfaceOrExit();
 
+  // self-register: cmdConductor が自身を daemon に登録（T228）。
+  // proxy-port 不在 / POST 失敗時は fail-fast。
+  await registerSelfAsConductor(surface);
+
   // T213: main ブランチを env → config → "main" の三段フォールバックで解決。
   //   `launchConductor` が `CMUX_TEAM_MAIN_BRANCH` をシェルに焼き付けるのが第一ソース。
   //   env が欠落しても config.mainBranch（cmdStart が永続化）で救済できる。
@@ -1704,6 +1754,12 @@ async function cmdConductor(): Promise<void> {
 async function cmdResume(): Promise<void> {
   if (hasHelpFlag()) showHelp("Usage: cmux-team resume <task-id>");
   const surface = await resolveCallerSurfaceOrExit();
+
+  // self-register: cmdResume が自身を daemon に登録（T228）。
+  // daemon 側ハンドラは既存 state があれば skip するため、resume 時に
+  // initializeConductorSlots が pre-set した taskId/taskRunId/worktreePath は破壊されない。
+  await registerSelfAsConductor(surface);
+
   const taskId = args[1];
   if (!taskId) {
     console.error("Usage: cmux-team resume <task-id>");

@@ -69,11 +69,13 @@ export interface ResumeAssignment {
 
 /**
  * 指定 surface 上で Conductor Claude セッションを起動する。
- * - CONDUCTOR_REGISTERED を HTTP API 経由で daemon に送信
  * - 環境変数をシェルに焼き付け
  * - `cmux-team conductor` を起動（session-id は cmdConductor が自己生成）
  *   または `opts.resumeTaskId` 指定時は `cmux-team resume <id>` を起動
  * - タブ名を設定（resume 時は呼び出し元が T<id> に rename するためスキップ）
+ *
+ * T228: 登録は `cmdConductor` / `cmdResume` の self-register に委譲。
+ * ここでは pane 内に `cmux-team conductor` / `cmux-team resume` を送信するだけ。
  *
  * T207: pane キャッシュ引数は廃止。pane 解決は呼び出し時には不要で、後段の
  * spawn-agent / resetConductor が `cmux.getPaneForSurface` /
@@ -84,24 +86,7 @@ export async function launchConductor(
   surface: string,
   opts?: { resumeTaskId?: string; mainBranch?: string },
 ): Promise<void> {
-  // 1. CONDUCTOR_REGISTERED を HTTP API 経由で送信
-  try {
-    const portFile = join(projectRoot, ".team/proxy-port");
-    const port = (await readFile(portFile, "utf-8")).trim();
-    await fetch(`http://localhost:${port}/api/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "CONDUCTOR_REGISTERED",
-        surface,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-  } catch (e: any) {
-    await log("error", `CONDUCTOR_REGISTERED send failed: ${formatSurface(surface, "C")} ${e.message}`);
-  }
-
-  // 2. 環境変数をシェルに焼き付け
+  // 1. 環境変数をシェルに焼き付け
   //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
   //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdConductor が env → config → "main"
@@ -113,7 +98,7 @@ export async function launchConductor(
   );
   await sleep(500);
 
-  // 3. Claude 起動
+  // 2. Claude 起動
   //    - resumeTaskId 指定時: 既存セッションを cmdResume 経由で復元
   //    - それ以外: 通常起動（--session-id なし — cmdConductor が自己生成して daemon に通知）
   if (opts?.resumeTaskId) {
@@ -122,7 +107,7 @@ export async function launchConductor(
     await cmux.send(surface, `cmux-team conductor\n`);
   }
 
-  // 4. タブ名設定
+  // 3. タブ名設定
   //    resume / 新規問わず `[N] Conductor` を設定する。
   //    T193 でタブ名はロール固定表記にしたため、後続で assign/reset 時に
   //    rename する必要はなく、ここで一度だけ設定すれば十分。
@@ -236,33 +221,27 @@ export async function initializeConductorSlots(
       }
     }
 
-    // フォールバック: CONDUCTOR_REGISTERED の HTTP POST が失敗した場合に備え
+    // resume 時の state pre-population: main.ts:699-718 の resume 割当反映ループが
+    // state.conductors.get(r.surface) で既存エントリを mutate するため、
+    // initializeLayout 完了時点で state.conductors に resume 対象 surface が
+    // 同期的に存在する必要がある。
+    // 非 resume 分岐は self-register (cmdConductor → CONDUCTOR_REGISTERED POST) に
+    // 委譲したため削除（T228）。
     for (const [i, surface] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
-      if (!conductors.has(surface)) {
-        await log("conductor_registered_fallback", formatSurface(surface, "C"));
-        if (resumeItem) {
-          // resume 割当済みの場合は running + taskId を最初からセット
-          conductors.set(surface, {
-            surface,
-            status: "running",
-            startedAt: new Date().toISOString(),
-            agents: [],
-            taskId: resumeItem.taskId,
-            taskRunId: resumeItem.taskRunId,
-            worktreePath: resumeItem.worktreePath,
-            taskTitle: resumeItem.taskTitle,
-            // sessionId なし — SessionStart hook で後から設定される
-          });
-        } else {
-          conductors.set(surface, {
-            surface,
-            status: "starting",
-            startedAt: new Date().toISOString(),
-            agents: [],
-            // sessionId なし — SessionStart hook で後から設定される
-          });
-        }
+      if (resumeItem && !conductors.has(surface)) {
+        await log("conductor_resume_prepopulated", formatSurface(surface, "C"));
+        conductors.set(surface, {
+          surface,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          agents: [],
+          taskId: resumeItem.taskId,
+          taskRunId: resumeItem.taskRunId,
+          worktreePath: resumeItem.worktreePath,
+          taskTitle: resumeItem.taskTitle,
+          // sessionId なし — SessionStart hook で後から設定される
+        });
       }
     }
 
