@@ -224,6 +224,8 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - Zod バリデーション（不正メッセージはスキップ）
 - `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
 
+`CONDUCTOR_REGISTERED` は **Conductor 実行プロセス自身**（`cmdConductor` / `cmdResume`）が起動時に POST する self-register 方式（T228）。`launchConductor`（Manager 起動経路）からは POST しない。daemon ハンドラは idempotent merge で、既存 state があれば `conductor_register_skipped` ログを出して skip する（resume 時の taskId/taskRunId/worktreePath を破壊しないため）。`state.conductors.size >= state.maxConductors` を超過した新規登録では `conductor_register_over_cap` warning ログを出すが登録自体は成功する（soft cap）。
+
 `SESSION_CLEAR` は Conductor が `/clear` を実行したときに送信される。Conductor が `running` 状態のときに `SESSION_CLEAR` を受信すると、ユーザーの手動 `/clear` とみなしてタスクを `aborted` に遷移させ、Conductor を idle にリセットする（`forceCloseDisconnectedConductor` と同パターン）。`idle` 状態の場合は何もしない（TUI チラつき防止）。
 
 `SESSION_ASK` は Stop hook が AskUserQuestion による停止を検出したときに送信される（T181）。Conductor が `running` 状態で受信すると status を `asking` に遷移させ、ユーザー入力待ちであることを TUI に反映する。Agent 側で発火した場合は Conductor の `await-agent` が STATUS=ASK を受け取り再開判断を行う。
