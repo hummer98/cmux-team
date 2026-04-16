@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.51.0] - 2026-04-17
+
+### Added
+- **direnv allow 未実行時の fail-fast 判定を導入（T225）**。`.envrc` が direnv allow されていない状態で `cmux-team start` や `spawn-agent` を実行すると、`CLAUDE_CODE_OAUTH_TOKEN` 等の環境変数が block され Conductor/Agent が意図しない認証経路で起動する事故が起きていた。新規 `direnv-check.ts` で `direnv status` の `Found RC allowed` 値をチェック（0=allow のみ ok とする fail-closed 判定）し、未 allow 時は原因と修復コマンドを表示して exit 1 する。`no_direnv`（direnv 未インストール）は警告のみで続行、`no_envrc`（`.envrc` 不在）は従来通り素通り
+- **Master の稼働中ステータスを TUI スピナーに反映（T175）**。Master Claude セッションの SessionStart / SessionEnd hook を `master-settings.json` に追加し、Master が busy / idle / prompt 状態に遷移した際に TUI ダッシュボードのスピナーが即座に更新されるようにした。`/master-state` ハンドラに `notifyStateChanged()` 呼び出しを追加し、ログに `master_state status=... prompt=...` を 1 行出力（40 字トリム）
+
+### Changed
+- **docs/spec と cmux-team-guide を実装の現状に同期（T224）**。`03-commands.md` に `trace` / `trace-hooks` の関連 CLI 参照を追記、`05-install-and-infrastructure.md` の CLI 表に `trace-hooks` 行を追加し `restart-task` 行を実装準拠（assigned/aborted 両対応）に修正、`.team/config.json` スキーマに `mainBranch` を追加。`cmux-team-guide` SKILL.md からも `restart-task` の誤記「assigned → ready に戻す」を修正
+
+### Fixed
+- **envrc-prompt の env 変数ベース判定に修正（T223）**。`.envrc.local` / `~/.zshenv` / `source_up` / 外部注入など `.envrc` 本体以外からの `CMUX_CLAUDE_HOOKS_DISABLED` 設定が検知されず過剰プロンプトが出る問題を解消。`ensureEnvrcHookPrompt` の gating に env 変数チェックを追加（`CMUX_TEAM_NO_PROMPT` 直後、log reason=`already_in_env`）し、既存の `.envrc` ファイル内容チェックも残して log reason を `already_in_envrc` に改名（direnv allow 未実行ケースの重複 append 防止）
+
 ## [3.50.0] - 2026-04-16
 
 ### Added
