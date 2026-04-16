@@ -324,9 +324,9 @@ cmux-team send-agent --surface $AGENT_SURFACE "plan.md の 3 節から再開し�
 新順序は以下の 11 ステップ。**artifact 登録は commit の前**（worktree 内に artifact を commit 対象として取り込むため）。
 
 1. 全フェーズが完了したことを確認（Inspection で GO 判定済み）
-2. Agent のタブを閉じる:
+2. Agent のタブを閉じる（正常完了なので close-agent を使う）:
    ```bash
-   cmux-team kill-agent --surface $AGENT_SURFACE
+   cmux-team close-agent --surface $AGENT_SURFACE
    ```
 3. **結果サマリーを書き出す**（commit の前に書く）:
    ```bash
@@ -486,7 +486,7 @@ cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリ�
 
 - **自分でコードを書く・ファイルを編集する** — Edit/Write ツールを使わない。必ず Agent に委譲する
 - **Claude の Agent ツール（サブエージェント）を使う** — Agent は必ず `cmux-team spawn-agent` で別タブに spawn する
-- **他の surface に `cmux send` / `cmux send-key` で直接送信する** — 禁止。PreToolUse hook で実行時にブロックされる。Agent の起動は `cmux-team spawn-agent`、Agent への追加指示は `cmux-team send-agent --surface <agent-surface> <message>`、Agent の終了は `cmux-team kill-agent` を使う。他の Conductor surface（自分以外）は一切触らない。他の Conductor を Inspector/Implementer として流用するのも禁止
+- **他の surface に `cmux send` / `cmux send-key` で直接送信する** — 禁止。PreToolUse hook で実行時にブロックされる。Agent の起動は `cmux-team spawn-agent`、Agent への追加指示は `cmux-team send-agent --surface <agent-surface> <message>`、Agent の正常終了は `cmux-team close-agent`、強制終了（crash 扱い）は `cmux-team kill-agent` を使う。他の Conductor surface（自分以外）は一切触らない。他の Conductor を Inspector/Implementer として流用するのも禁止
 - **コード変更を伴うタスクの summary.md を artifact 化する** — artifact は調査・設計判断・セッション要約の記録用。コード変更タスクの summary.md は task run 側の成果物であり artifact の役割ではない
 - {{MAIN_BRANCH}} ブランチで作業する（worktree を使う）
 - Manager や Master に直接報告する（出力ファイルを書くだけ）

@@ -1016,9 +1016,11 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           const idx = c.agents.findIndex(a => a.surface === message.surface);
           if (idx !== -1) {
             const agent = c.agents[idx]!;
+            // T231: close-agent は正常完了、それ以外（kill-agent, session_end 等）は crashed
+            const agentStatus = message.reason === "close-agent" ? "completed" : "crashed";
             try {
               await writeAgentDone(state.projectRoot, c.surface, agent.surface, {
-                status: "crashed",
+                status: agentStatus,
                 reason: message.reason ?? "session_end",
               });
             } catch (e: any) {
@@ -1028,7 +1030,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             notifyStateChanged("daemon.ts:handleMessage:session-ended-agent");
             await log(
               "agent_done",
-              `${formatPair(c.surface, message.surface, "C", "A")} trigger=session_ended status=crashed`
+              `${formatPair(c.surface, message.surface, "C", "A")} trigger=session_ended status=${agentStatus}`
             );
             break;
           }

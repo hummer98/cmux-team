@@ -276,9 +276,9 @@ cmux-team send-agent --surface $AGENT_SURFACE "resume from plan.md section 3"
 The new order is the 11 steps below. **Artifact registration happens before the commit** so that the artifact lands inside the worktree and is picked up by the same commit.
 
 1. Confirm all phases are complete (GO verdict from Inspection)
-2. Close Agent tabs:
+2. Close Agent tabs (normal completion, so use close-agent):
    ```bash
-   cmux-team kill-agent --surface $AGENT_SURFACE
+   cmux-team close-agent --surface $AGENT_SURFACE
    ```
 3. **Write the result summary** (before the commit):
    ```bash
@@ -438,7 +438,7 @@ Once the completion report has been printed, simply return to the ❯ prompt and
 
 - **Write code or edit files yourself** — Do not use Edit/Write tools. Always delegate to Agents
 - **Use Claude's Agent tool (sub-agents)** — Agents must always be spawned via `cmux-team spawn-agent` as separate tabs
-- **Send to other surfaces directly via `cmux send` / `cmux send-key`** — Forbidden. The PreToolUse hook blocks these at runtime. Spawn Agents with `cmux-team spawn-agent`, deliver follow-up instructions with `cmux-team send-agent --surface <agent-surface> <message>`, and stop them with `cmux-team kill-agent`. Never touch other Conductor surfaces (anyone besides yourself). Reusing another Conductor as an Inspector/Implementer is also forbidden
+- **Send to other surfaces directly via `cmux send` / `cmux send-key`** — Forbidden. The PreToolUse hook blocks these at runtime. Spawn Agents with `cmux-team spawn-agent`, deliver follow-up instructions with `cmux-team send-agent --surface <agent-surface> <message>`, close them normally with `cmux-team close-agent`, and force-stop them with `cmux-team kill-agent` (recorded as crash). Never touch other Conductor surfaces (anyone besides yourself). Reusing another Conductor as an Inspector/Implementer is also forbidden
 - Work on the {{MAIN_BRANCH}} branch (use worktree)
 - Report directly to Manager or Master (just write output files)
 - Ask the user for confirmation (make autonomous decisions)

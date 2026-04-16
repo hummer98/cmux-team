@@ -244,6 +244,24 @@ Examples:
   cmux-team kill-agent --surface surface:215
 `,
 
+  help_close_agent: `
+cmux-team close-agent -- close an agent (normal exit)
+
+Usage:
+  cmux-team close-agent --surface <surface>
+
+Options:
+  --surface <surface>     surface ID of the Agent to close (required)
+
+Notes:
+  - Use this when the Agent finished normally (e.g. approved by inspector).
+  - Unlike kill-agent, this records status=completed in the agent done marker.
+  - For crash/abort, prefer kill-agent which records status=crashed.
+
+Examples:
+  cmux-team close-agent --surface surface:215
+`,
+
   help_send_agent: `
 cmux-team send-agent -- send a message to an Agent spawned by this Conductor
 
@@ -550,7 +568,8 @@ Usage:
   cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             list running agents
-  cmux-team kill-agent --surface <surface>
+  cmux-team close-agent --surface <surface>    close an agent (normal exit)
+  cmux-team kill-agent --surface <surface>     kill an agent (crash/force)
   cmux-team send-agent --surface <surface> <message>    send a message to a spawned Agent
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
@@ -790,6 +809,24 @@ Options:
 
 Examples:
   cmux-team kill-agent --surface surface:215
+`,
+
+  help_close_agent: `
+cmux-team close-agent -- Agent を正常終了
+
+Usage:
+  cmux-team close-agent --surface <surface>
+
+Options:
+  --surface <surface>     正常終了する Agent の surface ID（必須）
+
+Notes:
+  - Agent が正常完了した場合（Inspector で GO 判定済み等）に使用する。
+  - kill-agent と違い、agent done マーカーに status=completed が記録される。
+  - クラッシュや強制停止には kill-agent を使う（status=crashed として記録）。
+
+Examples:
+  cmux-team close-agent --surface surface:215
 `,
 
   help_send_agent: `
@@ -1099,7 +1136,8 @@ Usage:
   cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
-  cmux-team kill-agent --surface <surface>
+  cmux-team close-agent --surface <surface>    Agent を正常終了
+  cmux-team kill-agent --surface <surface>     Agent を強制停止（crash 扱い）
   cmux-team send-agent --surface <surface> <message>    Agent にメッセージ送信
   cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
   cmux-team update-task --task-id <id> --status <status>
