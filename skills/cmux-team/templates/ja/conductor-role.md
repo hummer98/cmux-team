@@ -107,14 +107,23 @@ Inspector Agent を spawn し、実装結果を検品させる。**Implementer �
 
 ## Agent 起動手順
 
+> **重要（全 Agent ロール共通）:** heredoc 本文の Role 導入文（`## Role: ...` + 1-2 行の説明）の直後に、`{{PROJECT_INSTRUCTIONS}}` を 1 行独立して残すこと。
+> `cmux-team spawn-agent` が prompt-file を読み、このプレースホルダを `.team/agent-instructions/<role>.md` の内容で置換する。
+> overlay が無ければ空文字に置換され、余分な空行は残らない。
+> placeholder を残し忘れると overlay が効かないため、仕上げ前に heredoc 内に 1 行独立で含まれていることを目視で確認すること。
+
 ```bash
 # 1. プロンプトファイルを書き出す（CLI 引数の長さ制限・エスケープ問題を回避）
+#    quoted heredoc（'AGENT_PROMPT'）を推奨 — shell 変数展開を抑止し
+#    {{PROJECT_INSTRUCTIONS}} 等の placeholder を literal のまま保持する
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
 mkdir -p "$PROMPT_DIR"
 AGENT_ID="${CONDUCTOR_ID}-agent-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 # タスク指示
+
+{{PROJECT_INSTRUCTIONS}}
 
 作業ディレクトリ: <タスク割り当てで指定された作業ディレクトリ>
 
@@ -204,8 +213,13 @@ AGENT_ID="${CONDUCTOR_ID}-researcher-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 OUTPUT_DIR="<OUTPUT_DIR>"  # タスク割り当てで指定された値に置換する
 
+# quoted 'RESEARCHER_PROMPT' を使うと shell 変数展開を完全に抑止できるが、
+# 下記サンプルは ${OUTPUT_DIR} 等の値を埋め込むため unquoted を使う。
+# {{PROJECT_INSTRUCTIONS}} は `$` を含まないため unquoted でも literal に保持される。
 cat > "$PROMPT_FILE" << RESEARCHER_PROMPT
 ## Role: Researcher
+
+{{PROJECT_INSTRUCTIONS}}
 
 あなたは cmux-team の Researcher Agent です。以下のトピックを調査し、
 結果を ${OUTPUT_DIR}/research.md に書き出してください。
@@ -481,6 +495,22 @@ cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリ�
 - このレポートは次タスクの /clear で消えて構わない
 
 完了レポートを出力したら、あとは ❯ プロンプトに戻って待機する。`close-task` が daemon に完了通知を送っているので追加の送信操作は不要。daemon がリセット処理（`/clear` 送信）を行う。
+
+## プロジェクト固有の追加指示（overlay）
+
+Agent プロンプト本文に `{{PROJECT_INSTRUCTIONS}}` プレースホルダを残しておくと、
+`cmux-team spawn-agent` が実行時に `.team/agent-instructions/<role>.md` の内容を
+自動展開する。overlay ファイルが無い場合は空文字に置換される。
+
+overlay の編集:
+- `cmux-team get-agent-instructions --role <role>` で内容確認
+- `cmux-team set-agent-instructions --role <role> --from-file <path>` で更新
+- `cmux-team delete-agent-instructions --role <role>` で削除
+- `cmux-team list-agent-instructions` で全ロールの有無を一覧
+
+Conductor が heredoc で作る Agent プロンプトは、同じ `{{PROJECT_INSTRUCTIONS}}` を
+そのまま残せばよい（shell 変数展開の対象ではない）。role alias（`impl` → `implementer`,
+`reviewer` → `design-reviewer`）は `cmux-team spawn-agent --role` 側で正規化される。
 
 ## やらないこと（厳守）
 

@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: DocKeeper
 あなたはドキュメント管理エージェントです。以下を現在のプロジェクト状態と同期してください:
 - `docs/spec/` — 統合仕様書

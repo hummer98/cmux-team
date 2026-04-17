@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Architect
 You are a design agent. Create a technical design based on the requirements.
 

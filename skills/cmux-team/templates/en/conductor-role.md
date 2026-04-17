@@ -107,14 +107,24 @@ No user confirmation needed. Proceed through phases autonomously.
 
 ## Agent Launch Procedure
 
+> **IMPORTANT (applies to every agent role):** Keep `{{PROJECT_INSTRUCTIONS}}` on its own line in the heredoc body, placed right after the Role preamble (`## Role: ...` + its 1-2 line description).
+> `cmux-team spawn-agent` reads the prompt-file at spawn time and replaces this placeholder with the contents of `.team/agent-instructions/<role>.md`.
+> If the overlay file is absent, the placeholder is replaced with the empty string and no extra blank lines remain.
+> Dropping the placeholder silently disables the overlay, so double-check the heredoc contains it on its own line before finalising.
+
 ```bash
 # 1. Write prompt to file (avoid CLI argument length limits and escaping issues)
+#    Prefer a quoted heredoc ('AGENT_PROMPT') — it suppresses shell variable
+#    expansion and preserves placeholders like {{PROJECT_INSTRUCTIONS}} as
+#    literals for the spawn-agent template expander.
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
 mkdir -p "$PROMPT_DIR"
 AGENT_ID="${CONDUCTOR_ID}-agent-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 # Task Instructions
+
+{{PROJECT_INSTRUCTIONS}}
 
 Working directory: <working directory specified in task assignment>
 
@@ -156,8 +166,13 @@ AGENT_ID="${CONDUCTOR_ID}-researcher-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 OUTPUT_DIR="<OUTPUT_DIR>"  # replace with the value assigned to this task
 
+# A quoted heredoc ('RESEARCHER_PROMPT') would fully suppress shell expansion,
+# but this sample embeds ${OUTPUT_DIR} so we keep it unquoted. {{PROJECT_INSTRUCTIONS}}
+# has no `$` in it, so it survives literally even in an unquoted heredoc.
 cat > "$PROMPT_FILE" << RESEARCHER_PROMPT
 ## Role: Researcher
+
+{{PROJECT_INSTRUCTIONS}}
 
 You are a cmux-team Researcher Agent. Investigate the following topic and
 write the result to ${OUTPUT_DIR}/research.md.
@@ -433,6 +448,23 @@ Notes:
 - This report will be cleared by /clear for the next task
 
 Once the completion report has been printed, simply return to the ❯ prompt and wait. `close-task` already sends the completion notification to the daemon, so no extra send is required. The daemon will reset the session (send `/clear`).
+
+## Project-Specific Instructions (overlay)
+
+Leaving `{{PROJECT_INSTRUCTIONS}}` somewhere in an Agent prompt lets
+`cmux-team spawn-agent` inject the contents of `.team/agent-instructions/<role>.md`
+at spawn time. If the overlay file is missing or empty the placeholder is replaced
+with the empty string.
+
+Managing overlays:
+- `cmux-team get-agent-instructions --role <role>` — print the current overlay
+- `cmux-team set-agent-instructions --role <role> --from-file <path>` — write one
+- `cmux-team delete-agent-instructions --role <role>` — remove it (idempotent)
+- `cmux-team list-agent-instructions` — summary for every role
+
+When the Conductor hand-builds a prompt with a heredoc, keep `{{PROJECT_INSTRUCTIONS}}`
+verbatim — shell does not expand it. Role aliases (`impl` → `implementer`,
+`reviewer` → `design-reviewer`) are normalised by `cmux-team spawn-agent --role`.
 
 ## What NOT to Do (Strictly Enforced)
 

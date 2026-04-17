@@ -244,6 +244,40 @@ export type RateLimitInfo = z.infer<typeof RateLimitInfoSchema>;
 /** 5h unified utilization がこの値以上なら新規タスク割り当てを停止 */
 export const THROTTLE_5H_THRESHOLD = 0.90;
 
+// --- Agent ロール (T247) ---
+
+/**
+ * Agent ロール列挙。`.team/agent-instructions/<role>.md` の role 名と
+ * spawn-agent の --role 引数の canonical 値の両方で使う。
+ */
+export const AgentRole = z.enum([
+  "researcher",
+  "architect",
+  "planner",
+  "design-reviewer",
+  "implementer",
+  "inspector",
+  "dockeeper",
+  "task-manager",
+]);
+export type AgentRole = z.infer<typeof AgentRole>;
+export const AGENT_ROLES: readonly AgentRole[] = AgentRole.options;
+
+/**
+ * role エイリアスを正規化する。未知 role は undefined を返す。
+ * 現状のエイリアス: `impl` → `implementer`, `reviewer` → `design-reviewer`
+ * （conductor-role.md の heredoc サンプルが歴史的に `--role impl` を使っているため）。
+ */
+export function normalizeAgentRole(raw: string): AgentRole | undefined {
+  const alias: Record<string, AgentRole> = {
+    impl: "implementer",
+    reviewer: "design-reviewer",
+  };
+  const key = alias[raw] ?? raw;
+  const parsed = AgentRole.safeParse(key);
+  return parsed.success ? parsed.data : undefined;
+}
+
 // --- レイアウトモード ---
 
 export const LayoutMode = z.enum(["wide", "16x9"]);

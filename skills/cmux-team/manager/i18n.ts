@@ -25,6 +25,10 @@ export const locale: Locale = detectLocale();
 // --- メッセージ定義 ---
 
 const en = {
+  // ── T247: project-local agent instructions overlay ─────────────────────────
+  /** `{{PROJECT_INSTRUCTIONS}}` 展開時に overlay 本文の先頭に付ける見出し文字列 */
+  project_instructions_heading: "Project-Specific Instructions",
+
   // ── エラー・ステータスメッセージ ──────────────────────────────────────────────
   not_in_cmux:
     "❌ Not running in a cmux session. Please run this command inside cmux.",
@@ -566,6 +570,65 @@ Examples:
   cmux-team await-task --task-id 108,109 --timeout 7200
 `,
 
+  help_get_agent_instructions: `
+cmux-team get-agent-instructions -- print the project-local overlay for an agent role
+
+Usage:
+  cmux-team get-agent-instructions --role <role>
+
+Options:
+  --role <role>           agent role (required)
+                          aliases: impl → implementer, reviewer → design-reviewer
+
+Notes:
+  - Reads .team/agent-instructions/<role>.md under PROJECT_ROOT
+  - Prints the file content to stdout (trailing newline preserved)
+  - If the overlay file does not exist, prints nothing and exits 0
+  - Unknown role → exit 1 with error on stderr
+`,
+
+  help_set_agent_instructions: `
+cmux-team set-agent-instructions -- write the project-local overlay for an agent role
+
+Usage:
+  cmux-team set-agent-instructions --role <role> (--body <text> | --from-file <path> | --from-stdin)
+
+Options:
+  --role <role>           agent role (required)
+  --body <text>           overlay body as inline text (mutually exclusive with --from-file/--from-stdin)
+  --from-file <path>      read overlay body from a file (mutually exclusive)
+  --from-stdin            read overlay body from stdin (mutually exclusive)
+
+Notes:
+  - Creates .team/agent-instructions/ if missing
+  - Overlay body cannot exceed 100 KB (exits 1 otherwise)
+  - Unknown role → exit 1 (strict; overlay writer is a user entry point)
+  - Prints "OK role=<role> bytes=<n>" to stdout on success
+`,
+
+  help_delete_agent_instructions: `
+cmux-team delete-agent-instructions -- remove the project-local overlay for an agent role
+
+Usage:
+  cmux-team delete-agent-instructions --role <role>
+
+Notes:
+  - Prints "DELETED=true" if the file was removed, "DELETED=false" if it did not exist
+  - Exits 0 in both cases (deletion is idempotent)
+  - Unknown role → exit 1 with error on stderr
+`,
+
+  help_list_agent_instructions: `
+cmux-team list-agent-instructions -- list all agent roles with their overlay status
+
+Usage:
+  cmux-team list-agent-instructions
+
+Notes:
+  - Prints one line per role in AGENT_ROLES order
+  - "<role> ✓ <n> bytes" if the overlay exists, "<role> ✗" otherwise
+`,
+
   help_main: `cmux-team — multi-agent development orchestration
 
 Usage:
@@ -598,12 +661,19 @@ Usage:
   cmux-team artifacts open <id>                    open in markdown viewer
   cmux-team artifacts search <query>               full-text search
   cmux-team artifacts --validate                   validate frontmatter
+  cmux-team get-agent-instructions --role <role>   print project-local overlay for an agent role
+  cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  write overlay
+  cmux-team delete-agent-instructions --role <role> remove overlay
+  cmux-team list-agent-instructions                 list overlay status per role
   cmux-team self-update                            manually queue an update task
 
 For details on each command: cmux-team <command> --help`,
 };
 
 const ja: typeof en = {
+  // ── T247: project-local agent instructions overlay ─────────────────────────
+  project_instructions_heading: "プロジェクト固有の追加指示",
+
   // ── エラー・ステータスメッセージ ──────────────────────────────────────────────
   not_in_cmux: "❌ cmux 環境外です。cmux 内で実行してください。",
   daemon_not_running:
@@ -1144,6 +1214,66 @@ Examples:
   cmux-team await-task --task-id 108,109 --timeout 7200
 `,
 
+  help_get_agent_instructions: `
+cmux-team get-agent-instructions -- 指定 Agent ロールの project-local overlay を表示
+
+Usage:
+  cmux-team get-agent-instructions --role <role>
+
+Options:
+  --role <role>           Agent ロール（必須）
+                          エイリアス: impl → implementer, reviewer → design-reviewer
+
+Notes:
+  - PROJECT_ROOT 配下の .team/agent-instructions/<role>.md を読みます
+  - 内容を stdout に出力します（末尾改行保持）
+  - overlay ファイルが無い場合は何も出力せず exit 0
+  - 未知 role は stderr にエラーを出して exit 1
+`,
+
+  help_set_agent_instructions: `
+cmux-team set-agent-instructions -- 指定 Agent ロールの project-local overlay を書き込む
+
+Usage:
+  cmux-team set-agent-instructions --role <role> (--body <text> | --from-file <path> | --from-stdin)
+
+Options:
+  --role <role>           Agent ロール（必須）
+  --body <text>           overlay 本文をインラインテキストで指定（--from-file/--from-stdin と排他）
+  --from-file <path>      overlay 本文をファイルから読み取り（排他）
+  --from-stdin            overlay 本文を stdin から読み取り（排他）
+
+Notes:
+  - .team/agent-instructions/ が無ければ作成します
+  - overlay 本文は 100 KB を超えるとエラー（exit 1）
+  - 未知 role は exit 1（strict — overlay writer はユーザー入口のため）
+  - 成功時に "OK role=<role> bytes=<n>" を stdout に出力
+`,
+
+  help_delete_agent_instructions: `
+cmux-team delete-agent-instructions -- 指定 Agent ロールの project-local overlay を削除
+
+Usage:
+  cmux-team delete-agent-instructions --role <role>
+
+Notes:
+  - 削除成功時 "DELETED=true"、存在しなかった場合 "DELETED=false" を出力
+  - どちらも exit 0（削除は冪等）
+  - 未知 role は stderr にエラーを出して exit 1
+`,
+
+  help_list_agent_instructions: `
+cmux-team list-agent-instructions -- 全 Agent ロールの overlay 有無を一覧表示
+
+Usage:
+  cmux-team list-agent-instructions
+
+Notes:
+  - AGENT_ROLES の順で 1 ロール 1 行ずつ出力します
+  - overlay あり: "<role> ✓ <n> bytes"
+  - overlay なし: "<role> ✗"
+`,
+
   help_main: `cmux-team — マルチエージェント開発オーケストレーション
 
 Usage:
@@ -1176,6 +1306,10 @@ Usage:
   cmux-team artifacts open <id>                    Markdown ビューアで開く
   cmux-team artifacts search <query>               全文検索
   cmux-team artifacts --validate                   フロントマター検証
+  cmux-team get-agent-instructions --role <role>   Agent ロールの project-local overlay を表示
+  cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  overlay を書き込み
+  cmux-team delete-agent-instructions --role <role> overlay を削除
+  cmux-team list-agent-instructions                 ロールごとの overlay 有無を一覧
   cmux-team self-update                            update タスクを手動起票
 
 各コマンドの詳細: cmux-team <command> --help`,
@@ -1189,6 +1323,17 @@ const messages = { en, ja };
  */
 export function t(key: keyof typeof en, vars?: Record<string, string>): string {
   const str = messages[locale][key] ?? messages.en[key] ?? key;
+  if (!vars) return str;
+  return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), str);
+}
+
+/**
+ * 明示 locale 指定版の `t()`。`t()` がプロセス起動時の `locale` に固定されるのに対し、
+ * こちらは locale を引数で受け取るため、locale 切替のテスト・overlay 展開時の
+ * 明示指定などに使う（T247）。
+ */
+export function tFor(loc: Locale, key: keyof typeof en, vars?: Record<string, string>): string {
+  const str = messages[loc][key] ?? messages.en[key] ?? key;
   if (!vars) return str;
   return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), str);
 }

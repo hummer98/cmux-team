@@ -193,6 +193,25 @@ depends_on: [10, 11, 12]  # waits for all to complete
 | Conductor → Agent | `cmux-team send-agent` / `spawn-agent` (direct `cmux send` is blocked by hook) |
 | Conductor ← Agent | `cmux-team await-agent` (fs.watch on Agent done marker) |
 
+## Project-Specific Agent Instructions
+
+You can give each Agent role (researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager) a project-local overlay by writing `.team/agent-instructions/<role>.md`. The overlay content is injected into the Agent's prompt at spawn time.
+
+```bash
+# Write an overlay
+cmux-team set-agent-instructions --role implementer --from-file ./my-impl-notes.md
+cmux-team set-agent-instructions --role researcher --body "Limit search to papers from 2025 onward"
+
+# Inspect / list
+cmux-team get-agent-instructions --role implementer
+cmux-team list-agent-instructions
+
+# Delete (idempotent)
+cmux-team delete-agent-instructions --role implementer
+```
+
+Max overlay size is 100 KB. The dashboard's `Settings` tab (`4` key) shows a read-only preview of all role overlays plus a config snapshot.
+
 ## Traceability
 
 All API requests are automatically recorded through the built-in proxy when the daemon is running.

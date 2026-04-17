@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Architect
 あなたは設計エージェントです。要件に基づいて技術設計を作成してください。
 

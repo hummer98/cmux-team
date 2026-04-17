@@ -210,6 +210,7 @@ cmux-team/
 | 変数 | 使用テンプレート | 説明 |
 |------|----------------|------|
 | `{{COMMON_HEADER}}` | 全 Agent ロール | common-header.md の展開結果 |
+| `{{PROJECT_INSTRUCTIONS}}` | 全 Agent ロール + Conductor heredoc | `.team/agent-instructions/<role>.md` の本文に展開される overlay。不在時は空文字。spawn-agent 時に展開される（T247） |
 | `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | 調査すべきサブ質問リスト |
@@ -530,6 +531,7 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
 ├── tasks/             # タスクファイル（フラット構造）
 ├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
 ├── artifacts/         # Axxx — 知見の記録（調査・設計判断・セッション要約）
+├── agent-instructions/ # Agent ロール別の project-local overlay（T247）
 ├── output/            # Conductor/Agent の出力（taskRunId 別）
 ├── conductors/        # Conductor 状態ファイル
 ├── prompts/           # プロンプト（監査証跡）

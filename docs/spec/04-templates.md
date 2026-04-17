@@ -51,6 +51,34 @@ Project: {{PROJECT_ROOT}}
 
 ---
 
+## `{{PROJECT_INSTRUCTIONS}}` プレースホルダ（T247）
+
+全 Agent ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager）のテンプレート冒頭（`{{COMMON_HEADER}}` 直後）に `{{PROJECT_INSTRUCTIONS}}` を 1 行で配置している。
+
+**役割**: `cmux-team spawn-agent --prompt-file <path>` 実行時に、prompt-file 内のこのプレースホルダが `.team/agent-instructions/<role>.md` の内容で置換される。overlay が無い場合は空文字に置換されるため、テンプレート側には常に残しておく。
+
+**展開仕様**: `skills/cmux-team/manager/template.ts` の `expandProjectInstructions(projectRoot, role, content)` が担当:
+- `{{PROJECT_INSTRUCTIONS}}` を含まない → そのまま返す (mode=noop)
+- role エイリアス解決: `impl` → `implementer`、`reviewer` → `design-reviewer`
+- role 不明 → 空文字置換 (mode=unknown-role、warn ログ)
+- overlay 不在 / 空 → 空文字置換 (mode=empty)
+- overlay 有り → `\n## <project_instructions_heading>\n\n<body>\n` ブロックに展開 (mode=applied)
+
+**i18n**: 見出しは `project_instructions_heading` キー（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`formatProjectInstructionsBlock(body, locale)` が整形する。
+
+**Conductor 側の注意**: Conductor が heredoc で prompt-file を手組みする際は、quoted heredoc (`'AGENT_PROMPT'`) を使って `{{PROJECT_INSTRUCTIONS}}` を literal として保つ。`conductor-role.md` と `conductor.md` の先頭に全ロール共通の注意書きが追加されている。
+
+**Agent ロール enum** (`skills/cmux-team/manager/schema.ts`):
+```typescript
+export const AgentRole = z.enum([
+  "researcher", "architect", "planner", "design-reviewer",
+  "implementer", "inspector", "dockeeper", "task-manager",
+]);
+```
+エイリアス: `impl` → `implementer`、`reviewer` → `design-reviewer`。
+
+---
+
 ## Master Template
 
 Master 固有のテンプレート。ユーザー対話・タスク作成・進捗報告のプロトコルを定義。

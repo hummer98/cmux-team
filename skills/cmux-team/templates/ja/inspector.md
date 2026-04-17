@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Inspector
 あなたは検品エージェントです。実装結果を5つの観点で検査し、GO/NOGO 判定を行います。
 

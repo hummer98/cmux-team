@@ -46,8 +46,19 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, normalizeAutoUpdate, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
+import type { TeamConfig } from "./config";
+import { loadConfig, resolveLayout, resolveAutoUpdateMode } from "./config";
 import { persistRateLimit, loadRateLimit, isStale } from "./rate-limit-persistence";
+import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
+import {
+  readProjectInstructions,
+  writeProjectInstructions,
+  deleteProjectInstructions,
+  listProjectInstructions,
+  AGENT_INSTRUCTIONS_MAX_BYTES,
+} from "./agent-instructions";
+import { expandProjectInstructions } from "./template";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -93,87 +104,6 @@ const execFileAsync = promisify(execFile);
 
 // --- config ---
 const DEFAULT_MODEL = "opus";
-
-interface TeamConfig {
-  models?: {
-    master?: string;
-    conductor?: string;
-    agent?: string;
-  };
-  envrcHookPromptSkipped?: boolean;
-  layout?: LayoutMode;
-  /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
-  sleepPrevention?: boolean;
-  /**
-   * auto-update のモード（デフォルト: "off"）。env CMUX_TEAM_AUTO_UPDATE が優先。
-   * - "off": 更新チェックしない
-   * - "notify": 更新を検出して TUI バナーに表示（install は行わない）
-   * - "task": 更新を検出して update タスクを --run-after-all で自動起票
-   * 後方互換: true→"task", false→"off"
-   */
-  autoUpdate?: boolean | AutoUpdateMode;
-  /**
-   * プロジェクトの主開発ブランチ。未設定時は cmux-team start 起動時に
-   * `git symbolic-ref refs/remotes/origin/HEAD` で自動検出して書き込まれる。T213 で追加。
-   */
-  mainBranch?: string;
-}
-
-async function loadConfig(): Promise<TeamConfig> {
-  const configPath = join(PROJECT_ROOT, ".team/config.json");
-  try {
-    return JSON.parse(await readFile(configPath, "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-/**
- * レイアウトモードを解決する。
- * 優先順位: CLI フラグ (--layout) > config.json の layout > "wide"
- * 不正値は Error を throw する（呼び出し元で process.exit する想定）。
- */
-export function resolveLayout(
-  config: Pick<TeamConfig, "layout">,
-  cliLayout: string | undefined,
-): LayoutMode {
-  const raw = cliLayout ?? config.layout ?? "wide";
-  if (raw !== "wide" && raw !== "16x9") {
-    throw new Error(`Unknown layout: ${raw} (expected "wide" or "16x9")`);
-  }
-  return raw;
-}
-
-/**
- * auto-update のモードを解決する。
- * 優先順位: env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > "off"
- *
- * env 値の解釈:
- * - 未定義 / 空文字 → config にフォールバック
- * - "0" / "false" / "off" → off (source=env)
- * - "1" / "true" / "task" → task (source=env)
- * - "notify" → notify (source=env)
- * - それ以外 → throw
- *
- * config 値の解釈: normalizeAutoUpdate に委譲（true→task, false→off, 文字列はそのまま）
- */
-export function resolveAutoUpdateMode(
-  config: Pick<TeamConfig, "autoUpdate">,
-  env: NodeJS.ProcessEnv = process.env,
-): { mode: AutoUpdateMode; source: "env" | "config" | "default" } {
-  const raw = env.CMUX_TEAM_AUTO_UPDATE;
-  if (raw !== undefined && raw !== "") {
-    const v = raw.trim().toLowerCase();
-    if (v === "0" || v === "false" || v === "off") return { mode: "off", source: "env" };
-    if (v === "1" || v === "true" || v === "task") return { mode: "task", source: "env" };
-    if (v === "notify") return { mode: "notify", source: "env" };
-    throw new Error(`unknown CMUX_TEAM_AUTO_UPDATE=${JSON.stringify(raw)} (expected 0|1|true|false|off|notify|task)`);
-  }
-  if (config.autoUpdate !== undefined) {
-    return { mode: normalizeAutoUpdate(config.autoUpdate), source: "config" };
-  }
-  return { mode: "off", source: "default" };
-}
 
 function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
   return cliOverride ?? config.models?.[role] ?? DEFAULT_MODEL;
@@ -352,7 +282,7 @@ async function cmdStart(): Promise<void> {
   }
 
   // layout 解決（CLI --layout > config.json > "wide"）
-  const startConfig = await loadConfig();
+  const startConfig = await loadConfig(PROJECT_ROOT);
   let layout: LayoutMode;
   try {
     layout = resolveLayout(startConfig, getArg("layout"));
@@ -1706,7 +1636,7 @@ async function cmdConductor(): Promise<void> {
   //   `launchConductor` が `CMUX_TEAM_MAIN_BRANCH` をシェルに焼き付けるのが第一ソース。
   //   env が欠落しても config.mainBranch（cmdStart が永続化）で救済できる。
   //   両方空なら "main" にフォールバックしつつ警告ログを出す。
-  const conductorConfig = await loadConfig();
+  const conductorConfig = await loadConfig(PROJECT_ROOT);
   const envMainBranch = process.env.CMUX_TEAM_MAIN_BRANCH?.trim();
   const mainBranch = envMainBranch || conductorConfig.mainBranch || "main";
   if (!envMainBranch && !conductorConfig.mainBranch) {
@@ -1734,7 +1664,7 @@ async function cmdConductor(): Promise<void> {
   }
 
   // モデル解決
-  const config = await loadConfig();
+  const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "conductor", getArg("model"));
 
   // T203: sessionId は Claude 自身に発行させる。
@@ -1825,7 +1755,7 @@ async function cmdResume(): Promise<void> {
   }
 
   // モデル解決
-  const config = await loadConfig();
+  const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "conductor", getArg("model"));
 
   // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
@@ -1884,7 +1814,7 @@ async function cmdLaunchMaster(): Promise<void> {
   const masterSettingsPath = generateMasterSettings(PROJECT_ROOT);
 
   // モデル解決
-  const config = await loadConfig();
+  const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "master", getArg("model"));
 
   // claude を exec
@@ -2035,7 +1965,7 @@ async function cmdSpawnAgent(): Promise<void> {
 
   // --- 3. Claude Code 起動 ---
   // モデル解決
-  const config = await loadConfig();
+  const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "agent", getArg("model"));
 
   // Agent 用 settings.json 生成（T181: Stop / SessionEnd hook + statusLine）
@@ -2074,9 +2004,35 @@ async function cmdSpawnAgent(): Promise<void> {
   }
   claudeFlags.push(`--model ${model}`);
 
-  let claudeCmd: string;
+  // T247: prompt-file 内の {{PROJECT_INSTRUCTIONS}} を overlay で展開する。
+  // 展開後は `.team/prompts/<basename>.expanded.md` に書き出し、その path を Claude に渡す。
+  // 失敗時は元の promptFile にフォールバック。
+  let effectivePromptFile = promptFile;
   if (promptFile) {
-    claudeCmd = `claude ${claudeFlags.join(" ")} '${promptFile} を読んで指示に従ってください。'`;
+    try {
+      const original = await readFile(promptFile, "utf-8");
+      const { expanded, mode } = await expandProjectInstructions(PROJECT_ROOT, role, original);
+      if (mode !== "noop" && expanded !== original) {
+        const base = basename(promptFile, ".md");
+        const expandedPath = join(PROJECT_ROOT, ".team/prompts", `${base}.expanded.md`);
+        await mkdir(dirname(expandedPath), { recursive: true });
+        await writeFile(expandedPath, expanded, "utf-8");
+        effectivePromptFile = expandedPath;
+      }
+      await log(
+        "spawn_agent_expand",
+        `role=${role} mode=${mode} prompt_file=${promptFile}${effectivePromptFile !== promptFile ? ` expanded=${effectivePromptFile}` : ""}`,
+      );
+    } catch (e: any) {
+      await log("spawn_agent_expand_failed", `role=${role} prompt_file=${promptFile} error=${e?.message ?? e}`);
+      // 元の promptFile でフォールバック
+      effectivePromptFile = promptFile;
+    }
+  }
+
+  let claudeCmd: string;
+  if (effectivePromptFile) {
+    claudeCmd = `claude ${claudeFlags.join(" ")} '${effectivePromptFile} を読んで指示に従ってください。'`;
   } else {
     claudeCmd = `claude ${claudeFlags.join(" ")} '${prompt}'`;
   }
@@ -3503,6 +3459,96 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- agent-instructions サブコマンド (T247) ---
+
+/** --role 引数を `AgentRole` に正規化。未知 → stderr + exit 1 */
+function requireAgentRole(): AgentRole {
+  const raw = requireArg("role");
+  const role = normalizeAgentRole(raw);
+  if (!role) {
+    console.error(
+      `Error: unknown role: ${JSON.stringify(raw)} (expected one of ${AGENT_ROLES.join(", ")}; aliases: impl, reviewer)`,
+    );
+    process.exit(1);
+  }
+  return role;
+}
+
+async function cmdGetAgentInstructions(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_get_agent_instructions"));
+  const role = requireAgentRole();
+  const body = await readProjectInstructions(PROJECT_ROOT, role);
+  if (body === null) {
+    // ファイル無し — 無出力で exit 0（仕様 §5.2）
+    process.exit(0);
+  }
+  process.stdout.write(body);
+  process.exit(0);
+}
+
+async function cmdSetAgentInstructions(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_set_agent_instructions"));
+  const role = requireAgentRole();
+
+  const bodyArg = getArg("body");
+  const fromFile = getArg("from-file");
+  const fromStdin = hasFlag("from-stdin");
+  const sources = [bodyArg !== undefined, fromFile !== undefined, fromStdin].filter(Boolean).length;
+  if (sources === 0) {
+    console.error("Error: one of --body, --from-file, --from-stdin is required");
+    process.exit(1);
+  }
+  if (sources > 1) {
+    console.error("Error: --body, --from-file, --from-stdin are mutually exclusive");
+    process.exit(1);
+  }
+
+  let body: string;
+  if (bodyArg !== undefined) {
+    body = bodyArg;
+  } else if (fromFile !== undefined) {
+    try {
+      body = await readFile(fromFile, "utf-8");
+    } catch (e: any) {
+      console.error(`Error: failed to read ${fromFile}: ${e.message}`);
+      process.exit(1);
+    }
+  } else {
+    body = await readStdin();
+  }
+
+  try {
+    await writeProjectInstructions(PROJECT_ROOT, role, body);
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+  const bytes = Buffer.byteLength(body, "utf-8");
+  console.log(`OK role=${role} bytes=${bytes} (limit=${AGENT_INSTRUCTIONS_MAX_BYTES})`);
+  process.exit(0);
+}
+
+async function cmdDeleteAgentInstructions(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_delete_agent_instructions"));
+  const role = requireAgentRole();
+  const deleted = await deleteProjectInstructions(PROJECT_ROOT, role);
+  console.log(`DELETED=${deleted}`);
+  process.exit(0);
+}
+
+async function cmdListAgentInstructions(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_list_agent_instructions"));
+  const items = await listProjectInstructions(PROJECT_ROOT);
+  for (const it of items) {
+    if (it.exists) {
+      console.log(`${it.role} ✓ ${it.size} bytes`);
+    } else {
+      console.log(`${it.role} ✗`);
+    }
+  }
+  process.exit(0);
+}
+
 // --- self-update サブコマンド ---
 async function cmdSelfUpdate(): Promise<void> {
   if (hasHelpFlag()) {
@@ -3840,6 +3886,18 @@ switch (command) {
     break;
   case "self-update":
     await cmdSelfUpdate();
+    break;
+  case "get-agent-instructions":
+    await cmdGetAgentInstructions();
+    break;
+  case "set-agent-instructions":
+    await cmdSetAgentInstructions();
+    break;
+  case "delete-agent-instructions":
+    await cmdDeleteAgentInstructions();
+    break;
+  case "list-agent-instructions":
+    await cmdListAgentInstructions();
     break;
   default:
     if (!command || hasHelpFlag()) {

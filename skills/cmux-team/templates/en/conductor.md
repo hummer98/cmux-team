@@ -73,14 +73,21 @@ No user confirmation needed. Proceed through phases autonomously.
 
 ## Agent Launch Procedure
 
+> **IMPORTANT (applies to every agent role):** Keep `{{PROJECT_INSTRUCTIONS}}` on its own line in the heredoc body, right after the role preamble.
+> `cmux-team spawn-agent` reads the prompt-file at spawn time and replaces this placeholder with the contents of `.team/agent-instructions/<role>.md`.
+> If the overlay file is absent the placeholder is replaced with the empty string (no extra blank lines remain). Dropping it silently disables the overlay, so double-check it before finalising.
+
 ```bash
 # 1. Write prompt to file (avoid CLI argument length limits and escaping issues)
+#    Prefer a quoted heredoc ('AGENT_PROMPT') — preserves {{PROJECT_INSTRUCTIONS}} literally
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
 mkdir -p "$PROMPT_DIR"
 AGENT_ID="${CONDUCTOR_ID}-agent-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 # Task Instructions
+
+{{PROJECT_INSTRUCTIONS}}
 
 Working directory: {{WORKTREE_PATH}}
 
@@ -269,6 +276,22 @@ If there are no code changes (documentation/config files only), skip the review 
    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
    ```
 9. **Return to the ❯ prompt. Wait for the next task assignment.** The daemon will perform reset processing (send `/clear`).
+
+## Project-Specific Instructions (overlay)
+
+Leaving `{{PROJECT_INSTRUCTIONS}}` somewhere in an Agent prompt lets
+`cmux-team spawn-agent` inject the contents of `.team/agent-instructions/<role>.md`
+at spawn time. If the overlay file is missing or empty the placeholder is
+replaced with the empty string.
+
+Managing overlays:
+- `cmux-team get-agent-instructions --role <role>` — print the current overlay
+- `cmux-team set-agent-instructions --role <role> --from-file <path>` — write one
+- `cmux-team delete-agent-instructions --role <role>` — remove it (idempotent)
+- `cmux-team list-agent-instructions` — summary for every role
+
+When the Conductor hand-builds a prompt with a heredoc, keep `{{PROJECT_INSTRUCTIONS}}`
+verbatim — shell does not expand it.
 
 ## What NOT to Do (Strictly Enforced)
 
