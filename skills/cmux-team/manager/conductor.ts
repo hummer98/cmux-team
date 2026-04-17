@@ -370,6 +370,11 @@ export async function assignTask(
 
     // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
     // /clear + Enter でセッションリセット（Conductor は常駐セッション — /exit しない）
+    // T232: /clear 送信直前に "assigning" を立てる。daemon 自身の /clear が
+    //       遅延して SESSION_CLEAR hook を発火しても、この状態窓で早期 return して
+    //       ユーザー手動 /clear と誤認しない（race condition の根治）。
+    conductor.status = "assigning";
+    notifyStateChanged("conductor.ts:assignTask:assigning-set");
     try {
       await cmux.send(conductor.surface, "/clear");
       await sleep(500);
@@ -406,6 +411,10 @@ export async function assignTask(
     }
 
     // --- 6. ConductorState 更新 ---
+    // T232: status は "assigning" のまま維持する（/clear 送信直前にセット済み）。
+    //       running への遷移は SESSION_STARTED(source=clear) hook 到達時に行う。
+    //       保険経路として SESSION_IDLE / SESSION_ACTIVE でも assigning→running へ遷移させる
+    //       （daemon.ts 側）。60 秒経過で disconnected に倒す timeout もある。
     conductor.taskRunId = taskRunId;
     conductor.taskId = taskId;
     conductor.taskTitle = taskTitle;
@@ -413,9 +422,8 @@ export async function assignTask(
     conductor.outputDir = outputDir;
     conductor.startedAt = new Date().toISOString();
     conductor.agents = [];
-    conductor.status = "running";
     // sessionId は SessionStart hook で最新値に追従する
-    notifyStateChanged("conductor.ts:assignTask:status-running");
+    notifyStateChanged("conductor.ts:assignTask:task-info-updated");
 
     await log(
       "conductor_started",

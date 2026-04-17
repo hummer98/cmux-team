@@ -1942,3 +1942,236 @@ describe("handleMessage: CONDUCTOR_REGISTERED (T228)", () => {
     expect(logContent).toContain("max=3");
   });
 });
+
+// --- T232: assigning state による daemon-clear と user-clear の分離 ---
+
+describe("handleMessage: assigning 中の SESSION_CLEAR (T232)", () => {
+  test("assigning + SESSION_CLEAR → task-state.json は変更されず status も保持", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:232a",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "assigning",
+      pid: 44444,
+      taskRunId: "task-232-x",
+      taskId: "232",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    // task-state を assigned 状態にしておく（ユーザー手動 /clear では aborted に書き換わる）
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const before = await loadTaskState(testDir);
+    before["232"] = { status: "assigned", assignedAt: new Date().toISOString(), taskRunId: "task-232-x" };
+    await saveTaskState(testDir, before);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: "surface:232a",
+      timestamp: new Date().toISOString(),
+    });
+
+    // status は assigning のまま（ユーザー手動 clear 誤認を防止）
+    expect(conductor.status).toBe("assigning");
+    // pid も保持される（running 分岐の pid=undefined には到達しない）
+    expect(conductor.pid).toBe(44444);
+
+    // task-state は assigned のまま（aborted に書き換わらない）
+    const after = await loadTaskState(testDir);
+    expect(after["232"]?.status).toBe("assigned");
+    expect(after["232"]?.abortedAt).toBeUndefined();
+  });
+
+  test("running + SESSION_CLEAR は従来通り task_aborted 記録（回帰防止）", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:232b",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      pid: 55555,
+      taskRunId: "task-233-y",
+      taskId: "233",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const before = await loadTaskState(testDir);
+    before["233"] = { status: "assigned", assignedAt: new Date().toISOString(), taskRunId: "task-233-y" };
+    await saveTaskState(testDir, before);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: "surface:232b",
+      timestamp: new Date().toISOString(),
+    });
+
+    // user_clear として扱われるため aborted に書き換わる
+    const after = await loadTaskState(testDir);
+    expect(after["233"]?.status).toBe("aborted");
+    expect(after["233"]?.abortedAt).toBeDefined();
+    expect(after["233"]?.journal).toContain("user_clear");
+  });
+});
+
+describe("handleMessage: assigning → running 遷移 (T232)", () => {
+  test("assigning + SESSION_STARTED(source=clear) で running に遷移 / pid 更新", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:232c",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-234-z",
+      taskId: "234",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:232c",
+      pid: 66666,
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.pid).toBe(66666);
+
+    // クリーンアップ（PID watcher 停止）
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+
+  // R1: SESSION_IDLE / SESSION_ACTIVE でも assigning → running の保険遷移
+  test("R1: assigning + SESSION_IDLE(taskRunId あり) で running に遷移する", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:232d",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-235-a",
+      taskId: "235",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: "surface:232d",
+      pid: 77777,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.pid).toBe(77777);
+  });
+
+  test("R1: assigning + SESSION_ACTIVE(taskRunId あり) で running に遷移する", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:232e",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-236-b",
+      taskId: "236",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_ACTIVE",
+      surface: "surface:232e",
+      pid: 88888,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.pid).toBe(88888);
+  });
+});
+
+describe("monitorConductors: assigning timeout (T232)", () => {
+  test("assigning のまま 60 秒経過で disconnected に遷移する", async () => {
+    const state = await createDaemon(testDir);
+    // startedAt を 61 秒前にして即時 timeout 判定
+    const past = new Date(Date.now() - 61_000).toISOString();
+    const conductor: ConductorState = {
+      surface: "surface:232f",
+      startedAt: past,
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-237-c",
+      taskId: "237",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    expect(conductor.status).toBe("disconnected");
+    expect(conductor.disconnectedAt).toBeDefined();
+  });
+
+  test("assigning で 60 秒未満なら状態を維持（未 timeout）", async () => {
+    const state = await createDaemon(testDir);
+    // startedAt を 10 秒前（< 60s）
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    const conductor: ConductorState = {
+      surface: "surface:232g",
+      startedAt: recent,
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-238-d",
+      taskId: "238",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    // assigning のまま
+    expect(conductor.status).toBe("assigning");
+    expect(conductor.disconnectedAt).toBeUndefined();
+  });
+});
+
+// R4 (b): assignTask 中に /clear 送信失敗 → AssignTaskError("conductor") → disconnected
+describe("scanTasks: /clear 送信失敗時の conductor disconnected (T232 R4)", () => {
+  test("cmux.send で例外 → AssignTaskError(conductor) → idleConductor.status === 'disconnected'", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await createTask("239", "clear-fail");
+
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    const sendSpy = spyOn(cmux, "send").mockImplementation(async () => {
+      throw new Error("injected cmux send failure");
+    });
+    const sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+
+    try {
+      const state = await createDaemon(testDir);
+      const idleConductor: ConductorState = {
+        surface: "surface:232h",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "idle",
+      };
+      state.conductors.set(idleConductor.surface, idleConductor);
+
+      await scanTasks(state);
+
+      // conductor kind の AssignTaskError → disconnected に倒される
+      expect(idleConductor.status).toBe("disconnected");
+      expect(idleConductor.disconnectedAt).toBeDefined();
+    } finally {
+      sendSpy.mockRestore();
+      sendKeySpy.mockRestore();
+    }
+  }, 30000);
+});
