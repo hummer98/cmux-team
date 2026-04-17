@@ -9,3 +9,7 @@ tasks/*.status.json
 traces/
 debug/dump.jsonl
 debug/otel-dump.jsonl
+rate-limit.json
+masters/
+conductors/
+team.json
