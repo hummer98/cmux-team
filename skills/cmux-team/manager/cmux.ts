@@ -270,6 +270,27 @@ export async function clearStatus(
   }
 }
 
+/**
+ * cmux notify を実行して OS 通知を送る (T238)。
+ * best-effort: 失敗時は log するのみで throw しない。
+ */
+export async function notify(
+  surface: string,
+  title: string,
+  body?: string,
+  opts?: { subtitle?: string; workspace?: string },
+): Promise<void> {
+  const args = ["notify", "--surface", surface, "--title", title];
+  if (opts?.subtitle) args.push("--subtitle", opts.subtitle);
+  if (body) args.push("--body", body);
+  if (opts?.workspace) args.push("--workspace", opts.workspace);
+  try {
+    await runCmux(args);
+  } catch (e: any) {
+    await log("error", `notify failed: ${formatSurface(surface, "S")} ${formatExecError(e)}`);
+  }
+}
+
 export async function getCallerWorkspace(): Promise<string | undefined> {
   try {
     const { stdout } = await runCmux(["identify"]);

@@ -1462,6 +1462,10 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     const done = await readFile(doneFile, "utf-8");
     expect(done).toContain("status=ask");
     expect(done).toContain("question=どうしますか?");
+
+    // T238: agent.status が "asking" に遷移している
+    const updatedAgent = conductor.agents.find(a => a.surface === "surface:a1");
+    expect(updatedAgent?.status).toBe("asking");
   });
 
   test("Conductor / Case C (IDLE) → conductor.status 遷移", async () => {

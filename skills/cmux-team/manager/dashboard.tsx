@@ -503,8 +503,19 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
     const label = a.taskTitle ?? a.role ?? "";
     // T236: status に応じて spinner / role アイコンを切り替え。
     //       status undefined は古い team.json 復元経路で起きうる → idle 相当で描画。
+    // T238: status === "asking" のときは YELLOW + ? マーク + ラベル YELLOW で強調。
+    const isAgentAsking = a.status === "asking";
     const isAgentRunning = a.status === "running" || a.status === "starting";
-    if (isAgentRunning) {
+    if (isAgentAsking) {
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(`   ${prefix}`, { dim: true }),
+          ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: YELLOW } }),
+          ui.text("?", { style: { fg: YELLOW } }),
+          ui.text(`${roleIcon} ${label}`, { style: { fg: YELLOW } }),
+        ])
+      );
+    } else if (isAgentRunning) {
       const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
       children.push(
         ui.row({ gap: 1 }, [

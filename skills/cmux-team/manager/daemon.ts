@@ -1595,6 +1595,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } catch (e: any) {
           await log("error", `writeAgentDone failed (session_ask): ${e.message}`);
         }
+        // T238: TUI spinner / 色変更のための status 遷移。
+        //       SESSION_STARTED (running) / SESSION_IDLE (idle) の自然上書きで解除される。
+        agent.status = "asking";
+        notifyStateChanged("daemon.ts:handleMessage:session-ask-agent");
+        // T238: OS 通知を Agent surface に送る (best-effort, fire-and-forget)。
+        const subtitle = agent.taskTitle ?? agent.role ?? "Agent";
+        const body = truncate(message.question, 200);
+        void cmux.notify(message.surface, "Agent asking", body, { subtitle });
         await log(
           "agent_ask",
           `${formatPair(c.surface, agent.surface, "C", "A")} question=${truncate(message.question, 120)}`

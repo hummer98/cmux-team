@@ -155,7 +155,8 @@ export interface AgentState {
   pidWatcherInterval?: ReturnType<typeof setInterval>;
   // T236: TUI spinner のために Conductor と対称の status を持つ。
   // AGENT_SPAWNED で "starting"、SESSION_STARTED で "running"、SESSION_IDLE で "idle"。
-  status: "starting" | "running" | "idle";
+  // T238: SESSION_ASK で "asking"。SESSION_STARTED/IDLE で自然上書きにより解除される。
+  status: "starting" | "running" | "idle" | "asking";
 }
 
 // --- Master 状態 ---
