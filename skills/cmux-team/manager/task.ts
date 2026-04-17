@@ -241,6 +241,48 @@ export function filterRunAfterAllTasks(
   });
 }
 
+export interface CascadeAbortResult {
+  /** ready → draft に戻した子タスク ID のリスト */
+  revertedChildren: string[];
+}
+
+/**
+ * **呼び出し側は親が aborted/deleted に遷移した直後のみ呼ぶこと（cascade 関数内では遷移状態を検証しない）**。
+ *
+ * depends_on に `parentTaskId` を含む `ready` 状態の子タスクを `draft` に戻し、
+ * journal に `parent_aborted: <parentTaskId>` を追記する（既存 journal は `; ` で連結）。
+ *
+ * - 子が `ready` の場合のみ `draft` に戻す（draft/assigned/closed/aborted/deleted は変更なし）
+ * - 複数 depends_on のうち 1 つでも親が abort/deleted なら cascade 対象
+ *   （呼び出し側が「自身の遷移」起点で呼ぶので、ここではその 1 親との関係のみ判定）
+ * - `state` (TaskStateMap) はミュータブルに更新するため、呼び出し側で saveTaskState を呼ぶこと
+ * - ログ出力は呼び出し側で行う（文脈がある呼び側に責務）
+ *
+ * 返り値 `revertedChildren`: draft に戻した子 ID 群（呼び出し側がログ・notify に使う）
+ */
+export function cascadeAbortToChildren(
+  state: TaskStateMap,
+  tasks: TaskMeta[],
+  parentTaskId: string
+): CascadeAbortResult {
+  const reverted: string[] = [];
+  for (const t of tasks) {
+    if (!t.dependsOn.includes(parentTaskId)) continue;
+    const current = state[t.id];
+    if (current?.status !== "ready") continue;
+
+    const prev = current.journal ?? "";
+    const appended = `parent_aborted: ${parentTaskId}`;
+    state[t.id] = {
+      ...current,
+      status: "draft",
+      journal: prev ? `${prev}; ${appended}` : appended,
+    };
+    reverted.push(t.id);
+  }
+  return { revertedChildren: reverted };
+}
+
 /**
  * 優先度ソート（high > medium > low）
  */

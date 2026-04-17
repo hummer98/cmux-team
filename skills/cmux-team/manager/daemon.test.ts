@@ -2579,3 +2579,142 @@ describe("handleMessage: AGENT_SPAWNED master fallback cleanup (T244)", () => {
     }
   });
 });
+
+describe("depends_on cascade on parent abort/delete (T241)", () => {
+  test("ケース1: 親 abort → 子 ready が draft に戻る（journal 追記）", async () => {
+    await createTask("1", "parent", { status: "ready" });
+    await createTask("2", "child", { dependsOn: ["1"], status: "ready" });
+
+    const { loadTaskState, saveTaskState, cascadeAbortToChildren } = await import("./task");
+    const { tasks: loadedTasks } = await loadTasks(testDir);
+    const ts = await loadTaskState(testDir);
+    ts["1"] = { status: "aborted", abortedAt: new Date().toISOString(), journal: "test" };
+    const result = cascadeAbortToChildren(ts, loadedTasks, "1");
+    await saveTaskState(testDir, ts);
+
+    expect(result.revertedChildren).toEqual(["2"]);
+    const after = await loadTaskState(testDir);
+    expect(after["2"]?.status).toBe("draft");
+    expect(after["2"]?.journal).toBe("parent_aborted: 1");
+  });
+
+  test("ケース2: 親 abort → 子 assigned は維持（走行中の作業は止めない）", async () => {
+    await createTask("10", "parent");
+    await createTask("11", "child", { dependsOn: ["10"] });
+    {
+      const { saveTaskState, loadTaskState } = await import("./task");
+      const ts = await loadTaskState(testDir);
+      ts["11"] = { status: "assigned", assignedAt: new Date().toISOString() };
+      await saveTaskState(testDir, ts);
+    }
+
+    const { loadTaskState, saveTaskState, cascadeAbortToChildren } = await import("./task");
+    const { tasks: loadedTasks } = await loadTasks(testDir);
+    const ts = await loadTaskState(testDir);
+    ts["10"] = { status: "aborted", abortedAt: new Date().toISOString() };
+    const result = cascadeAbortToChildren(ts, loadedTasks, "10");
+    await saveTaskState(testDir, ts);
+
+    expect(result.revertedChildren).toEqual([]);
+    const after = await loadTaskState(testDir);
+    expect(after["11"]?.status).toBe("assigned");
+  });
+
+  test("ケース3: 親 delete → 子 ready が draft に戻る", async () => {
+    await createTask("20", "parent");
+    await createTask("21", "child", { dependsOn: ["20"] });
+
+    const { loadTaskState, saveTaskState, cascadeAbortToChildren } = await import("./task");
+    const { tasks: loadedTasks } = await loadTasks(testDir);
+    const ts = await loadTaskState(testDir);
+    ts["20"] = { status: "deleted", deletedAt: new Date().toISOString() };
+    const result = cascadeAbortToChildren(ts, loadedTasks, "20");
+    await saveTaskState(testDir, ts);
+
+    expect(result.revertedChildren).toEqual(["21"]);
+    const after = await loadTaskState(testDir);
+    expect(after["21"]?.status).toBe("draft");
+    expect(after["21"]?.journal).toBe("parent_aborted: 20");
+  });
+
+  test("ケース4: 複数 depends_on のうち 1 つが abort でも draft に戻る", async () => {
+    await createTask("30", "parent-a");
+    await createTask("31", "parent-b");
+    await createTask("32", "child", { dependsOn: ["30", "31"] });
+
+    const { loadTaskState, saveTaskState, cascadeAbortToChildren } = await import("./task");
+    const { tasks: loadedTasks } = await loadTasks(testDir);
+    const ts = await loadTaskState(testDir);
+    ts["30"] = { status: "aborted", abortedAt: new Date().toISOString() };
+    const result = cascadeAbortToChildren(ts, loadedTasks, "30");
+    await saveTaskState(testDir, ts);
+
+    expect(result.revertedChildren).toEqual(["32"]);
+    const after = await loadTaskState(testDir);
+    expect(after["32"]?.status).toBe("draft");
+    // もう片方の親 "31" は ready のまま
+    expect(after["31"]?.status).toBe("ready");
+  });
+
+  test("ケース5: 孫世代 A→B→C で A abort → B=ready は draft、C は変化なし", async () => {
+    await createTask("40", "task-A");
+    await createTask("41", "task-B", { dependsOn: ["40"] });
+    await createTask("42", "task-C", { dependsOn: ["41"] });
+
+    const { loadTaskState, saveTaskState, cascadeAbortToChildren } = await import("./task");
+    const { tasks: loadedTasks } = await loadTasks(testDir);
+    const ts = await loadTaskState(testDir);
+    ts["40"] = { status: "aborted", abortedAt: new Date().toISOString() };
+    const result = cascadeAbortToChildren(ts, loadedTasks, "40");
+    await saveTaskState(testDir, ts);
+
+    // 直接の子 B のみ revert、C は A の直接の子ではないので変化なし
+    expect(result.revertedChildren).toEqual(["41"]);
+    const after = await loadTaskState(testDir);
+    expect(after["41"]?.status).toBe("draft");
+    expect(after["42"]?.status).toBe("ready");
+  });
+
+  test("ケース6（回帰）: 親 closed → 子 ready は filterExecutableTasks で拾われる", async () => {
+    await createTask("50", "parent");
+    await createTask("51", "child", { dependsOn: ["50"] });
+
+    await closeTask("50");
+    const { tasks: loadedTasks, taskState } = await loadTasks(testDir);
+    const closed = new Set(
+      Object.entries(taskState)
+        .filter(([_, s]) => s.status === "closed")
+        .map(([id]) => id)
+    );
+    const open = loadedTasks.filter(t => t.status !== "closed");
+    const executable = filterExecutableTasks(open, closed, new Set());
+    expect(executable.map(t => t.id)).toContain("51");
+  });
+
+  test("E2E: assign_failed 経路（git 未初期化）で親 abort → 子 ready が draft に戻る", async () => {
+    // 親タスクは assign に失敗して aborted → cascade 発動で子 ready が draft に戻る
+    await createTask("60", "parent-failing", { priority: "high" });
+    await createTask("61", "child", { dependsOn: ["60"], status: "ready" });
+
+    const state = await createDaemon(testDir);
+    const fakeConductor: ConductorState = {
+      surface: "surface:fake-c241",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    };
+    state.conductors.set(fakeConductor.surface, fakeConductor);
+
+    await scanTasks(state);
+
+    // 親は assign_failed で aborted
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    expect(ts["60"]?.status).toBe("aborted");
+    expect(ts["60"]?.journal).toContain("assign_failed");
+
+    // 子は cascade で draft に戻される
+    expect(ts["61"]?.status).toBe("draft");
+    expect(ts["61"]?.journal).toBe("parent_aborted: 60");
+  });
+});

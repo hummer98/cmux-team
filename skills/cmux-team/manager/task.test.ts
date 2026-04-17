@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { parseTaskMeta, filterExecutableTasks, sortByPriority } from "./task";
-import type { TaskMeta } from "./task";
+import { parseTaskMeta, filterExecutableTasks, sortByPriority, cascadeAbortToChildren } from "./task";
+import type { TaskMeta, TaskStateMap } from "./task";
 
 describe("parseTaskMeta", () => {
   test("基本的なタスクをパースできる", () => {
@@ -249,5 +249,99 @@ describe("sortByPriority", () => {
     ];
     const sorted = sortByPriority(tasks);
     expect(sorted.map((t) => t.id)).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("cascadeAbortToChildren (T241)", () => {
+  const mkTask = (id: string, dependsOn: string[] = []): TaskMeta => ({
+    id,
+    title: `task-${id}`,
+    status: "ready",
+    priority: "medium",
+    dependsOn,
+    runAfterAll: false,
+    filePath: `/tmp/${id}.md`,
+    fileName: `${id}.md`,
+    createdAt: "2026-04-17T00:00:00Z",
+  });
+
+  test("親 aborted + 子 ready → draft に戻る", () => {
+    const tasks = [mkTask("1"), mkTask("2", ["1"])];
+    const state: TaskStateMap = {
+      "1": { status: "aborted", abortedAt: "2026-04-17T00:00:00Z" },
+      "2": { status: "ready" },
+    };
+    const result = cascadeAbortToChildren(state, tasks, "1");
+    expect(result.revertedChildren).toEqual(["2"]);
+    expect(state["2"]?.status).toBe("draft");
+    expect(state["2"]?.journal).toBe("parent_aborted: 1");
+  });
+
+  test("親 aborted + 子 draft → 変化なし", () => {
+    const tasks = [mkTask("1"), mkTask("2", ["1"])];
+    const state: TaskStateMap = {
+      "1": { status: "aborted" },
+      "2": { status: "draft" },
+    };
+    const result = cascadeAbortToChildren(state, tasks, "1");
+    expect(result.revertedChildren).toEqual([]);
+    expect(state["2"]?.status).toBe("draft");
+    expect(state["2"]?.journal).toBeUndefined();
+  });
+
+  test("親 aborted + 子 assigned → 変化なし", () => {
+    const tasks = [mkTask("1"), mkTask("2", ["1"])];
+    const state: TaskStateMap = {
+      "1": { status: "aborted" },
+      "2": { status: "assigned", assignedAt: "2026-04-17T00:00:00Z" },
+    };
+    const result = cascadeAbortToChildren(state, tasks, "1");
+    expect(result.revertedChildren).toEqual([]);
+    expect(state["2"]?.status).toBe("assigned");
+  });
+
+  test("親 aborted + 子 closed/aborted/deleted → 変化なし", () => {
+    const tasks = [
+      mkTask("1"),
+      mkTask("2", ["1"]),
+      mkTask("3", ["1"]),
+      mkTask("4", ["1"]),
+    ];
+    const state: TaskStateMap = {
+      "1": { status: "aborted" },
+      "2": { status: "closed" },
+      "3": { status: "aborted" },
+      "4": { status: "deleted" },
+    };
+    const result = cascadeAbortToChildren(state, tasks, "1");
+    expect(result.revertedChildren).toEqual([]);
+    expect(state["2"]?.status).toBe("closed");
+    expect(state["3"]?.status).toBe("aborted");
+    expect(state["4"]?.status).toBe("deleted");
+  });
+
+  test("複数 depends_on の子 ready → 1 親 cascade でも draft", () => {
+    const tasks = [mkTask("1"), mkTask("2"), mkTask("3", ["1", "2"])];
+    const state: TaskStateMap = {
+      "1": { status: "aborted" },
+      "2": { status: "ready" },
+      "3": { status: "ready" },
+    };
+    const result = cascadeAbortToChildren(state, tasks, "1");
+    expect(result.revertedChildren).toEqual(["3"]);
+    expect(state["3"]?.status).toBe("draft");
+    expect(state["3"]?.journal).toBe("parent_aborted: 1");
+    // もう片方の親 "2" は ready のまま（depends_on 被依存なので cascade 対象外）
+    expect(state["2"]?.status).toBe("ready");
+  });
+
+  test("既存 journal がある子 → `; parent_aborted:` で追記", () => {
+    const tasks = [mkTask("1"), mkTask("2", ["1"])];
+    const state: TaskStateMap = {
+      "1": { status: "aborted" },
+      "2": { status: "ready", journal: "prev note" },
+    };
+    cascadeAbortToChildren(state, tasks, "1");
+    expect(state["2"]?.journal).toBe("prev note; parent_aborted: 1");
   });
 });

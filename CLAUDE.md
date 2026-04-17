@@ -633,6 +633,26 @@ source が `config` 以外の場合のみ結果を `.team/config.json` に書き
 
 **異常検出**: PID ベース生存確認（`spawnPidWatcher` が `process.kill(pid, 0)` を 1 秒間隔で呼ぶ）と hook push（`SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED`）で行う。`cmux read-screen` は Trust 確認検出にのみ使う。
 
+### 依存タスクの cascade（T241）
+
+親タスクが `aborted` / `deleted` に遷移したとき、`depends_on` に親を含む
+**ready** 状態の子タスクは自動的に `draft` に戻される。
+
+- `draft` 子: 変更なし
+- `ready` 子: **`draft` に戻す**（journal に `parent_aborted: <parentId>` 追記）
+- `assigned` 子: 変更なし（走行中の作業は止めない）
+- `closed` / `aborted` / `deleted` 子: 変更なし
+
+cascade は以下 5 経路で同期的に走る:
+1. `cmux-team abort-task` CLI
+2. `cmux-team delete-task` CLI
+3. Conductor forced close（disconnect timeout）
+4. user_clear（手動 /clear で running を abort）
+5. assign_failed（worktree 作成失敗等）
+
+ログ: `child_reverted_to_draft parent=<X> child=<Y> reason=parent_aborted`
+（delete 経路でも `reason=parent_aborted` で統一）
+
 ## 既知の注意点
 
 ### Trust 確認（初回起動時）

@@ -40,7 +40,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, type TaskState } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, type TaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
@@ -2977,6 +2977,9 @@ async function cmdAbortTask(): Promise<void> {
     process.exit(1);
   }
 
+  // T241: cascade 用にタスクメタを 1 回だけロード（両分岐で共有）
+  const { tasks: allTasks } = await loadTasks(PROJECT_ROOT);
+
   // 2. team.json から該当 Conductor を特定
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
   let teamJson: any;
@@ -2996,8 +2999,16 @@ async function cmdAbortTask(): Promise<void> {
       abortedAt: new Date().toISOString(),
       journal,
     };
+    // T241: depends_on 親 abort → ready 子を draft に戻す
+    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
     await saveTaskState(PROJECT_ROOT, taskState);
     await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+    for (const childId of revertedChildren) {
+      await log(
+        "child_reverted_to_draft",
+        `parent=${taskId} child=${childId} reason=parent_aborted`
+      );
+    }
     // conductor 不在のため CONDUCTOR_DONE は送れない。TUI 即時反映のため TASK_UPDATED を送る
     const taskFilePath = await findTaskFile(taskId);
     await postMessage({
@@ -3020,9 +3031,17 @@ async function cmdAbortTask(): Promise<void> {
     abortedAt: new Date().toISOString(),
     journal,
   };
+  // T241: depends_on 親 abort → ready 子を draft に戻す
+  const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
   await saveTaskState(PROJECT_ROOT, taskState);
 
   await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+  for (const childId of revertedChildren) {
+    await log(
+      "child_reverted_to_draft",
+      `parent=${taskId} child=${childId} reason=parent_aborted`
+    );
+  }
 
   // タスク-セッション索引に記録
   try {
@@ -3264,9 +3283,18 @@ async function cmdDeleteTask(): Promise<void> {
     deletedAt: new Date().toISOString(),
     journal,
   };
+  // T241: depends_on 親 delete → ready 子を draft に戻す（ログキーは parent_aborted で統一）
+  const { tasks: allTasks } = await loadTasks(PROJECT_ROOT);
+  const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
   await saveTaskState(PROJECT_ROOT, taskState);
 
   await log("task_deleted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+  for (const childId of revertedChildren) {
+    await log(
+      "child_reverted_to_draft",
+      `parent=${taskId} child=${childId} reason=parent_aborted`
+    );
+  }
 
   // TUI 即時反映のため TASK_UPDATED を送る
   await postMessage({

@@ -15,7 +15,7 @@ import {
 } from "./conductor";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic } from "./task";
+import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren } from "./task";
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
@@ -1693,8 +1693,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
               const journal = `user_clear: ${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
               ts[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
+              // T241: depends_on 親 abort → ready 子を draft に戻す
+              const { tasks } = await loadTasks(state.projectRoot);
+              const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
               await saveTaskState(state.projectRoot, ts);
               await log("task_aborted", `task_id=${taskId} reason=user_clear`);
+              for (const childId of revertedChildren) {
+                await log(
+                  "child_reverted_to_draft",
+                  `parent=${taskId} child=${childId} reason=parent_aborted`
+                );
+              }
+              if (revertedChildren.length > 0) {
+                notifyStateChanged("daemon.ts:handleMessage:session-clear-cascade");
+              }
             }
           } catch (e: any) {
             await log("error", `SESSION_CLEAR task-state update failed: task_id=${taskId} ${e.message}`);
@@ -1843,11 +1855,23 @@ export async function scanTasks(state: DaemonState): Promise<void> {
             abortedAt: new Date().toISOString(),
             journal: `assign_failed: ${e.reason}`,
           };
+          // T241: depends_on 親 abort → ready 子を draft に戻す
+          const { tasks: currentTasks } = await loadTasks(state.projectRoot);
+          const { revertedChildren } = cascadeAbortToChildren(ts, currentTasks, task.id);
           await saveTaskState(state.projectRoot, ts);
           await log(
             "task_aborted",
             `task_id=${task.id} title=${task.title} journal_summary=assign_failed: ${e.reason}`
           );
+          for (const childId of revertedChildren) {
+            await log(
+              "child_reverted_to_draft",
+              `parent=${task.id} child=${childId} reason=parent_aborted`
+            );
+          }
+          if (revertedChildren.length > 0) {
+            notifyStateChanged("daemon.ts:scanTasks:assign-failed-cascade");
+          }
           // T232 R2: 保険 — assigning をセット済みで task kind 例外が飛んだ場合
           //          （現コードでは到達し得ないが将来変更への防衛）、disconnected に倒す。
           if (idleConductor.status === "assigning") {
@@ -2174,11 +2198,23 @@ async function forceCloseDisconnectedConductor(
           abortedAt: new Date().toISOString(),
           journal,
         };
+        // T241: depends_on 親 abort → ready 子を draft に戻す
+        const { tasks } = await loadTasks(state.projectRoot);
+        const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
         await saveTaskState(state.projectRoot, ts);
         await log(
           "task_aborted",
           `task_id=${taskId} reason=disconnect_timeout journal_summary=${journal}`
         );
+        for (const childId of revertedChildren) {
+          await log(
+            "child_reverted_to_draft",
+            `parent=${taskId} child=${childId} reason=parent_aborted`
+          );
+        }
+        if (revertedChildren.length > 0) {
+          notifyStateChanged("daemon.ts:forceCloseDisconnectedConductor:cascade");
+        }
       }
     } catch (e: any) {
       await log(
