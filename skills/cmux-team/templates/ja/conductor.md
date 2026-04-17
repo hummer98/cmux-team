@@ -73,14 +73,21 @@ cmux-team await-agent が STATUS=completed で返る → TaskUpdate: task-1 → 
 
 ## Agent 起動手順
 
+> **重要（全 Agent ロール共通）:** heredoc 本文の Role 導入文の直後に `{{PROJECT_INSTRUCTIONS}}` を 1 行独立して残すこと。
+> `cmux-team spawn-agent` が prompt-file を読み、`.team/agent-instructions/<role>.md` の内容で置換する。
+> overlay が無ければ空文字に置換され、余分な空行は残らない。placeholder を落とすと overlay が効かないので、仕上げ前に heredoc 内に残っていることを確認する。
+
 ```bash
 # 1. プロンプトファイルを書き出す（CLI 引数の長さ制限・エスケープ問題を回避）
+#    quoted heredoc（'AGENT_PROMPT'）推奨 — {{PROJECT_INSTRUCTIONS}} を literal に保つ
 PROMPT_DIR="{{PROJECT_ROOT}}/.team/prompts"
 mkdir -p "$PROMPT_DIR"
 AGENT_ID="${CONDUCTOR_ID}-agent-$(date +%s)"
 PROMPT_FILE="${PROMPT_DIR}/${AGENT_ID}.md"
 cat > "$PROMPT_FILE" << 'AGENT_PROMPT'
 # タスク指示
+
+{{PROJECT_INSTRUCTIONS}}
 
 作業ディレクトリ: {{WORKTREE_PATH}}
 
@@ -269,6 +276,21 @@ cmux-team close-agent --surface $REVIEWER_SURFACE
    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
    ```
 9. **❯ プロンプトに戻る。次のタスクの割り当てを待つ。** daemon がリセット処理（`/clear` 送信）を行う。
+
+## プロジェクト固有の追加指示（overlay）
+
+Agent プロンプト本文に `{{PROJECT_INSTRUCTIONS}}` プレースホルダを残しておくと、
+`cmux-team spawn-agent` が実行時に `.team/agent-instructions/<role>.md` の内容を
+自動展開する。overlay ファイルが無い場合は空文字に置換される。
+
+overlay の編集:
+- `cmux-team get-agent-instructions --role <role>` で内容確認
+- `cmux-team set-agent-instructions --role <role> --from-file <path>` で更新
+- `cmux-team delete-agent-instructions --role <role>` で削除
+- `cmux-team list-agent-instructions` で全ロールの有無を一覧
+
+Conductor が heredoc で作る Agent プロンプトは、同じ `{{PROJECT_INSTRUCTIONS}}` を
+そのまま残せばよい（shell 変数展開の対象ではない）。
 
 ## やらないこと（厳守）
 

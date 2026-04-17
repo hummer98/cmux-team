@@ -92,6 +92,54 @@ description: >
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
 | `cmux-team await-task` | タスク完了待ち（`--task-id` 必須、`--timeout` 任意） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`） |
+| `cmux-team get-agent-instructions` | Agent ロールの overlay を表示（`--role` 必須） |
+| `cmux-team set-agent-instructions` | overlay を書き込み（`--role` 必須、`--body` / `--from-file` / `--from-stdin`） |
+| `cmux-team delete-agent-instructions` | overlay を削除（`--role` 必須、存在しなければ exit 0） |
+| `cmux-team list-agent-instructions` | 全ロールの overlay 状況を一覧表示 |
+
+## 1.1. プロジェクト固有の追加指示（agent instructions overlay）
+
+プロジェクト固有の Agent への追加指示を `.team/agent-instructions/<role>.md` に置くと、`cmux-team spawn-agent` 実行時に prompt-file 中の `{{PROJECT_INSTRUCTIONS}}` プレースホルダがその内容で置換される。
+
+### 対象ロール
+
+`researcher` / `architect` / `planner` / `design-reviewer` / `implementer` / `inspector` / `dockeeper` / `task-manager` の 8 ロール。
+
+`--role impl` は `implementer`、`--role reviewer` は `design-reviewer` にエイリアスされる（conductor-role.md の既存 heredoc 例との互換性維持）。
+
+### 編集方法
+
+```bash
+# overlay を書き込む
+cmux-team set-agent-instructions --role implementer --from-file ./my-impl-notes.md
+cmux-team set-agent-instructions --role researcher --body "調査対象は 2025 年以降の論文に限る"
+cat ./notes.md | cmux-team set-agent-instructions --role planner --from-stdin
+
+# 内容確認
+cmux-team get-agent-instructions --role implementer
+cmux-team list-agent-instructions
+
+# 削除
+cmux-team delete-agent-instructions --role implementer
+```
+
+overlay ファイルは最大 100 KB。それを超えると set 時に exit 1。
+
+### 適用タイミング
+
+`cmux-team spawn-agent --prompt-file <path>` 実行時、prompt-file 内の `{{PROJECT_INSTRUCTIONS}}` プレースホルダが overlay 本文に展開される。Conductor が Agent 起動用の prompt-file を heredoc で書き出す際は、**必ず `{{PROJECT_INSTRUCTIONS}}` を単独行として残すこと**（quoted heredoc `'AGENT_PROMPT'` を使うと shell 展開されず安全）。
+
+overlay が存在しない / 空の場合はプレースホルダが空文字に置換される。
+
+### 典型パターン例
+
+- コーディング規約（命名・コメント言語）を implementer に共有
+- テスト方針（モック可否・カバレッジ基準）を inspector に共有
+- 調査範囲制限（特定年代・特定著者のみ）を researcher に共有
+
+### Settings タブで確認
+
+dashboard TUI の `Settings` タブ（`4` キー）で 8 ロールの overlay 状況と config 値を一覧・プレビューできる（read-only）。
 
 ## 2. トレーサビリティ
 

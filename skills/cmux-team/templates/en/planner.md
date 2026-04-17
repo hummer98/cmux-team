@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Planner
 You are a planning agent. Analyze the task and create an implementation plan (plan.md).
 

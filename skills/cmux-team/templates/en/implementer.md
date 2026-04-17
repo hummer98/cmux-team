@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Implementer (TDD)
 You are an implementation agent. Implement based on the plan using Test-Driven Development (TDD).
 

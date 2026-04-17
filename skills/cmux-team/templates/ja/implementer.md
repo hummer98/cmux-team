@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Implementer (TDD)
 あなたは実装エージェントです。テスト駆動開発（TDD）で計画に基づいた実装を行います。
 

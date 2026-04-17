@@ -5,7 +5,14 @@ import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, cp } from "fs/promises";
 import { join, dirname } from "path";
 import { log } from "./logger";
+// R3 (m9): locale は i18n.ts から module-top で import し、
+// `expandProjectInstructions` 内で `formatProjectInstructionsBlock(body, locale)` に渡す。
 import { locale, t } from "./i18n";
+import { normalizeAgentRole } from "./schema";
+import {
+  readProjectInstructions,
+  formatProjectInstructionsBlock,
+} from "./agent-instructions";
 
 /** base ディレクトリからロケール付きテンプレートディレクトリを解決する */
 function resolveLocalizedDir(base: string): string | null {
@@ -77,6 +84,60 @@ export async function generateConductorRolePrompt(
   await writeFile(promptFile, content);
   await log("conductor_role_prompt_generated", `path=${promptFile}`);
   return promptFile;
+}
+
+/**
+ * `{{PROJECT_INSTRUCTIONS}}` プレースホルダを overlay で展開する。
+ *
+ * R1 (M6) 方針: 置換文字列に余計な `\n` を付けない（formatProjectInstructionsBlock
+ * が返す `\n<heading>\n\n<body>\n` の先頭 `\n` だけで前行との空行 1 つを保つ）。
+ *
+ * 返り値の mode:
+ * - `noop`: 入力 content にプレースホルダが無い（content を変更せず返す）
+ * - `unknown-role`: role が AgentRole に属さない → プレースホルダを `""` で置換
+ * - `empty`: overlay ファイルが無い / 空 → プレースホルダを `""` で置換
+ * - `applied`: overlay を block に整形して置換
+ */
+export async function expandProjectInstructions(
+  projectRoot: string,
+  roleRaw: string,
+  content: string,
+): Promise<{
+  expanded: string;
+  mode: "noop" | "unknown-role" | "empty" | "applied";
+}> {
+  if (!content.includes("{{PROJECT_INSTRUCTIONS}}")) {
+    return { expanded: content, mode: "noop" };
+  }
+
+  const role = normalizeAgentRole(roleRaw);
+  let block = "";
+  let mode: "unknown-role" | "empty" | "applied";
+
+  if (!role) {
+    mode = "unknown-role";
+  } else {
+    const body = await readProjectInstructions(projectRoot, role);
+    if (body === null || body === "") {
+      mode = "empty";
+    } else {
+      block = formatProjectInstructionsBlock(body, locale);
+      mode = "applied";
+    }
+  }
+
+  // 前後の `\n` を含めて置換することで、プレースホルダが単独行にある
+  // 標準ケースで `\n\n\n+` が発生しないようにする。
+  const lineRe = /\n\{\{PROJECT_INSTRUCTIONS\}\}\n/;
+  let expanded: string;
+  if (lineRe.test(content)) {
+    expanded = content.replace(lineRe, block === "" ? "" : block);
+  } else {
+    // フォールバック: 単独行ではない（先頭/末尾/同一行内）— 単純置換する
+    expanded = content.replaceAll("{{PROJECT_INSTRUCTIONS}}", block);
+  }
+
+  return { expanded, mode };
 }
 
 export async function generateConductorTaskPrompt(

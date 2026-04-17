@@ -230,6 +230,7 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 ├── tasks/             # タスクファイル（TNNN-slug/ にタスク本体と runs/）
 │   └── archived/      # アーカイブ済み（closed → archived）
 ├── artifacts/         # 知見の記録（Axxx 番号付き、直接ファイル作成可）
+├── agent-instructions/ # Agent ロール別の project-local overlay
 ├── specs/             # 仕様書（git tracked）
 ├── conductors/        # Conductor 状態ファイル + agent-done/ マーカー
 ├── sessions/          # セッション情報
@@ -239,6 +240,25 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 ├── traces/            # SQLite FTS5 トレース DB
 └── proxy-port         # プロキシポート番号
 ```
+
+## プロジェクト固有の追加指示
+
+各 Agent ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager）に対して、プロジェクト固有の追加指示を `.team/agent-instructions/<role>.md` に置くと、エージェント起動時に自動的に組み込まれます。
+
+```bash
+# overlay を書き込む
+cmux-team set-agent-instructions --role implementer --from-file ./my-impl-notes.md
+cmux-team set-agent-instructions --role researcher --body "調査対象は 2025 年以降の論文に限る"
+
+# 内容確認 / 一覧
+cmux-team get-agent-instructions --role implementer
+cmux-team list-agent-instructions
+
+# 削除
+cmux-team delete-agent-instructions --role implementer
+```
+
+overlay の最大サイズは 100 KB。dashboard TUI の `Settings` タブ（`4` キー）で全ロールの overlay 状況と config をプレビューできます。
 
 ## Hooks 設定（推奨）
 

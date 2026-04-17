@@ -12,10 +12,9 @@ import {
   normalizeSurfaceArg,
   validateSendAgentTarget,
   waitForAgentRegistered,
-  resolveLayout,
-  resolveAutoUpdateMode,
   ensureAskDetectorScript,
 } from "./main";
+import { resolveLayout, resolveAutoUpdateMode } from "./config";
 import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
 

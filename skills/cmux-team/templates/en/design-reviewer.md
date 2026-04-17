@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Design Reviewer
 You are a design review agent. Review the plan.md created by the Planner and assess its quality.
 

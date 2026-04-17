@@ -22,10 +22,15 @@ import { isStale } from "./rate-limit-persistence";
 import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
+import { listProjectInstructions, readProjectInstructions } from "./agent-instructions";
+import { loadConfig, type TeamConfig } from "./config";
+import type { AgentRole } from "./schema";
+import { AGENT_ROLES } from "./schema";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
 const JOURNAL_VISIBLE_LINES = 30;
+const SETTINGS_PREVIEW_LINES = 20;
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -290,11 +295,81 @@ async function readLogLines(projectRoot: string): Promise<string[]> {
   }
 }
 
+async function loadSettingsItems(projectRoot: string): Promise<SettingsItem[]> {
+  const items: SettingsItem[] = [];
+  items.push({ kind: "section", label: "Agent Instructions Overlays (.team/agent-instructions/)" });
+
+  const list = await listProjectInstructions(projectRoot);
+  for (const entry of list) {
+    let preview: string[] = [];
+    let truncated = false;
+    if (entry.exists) {
+      const body = await readProjectInstructions(projectRoot, entry.role);
+      if (body) {
+        const allLines = body.split("\n");
+        preview = allLines.slice(0, SETTINGS_PREVIEW_LINES);
+        truncated = allLines.length > SETTINGS_PREVIEW_LINES;
+      }
+    }
+    items.push({
+      kind: "overlay",
+      role: entry.role,
+      exists: entry.exists,
+      size: entry.size,
+      filePath: join(projectRoot, ".team/agent-instructions", `${entry.role}.md`),
+      preview,
+      truncated,
+    });
+  }
+
+  items.push({ kind: "section", label: "Team Config (.team/config.json)" });
+  const cfg: TeamConfig = await loadConfig(projectRoot);
+  items.push({ kind: "config", label: "layout", value: cfg.layout ?? "wide (default)" });
+  items.push({
+    kind: "config",
+    label: "autoUpdate",
+    value: typeof cfg.autoUpdate === "boolean"
+      ? (cfg.autoUpdate ? "task (legacy true)" : "off (legacy false)")
+      : (cfg.autoUpdate ?? "off (default)"),
+  });
+  items.push({ kind: "config", label: "mainBranch", value: cfg.mainBranch ?? "(unresolved)" });
+  items.push({
+    kind: "config",
+    label: "sleepPrevention",
+    value: cfg.sleepPrevention === false ? "false" : "true (default)",
+  });
+
+  return items;
+}
+
 // --- 状態型 ---
+
+/**
+ * Settings タブで表示する項目。
+ * - overlay: `.team/agent-instructions/<role>.md` の存在・サイズ・プレビュー
+ * - config: `.team/config.json` の 1 行サマリ
+ * - section: 区切り見出しのみ（preview 無し）
+ */
+type SettingsItem =
+  | { kind: "section"; label: string }
+  | {
+      kind: "overlay";
+      role: AgentRole;
+      exists: boolean;
+      size: number;
+      filePath: string;
+      preview: string[]; // 最大 SETTINGS_PREVIEW_LINES 行。exists=false なら空
+      truncated: boolean;
+    }
+  | {
+      kind: "config";
+      label: string;
+      value: string;
+    };
 
 interface AppState {
   daemon: DaemonState;
-  activeTab: "journal" | "artifacts" | "log";
+  activeTab: "journal" | "artifacts" | "log" | "settings";
   journalEntries: JournalEntry[];
   logLines: string[];
   artifacts: ArtifactMeta[];
@@ -309,9 +384,11 @@ interface AppState {
   logScrollOffset: number;   // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   logAutoScroll: boolean;    // true = 最新に自動追従
   spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
-  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts";
+  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts" | "settings";
   journalScrollOffset: number;  // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   journalAutoScroll: boolean;   // true = 最新に自動追従
+  settingsItems: SettingsItem[];
+  settingsCursor: number;
 }
 
 // --- スピナー定義 ---
@@ -776,6 +853,77 @@ function buildLogRows(lines: string[]) {
   });
 }
 
+function buildSettingsRows(state: AppState): any[] {
+  const items = state.settingsItems;
+  if (items.length === 0) {
+    return [ui.text("loading settings…", { dim: true })];
+  }
+
+  const rows: any[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const isSelected = i === state.settingsCursor;
+    const cursor = isSelected ? ">" : " ";
+
+    if (item.kind === "section") {
+      rows.push(ui.text(""));
+      rows.push(ui.text(`── ${item.label} ──`, { dim: true }));
+      continue;
+    }
+
+    if (item.kind === "overlay") {
+      const status = item.exists ? "✓" : "✗";
+      const statusColor = item.exists ? GREEN : GRAY;
+      const sizeLabel = item.exists ? `${item.size} bytes` : "(not set)";
+      rows.push(
+        ui.row({ gap: 1 }, [
+          ui.text(cursor, isSelected ? { bold: true } : {}),
+          ui.text(status, { style: { fg: statusColor } }),
+          ui.text(item.role, { style: { bold: isSelected } }),
+          ui.text(sizeLabel, { dim: true }),
+        ]),
+      );
+      continue;
+    }
+
+    // config
+    rows.push(
+      ui.row({ gap: 1 }, [
+        ui.text(cursor, isSelected ? { bold: true } : {}),
+        ui.text(item.label, { style: { bold: isSelected } }),
+        ui.text("=", { dim: true }),
+        ui.text(item.value),
+      ]),
+    );
+  }
+
+  // プレビュー（選択中アイテム）
+  const selected = items[state.settingsCursor];
+  if (selected) {
+    rows.push(ui.text(""));
+    if (selected.kind === "overlay") {
+      const path = selected.filePath.replace(state.daemon.projectRoot + "/", "");
+      rows.push(ui.text(`── ${selected.role} (${path}) ──`, { dim: true }));
+      if (!selected.exists) {
+        rows.push(ui.text("  (no overlay set)", { dim: true }));
+        rows.push(ui.text(`  set: cmux-team set-agent-instructions --role ${selected.role} --from-file <path>`, { dim: true }));
+      } else {
+        for (const line of selected.preview) {
+          rows.push(ui.text(line, { dim: true }));
+        }
+        if (selected.truncated) {
+          rows.push(ui.text("  …", { dim: true }));
+        }
+      }
+    } else if (selected.kind === "config") {
+      rows.push(ui.text(`── ${selected.label} ──`, { dim: true }));
+      rows.push(ui.text(`  ${selected.value}`, { dim: true }));
+    }
+  }
+
+  return rows;
+}
+
 /**
  * 選択中の artifact を外部ビューアで開く
  * mo ビューア: TUI を停止せずバックグラウンドで起動し cmux browser open で表示
@@ -894,6 +1042,8 @@ export async function startDashboard(
       focusedArea: "global",
       journalScrollOffset: 0,
       journalAutoScroll: true,
+      settingsItems: [],
+      settingsCursor: 0,
     },
     config: { executionMode: "inline" },
   });
@@ -1013,7 +1163,7 @@ export async function startDashboard(
           onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks" })); } catch {} },
         }),
         ui.column({ gap: 0 }, taskRows),
-        // Journal / Artifacts / Log タブ（クリックでタブ切り替え + フォーカス）
+        // Journal / Artifacts / Log / Settings タブ（クリックでタブ切り替え + フォーカス）
         ui.row({ gap: 1 }, [
           ui.button({
             id: "tab-journal",
@@ -1036,6 +1186,13 @@ export async function startDashboard(
             style: state.activeTab === "log" ? { bold: true } : { dim: true },
             onPress: () => switchTab("log"),
           }),
+          ui.button({
+            id: "tab-settings",
+            label: "Settings",
+            px: 1,
+            style: state.activeTab === "settings" ? { bold: true } : { dim: true },
+            onPress: () => switchTab("settings"),
+          }),
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
@@ -1049,6 +1206,8 @@ export async function startDashboard(
               })()
             : state.activeTab === "artifacts"
             ? buildArtifactRows(state)
+            : state.activeTab === "settings"
+            ? buildSettingsRows(state)
             : (() => {
                 // 逆順表示: 最新が先頭、offset=0 で最新を表示
                 const reversed = [...state.logLines].reverse();
@@ -1103,11 +1262,21 @@ export async function startDashboard(
               ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
+          : state.focusedArea === "settings"
+          ? [
+              ui.kbd("↑/↓"), ui.text("select"),
+              ui.kbd("Enter"), ui.text("open"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("L"), ui.text("log"),
+              ui.kbd("ESC"), ui.text("back"),
+            ]
           : [ // global
               ui.kbd("T"), ui.text("tasks"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("L"), ui.text("log"),
               ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("4"), ui.text("settings"),
               ui.kbd("r"), ui.text("reload"),
               ui.kbd("q"), ui.text("quit"),
               ui.kbd("Q"), ui.text("full quit"),
@@ -1124,10 +1293,18 @@ export async function startDashboard(
     journal: "journal",
     artifacts: "artifacts",
     log: "log",
+    settings: "settings",
   };
+  // D17: refresh() が settings 再読み込みすべきかどうか判定するためのミラー
+  let currentActiveTab: TabId = "journal";
   function switchTab(tab: TabId) {
     try {
+      currentActiveTab = tab;
       app.update((s) => ({ ...s, activeTab: tab, focusedArea: FOCUSED_AREA_FOR_TAB[tab] }));
+      // settings に切り替えた直後は即時ロード
+      if (tab === "settings") {
+        refresh().catch(() => {});
+      }
     } catch {}
   }
 
@@ -1149,6 +1326,12 @@ export async function startDashboard(
         }
         case "artifacts": {
           return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+        }
+        case "settings": {
+          // section 項目はスキップ（preview が出ないので cursor を合わせる意味がない）
+          let c = s.settingsCursor - 1;
+          while (c >= 0 && s.settingsItems[c]?.kind === "section") c--;
+          return { ...s, settingsCursor: Math.max(c, 0) };
         }
         default:
           return s;
@@ -1172,6 +1355,12 @@ export async function startDashboard(
           const filtered = getFilteredArtifacts(s);
           return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
         }
+        case "settings": {
+          const max = s.settingsItems.length - 1;
+          let c = s.settingsCursor + 1;
+          while (c <= max && s.settingsItems[c]?.kind === "section") c++;
+          return { ...s, settingsCursor: Math.min(c, max) };
+        }
         default:
           return s;
       }
@@ -1179,8 +1368,9 @@ export async function startDashboard(
     "1": () => switchTab("journal"),
     "2": () => switchTab("artifacts"),
     "3": () => switchTab("log"),
+    "4": () => switchTab("settings"),
     Tab: (ctx) => {
-      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log"];
+      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings"];
       const idx = tabs.indexOf(ctx.state.activeTab);
       const next = tabs[(idx + 1) % tabs.length]!;
       switchTab(next);
@@ -1211,6 +1401,25 @@ export async function startDashboard(
         ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
         return;
       }
+      // settings タブ: 選択中 overlay をビューアで開く
+      if (currentState.focusedArea === "settings") {
+        const item = currentState.settingsItems[currentState.settingsCursor];
+        if (!item || item.kind !== "overlay" || !item.exists) return;
+
+        openArtifactInViewer(
+          app,
+          item.filePath,
+          () => {
+            dashboardActive = true;
+            spinnerInterval = setInterval(() => {
+              try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
+            }, SPINNER_INTERVAL);
+            refresh();
+          },
+        ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+        return;
+      }
+
       if (currentState.focusedArea !== "artifacts") return;
       const filtered = getFilteredArtifacts(currentState);
       if (filtered.length === 0) return;
@@ -1300,6 +1509,11 @@ export async function startDashboard(
     const repoUrl = await resolveGitHubRepoUrl(newDaemon.projectRoot);
     const artifacts = await loadArtifacts(newDaemon.projectRoot);
 
+    // D17: Settings タブ表示中のみ overlay/config を再読み込み
+    const settingsItems = currentActiveTab === "settings"
+      ? await loadSettingsItems(newDaemon.projectRoot)
+      : null;
+
     try {
       app.update((s) => {
         // フォーカス中は自動スクロールしない
@@ -1309,6 +1523,15 @@ export async function startDashboard(
         // 自動スクロール OFF 時: 新エントリ分だけ offset を増加して表示位置を保持
         const journalDelta = journalEntries.length - s.journalEntries.length;
         const logDelta = lines.length - s.logLines.length;
+
+        // settings 再読み込みは activeTab === "settings" のときのみ
+        const nextSettingsItems = s.activeTab === "settings" && settingsItems
+          ? settingsItems
+          : s.settingsItems;
+        const nextSettingsCursor = Math.min(
+          s.settingsCursor,
+          Math.max(nextSettingsItems.length - 1, 0),
+        );
 
         return {
           ...s,
@@ -1320,6 +1543,8 @@ export async function startDashboard(
           journalScrollOffset: journalAuto ? 0 : s.journalScrollOffset + Math.max(0, journalDelta),
           logScrollOffset: logAuto ? 0 : s.logScrollOffset + Math.max(0, logDelta),
           taskCursor: Math.min(s.taskCursor, Math.max(newDaemon.taskList.length - 1, 0)),
+          settingsItems: nextSettingsItems,
+          settingsCursor: nextSettingsCursor,
         };
       });
     } catch (e: any) {

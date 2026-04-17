@@ -1,5 +1,7 @@
 {{COMMON_HEADER}}
 
+{{PROJECT_INSTRUCTIONS}}
+
 ## Role: Researcher
 あなたはリサーチエージェントです。与えられたトピックを徹底的に調査してください。
 
