@@ -97,14 +97,16 @@ export async function listMasterFiles(
 }
 
 /**
- * Master ペインを spawn する（T229）。
+ * Master ペインを spawn する（T230 で self-register 経路に整理）。
  *
- * 戻り値には surface と startedAt のみを含む（pid は後続の SESSION_STARTED hook で受信する）。
- * 呼び出し側で `state.masters` に登録し、`persistMasterFile` で `.team/masters/` に書き出す。
+ * 責務は「pane を立てて `cmux-team spawn-master` を送るだけ」。state 更新や永続化は
+ * 行わない。pane 内で起動した `cmdLaunchMaster` が `registerSelfAsMaster(surface)` で
+ * `MASTER_REGISTERED` を POST し、daemon 側 handler が `state.masters.set` +
+ * `persistMasterFile` を行う（D3 — boot 時復元以外の state mutation は handler 経由に統一）。
  */
 export async function spawnMaster(
   daemonSurface?: string,
-): Promise<{ surface: string; startedAt: string } | null> {
+): Promise<{ surface: string } | null> {
   try {
     // ペイン作成（daemon surface を右に split）
     const surface = await cmux.newSplit(
@@ -119,9 +121,8 @@ export async function spawnMaster(
     const num = surface.replace("surface:", "");
     await cmux.renameTab(surface, `[${num}] Master`);
 
-    const startedAt = new Date().toISOString();
     await log("master_spawned", formatSurface(surface, "U"));
-    return { surface, startedAt };
+    return { surface };
   } catch (e: any) {
     await log("error", `Master spawn failed: ${e.message}`);
     return null;

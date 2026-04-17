@@ -129,7 +129,7 @@ skills/cmux-team/manager/
 | `trace` | トレースDB 検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `trace-hooks` | `hook_signals` テーブル検索・表示（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 |
 | `conductor` | Conductor 情報表示 |
-| `spawn-master` | Master surface 起動 |
+| `spawn-master` | Master surface 起動 + `MASTER_REGISTERED` self-register POST（T230、daemon 未起動時は fail-fast exit 1） |
 | `artifacts` | アーティファクト一覧・検索・追加（`add`）・表示（`show`）・Markdown ビューア（`open`） |
 | `resume` | assigned タスクの Conductor セッションを `claude --resume` で再開 |
 | `restart-task` | `assigned` / `aborted` タスクの Conductor セッションを再起動（T204 で `aborted` からの再開にも対応。status は `ready` に戻され、worktree / taskRunId / sessionId 等の割り当て情報はクリアされる。`aborted` の場合は残存 worktree も強制削除） |
@@ -387,11 +387,13 @@ e2e-results/
 - **ファイル名**: `<normalizeSurfaceForPath(surface)>.json`。`normalizeSurfaceForPath` は surface 中のコロン `:` のみを `_` に置換する（ハイフン等はそのまま保持）。空文字入力は throw
 - **ファイル内容**: `MasterStateSchema`（Zod 検証）。`surface` / `pid?` / `status: "idle"|"running"|"disconnected"` / `startedAt: ISO8601` / `disconnectedAt?` / `prompt?`
 - **真のソース**: ファイル名は一意キーとしてのみ扱い、`surface` フィールド本体は JSON 内容から取得する。ファイル名の衝突は後勝ち（`master_file_conflict` ログ）
-- **ライフサイクル**:
-  - `spawnMaster` 成功直後（`pid: undefined`）
-  - `SESSION_STARTED` 受信時に pid を確定し、`persistMasterFile` で再書き込み
+- **ライフサイクル**（T230 — self-register に統一）:
+  - `cmdLaunchMaster`（`cmux-team spawn-master`）が `registerSelfAsMaster(surface)` で `MASTER_REGISTERED` を daemon に POST（daemon の proxy 未起動時は fail-fast exit 1）
+  - daemon の `handleMessage` が `MASTER_REGISTERED` を受信して `state.masters.set` + `persistMasterFile`（status: `"starting"`、pid: 未確定）
+  - `SESSION_STARTED` 受信時に pid を確定し、`persistMasterFile` で再書き込み（status: `"idle"`）
+  - 取りこぼし対策: `SESSION_STARTED` 受信時に対応する Master エントリが state に無ければ、fallback として `state.masters.set`（status: `"starting"`）＋ `persistMasterFile` ＋ PID watcher 起動（Design Review F1）
   - `removeMaster(state, surface, reason)` で `state.masters` から削除すると同時に `deleteMasterFile` でファイルも削除
-- **daemon 再起動時の復元**: `startMaster` が `.team/masters/*.json` を列挙して PID 生存を `process.kill(pid, 0)` で確認し、生きているものだけを `state.masters` に登録。pid 欠落 / dead / JSON 破損のファイルは `unlink` して `master_restore_discarded` / `master_file_corrupted` をログ
+- **daemon 再起動時の復元**: `startMaster` が `.team/masters/*.json` を列挙して PID 生存を `process.kill(pid, 0)` で確認し、生きているものだけを `state.masters` に登録。pid 欠落 / dead / JSON 破損のファイルは `unlink` して `master_restore_discarded` / `master_file_corrupted` をログ。一件も復元できなかった場合（proxy-port 変更で全 Master を kill した場合、初回起動時を含む）は `spawnMaster(daemonSurface)` で 1 つだけ自動起動する（残りは pane から手動で `cmux-team spawn-master`）
 - **旧形式からのマイグレーション**: `initInfra` の末尾で `migrateMasterLayout` が `.team/master.surface` と `team.json.master.pid` を読み、`.team/masters/<normalized>.json` に統合する（1 回限り、冪等）。`.team/.gitignore` の `master.surface` 行も `masters/` に自動書き換えられる
 
 ### .team/rate-limit.json（T227）

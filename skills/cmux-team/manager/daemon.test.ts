@@ -1942,3 +1942,265 @@ describe("handleMessage: CONDUCTOR_REGISTERED (T228)", () => {
     expect(logContent).toContain("max=3");
   });
 });
+
+describe("handleMessage: MASTER_REGISTERED (T230)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  function stopWatchers(state: DaemonState): void {
+    for (const m of state.masters.values()) {
+      if (m.pidWatcherInterval) {
+        clearInterval(m.pidWatcherInterval);
+        m.pidWatcherInterval = undefined;
+      }
+    }
+    state.running = false;
+  }
+
+  test("T1: 新規 surface → state.masters に set + .team/masters/<surface>.json 永続化 + master_registered ログ", async () => {
+    const state = await createDaemon(testDir);
+    expect(state.masters.size).toBe(0);
+
+    const ts = new Date().toISOString();
+    try {
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:100",
+        timestamp: ts,
+      });
+
+      expect(state.masters.size).toBe(1);
+      const m = state.masters.get("surface:100");
+      expect(m).toBeDefined();
+      expect(m!.surface).toBe("surface:100");
+      expect(m!.status).toBe("starting");
+      expect(m!.startedAt).toBe(ts);
+      expect(m!.pid).toBeUndefined();
+
+      // 永続ファイル書き込みの確認
+      const persistPath = join(testDir, ".team/masters/surface_100.json");
+      expect(existsSync(persistPath)).toBe(true);
+      const persisted = JSON.parse(await readFile(persistPath, "utf-8"));
+      expect(persisted.surface).toBe("surface:100");
+      expect(persisted.status).toBe("starting");
+      expect(persisted.startedAt).toBe(ts);
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_registered");
+      expect(logContent).toContain("U[100]");
+      expect(logContent).toContain("pid=none");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("T2: 既存あり + 同 surface 2 回目 → skip ログ、6 フィールド（surface/pid/status/startedAt/disconnectedAt/prompt）全て保護", async () => {
+    const state = await createDaemon(testDir);
+    state.masters.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      pid: 54321,
+      startedAt: "2026-04-17T00:00:00.000Z",
+      disconnectedAt: "2026-04-17T01:00:00.000Z",
+      prompt: "preserved-prompt",
+    });
+
+    try {
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:100",
+        timestamp: new Date().toISOString(),
+      });
+
+      // 6 フィールド全てが破壊されないこと
+      const m = state.masters.get("surface:100")!;
+      expect(m.surface).toBe("surface:100");
+      expect(m.pid).toBe(54321);
+      expect(m.status).toBe("running");
+      expect(m.startedAt).toBe("2026-04-17T00:00:00.000Z");
+      expect(m.disconnectedAt).toBe("2026-04-17T01:00:00.000Z");
+      expect(m.prompt).toBe("preserved-prompt");
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_register_skipped");
+      expect(logContent).toContain("reason=already_registered");
+      expect(logContent).toContain("existing_status=running");
+      expect(logContent).toContain("existing_pid=54321");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("T3: pid 同梱で POST された場合は即時 watcher 起動（第 2 経路）", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      const ts = new Date().toISOString();
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:101",
+        pid: 12345,
+        timestamp: ts,
+      });
+
+      const m = state.masters.get("surface:101")!;
+      expect(m.pid).toBe(12345);
+      // watcher が起動していること
+      expect(m.pidWatcherInterval).toBeDefined();
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_registered");
+      expect(logContent).toContain("pid=12345");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("T4: SESSION_STARTED が MASTER_REGISTERED より先着した場合、F1 fallback で master として仮登録 + watcher 起動", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      const ts = new Date().toISOString();
+      // master/conductor/agent いずれにも該当しない surface の SESSION_STARTED
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:200",
+        pid: 99999,
+        timestamp: ts,
+      });
+
+      // F1: master として仮登録される
+      expect(state.masters.size).toBe(1);
+      const m = state.masters.get("surface:200")!;
+      expect(m.status).toBe("starting");
+      expect(m.pid).toBe(99999);
+      expect(m.startedAt).toBe(ts);
+      expect(m.pidWatcherInterval).toBeDefined();
+
+      // 永続化されていること
+      expect(
+        existsSync(join(testDir, ".team/masters/surface_200.json")),
+      ).toBe(true);
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_session_started_fallback");
+      expect(logContent).toContain("reason=master_registered_not_received_yet");
+
+      // 後続で MASTER_REGISTERED が届いても skip され、pid/startedAt が破壊されない
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:200",
+        timestamp: new Date(Date.now() + 1000).toISOString(),
+      });
+      const m2 = state.masters.get("surface:200")!;
+      expect(m2.pid).toBe(99999);
+      expect(m2.startedAt).toBe(ts);
+      expect(m2.status).toBe("starting");
+
+      const log2 = await readManagerLog();
+      expect(log2).toContain("master_register_skipped");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("T5: SESSION_STARTED が既存 master entry に対して届いた場合、status=idle 遷移 + pid 更新（既存経路の維持）", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      // 先に MASTER_REGISTERED
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:300",
+        timestamp: new Date().toISOString(),
+      });
+      const before = state.masters.get("surface:300")!;
+      expect(before.status).toBe("starting");
+      expect(before.pid).toBeUndefined();
+
+      // 後続で SESSION_STARTED（pid 付き）
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:300",
+        pid: 77777,
+        timestamp: new Date().toISOString(),
+      });
+
+      const after = state.masters.get("surface:300")!;
+      expect(after.status).toBe("idle");
+      expect(after.pid).toBe(77777);
+      expect(after.pidWatcherInterval).toBeDefined();
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("T6: proxy-port 変化時に全 Master が state と永続ファイルから除去される（縮退テスト）", async () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-cmux-team-test";
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const { startMaster } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    try {
+      // 既存の Master 2 件を永続ファイルごと配置して restore 経路を走らせる
+      await mkdir(join(testDir, ".team/masters"), { recursive: true });
+      await writeFile(
+        join(testDir, ".team/masters/surface_400.json"),
+        JSON.stringify({
+          surface: "surface:400",
+          status: "idle",
+          pid: 11111,
+          startedAt: new Date().toISOString(),
+        }, null, 2),
+      );
+      await writeFile(
+        join(testDir, ".team/masters/surface_401.json"),
+        JSON.stringify({
+          surface: "surface:401",
+          status: "idle",
+          pid: 22222,
+          startedAt: new Date().toISOString(),
+        }, null, 2),
+      );
+      state.proxyPortChanged = true;
+      state.proxyPort = 19999;
+
+      // restoreMasters → proxyPortChanged 分岐 → 全 Master を remove
+      //   spawn は PATH 不在により失敗する（cmux コマンドが見つからない）が、
+      //   縮退テストとして remove 完了までを検証する。
+      await startMaster(state);
+
+      // 2 件とも state から除去される
+      expect(state.masters.size).toBe(0);
+      // 永続ファイルも削除されている
+      expect(
+        existsSync(join(testDir, ".team/masters/surface_400.json")),
+      ).toBe(false);
+      expect(
+        existsSync(join(testDir, ".team/masters/surface_401.json")),
+      ).toBe(false);
+      // フラグがリセットされている
+      expect(state.proxyPortChanged).toBe(false);
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_respawn_proxy_changed");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+      if (originalPath !== undefined) process.env.PATH = originalPath;
+      else delete process.env.PATH;
+    }
+  });
+});

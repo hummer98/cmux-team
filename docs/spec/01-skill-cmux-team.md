@@ -83,7 +83,7 @@ description: >
 | `cmux-team await-agent` | Agent 完了/ask/crash を done マーカーの fs.watch で待機（`--surface` 必須、`--timeout` 任意）。Conductor テンプレートから使用され、STATUS= 行を stdout に出力し状態に応じた exit code で終了する（T181） |
 | `cmux-team trace-task` | 特定タスクのセッション履歴を表示（タスク ID positional 引数必須） |
 | `cmux-team conductor` | Conductor 用 Claude Code を起動する。起動時に自身を daemon に self-register（`CONDUCTOR_REGISTERED` POST）する（T228）。daemon 不在 / proxy-port 破損時は fail-fast（exit 1）。任意の surface から実行でき、`cmux-team start` が作成する固定 pane に依存しない |
-| `cmux-team spawn-master` | Master surface 起動 |
+| `cmux-team spawn-master` | Master 用 Claude Code を起動する。起動時に自身を daemon に self-register（`MASTER_REGISTERED` POST）する（T230）。daemon 不在 / proxy-port 破損時は fail-fast（exit 1）。任意の pane から実行でき、`cmux-team start` で立ち上がる 1 つ目以外にも Master を追加可能（複数 Master 並行運用） |
 | `cmux-team artifacts` | アーティファクト一覧・検索 |
 | `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
 | `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
