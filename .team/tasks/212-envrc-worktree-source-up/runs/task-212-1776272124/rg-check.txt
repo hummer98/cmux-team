@@ -1,0 +1,32 @@
+# rg 'source_up|envrc_generated|direnv_allowed|direnv allow' skills/
+# generated: 2026-04-16T02:00:14+09:00
+
+skills/cmux-team/templates/ja/conductor.md:direnv allow  # .envrc がある場合
+skills/cmux-team/templates/en/conductor.md:direnv allow  # if .envrc exists
+skills/cmux-team/manager/main.ts:    await cmux.send(surface, `direnv allow 2>/dev/null\n`);
+skills/cmux-team/manager/envrc-prompt.ts:  "  2. シェルで: direnv allow\n" +
+skills/cmux-team/manager/envrc-prompt.ts:  /** テスト用に direnv allow の実行関数を差し替える */
+skills/cmux-team/manager/envrc-prompt.ts:      warnings.push(`direnv allow に失敗しました: ${e.message}`);
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    expect(content).toBe("source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    expect(envrc).toBe("source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:  test("Y 入力 + direnv あり で direnv allow が呼ばれる", async () => {
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:  test("Y 入力で direnv allow 手順案内が console.log に出力される", async () => {
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:      expect(allOutput).toContain("direnv allow");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(envrcPath, "source_up");
+skills/cmux-team/manager/envrc-prompt.test.ts:    expect(content).toBe("source_up\nexport CMUX_CLAUDE_HOOKS_DISABLED=1\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(envrcPath, "source_up\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    expect(content).toBe("source_up\nexport CMUX_CLAUDE_HOOKS_DISABLED=1\n");
+skills/cmux-team/manager/envrc-prompt.test.ts:    await writeFile(join(testDir, ".envrc"), "source_up");
+skills/cmux-team/manager/envrc-prompt.test.ts:    expect(content).toBe("source_up\nexport CMUX_CLAUDE_HOOKS_DISABLED=1\n");
