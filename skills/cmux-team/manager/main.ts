@@ -1842,7 +1842,7 @@ async function cmdResume(): Promise<void> {
     ], {
       stdio: "inherit",
       env: process.env,
-      cwd: ts.worktreePath,
+      cwd: PROJECT_ROOT,
     });
   } catch (e: any) {
     process.exit(e.status ?? 1);
