@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.53.0] - 2026-04-17
+
+### Added
+- **Agent の AskUserQuestion 発生を Conductor に通知し TUI で可視化（T238）**。`AgentState.status` に `"asking"` を追加し、`SESSION_ASK` hook 発火時に daemon が status を `asking` に遷移させ `notifyStateChanged()` で TUI を即時更新、加えて `cmux notify` で OS 通知を発火する。dashboard の Agent 行は YELLOW + `?` アイコン + `asking` ラベルで表示され、Conductor が Agent の応答待ちであることが一目で分かる。解除は既存の `SESSION_STARTED` / `SESSION_IDLE` の status 上書きで自然に行われるため追加コードなし
+
+### Fixed
+- **`cmux-team resume` 実行時の Conductor resume 失敗を修正（T239）**。`cmdConductor` が `cwd: PROJECT_ROOT` で Claude を exec するのに対し `cmdResume` は `cwd: ts.worktreePath` だったため、Claude が別 project dir のセッション保存先を探しに行き `"No conversation found with session ID: ..."` で resume に失敗していた。`cmdResume` の cwd を `PROJECT_ROOT` に揃え、保存済みセッションと整合させる
+
 ## [3.52.0] - 2026-04-17
 
 ### Added
