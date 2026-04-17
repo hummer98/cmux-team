@@ -262,6 +262,7 @@ describe("cascadeAbortToChildren (T241)", () => {
     priority: "medium",
     dependsOn,
     runAfterAll: false,
+    exclusive: false,
     filePath: `/tmp/${id}.md`,
     fileName: `${id}.md`,
     createdAt: "2026-04-17T00:00:00Z",
