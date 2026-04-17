@@ -25,6 +25,7 @@ import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal } from "./trace-store";
 import { isStale } from "./rate-limit-persistence";
+import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths";
 
 export interface TaskSummary {
   id: string;
@@ -100,10 +101,11 @@ export interface DaemonState {
  * surface 名をファイルパス用に正規化する (T181)。
  * `surface:12` のようなコロンを含む surface 名を `surface_12` に変換。
  * await-agent / daemon 双方で同じ関数を使って一貫した done ファイルパスを組み立てる。
+ *
+ * T234: 実装は paths.ts に集約（master.ts との重複定義解消）。
+ * 既存の import 互換のために ./paths からの再 export を公開する。
  */
-export function normalizeSurfaceForPath(surface: string): string {
-  return surface.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
-}
+export const normalizeSurfaceForPath = normalizeSurfaceForPathImpl;
 
 /**
  * Agent の done マーカーファイルを書き出す (T181)。
@@ -230,6 +232,41 @@ export async function createDaemon(
     mainBranch: "main",
     traceDb: null,
   };
+}
+
+/**
+ * daemon を停止する（T234）。
+ *
+ * `state.running = false` に加えて、`spawnPidWatcher` / `spawnAgentPidWatcher` /
+ * `spawnMasterPidWatcher` で set された全 `setInterval` を明示的に `clearInterval` する。
+ * 各 watcher は次回 tick で `state.running` が false なら self-clear するが、
+ * 最大 1 秒ラグが残る。graceful shutdown 時や Bun テストの後片付けでは
+ * イベントループを即座に解放したいため、まとめて同期的に stop する。
+ *
+ * 冪等: 既に stop 済みでも問題なく再呼び出しできる。
+ */
+export function stopDaemon(state: DaemonState): void {
+  state.running = false;
+
+  for (const conductor of state.conductors.values()) {
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+    for (const agent of conductor.agents) {
+      if (agent.pidWatcherInterval) {
+        clearInterval(agent.pidWatcherInterval);
+        agent.pidWatcherInterval = undefined;
+      }
+    }
+  }
+
+  for (const master of state.masters.values()) {
+    if (master.pidWatcherInterval) {
+      clearInterval(master.pidWatcherInterval);
+      master.pidWatcherInterval = undefined;
+    }
+  }
 }
 
 /**
@@ -888,7 +925,8 @@ export async function tick(state: DaemonState): Promise<void> {
     const changedFile = await checkSourceChanged(state.sourceMtimes);
     if (changedFile) {
       await log("source_changed", `file=${changedFile}`);
-      state.running = false;
+      // T234: restart のために watcher もまとめて停止する
+      stopDaemon(state);
       state.restartRequested = true;
     }
   }
@@ -1109,11 +1147,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         //   pid/status/startedAt は破壊されない。
         //   agent/conductor は事前登録（AGENT_SPAWNED / CONDUCTOR_REGISTERED）が先行する
         //   プロトコルなので、ここに到達した SESSION_STARTED は実質 master のみ。
+        //   T234: conductor が後着で登録された場合の掃除用に `fallback: true` を立てる。
         const fallback: MasterState = {
           surface: message.surface,
           status: "starting",
           startedAt: message.timestamp,
           pid: message.pid,
+          fallback: true,
         };
         state.masters.set(message.surface, fallback);
         try {
@@ -1135,6 +1175,23 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "CONDUCTOR_REGISTERED": {
+      // T234: SESSION_STARTED F1 fallback で同 surface が master として仮登録されていたら
+      //   conductor が late register してきた時点で master 仮登録は誤りなので掃除する。
+      //   通常経路では registerSelfAsConductor が claude exec 前に POST されるため発生しないが、
+      //   キュー詰まり等でレースが残る可能性に備える。
+      const staleMaster = state.masters.get(message.surface);
+      if (staleMaster?.fallback) {
+        await removeMaster(
+          state,
+          message.surface,
+          "conductor_registered_late",
+        );
+        await log(
+          "master_fallback_cleanup",
+          `${formatSurface(message.surface, "U")} reason=conductor_registered_late`,
+        );
+      }
+
       // T228: idempotent merge — 既存 state があれば skip（taskId/agents 等を破壊しないため）。
       //   cmdConductor / cmdResume 自身が POST する self-register 方式に変わったため、
       //   resume 経路では initializeConductorSlots が pre-set した state が既に存在する。
@@ -1171,8 +1228,26 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       //   idempotent merge — 既存 state があれば skip（startedAt/pid/status を破壊しないため）。
       //   PID watcher はここでは起動しない。pid は後続の SESSION_STARTED hook で受信する（D6）。
       //   ただし F1 対処として、message.pid が渡されていれば即時 watcher を起動する経路も許容する。
-      if (state.masters.has(message.surface)) {
-        const existing = state.masters.get(message.surface)!;
+      //   T234: 既存 entry が F1 fallback の場合は「誤登録ではなく正しい推測の確定」なので
+      //   entry は残し fallback フラグのみ落とす（SESSION_STARTED で既に得た pid/startedAt を保持）。
+      const existing = state.masters.get(message.surface);
+      if (existing) {
+        if (existing.fallback) {
+          existing.fallback = undefined;
+          try {
+            await persistMasterFile(state.projectRoot, existing);
+          } catch (e: any) {
+            await log(
+              "error",
+              `persistMasterFile failed (fallback_confirmed): ${e?.message ?? e}`,
+            );
+          }
+          await log(
+            "master_fallback_cleanup",
+            `${formatSurface(message.surface, "U")} reason=master_registered_confirms_fallback`,
+          );
+          // 以降も skip 経路を通す（pid/startedAt を破壊しないため）
+        }
         await log(
           "master_register_skipped",
           `${formatSurface(message.surface, "U")} reason=already_registered existing_status=${existing.status} existing_pid=${existing.pid ?? "null"}`,
@@ -1566,7 +1641,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
     case "SHUTDOWN":
       await log("shutdown_requested");
-      state.running = false;
+      // T234: 全 pidWatcher の clearInterval も同時に実行
+      stopDaemon(state);
       notifyStateChanged("daemon.ts:handleMessage:shutdown");
       break;
   }

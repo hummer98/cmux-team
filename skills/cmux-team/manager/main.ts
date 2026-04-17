@@ -31,7 +31,7 @@ import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -502,7 +502,8 @@ async function cmdStart(): Promise<void> {
   // シグナルハンドリング（TUI 起動前に設定）
   // quit 時は proxy を停止しない（既存 Master/Conductor の接続を維持するため）
   const shutdown = async () => {
-    state.running = false;
+    // T234: state.running = false + 全 pidWatcher 停止をまとめて実行
+    stopDaemon(state);
     state.fileWatcherAbort?.abort();
     state.fileWatcherAbort = null;
     updateCaffeinate(false);
@@ -533,7 +534,8 @@ async function cmdStart(): Promise<void> {
       const latestMainTs = findLatestMainTs();
       await log("daemon_reload");
       await log("daemon_reload_target", latestMainTs);
-      state.running = false;
+      // T234: 再起動 exec 前に watcher を止め尽くす
+      stopDaemon(state);
       state.fileWatcherAbort?.abort();
       state.fileWatcherAbort = null;
       const { execFileSync } = require("child_process");
@@ -595,7 +597,8 @@ async function cmdStart(): Promise<void> {
       }
 
       await log("full_quit_completed");
-      state.running = false;
+      // T234: 全 pidWatcher を停止してからプロセス終了
+      stopDaemon(state);
       state.fileWatcherAbort?.abort();
       state.fileWatcherAbort = null;
       await updateTeamJson(state);
@@ -1158,63 +1161,27 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
 }
 
 /**
- * Conductor 実行プロセスが自身を daemon に登録する（T228）。
- * proxy-port が読み取れない / proxy が死んでいる / POST が失敗するいずれの
- * 場合も fail-fast（exit 1）する。daemon 不在で claude だけ起動しても
- * タスク割当も SessionStart hook の state 更新も機能しないため。
+ * 自身を daemon に登録する共通処理（T234）。
  *
- * postMessage は「daemon 未起動時は黙って skip」するため、fail-fast と
- * 矛盾する。ここでは使わない。
- */
-async function registerSelfAsConductor(surface: string): Promise<void> {
-  const port = await resolveProxyPort();
-  if (!port) {
-    console.error(
-      "daemon が起動していません (.team/proxy-port 不在 / proxy 死亡 / 壊れた proxy-port ファイル)。",
-    );
-    console.error("cmux-team start を先に実行してください。");
-    console.error(
-      "壊れた proxy-port ファイルの場合は `.team/proxy-port` を削除して `cmux-team start` をやり直してください。",
-    );
-    process.exit(1);
-  }
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "CONDUCTOR_REGISTERED",
-        surface,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    if (!res.ok) {
-      console.error(
-        `CONDUCTOR_REGISTERED POST failed: status=${res.status} surface=${surface}`,
-      );
-      process.exit(1);
-    }
-  } catch (e: any) {
-    console.error(
-      `CONDUCTOR_REGISTERED POST failed: ${e?.message ?? e} surface=${surface}`,
-    );
-    process.exit(1);
-  }
-  await log("conductor_self_register", formatSurface(surface, "C"));
-}
-
-/**
- * Master 実行プロセスが自身を daemon に登録する（T230）。
+ * `role` によって `MASTER_REGISTERED` / `CONDUCTOR_REGISTERED` の POST と
+ * `master_self_register` / `conductor_self_register` のログを出し分ける。
  *
  * proxy-port が読み取れない / proxy が死んでいる / POST が失敗するいずれの
  * 場合も fail-fast（exit 1）する。daemon 不在で claude だけ起動しても
- * `state.masters` に登録されず TUI・PID watcher・`team.json` に反映されない
- * 壊れた Master が取り残されるため。
+ * `state.masters` / `state.conductors` に登録されず TUI・PID watcher・
+ * `team.json` に反映されない壊れたセッションが取り残されるため。
  *
  * `postMessage` は daemon 未起動時に silent skip するため fail-fast と矛盾する。
- * よってここでは `fetch` で直接 POST する（`registerSelfAsConductor` と同構造）。
+ * よってここでは `fetch` で直接 POST する。
  */
-async function registerSelfAsMaster(surface: string): Promise<void> {
+async function registerSelf(
+  role: "master" | "conductor",
+  surface: string,
+): Promise<void> {
+  const messageType = role === "master" ? "MASTER_REGISTERED" : "CONDUCTOR_REGISTERED";
+  const logEvent = role === "master" ? "master_self_register" : "conductor_self_register";
+  const surfaceRole = role === "master" ? "U" : "C";
+
   const port = await resolveProxyPort();
   if (!port) {
     console.error(
@@ -1231,24 +1198,24 @@ async function registerSelfAsMaster(surface: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        type: "MASTER_REGISTERED",
+        type: messageType,
         surface,
         timestamp: new Date().toISOString(),
       }),
     });
     if (!res.ok) {
       console.error(
-        `MASTER_REGISTERED POST failed: status=${res.status} surface=${surface}`,
+        `${messageType} POST failed: status=${res.status} surface=${surface}`,
       );
       process.exit(1);
     }
   } catch (e: any) {
     console.error(
-      `MASTER_REGISTERED POST failed: ${e?.message ?? e} surface=${surface}`,
+      `${messageType} POST failed: ${e?.message ?? e} surface=${surface}`,
     );
     process.exit(1);
   }
-  await log("master_self_register", formatSurface(surface, "U"));
+  await log(logEvent, formatSurface(surface, surfaceRole));
 }
 
 /**
@@ -1733,7 +1700,7 @@ async function cmdConductor(): Promise<void> {
 
   // self-register: cmdConductor が自身を daemon に登録（T228）。
   // proxy-port 不在 / POST 失敗時は fail-fast。
-  await registerSelfAsConductor(surface);
+  await registerSelf("conductor", surface);
 
   // T213: main ブランチを env → config → "main" の三段フォールバックで解決。
   //   `launchConductor` が `CMUX_TEAM_MAIN_BRANCH` をシェルに焼き付けるのが第一ソース。
@@ -1818,7 +1785,7 @@ async function cmdResume(): Promise<void> {
   // self-register: cmdResume が自身を daemon に登録（T228）。
   // daemon 側ハンドラは既存 state があれば skip するため、resume 時に
   // initializeConductorSlots が pre-set した taskId/taskRunId/worktreePath は破壊されない。
-  await registerSelfAsConductor(surface);
+  await registerSelf("conductor", surface);
 
   const taskId = args[1];
   if (!taskId) {
@@ -1895,7 +1862,7 @@ async function cmdLaunchMaster(): Promise<void> {
 
   // T230: daemon へ自己登録する。proxy-port 不在・POST 失敗は fail-fast（exit 1）。
   // generateMasterPrompt や claude exec より前に実行する（壊れた Master を残さないため）。
-  await registerSelfAsMaster(surface);
+  await registerSelf("master", surface);
 
   // プロンプト生成
   const { generateMasterPrompt } = await import("./template");

@@ -171,6 +171,12 @@ export const MasterStateSchema = z.object({
 
 export type MasterState = z.infer<typeof MasterStateSchema> & {
   pidWatcherInterval?: ReturnType<typeof setInterval>;
+  /**
+   * T234: SESSION_STARTED の F1 fallback で作成された仮 master 登録を示すランタイム限定マーカー。
+   * MASTER_REGISTERED 本登録 / CONDUCTOR_REGISTERED 到着時に掃除対象を識別する。
+   * 永続化しない（`persistMasterFile` は payload に含めない）。
+   */
+  fallback?: boolean;
 };
 
 // --- Conductor 状態 ---
