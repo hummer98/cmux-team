@@ -37,7 +37,7 @@ export interface StatuslineConductor {
   surface: string;
   taskId?: string;
   taskTitle?: string;
-  status?: "starting" | "idle" | "running" | "asking" | "disconnected";
+  status?: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected";
   agents?: Array<{ surface: string; role?: string; taskTitle?: string }>;
 }
 

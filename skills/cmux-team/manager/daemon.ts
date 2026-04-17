@@ -1025,6 +1025,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
             formatSurface(message.surface, "C")
           );
+        } else if (conductor.status === "assigning") {
+          // T232: assignTask 実行中の /clear 完了 → SESSION_STARTED(source=clear) で running へ遷移
+          conductor.status = "running";
+          await log(
+            "conductor_running",
+            `${formatSurface(message.surface, "C")} via=SESSION_STARTED source=${message.source ?? "-"}`
+          );
         }
         // T203: SessionStart hook 経由で受信した sessionId を最新値に追従
         const prevSessionId = conductor.sessionId;
@@ -1319,6 +1326,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
           await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE`);
+        } else if (conductor.status === "assigning" && conductor.taskRunId) {
+          // T232 R1: SESSION_STARTED が配送順逆転で後着する race の保険。
+          //          taskRunId が埋まっていれば assigning → running に遷移させる。
+          conductor.status = "running";
+          await log(
+            "conductor_running",
+            `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE taskRunId=${conductor.taskRunId}`
+          );
         }
         notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
       }
@@ -1412,6 +1427,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
           await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_IDLE`);
+        } else if (conductor.status === "assigning" && conductor.taskRunId) {
+          // T232 R1: SESSION_STARTED が配送順逆転で後着する race の保険。
+          //          taskRunId が埋まっていれば assigning → running に遷移させる。
+          conductor.status = "running";
+          await log(
+            "conductor_running",
+            `${formatSurface(message.surface, "C")} via=SESSION_IDLE taskRunId=${conductor.taskRunId}`
+          );
         }
         notifyStateChanged("daemon.ts:handleMessage:session-idle-conductor");
         await log(
@@ -1510,6 +1533,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       const conductor = findConductor(state, message.surface);
+      // T232: assigning 中の SESSION_CLEAR は daemon 自身が送った /clear の遅延発火。
+      //       destructive な処理（task-state 書き換え / resetConductor）をスキップして早期 break する。
+      //       これを `disconnected/starting → idle` 分岐より **前** に置くことで、
+      //       不意のフォールスルーを防ぐ。
+      if (conductor && conductor.status === "assigning") {
+        await log(
+          "session_clear_expected",
+          `${formatSurface(message.surface, "C")} reason=daemon_assign_clear taskRunId=${conductor.taskRunId ?? "-"}`
+        );
+        break;
+      }
       if (conductor && (conductor.status === "disconnected" || conductor.status === "starting")) {
         const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
         conductor.status = "idle";
@@ -1683,6 +1717,17 @@ export async function scanTasks(state: DaemonState): Promise<void> {
             "task_aborted",
             `task_id=${task.id} title=${task.title} journal_summary=assign_failed: ${e.reason}`
           );
+          // T232 R2: 保険 — assigning をセット済みで task kind 例外が飛んだ場合
+          //          （現コードでは到達し得ないが将来変更への防衛）、disconnected に倒す。
+          if (idleConductor.status === "assigning") {
+            idleConductor.status = "disconnected";
+            idleConductor.disconnectedAt = new Date().toISOString();
+            notifyStateChanged("daemon.ts:scanTasks:assigning-fallback-disconnected");
+            await log(
+              "conductor_disconnected",
+              `${formatSurface(idleConductor.surface, "C")} reason=assigning_stuck kind=task task_id=${task.id}`
+            );
+          }
           // 次のタスクへ。idle Conductor はそのまま維持
           continue;
         }
@@ -1698,7 +1743,8 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       }
       // AssignTaskError 以外の想定外例外（defensive: conductor.ts の catch-all が
       // すべてを AssignTaskError にラップしているためデッドコードに近いが、
-      // 将来の変更に備えて最悪ケースとして conductor を落とす）
+      // 将来の変更に備えて最悪ケースとして conductor を落とす）。
+      // T232 R2: assigning 状態で抜けた場合も確実に disconnected に倒す。
       await log("error", `assignTask unexpected: task_id=${task.id} ${(e as Error).message}`);
       idleConductor.status = "disconnected";
       idleConductor.disconnectedAt = new Date().toISOString();
@@ -1898,6 +1944,14 @@ export function spawnMasterPidWatcher(
 
 /** starting 状態のタイムアウト（秒） */
 const STARTING_TIMEOUT_SEC = 60;
+/**
+ * assigning 状態のタイムアウト（秒） — 超過で disconnected に倒す（T232）。
+ *
+ * /clear 送信から SESSION_STARTED(source=clear) 到達までの実測遅延は ~10 秒。
+ * 10 倍のマージンを取って 60 秒とする。これを超えたら disconnected → 5 分 timeout
+ * → forced close の経路で人間が認識できる形に落ちる。
+ */
+const ASSIGNING_TIMEOUT_SEC = 60;
 /** disconnected 状態のタイムアウト（秒） — 超過で forced cleanup */
 const DISCONNECT_TIMEOUT_SEC =
   Number(process.env.CMUX_TEAM_DISCONNECT_TIMEOUT_SEC) || 300;  // 5 分
@@ -1921,6 +1975,21 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
         await log(
           "conductor_start_timeout",
           `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s`
+        );
+      }
+      continue;
+    }
+
+    // T232: assigning: タイムアウト → disconnected に倒す（SESSION_STARTED 未到達時の保険）
+    if (conductor.status === "assigning") {
+      const elapsed = (Date.now() - new Date(conductor.startedAt).getTime()) / 1000;
+      if (elapsed > ASSIGNING_TIMEOUT_SEC) {
+        conductor.status = "disconnected";
+        conductor.disconnectedAt = new Date().toISOString();
+        notifyStateChanged("daemon.ts:monitorConductors:assigning-timeout");
+        await log(
+          "conductor_assign_timeout",
+          `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
         );
       }
       continue;

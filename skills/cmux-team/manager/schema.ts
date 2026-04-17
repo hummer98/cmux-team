@@ -192,7 +192,7 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  status: "starting" | "idle" | "running" | "asking" | "disconnected";
+  status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected";
   pidWatcherInterval?: ReturnType<typeof setInterval>;
 };
 

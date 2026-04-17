@@ -381,6 +381,7 @@ function buildMasterSection(state: DaemonState) {
 
 function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
   const isStarting = c.status === "starting";
+  const isAssigning = c.status === "assigning";
   const isIdle = c.status === "idle";
   const isDisconnected = c.status === "disconnected";
   const isAsking = c.status === "asking";
@@ -398,6 +399,25 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
         ui.text(spinChar, { style: { fg: CYAN } }),
         ui.text(`[${surface}]`, { style: { fg: CYAN } }),
         ui.text("starting…", { style: { fg: CYAN } }),
+      ])
+    );
+  } else if (isAssigning) {
+    // T232: assigning 状態は「タスク割り当て中（/clear → SESSION_STARTED 待ち）」
+    //       starting と同じトーン（spinner + CYAN + 省略記号）で表示する。
+    const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+    const taskParts: ReturnType<typeof ui.text>[] = [];
+    if (c.taskId) {
+      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+    }
+    if (c.taskTitle) {
+      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+    }
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text(spinChar, { style: { fg: CYAN } }),
+        ui.text(`[${surface}]`, { style: { fg: CYAN } }),
+        ...taskParts,
+        ui.text("assigning…", { style: { fg: CYAN } }),
       ])
     );
   } else if (isIdle) {
@@ -855,6 +875,7 @@ export async function startDashboard(
   function buildViewWithApp(state: AppState) {
     const { daemon, repoUrl } = state;
     const startingCount = [...daemon.conductors.values()].filter(c => c.status === "starting").length;
+    const assigningCount = [...daemon.conductors.values()].filter(c => c.status === "assigning").length;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const askingCount = [...daemon.conductors.values()].filter(c => c.status === "asking").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
@@ -954,7 +975,7 @@ export async function startDashboard(
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
+        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション（クリックでフォーカス）
         ui.button({
@@ -1300,7 +1321,7 @@ export async function startDashboard(
       const daemon = getState();
       const needsAnimation =
         [...daemon.masters.values()].some(m => m.status === "running") ||
-        [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting");
+        [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting" || c.status === "assigning");
 
       if (needsAnimation) {
         wasAnimating = true;

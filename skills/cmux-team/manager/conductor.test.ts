@@ -102,6 +102,50 @@ describe("assignTask エラー分類", () => {
   });
 });
 
+// --- T232: assignTask 成功パスで status が "assigning" になること ---
+
+describe("assignTask 状態遷移 (T232)", () => {
+  let sendSpy: ReturnType<typeof spyOn>;
+  let sendKeySpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+    sendKeySpy.mockRestore();
+  });
+
+  test("assignTask 成功後に conductor.status === 'assigning'（running ではない）", async () => {
+    // git init + 初期コミットでワーキングツリーを作る（worktree add が通るため）
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await writeTaskFile("232", "assigning-test");
+
+    const conductor = fakeConductor();
+    const updated = await assignTask(conductor, "232", testDir, "main");
+
+    // Decision Log D5: running への即時遷移は削除され、assigning のまま
+    expect(updated.status).toBe("assigning");
+    expect(conductor.status).toBe("assigning");
+
+    // タスク情報は埋まっている（SESSION_STARTED で running に遷移する前提）
+    expect(updated.taskId).toBe("232");
+    expect(updated.taskRunId).toMatch(/^task-232-/);
+    expect(updated.worktreePath).toContain(".worktrees");
+
+    // cmux.send が /clear と新プロンプト送信の 2 回呼ばれたこと
+    expect(sendSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendSpy.mock.calls[0]?.[1]).toBe("/clear");
+  }, 30000);
+});
+
 // --- T176: createConductorPanes layout 分岐 ---
 
 describe("createConductorPanes layout 分岐 (T176)", () => {
