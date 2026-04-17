@@ -719,7 +719,13 @@ async function cmdStart(): Promise<void> {
       state.lastUpdateCheckAt = Date.now();
       await checkUpdateAndNotify(state, autoUpdate.mode);
     }
+    const sleepStart = Date.now();
     await sleepUntilWakeup(state);
+    const sleepElapsed = Date.now() - sleepStart;
+    // タイマーが期待値の3倍超を経過していた場合、Mac スリープからの復帰と判断
+    if (sleepElapsed > state.pollInterval * 3) {
+      await log("wake_detected", `gap=${Math.round(sleepElapsed / 1000)}s`);
+    }
   }
 
   // ソース変更による再起動要求（proxy は停止しない — 再起動後に再利用される）
