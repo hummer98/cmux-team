@@ -322,9 +322,31 @@ export async function assignTask(
     } catch (e: any) {
       throw new AssignTaskError("task", `git worktree add failed: ${formatExecError(e)}`, e);
     }
+
+    // T243: worktree 作成直後に rev-parse HEAD で base SHA を取得する
+    //   `git worktree add -b <new> <start-point>` は HEAD を start-point に揃えるので
+    //   worktree の cwd で rev-parse HEAD を打てば「実際に出発した commit」が手に入る。
+    //   失敗時は null + error ログで継続し、DB insert はそのまま続行する。
+    let baseSha: string | null = null;
+    try {
+      const { stdout } = await execFile("git", ["rev-parse", "HEAD"], {
+        cwd: worktreePath,
+        timeout: 30000,
+      });
+      const sha = stdout.trim();
+      if (/^[0-9a-f]{40}$/.test(sha)) {
+        baseSha = sha;
+      } else {
+        await log("error", `rev-parse HEAD returned unexpected value in worktree: path=${worktreePath} value=${sha.slice(0, 64)}`);
+      }
+    } catch (e: any) {
+      await log("error", `rev-parse HEAD failed in worktree: path=${worktreePath} ${formatExecError(e)}`);
+    }
+
+    const shortSha = baseSha ? baseSha.slice(0, 7) : "-";
     await log(
       "worktree_created",
-      `branch=${branch} base=${baseResolution.baseLabel} source=${baseResolution.source} path=${worktreePath}`,
+      `branch=${branch} base=${baseResolution.baseLabel} source=${baseResolution.source} sha=${shortSha} path=${worktreePath}`,
     );
 
     // .claude/settings.local.json を worktree にコピー
@@ -411,6 +433,9 @@ export async function assignTask(
         surface: conductor.surface,
         worktree_path: worktreePath,
         event: "assigned",
+        base_branch: baseResolution.baseLabel,
+        base_sha: baseSha,
+        base_source: baseResolution.source,
       });
       db.close();
     } catch (e: any) {

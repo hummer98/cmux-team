@@ -3336,12 +3336,25 @@ async function cmdTraceTask(): Promise<void> {
       : worktreePath;
     console.log(`Worktree: ${rel}`);
   }
-  console.log();
 
   // DB からセッション取得
   const db = initDB(PROJECT_ROOT);
   const sessions = getSessionsForTask(db, taskId);
   db.close();
+
+  // T243: assigned 行から base 情報を表示（worktree 作成時の base branch / 親 commit / 解決ソース）
+  const assignedRow = sessions.find(
+    (s) => s.event === "assigned" && s.role === "conductor",
+  );
+  if (assignedRow && (assignedRow.base_branch || assignedRow.base_sha || assignedRow.base_source)) {
+    const baseLabel = assignedRow.base_branch ?? "-";
+    const shortSha = assignedRow.base_sha ? assignedRow.base_sha.slice(0, 7) : "-";
+    const source = assignedRow.base_source ?? "-";
+    console.log(`Base: ${baseLabel} @${shortSha} (source=${source})`);
+  } else {
+    console.log("Base: -");
+  }
+  console.log();
 
   if (sessions.length === 0) {
     console.log("No sessions found.");

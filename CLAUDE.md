@@ -688,9 +688,10 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 
 - **DB パス**: `.team/traces/traces.db`
 - **本文保存**: `.team/logs/traces/bodies/`
-- **検索**: `cmux-team trace --task <id>`, `--search <query>`, `--show <id>`
+- **検索**: `cmux-team trace-task <id>`（旧 `cmux-team trace --task / --search / --show` は廃止され `trace-task` に集約）
 - **メタデータ**: `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role` ヘッダーで伝播
 - **自動設定**: Master/Conductor に `ANTHROPIC_BASE_URL` を設定し、全リクエストを Proxy 経由にする
+- **base 列（T243）**: `task_sessions` テーブルの `event=assigned` 行に `base_branch` / `base_sha` / `base_source` を記録する。worktree 作成時の出発点（branch ラベル + 親 commit SHA + 解決ソース）を事後追跡できるようにするための列で、`event=agent_spawned` / `closed` / `aborted` 行は NULL のまま。T243 より前の旧レコードも NULL のまま（マイグレーションでは過去行を更新しない）
 
 ### API レート制限
 

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **trace DB `task_sessions` に `base_branch` / `base_sha` / `base_source` 列を追加（T243）**。`assignTask` で worktree 作成直後に `git rev-parse HEAD`（cwd=worktreePath）を呼んで親 commit の SHA を取得し、`event=assigned` 行に worktree の出発点情報を記録する。`base_branch` は `WorktreeBaseResolution.baseLabel`（`origin/main` / `main` / `HEAD` 等）、`base_source` は `WorktreeBaseSource` enum（`explicit` / `config-origin` / `config-local` / `head-fallback`）、`base_sha` は 40 桁 hex。既存 DB は `initDB()` 内の `PRAGMA table_info` ベースのマイグレーションで `ALTER TABLE ADD COLUMN` 経由に列追加され、過去行は NULL のまま温存される（冪等）。`cmux-team trace-task` の出力ヘッダに `Base: <label> @<short-sha> (source=<source>)` を 1 行追加し、worktree が削除された後でも事後診断ができるようにした
+
 ### Changed
 - **Conductor worktree の base を `origin/<mainBranch>` 優先で解決（T242）**。`skills/cmux-team/manager/worktree-base.ts:resolveWorktreeBase` を新規追加し、`assignTask` の worktree 作成時に task.md `base_branch:` 明示 → `origin/<mainBranch>` → local `<mainBranch>` → HEAD fallback の優先順位で start-point を決定する。従来は `base_branch:` 未指定時にローカル HEAD へ暗黙依存していたため、ローカル main が origin から乖離していると worktree に無関係 commits が紛れ込み PR を汚染していた（Dear T165 / PR #1891 の 14 タスク分混入）。ログに `worktree_created branch=<new> base=<ref> source=<explicit|config-origin|config-local|head-fallback> path=<...>` を常時出力。環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1` で事前 `git fetch --quiet origin <mainBranch>` を opt-in 可能（デフォルト OFF、失敗はベストエフォート継続）
 

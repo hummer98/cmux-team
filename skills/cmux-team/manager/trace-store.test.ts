@@ -1,9 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, mkdir, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import type { Database } from "bun:sqlite";
-import { initDB, insertHookSignal, getHookSignals } from "./trace-store";
+import { Database } from "bun:sqlite";
+import {
+  initDB,
+  insertHookSignal,
+  getHookSignals,
+  insertTaskSession,
+  getTaskSessions,
+} from "./trace-store";
 import type { QueueMessage } from "./schema";
 
 describe("trace-store: insertHookSignal (T216)", () => {
@@ -199,5 +205,143 @@ describe("trace-store: getHookSignals (T217)", () => {
     expect(first.type).toBe("CONDUCTOR_DONE");
     expect(second.type).toBe("SESSION_STARTED");
     expect(second.surface).toBe("surface:200");
+  });
+});
+
+describe("trace-store: task_sessions base columns (T243)", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-task-sessions-base-"));
+    db = initDB(tmpDir);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test("新規 DB: insertTaskSession で base_branch/base_sha/base_source が読み出せる", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-17T10:00:00.000Z",
+      task_id: "T243",
+      task_run_id: "task-243-1776424220",
+      session_id: "session-abc",
+      role: "conductor",
+      surface: "surface:665",
+      worktree_path: "/tmp/wt",
+      event: "assigned",
+      base_branch: "origin/main",
+      base_sha: "abcdef0123456789abcdef0123456789abcdef01",
+      base_source: "config-origin",
+    });
+
+    const rows = getTaskSessions(db, { taskId: "T243", event: "assigned" });
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.base_branch).toBe("origin/main");
+    expect(row.base_sha).toBe("abcdef0123456789abcdef0123456789abcdef01");
+    expect(row.base_source).toBe("config-origin");
+  });
+
+  test("base_* 未指定時は NULL になる（旧コードパス互換）", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-17T10:01:00.000Z",
+      task_id: "T243",
+      session_id: "session-def",
+      event: "agent_spawned",
+    });
+
+    const rows = getTaskSessions(db, { taskId: "T243", event: "agent_spawned" });
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.base_branch ?? null).toBeNull();
+    expect(row.base_sha ?? null).toBeNull();
+    expect(row.base_source ?? null).toBeNull();
+  });
+
+  test("旧スキーマ DB → initDB 再呼び出しで ALTER TABLE による列追加が走る", async () => {
+    // 旧 traces.db を手作業で作る（base_* 列なし）
+    const oldDir = await mkdtemp(join(tmpdir(), "cmux-team-old-schema-"));
+    try {
+      await mkdir(join(oldDir, ".team/traces"), { recursive: true });
+      const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
+      oldDb.exec(`
+        CREATE TABLE task_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          task_run_id TEXT,
+          session_id TEXT NOT NULL,
+          role TEXT,
+          surface TEXT,
+          worktree_path TEXT,
+          event TEXT NOT NULL
+        );
+      `);
+      // 旧形式のダミー行を 1 件入れる
+      oldDb
+        .prepare(
+          `INSERT INTO task_sessions
+            (timestamp, task_id, task_run_id, session_id, role, surface, worktree_path, event)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "2026-01-01T00:00:00.000Z",
+          "T100",
+          "task-100-old",
+          "session-old",
+          "conductor",
+          "surface:100",
+          "/old/path",
+          "assigned",
+        );
+      oldDb.close();
+
+      // initDB で migration が走る
+      const migratedDb = initDB(oldDir);
+      try {
+        const cols = migratedDb
+          .prepare("PRAGMA table_info(task_sessions)")
+          .all() as Array<{ name: string }>;
+        const names = new Set(cols.map((c) => c.name));
+        expect(names.has("base_branch")).toBe(true);
+        expect(names.has("base_sha")).toBe(true);
+        expect(names.has("base_source")).toBe(true);
+
+        // 旧行は NULL のまま生存
+        const old = migratedDb
+          .prepare(
+            "SELECT task_id, base_branch, base_sha, base_source FROM task_sessions WHERE task_id = ?",
+          )
+          .get("T100") as {
+            task_id: string;
+            base_branch: string | null;
+            base_sha: string | null;
+            base_source: string | null;
+          };
+        expect(old.task_id).toBe("T100");
+        expect(old.base_branch).toBeNull();
+        expect(old.base_sha).toBeNull();
+        expect(old.base_source).toBeNull();
+
+        // 2 回目の initDB 呼び出しでも ALTER は冪等（throw しない）
+        migratedDb.close();
+        const reopen = initDB(oldDir);
+        const cols2 = reopen
+          .prepare("PRAGMA table_info(task_sessions)")
+          .all() as Array<{ name: string }>;
+        const names2 = new Set(cols2.map((c) => c.name));
+        expect(names2.has("base_branch")).toBe(true);
+        expect(names2.has("base_sha")).toBe(true);
+        expect(names2.has("base_source")).toBe(true);
+        reopen.close();
+      } finally {
+        try { migratedDb.close(); } catch {}
+      }
+    } finally {
+      await rm(oldDir, { recursive: true, force: true });
+    }
   });
 });

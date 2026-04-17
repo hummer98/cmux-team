@@ -8,7 +8,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { join } from "path";
-import type { QueueMessage } from "./schema";
+import type { QueueMessage, WorktreeBaseSource } from "./schema";
 
 export interface TaskSessionRecord {
   id?: number;
@@ -20,6 +20,10 @@ export interface TaskSessionRecord {
   surface?: string;
   worktree_path?: string;
   event: "assigned" | "agent_spawned" | "closed" | "aborted";
+  // T243: worktree 作成時の base 情報（assigned 行のみ書き込み、他は NULL）
+  base_branch?: string | null;
+  base_sha?: string | null;
+  base_source?: WorktreeBaseSource | null;
 }
 
 export interface HookSignalRecord {
@@ -45,7 +49,10 @@ CREATE TABLE IF NOT EXISTS task_sessions (
   role TEXT,
   surface TEXT,
   worktree_path TEXT,
-  event TEXT NOT NULL
+  event TEXT NOT NULL,
+  base_branch TEXT,
+  base_sha TEXT,
+  base_source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_task_sessions_task_id ON task_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_sessions_session_id ON task_sessions(session_id);
@@ -86,13 +93,35 @@ export function initDB(projectRoot: string): Database {
   }
 
   db.exec(SCHEMA);
+  ensureTaskSessionsColumns(db);
   return db;
+}
+
+/**
+ * T243: 既存 DB の `task_sessions` テーブルに `base_branch` / `base_sha` /
+ * `base_source` 列が無ければ ALTER TABLE で追加する（冪等）。
+ *
+ * 新規 DB では `db.exec(SCHEMA)` 直後に PRAGMA で全列が確認できるため ALTER は走らない。
+ * 既存 DB（旧スキーマ）では欠損列だけが ADD COLUMN される。
+ */
+function ensureTaskSessionsColumns(db: Database): void {
+  const rows = db
+    .prepare("PRAGMA table_info(task_sessions)")
+    .all() as Array<{ name: string }>;
+  const existing = new Set(rows.map((r) => r.name));
+  const required = ["base_branch", "base_sha", "base_source"] as const;
+  for (const col of required) {
+    if (!existing.has(col)) {
+      db.exec(`ALTER TABLE task_sessions ADD COLUMN ${col} TEXT`);
+      console.warn(`[trace-store] task_sessions_migrated col=${col}`);
+    }
+  }
 }
 
 export function insertTaskSession(db: Database, record: TaskSessionRecord): number {
   const stmt = db.prepare(`
-    INSERT INTO task_sessions (timestamp, task_id, task_run_id, session_id, role, surface, worktree_path, event)
-    VALUES ($timestamp, $task_id, $task_run_id, $session_id, $role, $surface, $worktree_path, $event)
+    INSERT INTO task_sessions (timestamp, task_id, task_run_id, session_id, role, surface, worktree_path, event, base_branch, base_sha, base_source)
+    VALUES ($timestamp, $task_id, $task_run_id, $session_id, $role, $surface, $worktree_path, $event, $base_branch, $base_sha, $base_source)
   `);
   const result = stmt.run({
     $timestamp: record.timestamp,
@@ -103,6 +132,9 @@ export function insertTaskSession(db: Database, record: TaskSessionRecord): numb
     $surface: record.surface ?? null,
     $worktree_path: record.worktree_path ?? null,
     $event: record.event,
+    $base_branch: record.base_branch ?? null,
+    $base_sha: record.base_sha ?? null,
+    $base_source: record.base_source ?? null,
   });
   return Number(result.lastInsertRowid);
 }

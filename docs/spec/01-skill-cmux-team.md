@@ -111,7 +111,32 @@ daemon が起動すると Proxy が自動で立ち上がり、Master および C
 cmux-team trace-task 035            # 特定タスクのセッション履歴（Conductor + Agent）
 ```
 
+出力例（T243 で `Base:` 行が追加された）:
+```
+Task T035: <title>
+Run: task-035-1776424220
+Worktree: .worktrees/task-035-1776424220
+Base: origin/main @abcdef1 (source=config-origin)
+
+Sessions:
+  conductor    abcdef12  surface:665   24 lines   ~/.claude/projects/.../abcdef12...jsonl
+  ...
+```
+
 > 旧 `cmux-team trace --task / --search / --show` は `trace-task` に集約された（commit `0641ac9`）。全文検索 CLI は現在なく、`.team/traces/traces.db` を直接参照する必要がある。
+
+**`task_sessions` テーブルの主要列（T243 で base 列追加）:**
+
+| 列 | 内容 |
+|----|------|
+| `task_id` / `task_run_id` / `session_id` / `surface` / `role` | 索引キー |
+| `worktree_path` | worktree の絶対パス |
+| `event` | `assigned` / `agent_spawned` / `closed` / `aborted` |
+| `base_branch` | worktree 作成時の base ラベル（`origin/main` / `main` / `HEAD` 等）。`event=assigned` 行のみ |
+| `base_sha` | worktree 作成直後の `git rev-parse HEAD`（40 桁 hex）。`event=assigned` 行のみ |
+| `base_source` | `explicit` / `config-origin` / `config-local` / `head-fallback`。`event=assigned` 行のみ |
+
+T243 より前のレコードは `base_*` 列が NULL のまま残る（マイグレーション時に `ALTER TABLE ADD COLUMN` で追加されるが過去行は更新されない）。
 
 ### 2a. Dashboard のレート制限表示（T227）
 

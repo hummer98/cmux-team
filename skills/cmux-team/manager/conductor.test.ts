@@ -190,6 +190,66 @@ describe("assignTask worktree base 解決 (T242)", () => {
   }, 30000);
 });
 
+// --- T243: assignTask が base_branch/base_sha/base_source を trace DB に書き込む ---
+
+describe("assignTask: base_* persistence (T243)", () => {
+  let sendSpy: ReturnType<typeof spyOn>;
+  let sendKeySpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+    sendKeySpy.mockRestore();
+  });
+
+  test("local main 経由で worktree を作ると base_branch=main / base_source=config-local / base_sha=40hex が記録される", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+
+    // git init + main 1 commit（origin remote なし → config-local パスに倒れる）
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    const gitEnv = ["-c", "user.email=t@t", "-c", "user.name=t"];
+    await execFile("git", [...gitEnv, "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+    const { stdout: mainHead } = await execFile("git", ["rev-parse", "HEAD"], { cwd: testDir });
+    const expectedSha = mainHead.trim();
+
+    await writeTaskFile("243", "base-persistence-test");
+
+    const conductor = fakeConductor();
+    const updated = await assignTask(conductor, "243", testDir, "main");
+
+    // trace DB から assigned 行を読み出す
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(join(testDir, ".team/traces/traces.db"));
+    try {
+      const row = db
+        .prepare(
+          `SELECT base_branch, base_sha, base_source, task_run_id
+           FROM task_sessions WHERE task_id = ? AND event = 'assigned'`,
+        )
+        .get("243") as {
+          base_branch: string | null;
+          base_sha: string | null;
+          base_source: string | null;
+          task_run_id: string | null;
+        };
+      expect(row).toBeTruthy();
+      expect(row.task_run_id).toBe(updated.taskRunId!);
+      expect(row.base_branch).toBe("main");
+      expect(row.base_source).toBe("config-local");
+      expect(row.base_sha).toMatch(/^[0-9a-f]{40}$/);
+      expect(row.base_sha).toBe(expectedSha);
+    } finally {
+      db.close();
+    }
+  }, 30000);
+});
+
 // --- T176: createConductorPanes layout 分岐 ---
 
 describe("createConductorPanes layout 分岐 (T176)", () => {

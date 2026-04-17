@@ -23,12 +23,20 @@ cmux-team trace-task <task-id>
 Task T141: SESSION_CLEAR で running Conductor のステータスをリセットする
 Run: task-141-1775852524
 Worktree: .worktrees/task-141-1775852524
+Base: origin/main @abcdef1 (source=config-origin)
 
 Sessions:
   conductor    a87d71b5  surface:125   54 lines   ~/.claude/projects/.../a87d71b5.jsonl
   impl         1ad0d40a  surface:136   77 lines   ~/.claude/projects/.../1ad0d40a.jsonl
   inspector    xxxxxxxx  surface:137   45 lines   ~/.claude/projects/.../xxxxxxxx.jsonl
 ```
+
+`Base:` 行は T243 で追加された worktree 出発点情報:
+- `<label>`: `WorktreeBaseResolution.baseLabel`（`origin/main` / `main` / `HEAD` 等）
+- `@<short-sha>`: worktree 作成直後の `git rev-parse HEAD` 先頭 7 文字
+- `source=<source>`: `explicit` / `config-origin` / `config-local` / `head-fallback`
+
+T243 より前のタスクは情報なしで `Base: -` と表示される。
 
 ### 2. JSONL の分析
 
@@ -47,3 +55,4 @@ JSONL の各行は JSON オブジェクトで、主要フィールド:
 - **エラー**: エラーメッセージ、リトライ、失敗パターン
 - **判断**: Agent がどのような判断を下したか
 - **成果物**: 生成されたファイル、コミット
+- **worktree base**: ヘッダの `Base:` 行から worktree の base branch / 親 commit / 解決ソースを把握する（T243）。`source=head-fallback` のタスクは worktree が origin と乖離した HEAD から切られていた可能性があり、PR への混入 commit を確認する判断材料になる
