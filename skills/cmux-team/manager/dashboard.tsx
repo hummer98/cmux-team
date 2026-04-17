@@ -929,7 +929,7 @@ export async function startDashboard(
           const rl = buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
-          const rightText = rl.parts.map((p, i) => (i > 0 && p.group ? "  " : "") + p.text).join("");
+          const rightText = rl.parts.map((p, i) => (i > 0 ? (p.group ? "  " : " ") : "") + p.text).join("");
           const fill = "─".repeat(Math.max(1, 80 - left.length - rightText.length));
 
           // スロットリング中: headerSubtitle 部分を赤色で表示
@@ -949,7 +949,7 @@ export async function startDashboard(
           return ui.row({ gap: 0 }, [
             ui.text(`${left} ${fill} `, { dim: true }),
             ...rl.parts.flatMap((p, i) => [
-              ...(i > 0 && p.group ? [ui.text("  ", { dim: true })] : []),
+              ...(i > 0 ? [ui.text(p.group ? "  " : " ", { dim: true })] : []),
               ui.text(p.text, { style: { fg: mapRateLimitColor(p.color) } }),
             ]),
           ]);
