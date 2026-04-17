@@ -3,5 +3,6 @@
     "master": "opus",
     "conductor": "opus",
     "agent": "opus"
-  }
+  },
+  "mainBranch": "main"
 }
