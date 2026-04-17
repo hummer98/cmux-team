@@ -667,38 +667,6 @@ async function restoreMasters(state: DaemonState): Promise<number> {
   return restored;
 }
 
-/**
- * Master を 1 つ起動する（T229）。
- * 内部ヘルパー: state.masters に未登録のものを spawn → register → persist まで行う。
- */
-async function spawnAndRegisterMaster(
-  state: DaemonState,
-  daemonSurface?: string,
-): Promise<MasterState | null> {
-  await log("master_spawning");
-  const spawned = await spawnMaster(daemonSurface);
-  if (!spawned) {
-    await log("master_spawn_failed");
-    return null;
-  }
-  const master: MasterState = {
-    surface: spawned.surface,
-    status: "idle",
-    startedAt: spawned.startedAt,
-  };
-  state.masters.set(master.surface, master);
-  try {
-    await persistMasterFile(state.projectRoot, master);
-  } catch (e: any) {
-    await log(
-      "error",
-      `persistMasterFile failed (spawnAndRegisterMaster): ${e?.message ?? e}`
-    );
-  }
-  await log("master_started", formatSurface(master.surface, "U"));
-  return master;
-}
-
 export async function startMaster(state: DaemonState, daemonSurface?: string): Promise<void> {
   // 既存の Master を PID ベースで復元
   let restored = 0;
@@ -708,8 +676,13 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
     await log("master_check_error", e?.message ?? String(e));
   }
 
-  // proxy ポート変更時は全 Master を再起動
+  // T230 S8: proxy ポート変更時は全 Master を再起動する。
+  //   旧方式: removeMaster + closeSurface で終わり、下流の `restored === 0` で 1 つだけ spawn。
+  //   新方式: 対象 Master 数だけ個別に spawnMaster を呼ぶ（複数 Master を維持）。
+  //   spawn された pane は内部で cmdLaunchMaster → registerSelfAsMaster を走らせるため、
+  //   daemon 側の state mutation は MASTER_REGISTERED handler 経由で行われる（D3 守護）。
   if (state.proxyPortChanged && restored > 0) {
+    const respawnCount = state.masters.size;
     for (const surface of [...state.masters.keys()]) {
       await log(
         "master_respawn_proxy_changed",
@@ -720,11 +693,26 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
     }
     state.proxyPortChanged = false;
     restored = 0;
+    // close 済み Master の数だけ再 spawn する
+    for (let i = 0; i < respawnCount; i++) {
+      await log("master_spawning");
+      const spawned = await spawnMaster(daemonSurface);
+      if (!spawned) {
+        await log("master_spawn_failed");
+      }
+    }
+    return;
   }
 
-  // 復元 0 件なら新規 spawn（cmdStart の外部挙動は 1 つ立ち上げ）
+  // 復元 0 件なら新規 spawn（cmdStart の外部挙動は 1 つ立ち上げ）。
+  //   F2 対処: 新関数を設けず `spawnMaster` を直接呼ぶ（D3 守護: state.masters.set は
+  //   restoreMasters と MASTER_REGISTERED handler の 2 箇所のみ）。
   if (restored === 0) {
-    await spawnAndRegisterMaster(state, daemonSurface);
+    await log("master_spawning");
+    const spawned = await spawnMaster(daemonSurface);
+    if (!spawned) {
+      await log("master_spawn_failed");
+    }
   }
 }
 
@@ -1114,7 +1102,34 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
       }
       if (!agentMatched) {
-        await log("session_started_ignored", `${formatSurface(message.surface, "S")} reason=not_found`);
+        // T230 F1: master/conductor/agent どれにも該当しない場合の fallback。
+        //   MASTER_REGISTERED より先に SESSION_STARTED が届くレース（proxy-port 変化時の
+        //   再 spawn や handleMessage キュー詰まり）に備え、master として仮 entry を作成し
+        //   PID watcher を起動する。MASTER_REGISTERED が後から来ても idempotent skip で
+        //   pid/status/startedAt は破壊されない。
+        //   agent/conductor は事前登録（AGENT_SPAWNED / CONDUCTOR_REGISTERED）が先行する
+        //   プロトコルなので、ここに到達した SESSION_STARTED は実質 master のみ。
+        const fallback: MasterState = {
+          surface: message.surface,
+          status: "starting",
+          startedAt: message.timestamp,
+          pid: message.pid,
+        };
+        state.masters.set(message.surface, fallback);
+        try {
+          await persistMasterFile(state.projectRoot, fallback);
+        } catch (e: any) {
+          await log(
+            "error",
+            `persistMasterFile failed (session_started_fallback): ${e?.message ?? e}`,
+          );
+        }
+        spawnMasterPidWatcher(state, message.surface, message.pid);
+        notifyStateChanged("daemon.ts:handleMessage:session-started-master-fallback");
+        await log(
+          "master_session_started_fallback",
+          `${formatSurface(message.surface, "U")} pid=${message.pid} reason=master_registered_not_received_yet`,
+        );
       }
       break;
     }
@@ -1148,6 +1163,47 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
       await log("conductor_registered", formatSurface(message.surface, "C"));
+      break;
+    }
+
+    case "MASTER_REGISTERED": {
+      // T230: Master 側プロセスが `registerSelfAsMaster` で POST する。
+      //   idempotent merge — 既存 state があれば skip（startedAt/pid/status を破壊しないため）。
+      //   PID watcher はここでは起動しない。pid は後続の SESSION_STARTED hook で受信する（D6）。
+      //   ただし F1 対処として、message.pid が渡されていれば即時 watcher を起動する経路も許容する。
+      if (state.masters.has(message.surface)) {
+        const existing = state.masters.get(message.surface)!;
+        await log(
+          "master_register_skipped",
+          `${formatSurface(message.surface, "U")} reason=already_registered existing_status=${existing.status} existing_pid=${existing.pid ?? "null"}`,
+        );
+        break;
+      }
+      const master: MasterState = {
+        surface: message.surface,
+        status: "starting",
+        startedAt: message.timestamp,
+        pid: message.pid,
+      };
+      state.masters.set(message.surface, master);
+      try {
+        await persistMasterFile(state.projectRoot, master);
+      } catch (e: any) {
+        await log(
+          "error",
+          `persistMasterFile failed (master_registered): ${e?.message ?? e}`,
+        );
+      }
+      // F1 第 2 経路: pid が optional で渡されていれば即時 watcher 起動。
+      //   通常は SESSION_STARTED で pid を受ける設計だが、将来的に pid 同梱で POST するケースを許容する。
+      if (typeof message.pid === "number") {
+        spawnMasterPidWatcher(state, message.surface, message.pid);
+      }
+      notifyStateChanged("daemon.ts:handleMessage:master-registered");
+      await log(
+        "master_registered",
+        `${formatSurface(message.surface, "U")} pid=${message.pid ?? "none"}`,
+      );
       break;
     }
 

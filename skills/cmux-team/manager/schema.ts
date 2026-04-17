@@ -60,6 +60,15 @@ export const ConductorRegisteredMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T230: Master の self-register メッセージ（pane 内 `cmux-team spawn-master` が
+// claude 起動前に POST する）。pid は hook 経由の SESSION_STARTED で後追いするため optional。
+export const MasterRegisteredMessage = z.object({
+  type: z.literal("MASTER_REGISTERED"),
+  surface: z.string(),
+  pid: z.number().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const SessionActiveMessage = z.object({
   type: z.literal("SESSION_ACTIVE"),
   surface: z.string(),
@@ -111,6 +120,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   TaskUpdatedMessage,
   ConductorDoneMessage,
   ConductorRegisteredMessage,
+  MasterRegisteredMessage,
   AgentSpawnedMessage,
   SessionStartedMessage,
   SessionEndedMessage,
@@ -127,6 +137,7 @@ export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
 export type TaskUpdatedMessage = z.infer<typeof TaskUpdatedMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
 export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
+export type MasterRegisteredMessage = z.infer<typeof MasterRegisteredMessage>;
 export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
 export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
@@ -149,7 +160,10 @@ export interface AgentState {
 export const MasterStateSchema = z.object({
   surface: z.string(),
   pid: z.number().optional(),
-  status: z.enum(["idle", "running", "disconnected"]),
+  // T230: "starting" は MASTER_REGISTERED handler で set される初期状態。
+  // SESSION_STARTED 到達で running へ遷移する。永続ファイルに "starting" が残っても
+  // `restoreMasters` が idle に hardcode reset するため後方互換は壊れない。
+  status: z.enum(["starting", "idle", "running", "disconnected"]),
   startedAt: z.string().datetime(),
   disconnectedAt: z.string().datetime().optional(),
   prompt: z.string().optional(),

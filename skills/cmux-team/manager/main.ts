@@ -1204,6 +1204,54 @@ async function registerSelfAsConductor(surface: string): Promise<void> {
 }
 
 /**
+ * Master 実行プロセスが自身を daemon に登録する（T230）。
+ *
+ * proxy-port が読み取れない / proxy が死んでいる / POST が失敗するいずれの
+ * 場合も fail-fast（exit 1）する。daemon 不在で claude だけ起動しても
+ * `state.masters` に登録されず TUI・PID watcher・`team.json` に反映されない
+ * 壊れた Master が取り残されるため。
+ *
+ * `postMessage` は daemon 未起動時に silent skip するため fail-fast と矛盾する。
+ * よってここでは `fetch` で直接 POST する（`registerSelfAsConductor` と同構造）。
+ */
+async function registerSelfAsMaster(surface: string): Promise<void> {
+  const port = await resolveProxyPort();
+  if (!port) {
+    console.error(
+      "daemon が起動していません (.team/proxy-port 不在 / proxy 死亡 / 壊れた proxy-port ファイル)。",
+    );
+    console.error("cmux-team start を先に実行してください。");
+    console.error(
+      "壊れた proxy-port ファイルの場合は `.team/proxy-port` を削除して `cmux-team start` をやり直してください。",
+    );
+    process.exit(1);
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "MASTER_REGISTERED",
+        surface,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) {
+      console.error(
+        `MASTER_REGISTERED POST failed: status=${res.status} surface=${surface}`,
+      );
+      process.exit(1);
+    }
+  } catch (e: any) {
+    console.error(
+      `MASTER_REGISTERED POST failed: ${e?.message ?? e} surface=${surface}`,
+    );
+    process.exit(1);
+  }
+  await log("master_self_register", formatSurface(surface, "U"));
+}
+
+/**
  * conductor-settings.json を生成する共通ヘルパー。
  * cmdConductor と cmdResume の両方から使用される。
  * @returns 生成したファイルの絶対パス
@@ -1844,6 +1892,10 @@ async function cmdLaunchMaster(): Promise<void> {
   // cmux pane env 継承が壊れた経路 (cmux identify fallback) でも surface が解決されるよう
   // Conductor (cmdConductor) と同じく defensive に明示設定する。
   const surface = await resolveCallerSurfaceOrExit();
+
+  // T230: daemon へ自己登録する。proxy-port 不在・POST 失敗は fail-fast（exit 1）。
+  // generateMasterPrompt や claude exec より前に実行する（壊れた Master を残さないため）。
+  await registerSelfAsMaster(surface);
 
   // プロンプト生成
   const { generateMasterPrompt } = await import("./template");

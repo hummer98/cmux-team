@@ -536,7 +536,9 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
 
 daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
 
-`team.json.masters` は **配列**で、複数の Master 稼働を許容する（T229）。各要素は `{ surface, status, startedAt, pid?, lastPromptPreview?, lastPromptAt? }` のサブセット。旧 `team.json.master`（単一オブジェクト）は廃止済み。`masters[0]` への単純な依存は避け、複数 Master 前提で扱うこと。
+`team.json.masters` は **配列**で、複数の Master 稼働を許容する（T229）。各要素は `{ surface, status, pid?, startedAt }` のサブセットを書き出す（`daemon.ts:updateTeamJson` 実装準拠）。旧 `team.json.master`（単一オブジェクト）は廃止済み。`masters[0]` への単純な依存は避け、複数 Master 前提で扱うこと。
+
+Master は **任意の pane から** `cmux-team spawn-master` で追加できる（T230）。pane 内の `cmdLaunchMaster` が `MASTER_REGISTERED` メッセージを daemon に POST → handler が `.team/masters/<surface>.json` を書き出し `state.masters` に登録する。daemon 未起動時は fail-fast（exit 1）。
 
 ### 進捗情報の取得方法（Master 向け）
 

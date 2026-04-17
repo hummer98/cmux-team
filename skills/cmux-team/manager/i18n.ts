@@ -487,7 +487,7 @@ Notes:
 `,
 
   help_spawn_master: `
-cmux-team spawn-master -- launch Claude Code for Master (internal use)
+cmux-team spawn-master -- launch Claude Code for Master (self-register)
 
 Usage:
   cmux-team spawn-master [--model <model>]
@@ -496,7 +496,9 @@ Options:
   --model <model>   model to use (default: config.models.master or "{model}")
 
 Notes:
-  - Internal command called automatically by daemon at startup
+  - Registers itself with daemon via MASTER_REGISTERED before launching Claude Code
+  - Fails with exit 1 if daemon is not running (.team/proxy-port unreachable)
+  - Can be invoked from any pane to add a new Master to the running daemon
   - Dynamically resolves logging proxy port and exec's Claude Code
   - Generates Master prompt then launches with --dangerously-skip-permissions
 `,
@@ -1055,7 +1057,7 @@ Notes:
 `,
 
   help_spawn_master: `
-cmux-team spawn-master -- Master 用 Claude Code を起動（内部用）
+cmux-team spawn-master -- Master 用 Claude Code を起動（self-register）
 
 Usage:
   cmux-team spawn-master [--model <model>]
@@ -1064,7 +1066,9 @@ Options:
   --model <model>   使用するモデル（デフォルト: config.models.master or "{model}"）
 
 Notes:
-  - daemon が起動時に自動的に呼び出す内部コマンドです
+  - Claude Code 起動前に MASTER_REGISTERED を daemon へ POST して自己登録します
+  - daemon が起動していない場合は exit 1 で失敗します（.team/proxy-port 不在）
+  - 任意のペインから実行できます — 起動中の daemon に新しい Master を追加する用途に利用可能
   - ロギングプロキシのポートを動的に解決して Claude Code を exec します
   - Master プロンプトを生成してから --dangerously-skip-permissions で起動されます
 `,
