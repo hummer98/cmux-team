@@ -420,7 +420,7 @@ async function cmdStart(): Promise<void> {
   const updateCaffeinate = (active: boolean) => {
     if (!sleepPrevention || process.platform !== "darwin") return;
     if (active && !caffeinateProc) {
-      caffeinateProc = Bun.spawn(["caffeinate", "-i"], {
+      caffeinateProc = Bun.spawn(["caffeinate", "-dis"], {
         stdin: "ignore", stdout: "ignore", stderr: "ignore",
       });
     } else if (!active && caffeinateProc) {

@@ -88,7 +88,7 @@ Options:
   --layout <wide|16x9>     layout mode (default: wide, or config.json layout)
                            - wide: 2x2 layout, 3 Conductors (default)
                            - 16x9: top full-width + bottom split, 2 Conductors
-  --no-sleep-prevention    disable macOS sleep prevention (caffeinate)
+  --no-sleep-prevention    disable macOS sleep prevention (caffeinate -dis)
                            also configurable via .team/config.json "sleepPrevention": false
 
 Notes:
@@ -98,7 +98,8 @@ Notes:
   - CMUX_TEAM_MAX_CONDUCTORS env var overrides layout-derived max
     (16x9 still creates only 2 panes; extra conductors are clamped)
   - Dashboard is displayed with keyboard shortcuts for interaction
-  - Sleep prevention: on macOS, caffeinate -i is used while any agent is active.
+  - Sleep prevention: on macOS, caffeinate -dis is used while any agent is active
+    (prevents display sleep, idle system sleep, and AC-powered system sleep).
     Priority: --no-sleep-prevention > .team/config.json "sleepPrevention" > true
 `,
 
@@ -731,7 +732,7 @@ Options:
   --layout <wide|16x9>     レイアウトモード (デフォルト: wide、または config.json の layout)
                            - wide: 2x2 レイアウト、Conductor x3（デフォルト）
                            - 16x9: 上段フル幅 + 下段 2 分割、Conductor x2
-  --no-sleep-prevention    macOS スリープ抑止を無効化（caffeinate を使わない）
+  --no-sleep-prevention    macOS スリープ抑止を無効化（caffeinate -dis を使わない）
                            .team/config.json の "sleepPrevention": false でも設定可能
 
 Notes:
@@ -741,7 +742,8 @@ Notes:
   - CMUX_TEAM_MAX_CONDUCTORS 環境変数は layout 派生値を上書きします
     （16x9 は 2 pane のみ作成、超過分は clamp されます）
   - ダッシュボードが表示され、キーボードショートカットで操作できます
-  - スリープ抑止: macOS では稼働中エージェントがある間 caffeinate -i を実行します
+  - スリープ抑止: macOS では稼働中エージェントがある間 caffeinate -dis を実行します
+    （ディスプレイスリープ・アイドルスリープ・AC 電源時のシステムスリープを抑止）
     優先順位: --no-sleep-prevention > .team/config.json の "sleepPrevention" > true
 `,
 
