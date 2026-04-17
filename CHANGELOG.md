@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.54.1] - 2026-04-18
+
+### Added
+- **daemon メインループに Mac スリープ復帰検出ログを追加**。`sleepUntilWakeup` の前後経過時間を計測し、`pollInterval * 3` を超えた gap を検知したら `wake_detected gap=<秒>s` を `manager.log` に出力する。caffeinate `-dis`（T256）でもなお発生するスリープ復帰の事後診断に利用する
+
 ## [3.54.0] - 2026-04-18
 
 ### Added
