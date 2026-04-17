@@ -2,12 +2,22 @@
 
 ## [Unreleased]
 
+## [3.54.0] - 2026-04-18
+
 ### Added
+- **Conductor に `broken` ステータスを追加し、エラー発生時の自動再利用を停止（T250）**。従来は disconnect timeout の forced close 後に idle へ戻して即座に次のタスクを割り当てていたため、接続エラーの根本原因を調査しないまま同じ Conductor が再利用されてしまっていた。`ConductorStatus` に `broken` を追加し、forced close 時は idle ではなく broken へ遷移してユーザーが明示的にクリアするまで再利用しない。`cmux-team clear-conductor --surface <id>` で broken → idle に復帰可能。broken 中は SESSION_STARTED/ACTIVE/IDLE/CLEAR の 4 ハンドラで early-return し `session_event_ignored_broken` ログを残す。dashboard に broken 行（⨯ RED + `use clear-conductor` ガイド + brokenCount ヘッダー）を追加
+- **マージ前に `origin/<mainBranch>` へ rebase する手順を Conductor に追加（T249）**。worktree 内で commit 後に `git fetch --quiet origin <mainBranch>` → `git rebase origin/<mainBranch>` を実行し、納品時の merge は `--ff-only` で fast-forward 限定とする。main 側で conflict が surface するのを防ぎ main を常にクリーンに保つ。rebase conflict 時は即 `git rebase --abort` して人間の再判断に委ね、close-task は呼ばずタスクは assigned のまま残す
+- **Agent ロール別の project-local instructions overlay 機構（T247）**。プロジェクト固有の Agent 運用ルール（例: `.team/agent-instructions/implementer.md` にコーディング規約を記述）を role 単位で注入できる仕組み。全 Agent ロールテンプレートと Conductor の heredoc 内に `{{PROJECT_INSTRUCTIONS}}` プレースホルダを追加し、`cmux-team spawn-agent` 時に `.team/agent-instructions/<role>.md` の内容で置換する（不在時は空文字）。`cmux-team {get,set,delete,list}-agent-instructions` CLI を追加
+- **タスク排他実行属性 `--exclusive` を追加（T246）**。リリース作業・コンフリクト解消・破壊的依存変更など、他タスクを全て止めて単独で走らせたい作業のために、3 フェーズモデル（drain → exclusive run → resume）の排他実行属性を追加。`--exclusive` 同士は ID 昇順に順次排他実行、`--exclusive` と非排他 `--run-after-all` は共存不可。assigned 中は他の全 assignment を停止し、closed になると次 tick から通常 assignment を再開
 - **trace DB `task_sessions` に `base_branch` / `base_sha` / `base_source` 列を追加（T243）**。`assignTask` で worktree 作成直後に `git rev-parse HEAD`（cwd=worktreePath）を呼んで親 commit の SHA を取得し、`event=assigned` 行に worktree の出発点情報を記録する。`base_branch` は `WorktreeBaseResolution.baseLabel`（`origin/main` / `main` / `HEAD` 等）、`base_source` は `WorktreeBaseSource` enum（`explicit` / `config-origin` / `config-local` / `head-fallback`）、`base_sha` は 40 桁 hex。既存 DB は `initDB()` 内の `PRAGMA table_info` ベースのマイグレーションで `ALTER TABLE ADD COLUMN` 経由に列追加され、過去行は NULL のまま温存される（冪等）。`cmux-team trace-task` の出力ヘッダに `Base: <label> @<short-sha> (source=<source>)` を 1 行追加し、worktree が削除された後でも事後診断ができるようにした
+- **depends_on 親 abort/deleted 時の ready 子 cascade（T241）**。親タスクが `aborted` / `deleted` に遷移したとき、`depends_on` に親を含む **ready** 状態の子タスクを自動的に `draft` に戻す。`draft` / `assigned` / `closed` / `aborted` / `deleted` 子は変更なし。cascade は 5 経路（abort-task CLI / delete-task CLI / forced close / user_clear / assign_failed）で同期的に走る。ログに `child_reverted_to_draft parent=<X> child=<Y> reason=parent_aborted` を出力
 
 ### Changed
-- **macOS スリープ抑止 `caffeinate` のフラグを `-i` から `-dis` に変更（T256）**。`caffeinate -i` は `PreventUserIdleSystemSleep` のみを立てるため display sleep 経由の system sleep 連鎖を防げず、daemon 稼働中でも Mac が sleep する事象が観測されていた（`pmset -g log` で確認）。`-dis` に変更して `PreventUserIdleDisplaySleep`（display sleep 抑止）と `PreventSystemSleep`（AC 電源時の system sleep 抑止）を併用することで、アイドル由来・display sleep 連鎖由来のスリープを共に防ぐ。副作用として稼働中はディスプレイが常時点灯する（バッテリー消費増）。Apple Silicon + 蓋閉じの Clamshell Sleep はハードウェア強制でフラグでは防げないためスコープ外
 - **Conductor worktree の base を `origin/<mainBranch>` 優先で解決（T242）**。`skills/cmux-team/manager/worktree-base.ts:resolveWorktreeBase` を新規追加し、`assignTask` の worktree 作成時に task.md `base_branch:` 明示 → `origin/<mainBranch>` → local `<mainBranch>` → HEAD fallback の優先順位で start-point を決定する。従来は `base_branch:` 未指定時にローカル HEAD へ暗黙依存していたため、ローカル main が origin から乖離していると worktree に無関係 commits が紛れ込み PR を汚染していた（Dear T165 / PR #1891 の 14 タスク分混入）。ログに `worktree_created branch=<new> base=<ref> source=<explicit|config-origin|config-local|head-fallback> path=<...>` を常時出力。環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1` で事前 `git fetch --quiet origin <mainBranch>` を opt-in 可能（デフォルト OFF、失敗はベストエフォート継続）
+- **macOS スリープ抑止 `caffeinate` のフラグを `-i` から `-dis` に変更（T256）**。`caffeinate -i` は `PreventUserIdleSystemSleep` のみを立てるため display sleep 経由の system sleep 連鎖を防げず、daemon 稼働中でも Mac が sleep する事象が観測されていた（`pmset -g log` で確認）。`-dis` に変更して `PreventUserIdleDisplaySleep`（display sleep 抑止）と `PreventSystemSleep`（AC 電源時の system sleep 抑止）を併用することで、アイドル由来・display sleep 連鎖由来のスリープを共に防ぐ。副作用として稼働中はディスプレイが常時点灯する（バッテリー消費増）。Apple Silicon + 蓋閉じの Clamshell Sleep はハードウェア強制でフラグでは防げないためスコープ外
+
+### Fixed
+- **`AGENT_SPAWNED` を Claude 起動前に POST して master fallback 誤作成を防止（T244）**。spawn-agent が Claude を起動した後に daemon へ `AGENT_SPAWNED` を POST していたため、起動直後の `SESSION_STARTED` が先着して daemon が未知 surface と誤認し master の fallback 登録を行うレースがあった。Claude exec の直前に POST する順序に変更し、daemon が必ず Agent として認識できるようにした
 
 ## [3.53.0] - 2026-04-17
 
