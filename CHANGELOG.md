@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Conductor worktree の base を `origin/<mainBranch>` 優先で解決（T242）**。`skills/cmux-team/manager/worktree-base.ts:resolveWorktreeBase` を新規追加し、`assignTask` の worktree 作成時に task.md `base_branch:` 明示 → `origin/<mainBranch>` → local `<mainBranch>` → HEAD fallback の優先順位で start-point を決定する。従来は `base_branch:` 未指定時にローカル HEAD へ暗黙依存していたため、ローカル main が origin から乖離していると worktree に無関係 commits が紛れ込み PR を汚染していた（Dear T165 / PR #1891 の 14 タスク分混入）。ログに `worktree_created branch=<new> base=<ref> source=<explicit|config-origin|config-local|head-fallback> path=<...>` を常時出力。環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1` で事前 `git fetch --quiet origin <mainBranch>` を opt-in 可能（デフォルト OFF、失敗はベストエフォート継続）
+
 ## [3.53.0] - 2026-04-17
 
 ### Added

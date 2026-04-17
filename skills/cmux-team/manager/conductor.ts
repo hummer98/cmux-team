@@ -13,6 +13,7 @@ import { log, formatSurface } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
+import { resolveWorktreeBase } from "./worktree-base";
 import type { ConductorState, LayoutMode } from "./schema";
 
 const execFile = promisify(execFileCb);
@@ -304,21 +305,27 @@ export async function assignTask(
     const baseBranch = taskContent.match(/^base_branch:\s*(.+)$/m)?.[1]?.trim();
 
     // --- 2. git worktree 作成 ---
+    const baseResolution = await resolveWorktreeBase(projectRoot, {
+      baseBranch,
+      mainBranch,
+      doFetch: process.env.CMUX_TEAM_FETCH_BEFORE_WORKTREE === "1",
+    });
     try {
       const worktreeArgs = ["worktree", "add", worktreePath, "-b", branch];
-      if (baseBranch) {
-        worktreeArgs.push(baseBranch);  // start-point を指定
+      if (baseResolution.startPoint) {
+        worktreeArgs.push(baseResolution.startPoint);  // start-point を指定
       }
       await execFile("git", worktreeArgs, {
         cwd: projectRoot,
       });
       worktreeCreated = true;
-      if (baseBranch) {
-        log("worktree_created", `branch=${branch} baseBranch=${baseBranch} path=${worktreePath}`);
-      }
     } catch (e: any) {
       throw new AssignTaskError("task", `git worktree add failed: ${formatExecError(e)}`, e);
     }
+    await log(
+      "worktree_created",
+      `branch=${branch} base=${baseResolution.baseLabel} source=${baseResolution.source} path=${worktreePath}`,
+    );
 
     // .claude/settings.local.json を worktree にコピー
     // （untracked なので worktree に含まれないが、Agent 起動時に必要）

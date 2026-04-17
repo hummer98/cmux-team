@@ -612,11 +612,26 @@ Conductor が worktree 作成時のベース・マージ先として使うブラ
 
 source が `config` 以外の場合のみ結果を `.team/config.json` に書き戻し、`main_branch_resolved branch=<name> source=<config|detected|fallback>` をログ出力する。初回起動後は常に config 経路が使われる。
 
+### worktree 作成時の start-point 解決（T242）
+
+Conductor が worktree を作成する際、start-point は以下の優先順位で決定される（`worktree-base.ts:resolveWorktreeBase`）:
+
+1. **`explicit`** — task.md frontmatter の `base_branch:` が明示されている場合
+2. **`config-origin`** — `origin/<mainBranch>` が存在すれば採用（他タスクの PR マージ後の最新状態を起点にする）
+3. **`config-local`** — `origin/<mainBranch>` が無く、local `<mainBranch>` が存在する場合
+4. **`head-fallback`** — 上記いずれも解決できない場合（`git worktree add -b <new>` のみ発行、現在の HEAD から分岐）
+
+ログは `worktree_created branch=<new> base=<ref> source=<explicit|config-origin|config-local|head-fallback> path=<worktreePath>` 形式。
+
+**注意:** `config-origin` を確実に使うには origin が最新化されている必要がある。ローカル未 push の commit を起点にしたい場合は、task.md の `base_branch: HEAD` を明示すれば従来通り現在の HEAD から分岐する（`explicit` 経路）。
+
+**環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1`** を設定すると、worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行する（タイムアウト 30 秒、失敗はログのみで継続）。デフォルトは OFF — offline 環境・rate limit 対策・並列負荷回避のため。
+
 ## git worktree（概要）
 
 すべての作業は `.worktrees/<taskRunId>/` 内で行う。main ブランチは常に無傷。
 
-- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId>`（taskRunId は `task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`）
+- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId> <start-point>`（taskRunId は `task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`）。`<start-point>` は上記「worktree 作成時の start-point 解決」の通り、`origin/<mainBranch>` を優先
 - **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
 - **成功時**: worktree 内でコミット → main にマージ → worktree 削除
 - **失敗時**: `git worktree remove --force` + ブランチ削除

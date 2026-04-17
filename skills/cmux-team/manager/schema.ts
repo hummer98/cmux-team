@@ -265,6 +265,22 @@ export interface MainBranchResolution {
   source: MainBranchSource;
 }
 
+// --- Worktree base resolution (T242) ---
+
+export const WorktreeBaseSource = z.enum([
+  "explicit",
+  "config-origin",
+  "config-local",
+  "head-fallback",
+]);
+export type WorktreeBaseSource = z.infer<typeof WorktreeBaseSource>;
+
+export interface WorktreeBaseResolution {
+  startPoint: string | null;
+  source: WorktreeBaseSource;
+  baseLabel: string;
+}
+
 // --- Auto update mode ---
 
 export const AutoUpdateMode = z.enum(["off", "notify", "task"]);

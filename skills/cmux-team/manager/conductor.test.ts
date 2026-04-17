@@ -146,6 +146,50 @@ describe("assignTask 状態遷移 (T232)", () => {
   }, 30000);
 });
 
+// --- T242: worktree base 解決 ---
+
+describe("assignTask worktree base 解決 (T242)", () => {
+  let sendSpy: ReturnType<typeof spyOn>;
+  let sendKeySpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+    sendKeySpy.mockRestore();
+  });
+
+  test("base_branch: 未指定 + local main 存在 → worktree が main 基点で作成される", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+
+    // git init + main に 2 commits、dev branch に 1 commit 進める
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    const gitEnv = ["-c", "user.email=t@t", "-c", "user.name=t"];
+    await execFile("git", [...gitEnv, "commit", "--allow-empty", "-q", "-m", "main-1"], { cwd: testDir });
+    await execFile("git", [...gitEnv, "commit", "--allow-empty", "-q", "-m", "main-2"], { cwd: testDir });
+    const { stdout: mainHead } = await execFile("git", ["rev-parse", "HEAD"], { cwd: testDir });
+    // 別ブランチ dev を作成し HEAD を進める（検出時は main と異なる）
+    await execFile("git", ["checkout", "-q", "-b", "dev"], { cwd: testDir });
+    await execFile("git", [...gitEnv, "commit", "--allow-empty", "-q", "-m", "dev-1"], { cwd: testDir });
+
+    await writeTaskFile("242", "wt-base-test");
+
+    const conductor = fakeConductor();
+    // mainBranch="main" を渡すが、base_branch: は task.md で未指定
+    const updated = await assignTask(conductor, "242", testDir, "main");
+
+    // worktree の HEAD が main と一致することを確認
+    const worktreePath = updated.worktreePath!;
+    const { stdout: wtHead } = await execFile("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+    expect(wtHead.trim()).toBe(mainHead.trim());
+  }, 30000);
+});
+
 // --- T176: createConductorPanes layout 分岐 ---
 
 describe("createConductorPanes layout 分岐 (T176)", () => {
