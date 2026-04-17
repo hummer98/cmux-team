@@ -1020,6 +1020,24 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
 
     case "AGENT_SPAWNED": {
+      // T244: SESSION_STARTED F1 fallback で同 surface が master として仮登録されていたら
+      //   agent が late register してきた時点で master 仮登録は誤りなので掃除する。
+      //   T234 の CONDUCTOR_REGISTERED 側ロジックと対称。
+      //   対策 A (main.ts cmdSpawnAgent で AGENT_SPAWNED を Claude 起動前に POST) により
+      //   通常経路ではこの race は発生しないはずだが、キュー詰まり・手動 POST 等への保険。
+      const staleMaster = state.masters.get(message.surface);
+      if (staleMaster?.fallback) {
+        await removeMaster(
+          state,
+          message.surface,
+          "agent_spawned_late",
+        );
+        await log(
+          "master_fallback_cleanup",
+          `${formatSurface(message.surface, "U")} reason=agent_spawned_late`,
+        );
+      }
+
       const conductor = findConductor(state, message.conductorSurface);
       if (conductor) {
         conductor.agents.push({
@@ -1159,9 +1177,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         //   再 spawn や handleMessage キュー詰まり）に備え、master として仮 entry を作成し
         //   PID watcher を起動する。MASTER_REGISTERED が後から来ても idempotent skip で
         //   pid/status/startedAt は破壊されない。
-        //   agent/conductor は事前登録（AGENT_SPAWNED / CONDUCTOR_REGISTERED）が先行する
-        //   プロトコルなので、ここに到達した SESSION_STARTED は実質 master のみ。
-        //   T234: conductor が後着で登録された場合の掃除用に `fallback: true` を立てる。
+        //   agent/conductor は事前登録（AGENT_SPAWNED / CONDUCTOR_REGISTERED）が Claude
+        //   起動より前に送信される（T244 で cmdSpawnAgent 側を修正）。通常経路ではここに
+        //   到達した SESSION_STARTED は実質 master のみ。キュー詰まり等の保険として
+        //   T234/T244 で CONDUCTOR_REGISTERED/AGENT_SPAWNED ハンドラに fallback 掃除を
+        //   入れてあるので、誤って master 登録されても late register で回復する。
+        //   T234/T244: conductor/agent が後着で登録された場合の掃除用に `fallback: true`。
         const fallback: MasterState = {
           surface: message.surface,
           status: "starting",

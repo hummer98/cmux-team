@@ -2018,6 +2018,21 @@ async function cmdSpawnAgent(): Promise<void> {
   // T195: newSurface / newSplit 成功時点で surface は cmux 側に存在する。
   // 念押しの validation は deadlock リスクを招くため廃止。
 
+  // --- 2a. AGENT_SPAWNED を Claude 起動より前に daemon へ送信（T244） ---
+  //   Claude 起動 (L2068 send(claudeCmd)) で SessionStart hook が発火し SESSION_STARTED
+  //   を daemon に POST する。AGENT_SPAWNED がそれより後に届くと、daemon 側の
+  //   SESSION_STARTED fallback 経路が「未登録 surface = master」と誤判定して
+  //   state.masters に仮登録してしまう（現象: master_session_started_fallback）。
+  //   それを防ぐため、surface 作成直後・Claude 起動前に AGENT_SPAWNED を先行送信する。
+  await postMessage({
+    type: "AGENT_SPAWNED",
+    conductorSurface,
+    surface,
+    role,
+    taskTitle,
+    timestamp: new Date().toISOString(),
+  });
+
   // --- 3. Claude Code 起動 ---
   // モデル解決
   const config = await loadConfig();
@@ -2070,16 +2085,6 @@ async function cmdSpawnAgent(): Promise<void> {
   // --- 4. タブ名設定 ---
   const num = surface.replace("surface:", "");
   await cmux.renameTab(surface, `[${num}] Agent`);
-
-  // --- 6. AGENT_SPAWNED を daemon に送信 ---
-  await postMessage({
-    type: "AGENT_SPAWNED",
-    conductorSurface,
-    surface,
-    role,
-    taskTitle,
-    timestamp: new Date().toISOString(),
-  });
 
   // タスク-セッション索引に記録
   try {

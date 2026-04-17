@@ -2445,3 +2445,137 @@ describe("scanTasks: /clear 送信失敗時の conductor disconnected (T232 R4)"
     }
   }, 30000);
 });
+
+describe("handleMessage: AGENT_SPAWNED master fallback cleanup (T244)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  function stopWatchers(state: DaemonState): void {
+    for (const m of state.masters.values()) {
+      if (m.pidWatcherInterval) {
+        clearInterval(m.pidWatcherInterval);
+        m.pidWatcherInterval = undefined;
+      }
+    }
+    state.running = false;
+  }
+
+  test("fallback=true の master が存在する場合、AGENT_SPAWNED で master を掃除し conductor.agents に追加する", async () => {
+    const state = await createDaemon(testDir);
+
+    // 事前条件: SESSION_STARTED fallback 経由で master 仮登録された surface:500 がある
+    state.masters.set("surface:500", {
+      surface: "surface:500",
+      status: "starting",
+      startedAt: new Date().toISOString(),
+      pid: 99999,
+      fallback: true,
+    });
+    // 対応する conductor を事前登録
+    state.conductors.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+
+    try {
+      await handleMessage(state, {
+        type: "AGENT_SPAWNED",
+        conductorSurface: "surface:100",
+        surface: "surface:500",
+        role: "inspector",
+        taskTitle: "test task",
+        timestamp: new Date().toISOString(),
+      });
+
+      // master 仮登録が削除されている
+      expect(state.masters.has("surface:500")).toBe(false);
+      // conductor の agents に追加されている
+      const c = state.conductors.get("surface:100")!;
+      expect(c.agents.length).toBe(1);
+      expect(c.agents[0]!.surface).toBe("surface:500");
+      expect(c.agents[0]!.role).toBe("inspector");
+
+      // 掃除ログが記録されている
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("master_fallback_cleanup");
+      expect(logContent).toContain("reason=agent_spawned_late");
+      expect(logContent).toContain("agent_spawned");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("fallback=false(本物の master) が存在する場合、AGENT_SPAWNED で master は削除しない", async () => {
+    const state = await createDaemon(testDir);
+
+    // 実在の master として surface:500 が登録されている（fallback ではなく MASTER_REGISTERED 経由）
+    state.masters.set("surface:500", {
+      surface: "surface:500",
+      status: "idle",
+      startedAt: new Date().toISOString(),
+      pid: 99999,
+      // fallback flag 無し
+    });
+    state.conductors.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+
+    try {
+      await handleMessage(state, {
+        type: "AGENT_SPAWNED",
+        conductorSurface: "surface:100",
+        surface: "surface:500",
+        role: "inspector",
+        taskTitle: "test task",
+        timestamp: new Date().toISOString(),
+      });
+
+      // 本物の master は削除されない
+      expect(state.masters.has("surface:500")).toBe(true);
+
+      // 掃除ログは出ない
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("master_fallback_cleanup");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("master 未登録の通常経路では AGENT_SPAWNED は normally conductor.agents に追加されるだけ", async () => {
+    const state = await createDaemon(testDir);
+    state.conductors.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+    } as any);
+
+    try {
+      await handleMessage(state, {
+        type: "AGENT_SPAWNED",
+        conductorSurface: "surface:100",
+        surface: "surface:500",
+        role: "inspector",
+        taskTitle: "test task",
+        timestamp: new Date().toISOString(),
+      });
+
+      expect(state.masters.size).toBe(0);
+      const c = state.conductors.get("surface:100")!;
+      expect(c.agents.length).toBe(1);
+      expect(c.agents[0]!.surface).toBe("surface:500");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+});
