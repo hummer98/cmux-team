@@ -993,7 +993,7 @@ async function cmdStatus(): Promise<void> {
     : teamJson.master?.surface
       ? [{ surface: teamJson.master.surface as string, status: teamJson.master.status, pid: teamJson.master.pid }]
       : [];
-  const conductors: Array<{ taskId: string; taskTitle?: string; surface: string }> = teamJson.conductors || [];
+  const conductors: Array<{ taskId: string; taskTitle?: string; surface: string; status?: string }> = teamJson.conductors || [];
   const logLines = getArg("log") || "10";
 
   // --- ヘッダー ---
@@ -1020,9 +1020,11 @@ async function cmdStatus(): Promise<void> {
     console.log(`  idle`);
   } else {
     for (const c of conductors) {
+      const icon = c.status === "broken" ? "⨯" : "●";
+      const statusLabel = c.status === "broken" ? " BROKEN" : "";
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
       const tid = c.taskId && c.taskId !== "undefined" ? `T${c.taskId}` : "---";
-      console.log(`  ● [${c.surface.replace("surface:", "")}]  ${tid}${title}`);
+      console.log(`  ${icon} [${c.surface.replace("surface:", "")}]${statusLabel}  ${tid}${title}`);
     }
   }
 
@@ -2923,6 +2925,57 @@ async function cleanupAssignedTask(conductor: any): Promise<void> {
   }
 }
 
+/**
+ * T250: broken 状態の Conductor を明示的に idle に戻す。
+ *
+ * - abort-task / restart-task は taskId 起点で Conductor を探すが、broken に到達した
+ *   Conductor は taskId がクリア済みのため見つからない。
+ * - 代わりに surface 起点で CONDUCTOR_CLEAR を送り、daemon 側の handler で
+ *   resetConductor(opts={targetStatus:"idle", reason:"cleared"}) を呼ばせる。
+ * - broken 以外の状態の Conductor は error 終了させる（abort-task / restart-task の誘導）。
+ */
+async function cmdClearConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_clear_conductor"));
+  const surface = requireArg("surface");
+  const normalizedSurface = surface.startsWith("surface:") ? surface : `surface:${surface}`;
+
+  const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+  if (!existsSync(teamJsonPath)) {
+    console.error("Error: team.json not found");
+    process.exit(1);
+  }
+  let teamJson: any;
+  try {
+    teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+  } catch {
+    console.error("Error: team.json unreadable");
+    process.exit(1);
+  }
+  const conductor = (teamJson.conductors ?? []).find(
+    (c: any) => c.surface === normalizedSurface,
+  );
+  if (!conductor) {
+    console.error(`Error: conductor ${normalizedSurface} not found in team.json`);
+    process.exit(1);
+  }
+  if (conductor.status !== "broken") {
+    console.error(
+      `Error: conductor ${normalizedSurface} is not broken (current: ${conductor.status ?? "unknown"}). ` +
+        `Use abort-task / restart-task for other states.`,
+    );
+    process.exit(1);
+  }
+  // R1 対応: CONDUCTOR_DONE 流用ではなく新 message 型 CONDUCTOR_CLEAR を送る。
+  // daemon.ts の no_task guard を回避し、専用 handler (ST-8A) に流す。
+  await postMessage({
+    type: "CONDUCTOR_CLEAR",
+    surface: normalizedSurface,
+    reason: "user_clear",
+    timestamp: new Date().toISOString(),
+  });
+  console.log(`OK cleared ${normalizedSurface} (broken → idle)`);
+}
+
 async function cmdAbortTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_abort_task"));
   const taskId = requireArg("task-id");
@@ -3862,6 +3915,9 @@ switch (command) {
     break;
   case "restart-task":
     await cmdRestartTask();
+    break;
+  case "clear-conductor":
+    await cmdClearConductor();
     break;
   case "delete-task":
     await cmdDeleteTask();

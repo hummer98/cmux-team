@@ -9,7 +9,7 @@ import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:
 import { mkdtemp, rm, mkdir, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { assignTask, AssignTaskError, createConductorPanes } from "./conductor";
+import { assignTask, AssignTaskError, createConductorPanes, resetConductor } from "./conductor";
 import type { ConductorState } from "./schema";
 import * as cmux from "./cmux";
 
@@ -328,5 +328,91 @@ describe("createConductorPanes layout 分岐 (T176)", () => {
     expect(newSplitSpy.mock.calls[0][0]).toBe("right");
     expect(newSplitSpy.mock.calls[1][0]).toBe("down");
     expect(newSplitSpy.mock.calls[2][0]).toBe("down");
+  });
+});
+
+// --- T250: resetConductor opts テスト ---
+describe("resetConductor targetStatus オプション (T250)", () => {
+  // cmux 外部コマンドをモックする（listSiblingSurfaces は空配列を返し、closeSurface は何もしない）
+  let listSiblingsSpy: ReturnType<typeof spyOn>;
+  let closeSurfaceSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    listSiblingsSpy = spyOn(cmux, "listSiblingSurfaces").mockResolvedValue([]);
+    closeSurfaceSpy = spyOn(cmux, "closeSurface").mockResolvedValue(undefined as any);
+  });
+
+  afterEach(() => {
+    listSiblingsSpy.mockRestore();
+    closeSurfaceSpy.mockRestore();
+  });
+
+  test("opts 未指定ならデフォルトで idle に戻し disconnectedAt をクリアする", async () => {
+    const conductor: ConductorState = {
+      surface: "surface:reset-default",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      taskRunId: "task-010-xxx",
+      taskId: "10",
+      taskTitle: "x",
+      agents: [],
+      status: "disconnected",
+    };
+
+    await resetConductor(conductor, testDir);
+
+    expect(conductor.status).toBe("idle");
+    expect(conductor.disconnectedAt).toBeUndefined();
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.taskId).toBeUndefined();
+    expect(conductor.agents).toEqual([]);
+  });
+
+  test("opts.targetStatus='broken' なら broken に遷移し disconnectedAt を保持する", async () => {
+    const preservedDisconnectedAt = "2026-04-18T10:00:00.000Z";
+    const conductor: ConductorState = {
+      surface: "surface:reset-broken",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: preservedDisconnectedAt,
+      taskRunId: "task-020-xxx",
+      taskId: "20",
+      taskTitle: "y",
+      agents: [],
+      status: "disconnected",
+    };
+
+    await resetConductor(conductor, testDir, undefined, {
+      targetStatus: "broken",
+      reason: "disconnect_timeout",
+    });
+
+    expect(conductor.status).toBe("broken");
+    // broken は UI 経過時間表示のため disconnectedAt を保持する
+    expect(conductor.disconnectedAt).toBe(preservedDisconnectedAt);
+    // それ以外のフィールドは cleanup される
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.taskId).toBeUndefined();
+    expect(conductor.agents).toEqual([]);
+  });
+
+  test("opts.targetStatus='idle' 明示指定でも disconnectedAt がクリアされる", async () => {
+    const conductor: ConductorState = {
+      surface: "surface:reset-idle-explicit",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      taskRunId: "task-030-xxx",
+      taskId: "30",
+      agents: [],
+      status: "broken",
+    };
+
+    await resetConductor(conductor, testDir, undefined, {
+      targetStatus: "idle",
+      reason: "cleared",
+    });
+
+    expect(conductor.status).toBe("idle");
+    expect(conductor.disconnectedAt).toBeUndefined();
+    expect(conductor.taskRunId).toBeUndefined();
   });
 });

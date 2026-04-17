@@ -792,10 +792,13 @@ describe("crashed → disconnected 遷移 (T121/T195)", () => {
 
     await monitorConductors(state);
 
-    // timeout 判定 → forced close
-    expect(conductor.status).toBe("idle");
+    // T250: timeout 判定 → forced close で broken に遷移（idle ではなく）
+    expect(conductor.status).toBe("broken");
     expect(conductor.taskRunId).toBeUndefined();
-    expect(conductor.disconnectedAt).toBeUndefined();  // Minor 3
+    // T250: broken は disconnectedAt を保持（UI 経過時間表示 + デバッグ用）
+    expect(conductor.disconnectedAt).toBeDefined();
+    // T250: broken Conductor は state.conductors に残ったまま（可視化のため）
+    expect(state.conductors.has(conductor.surface)).toBe(true);
 
     // task-state が aborted になっている
     const tsAfter = await loadTS(testDir);
@@ -2718,3 +2721,319 @@ describe("depends_on cascade on parent abort/delete (T241)", () => {
     expect(ts["61"]?.journal).toBe("parent_aborted: 60");
   });
 });
+
+// --- T250: broken status テスト ---
+describe("T250 broken status", () => {
+  test("broken Conductor は scanTasks の割当候補から除外される", async () => {
+    await createTask("250", "ready-task", { status: "ready" });
+
+    const state = await createDaemon(testDir);
+    const brokenConductor: ConductorState = {
+      surface: "surface:broken-1",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(brokenConductor.surface, brokenConductor);
+
+    await scanTasks(state);
+
+    // broken のまま
+    expect(brokenConductor.status).toBe("broken");
+    // タスクは ready のまま（broken に assign されない）
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    expect(ts["250"]?.status).toBe("ready");
+  });
+
+  test("broken Conductor は SESSION_STARTED で idle に戻らない (source=startup)", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-ss1",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 99001,
+      sessionId: "uuid-bss1",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_STARTED で idle に戻らない (source=resume)", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-ss2",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 99002,
+      sessionId: "uuid-bss2",
+      source: "resume",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_STARTED で idle に戻らない (source=clear)", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-ss3",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 99003,
+      sessionId: "uuid-bss3",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_STARTED で idle に戻らない (source=compact)", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-ss4",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 99004,
+      sessionId: "uuid-bss4",
+      source: "compact",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_ACTIVE で idle に戻らない", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-sa",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_ACTIVE",
+      surface: conductor.surface,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_IDLE で idle に戻らない", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-si",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("broken Conductor は SESSION_CLEAR で idle に戻らない", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-sc",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: conductor.surface,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("broken");
+  });
+
+  test("CONDUCTOR_CLEAR で broken Conductor が idle に戻る（正常経路）", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:broken-cc1",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      agents: [],
+      status: "broken",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_CLEAR",
+      surface: conductor.surface,
+      reason: "user_clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("idle");
+    expect(conductor.disconnectedAt).toBeUndefined();
+    expect(conductor.taskRunId).toBeUndefined();
+  });
+
+  test("CONDUCTOR_CLEAR が idle Conductor に来ても無視される", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:idle-cc",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_CLEAR",
+      surface: conductor.surface,
+      reason: "user_clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("idle");
+  });
+
+  test("CONDUCTOR_CLEAR が running Conductor に来ても無視される", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:running-cc",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-1-xxx",
+      taskId: "1",
+      agents: [],
+      status: "running",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_CLEAR",
+      surface: conductor.surface,
+      reason: "user_clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.taskRunId).toBe("task-1-xxx");
+  });
+
+  test("CONDUCTOR_CLEAR が disconnected Conductor に来ても無視される", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:disc-cc",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: new Date().toISOString(),
+      taskRunId: "task-2-xxx",
+      taskId: "2",
+      agents: [],
+      status: "disconnected",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_CLEAR",
+      surface: conductor.surface,
+      reason: "user_clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(conductor.status).toBe("disconnected");
+  });
+
+  test("CONDUCTOR_CLEAR が未登録 surface に来ても無視される (not_found)", async () => {
+    const state = await createDaemon(testDir);
+    // 何も登録しない
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_CLEAR",
+      surface: "surface:ghost",
+      reason: "user_clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(state.conductors.has("surface:ghost")).toBe(false);
+  });
+
+  test("team.json round-trip: broken Conductor を書き出して読み戻しても broken のまま (ST-14)", async () => {
+    const state = await createDaemon(testDir);
+    const brokenSurface = "surface:broken-rt";
+    const brokenDisconnectedAt = "2026-04-18T10:00:00.000Z";
+    const conductor: ConductorState = {
+      surface: brokenSurface,
+      startedAt: "2026-04-18T09:00:00.000Z",
+      disconnectedAt: brokenDisconnectedAt,
+      agents: [],
+      status: "broken",
+      sessionId: "uuid-broken-rt",
+    };
+    state.conductors.set(brokenSurface, conductor);
+
+    await updateTeamJson(state);
+
+    const raw = await readFile(join(testDir, ".team/team.json"), "utf-8");
+    const json = JSON.parse(raw);
+    const persisted = (json.conductors ?? []).find((c: any) => c.surface === brokenSurface);
+    expect(persisted).toBeDefined();
+    expect(persisted.status).toBe("broken");
+    expect(persisted.disconnectedAt).toBe(brokenDisconnectedAt);
+    expect(persisted.sessionId).toBe("uuid-broken-rt");
+
+    // restoreConductors 相当: initializeLayout (daemon.ts:840-845) の switch と同じロジックで
+    // 復元時も broken を保持することを確認する
+    const restoredStatus =
+      persisted.status === "running" ? "running"
+      : persisted.status === "disconnected" ? "disconnected"
+      : persisted.status === "broken" ? "broken"
+      : "idle";
+    expect(restoredStatus).toBe("broken");
+  });
+});
+

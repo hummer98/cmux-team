@@ -417,6 +417,25 @@ Notes:
   - Sends TASK_CREATED notification for automatic re-assignment
 `,
 
+  help_clear_conductor: `
+cmux-team clear-conductor -- explicitly reset a broken Conductor (broken -> idle)
+
+Usage:
+  cmux-team clear-conductor --surface <id>
+
+Options:
+  --surface <id>   surface ID (e.g. 112 or surface:112)
+
+Examples:
+  cmux-team clear-conductor --surface 112
+  cmux-team clear-conductor --surface surface:112
+
+Notes:
+  - Only Conductors currently in broken state can be cleared
+  - For other states, use abort-task / restart-task
+  - Worktree / branch residue is already cleaned up at the broken transition; this CLI only resets the status
+`,
+
   help_delete_task: `
 cmux-team delete-task -- delete a task (sets to deleted)
 
@@ -1059,6 +1078,25 @@ Notes:
   - aborted からは abort 時に残った worktree / ブランチの残骸のみ削除します
   - ステータスを aborted ではなく ready に戻します
   - TASK_CREATED 通知により自動再割り当てされます
+`,
+
+  help_clear_conductor: `
+cmux-team clear-conductor -- broken Conductor を明示的にリセットする（broken → idle）
+
+Usage:
+  cmux-team clear-conductor --surface <id>
+
+Options:
+  --surface <id>   surface ID（例: 112 または surface:112）
+
+Examples:
+  cmux-team clear-conductor --surface 112
+  cmux-team clear-conductor --surface surface:112
+
+Notes:
+  - broken 状態の Conductor のみクリアできます
+  - 他の状態は abort-task / restart-task を使ってください
+  - worktree / branch 残骸は broken 遷移時点で既に掃除済みのため、ここでは行いません
 `,
 
   help_delete_task: `

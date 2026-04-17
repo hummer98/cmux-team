@@ -28,6 +28,16 @@ export const ConductorDoneMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T250: broken Conductor を明示的にクリアするメッセージ（`cmux-team clear-conductor` が送る）。
+// CONDUCTOR_DONE を流用すると daemon.ts の `no_task` ガードで早期 break されるため、
+// 専用 handler を持つ新 message 型として分離する（A015 の決定 2 項）。
+export const ConductorClearMessage = z.object({
+  type: z.literal("CONDUCTOR_CLEAR"),
+  surface: z.string(),
+  reason: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const AgentSpawnedMessage = z.object({
   type: z.literal("AGENT_SPAWNED"),
   conductorSurface: z.string(),
@@ -119,6 +129,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   TaskUpdatedMessage,
   ConductorDoneMessage,
+  ConductorClearMessage,
   ConductorRegisteredMessage,
   MasterRegisteredMessage,
   AgentSpawnedMessage,
@@ -136,6 +147,7 @@ export type QueueMessage = z.infer<typeof QueueMessage>;
 export type TaskCreatedMessage = z.infer<typeof TaskCreatedMessage>;
 export type TaskUpdatedMessage = z.infer<typeof TaskUpdatedMessage>;
 export type ConductorDoneMessage = z.infer<typeof ConductorDoneMessage>;
+export type ConductorClearMessage = z.infer<typeof ConductorClearMessage>;
 export type ConductorRegisteredMessage = z.infer<typeof ConductorRegisteredMessage>;
 export type MasterRegisteredMessage = z.infer<typeof MasterRegisteredMessage>;
 export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
@@ -202,7 +214,10 @@ export const ConductorState = z.object({
 
 export type ConductorState = z.infer<typeof ConductorState> & {
   agents: AgentState[];
-  status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected";
+  // T250: "broken" = disconnect timeout 到達後の確定した異常状態。
+  // cleanup 済み（worktree / branch / siblings）だが、state.conductors には残す。
+  // ユーザーが `cmux-team clear-conductor` で明示的に idle に戻すまで保持される。
+  status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected" | "broken";
   pidWatcherInterval?: ReturnType<typeof setInterval>;
 };
 

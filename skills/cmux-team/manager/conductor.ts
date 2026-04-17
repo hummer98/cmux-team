@@ -486,10 +486,24 @@ export async function assignTask(
 
 // --- resetConductor ---
 
+/**
+ * Conductor の cleanup を行い、指定された status に遷移させる。
+ *
+ * T250: `opts.targetStatus` で遷移先を制御する。
+ *   - 省略 or "idle": 完全リセット（既存挙動）。disconnectedAt もクリア
+ *   - "broken": disconnect timeout 経由で「確定的に壊れた」と記録する経路。
+ *     cleanup（siblings close / worktree / branch 削除）は実行するが、
+ *     UI 上で「いつ壊れたか」を表示するため `disconnectedAt` は保持する。
+ *     次の割当対象から自動除外され、`cmux-team clear-conductor` で idle に戻せる。
+ *
+ * ログは本関数内で status に応じて `conductor_broken` / `conductor_reset` を発行する。
+ * 呼び出し側で個別にログを出してはならない（集約ポリシー — Decision D12）。
+ */
 export async function resetConductor(
   conductor: ConductorState,
   projectRoot: string,
   workspace?: string,
+  opts?: { targetStatus?: "idle" | "broken"; reason?: string },
 ): Promise<void> {
   try {
     // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
@@ -531,20 +545,28 @@ export async function resetConductor(
     }
 
     // 4. ConductorState リセット
-    conductor.status = "idle";
+    const targetStatus = opts?.targetStatus ?? "idle";
+    conductor.status = targetStatus;
     conductor.taskRunId = undefined;
     conductor.taskId = undefined;
     conductor.taskTitle = undefined;
     conductor.worktreePath = undefined;
     conductor.outputDir = undefined;
     conductor.agents = [];
-    // disconnected 状態から reset される経路（forceCloseDisconnectedConductor 等）で
-    // 古い disconnectedAt が残ることを防ぐ (Minor 3)
-    conductor.disconnectedAt = undefined;
+    // idle に戻す経路では古い disconnectedAt をクリアする (Minor 3)。
+    // broken 経路では UI の「経過時間」表示のため保持する（将来 clear-conductor で
+    // idle に戻す際は、上の条件に従って undefined に落ちる）。
+    if (targetStatus === "idle") {
+      conductor.disconnectedAt = undefined;
+    }
     // sessionId は SessionStart hook で最新値に追従するため reset では触らない
-    notifyStateChanged("conductor.ts:resetConductor:status-idle");
+    notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
-    await log("conductor_reset", formatSurface(conductor.surface, "C"));
+    const reasonSuffix = opts?.reason ? ` reason=${opts.reason}` : "";
+    await log(
+      targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
+      `${formatSurface(conductor.surface, "C")}${reasonSuffix}`,
+    );
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);
   }

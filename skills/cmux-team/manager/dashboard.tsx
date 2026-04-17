@@ -461,6 +461,7 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
   const isAssigning = c.status === "assigning";
   const isIdle = c.status === "idle";
   const isDisconnected = c.status === "disconnected";
+  const isBroken = c.status === "broken";
   const isAsking = c.status === "asking";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
@@ -547,6 +548,18 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
         ui.text(`[${surface}]`),
         ...taskParts,
         ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
+      ])
+    );
+  } else if (isBroken) {
+    // T250: broken 状態の Conductor は RED + ⨯ で明示。disconnectedAt を経過時間として表示し、
+    //       clear-conductor CLI での明示解除を促す。
+    const brokenElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text("⨯", { style: { fg: RED } }),
+        ui.text(`[${surface}]`),
+        ui.text(`broken ${brokenElapsed}`, { style: { fg: RED } }),
+        ui.text("use clear-conductor", { dim: true }),
       ])
     );
   } else {
@@ -1054,6 +1067,7 @@ export async function startDashboard(
     const assigningCount = [...daemon.conductors.values()].filter(c => c.status === "assigning").length;
     const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
     const askingCount = [...daemon.conductors.values()].filter(c => c.status === "asking").length;
+    const brokenCount = [...daemon.conductors.values()].filter(c => c.status === "broken").length;
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
@@ -1151,7 +1165,7 @@ export async function startDashboard(
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}`),
+        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}${brokenCount > 0 ? ` ${brokenCount} broken` : ""}`),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション（クリックでフォーカス）
         ui.button({

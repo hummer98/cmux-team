@@ -834,10 +834,17 @@ export async function initializeLayout(
             worktreePath: c.worktreePath,
             outputDir: c.outputDir,
             startedAt: c.startedAt ?? new Date().toISOString(),
+            // T250: broken / disconnected の経過時間表示用に disconnectedAt を復元する。
+            disconnectedAt: c.disconnectedAt,
             sessionId: c.sessionId,
             pid: c.pid,
             agents: restoredAgents,
-            status: c.status === "running" ? "running" : c.status === "disconnected" ? "disconnected" : "idle",
+            // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
+            status:
+              c.status === "running" ? "running"
+              : c.status === "disconnected" ? "disconnected"
+              : c.status === "broken" ? "broken"
+              : "idle",
           };
           restored.push(restoredConductor);
         }
@@ -1019,6 +1026,35 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "CONDUCTOR_CLEAR": {
+      // T250: broken Conductor を明示的に idle に戻す専用経路。
+      //       CONDUCTOR_DONE 流用だと `no_task` guard で早期 break されるため新 message 型で分離。
+      const conductor = state.conductors.get(message.surface);
+      if (!conductor) {
+        await log(
+          "conductor_clear_ignored",
+          `surface=${message.surface} reason=not_found`
+        );
+        break;
+      }
+      if (conductor.status !== "broken") {
+        await log(
+          "conductor_clear_ignored",
+          `${formatSurface(conductor.surface, "C")} status=${conductor.status} reason=not_broken`
+        );
+        break;
+      }
+      // cleanup は broken 遷移時点で既に済んでいるが、resetConductor は冪等なので
+      // 再度呼んでも worktree 不在時は no-op 的に振る舞う。
+      await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
+        targetStatus: "idle",
+        reason: message.reason ?? "cleared",
+      });
+      // 即時 tick を発火し、次の scanTasks で新タスクを拾えるようにする
+      requestWakeup(state);
+      break;
+    }
+
     case "AGENT_SPAWNED": {
       // T244: SESSION_STARTED F1 fallback で同 surface が master として仮登録されていたら
       //   agent が late register してきた時点で master 仮登録は誤りなので掃除する。
@@ -1078,6 +1114,15 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T250: broken は明示的クリア (clear-conductor) 以外で解除しない。
+        //       自動復帰経路を塞ぎ、観測のため ignore ログを残す。
+        if (conductor.status === "broken") {
+          await log(
+            "session_event_ignored_broken",
+            `${formatSurface(conductor.surface, "C")} event=SESSION_STARTED reason=broken_requires_manual_clear`
+          );
+          break;
+        }
         // n1: 既存の starting/disconnected → idle 遷移ロジックは残す
         if (conductor.status === "starting" || conductor.status === "disconnected") {
           const prevStatus = conductor.status;
@@ -1421,6 +1466,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
+        if (conductor.status === "broken") {
+          await log(
+            "session_event_ignored_broken",
+            `${formatSurface(conductor.surface, "C")} event=SESSION_ACTIVE reason=broken_requires_manual_clear`
+          );
+          break;
+        }
         conductor.disconnectedAt = undefined;
         if (message.pid) conductor.pid = message.pid;
         if (conductor.status === "disconnected") {
@@ -1501,6 +1554,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
+        if (conductor.status === "broken") {
+          await log(
+            "session_event_ignored_broken",
+            `${formatSurface(conductor.surface, "C")} event=SESSION_IDLE reason=broken_requires_manual_clear`
+          );
+          break;
+        }
         conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
         if (message.pid) conductor.pid = message.pid;
         // T181: asking → idle/running に戻る経路（Ask 解決後の通常 stop）
@@ -1647,6 +1708,15 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       const conductor = findConductor(state, message.surface);
+      // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
+      //       assigning ガードよりも前に置き、下流の destructive 処理に落ちないようにする。
+      if (conductor && conductor.status === "broken") {
+        await log(
+          "session_event_ignored_broken",
+          `${formatSurface(conductor.surface, "C")} event=SESSION_CLEAR reason=broken_requires_manual_clear`
+        );
+        break;
+      }
       // T232: assigning 中の SESSION_CLEAR は daemon 自身が送った /clear の遅延発火。
       //       destructive な処理（task-state 書き換え / resetConductor）をスキップして早期 break する。
       //       これを `disconnected/starting → idle` 分岐より **前** に置くことで、
@@ -2136,6 +2206,11 @@ const DISCONNECT_TIMEOUT_SEC =
  */
 export async function monitorConductors(state: DaemonState): Promise<void> {
   for (const [surface, conductor] of state.conductors) {
+    // T250: broken はユーザーの明示操作（clear-conductor / abort-task / restart-task）
+    //       でのみ解除される。timeout 判定の対象外（2 度目の timeout を発火させない）。
+    if (conductor.status === "broken") {
+      continue;
+    }
     // starting: タイムアウトチェックのみ
     if (conductor.status === "starting") {
       const elapsed = (Date.now() - new Date(conductor.startedAt).getTime()) / 1000;
@@ -2188,6 +2263,11 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
 /**
  * disconnected timeout で Conductor の強制クローズ + タスク abort を行う。
  * CLAUDE.md「異常検知時のリカバリーは人間に委ねる」に従い、reopen はしない。
+ *
+ * T250: 自動 idle 化は廃止。resetConductor を `targetStatus: "broken"` で呼び、
+ * 確定した異常状態として state.conductors に残す（cleanup 済みだが可視化のため）。
+ * ユーザーが `cmux-team clear-conductor --surface <id>` で明示的に idle に戻すまで、
+ * 次のタスク割当候補から除外され続ける。
  */
 async function forceCloseDisconnectedConductor(
   state: DaemonState,
@@ -2246,8 +2326,12 @@ async function forceCloseDisconnectedConductor(
     conductor.pidWatcherInterval = undefined;
   }
 
-  // 3. resetConductor で worktree/branch/タブ名をクリーンアップ
-  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
+  // 3. resetConductor で worktree/branch/タブ名をクリーンアップし broken 状態に遷移
+  //    ログ（conductor_broken）は resetConductor 内で発行される（集約ポリシー D12）。
+  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
+    targetStatus: "broken",
+    reason: "disconnect_timeout",
+  });
 }
 
 async function handleConductorDone(
@@ -2302,6 +2386,8 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       worktreePath: c.worktreePath,
       outputDir: c.outputDir,
       startedAt: c.startedAt,
+      // T250: broken Conductor が再起動後も経過時間を表示できるよう disconnectedAt を永続化する。
+      disconnectedAt: c.disconnectedAt,
       sessionId: c.sessionId,
       pid: c.pid,
       agents: c.agents.map((a) => ({
