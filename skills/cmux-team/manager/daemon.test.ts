@@ -901,6 +901,7 @@ describe("spawnAgentPidWatcher tick (T195)", () => {
         surface: "surface:a1",
         spawnedAt: new Date().toISOString(),
         pid: 99999,
+        status: "running" as const,
       };
       const conductor: ConductorState = {
         surface: "surface:c1",
@@ -935,6 +936,7 @@ describe("spawnAgentPidWatcher tick (T195)", () => {
         surface: "surface:a1",
         spawnedAt: new Date().toISOString(),
         pid: 12345,
+        status: "running" as const,
       };
       const conductor: ConductorState = {
         surface: "surface:c1",
@@ -964,6 +966,7 @@ describe("spawnAgentPidWatcher tick (T195)", () => {
         surface: "surface:a1",
         spawnedAt: new Date().toISOString(),
         pid: 99999,
+        status: "running" as const,
       };
       const conductor: ConductorState = {
         surface: "surface:c1",
@@ -1014,6 +1017,7 @@ describe("Agent SESSION_STARTED (T195)", () => {
     const agent = {
       surface: "surface:a1",
       spawnedAt: new Date().toISOString(),
+      status: "starting" as const,
     };
     const conductor: ConductorState = {
       surface: "surface:c1",
@@ -1130,6 +1134,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
     const agent = {
       surface: "surface:a2",
       spawnedAt: new Date().toISOString(),
+      status: "starting" as const,
     };
     const conductor: ConductorState = {
       surface: "surface:c4",
@@ -1424,7 +1429,7 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     const conductor: ConductorState = {
       surface: "surface:c1",
       startedAt: new Date().toISOString(),
-      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString(), status: "running" as const }],
       status: "running",
     };
     state.conductors.set(conductor.surface, conductor);
@@ -1500,7 +1505,7 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     const conductor: ConductorState = {
       surface: "surface:c1",
       startedAt: new Date().toISOString(),
-      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString(), status: "running" as const }],
       status: "running",
     };
     state.conductors.set(conductor.surface, conductor);
@@ -1532,7 +1537,7 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     const conductor: ConductorState = {
       surface: "surface:c1",
       startedAt: new Date().toISOString(),
-      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString() }],
+      agents: [{ surface: "surface:a1", spawnedAt: new Date().toISOString(), status: "running" as const }],
       status: "running",
     };
     state.conductors.set(conductor.surface, conductor);
