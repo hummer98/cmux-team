@@ -5,17 +5,14 @@ import { mkdir, readFile, readdir, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import * as cmux from "./cmux";
 import { log, formatSurface } from "./logger";
+import { normalizeSurfaceForPath } from "./paths";
 import type { MasterState } from "./schema";
 import { MasterStateSchema } from "./schema";
 
-/**
- * surface 名をファイルパス用に正規化する（T229）。
- * `surface:12` → `surface_12`。`.team/masters/<normalized>.json` のファイル名に使う。
- * daemon.ts の同名関数と同じ意味を持つが、循環 import を避けるため master.ts にも定義する。
- */
-export function normalizeSurfaceForPath(surface: string): string {
-  return surface.replaceAll(":", "_");
-}
+// T234: normalizeSurfaceForPath は paths.ts に集約した。旧 master.ts 版は
+// `replaceAll(":", "_")` で実装されていたが、`surface:NNN` 形式では daemon.ts 版
+// regex と同じ出力になるため意味的差異はない（詳細は paths.ts のコメント参照）。
+export { normalizeSurfaceForPath };
 
 /**
  * `.team/masters/<normalized>.json` のファイルパスを返す（T229）。
