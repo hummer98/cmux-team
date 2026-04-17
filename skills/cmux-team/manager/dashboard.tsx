@@ -498,16 +498,31 @@ function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: s
       tester: "🧪", test: "🧪",
       architect: "📐", design: "📐",
     };
-    const icon = roleIcons[a.role ?? ""] ?? "🔧";
+    const roleIcon = roleIcons[a.role ?? ""] ?? "🔧";
     const prefix = i === agents.length - 1 ? "└─" : "├─";
     const label = a.taskTitle ?? a.role ?? "";
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text(`   ${prefix}`, { dim: true }),
-        ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
-        ui.text(`${icon} ${label}`),
-      ])
-    );
+    // T236: status に応じて spinner / role アイコンを切り替え。
+    //       status undefined は古い team.json 復元経路で起きうる → idle 相当で描画。
+    const isAgentRunning = a.status === "running" || a.status === "starting";
+    if (isAgentRunning) {
+      const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(`   ${prefix}`, { dim: true }),
+          ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
+          ui.text(spinChar, { style: { fg: CYAN } }),
+          ui.text(label),
+        ])
+      );
+    } else {
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(`   ${prefix}`, { dim: true }),
+          ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
+          ui.text(`${roleIcon} ${label}`, { dim: true }),
+        ])
+      );
+    }
   }
 
   return ui.column({ gap: 0 }, children);
@@ -1321,7 +1336,9 @@ export async function startDashboard(
       const daemon = getState();
       const needsAnimation =
         [...daemon.masters.values()].some(m => m.status === "running") ||
-        [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting" || c.status === "assigning");
+        [...daemon.conductors.values()].some(c => c.status === "running" || c.status === "starting" || c.status === "assigning") ||
+        // T236: Conductor が idle でも Agent のみ running/starting の状況で spinner フレームを前進させる
+        [...daemon.conductors.values()].some(c => (c.agents ?? []).some(a => a.status === "running" || a.status === "starting"));
 
       if (needsAnimation) {
         wasAnimating = true;

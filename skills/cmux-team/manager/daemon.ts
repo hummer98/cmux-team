@@ -821,6 +821,10 @@ export async function initializeLayout(
             sessionId: a.sessionId,
             spawnedAt: a.spawnedAt ?? new Date().toISOString(),
             pid: (typeof a.pid === "number" && cmux.isAlive(a.pid)) ? a.pid : undefined,
+            // T236: 旧 team.json に status が無ければ "idle" にフォールバック。
+            //       PID 生存だけでは running/idle を判別できず、次の SESSION_STARTED/IDLE
+            //       到達までは false-running spinner を避けるため idle 側に倒す。
+            status: (a.status as AgentState["status"]) ?? "idle",
           }));
           const restoredConductor: ConductorState = {
             surface: c.surface,
@@ -1023,6 +1027,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           role: message.role,
           taskTitle: message.taskTitle,
           spawnedAt: message.timestamp,
+          status: "starting",
         });
         notifyStateChanged("daemon.ts:handleMessage:agent-spawned");
         await log(
@@ -1136,6 +1141,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           // T203: Agent も同様に最新 sessionId を反映
           if (message.sessionId) agent.sessionId = message.sessionId;
           agent.pid = message.pid;
+          // T236: TUI spinner 用の status 遷移（starting/idle → running）
+          agent.status = "running";
           spawnAgentPidWatcher(state, c, agent, message.pid);
           notifyStateChanged("daemon.ts:handleMessage:session-started-agent");
           await log(
@@ -1532,6 +1539,9 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } catch (e: any) {
           await log("error", `writeAgentDone failed (session_idle): ${e.message}`);
         }
+        // T236: TUI spinner 用の status 遷移（running → idle）
+        agent.status = "idle";
+        notifyStateChanged("daemon.ts:handleMessage:session-idle-agent");
         // agents リストからは削除しない（idle 中の Agent も生存扱い。SESSION_ENDED / surface_lost で削除）
         await log(
           "agent_done",
@@ -1670,6 +1680,22 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
       }
       // idle 時は何もしない（TUI チラつき防止）
+      // T236: Conductor にマッチしなかった場合 Agent surface として status をリセット
+      //       （/clear 後は次のターン開始を意味するため running に戻す）。
+      //       destructive な処理（task-state / worktree 等）は行わない。
+      if (!conductor) {
+        for (const c of state.conductors.values()) {
+          const agent = c.agents.find(a => a.surface === message.surface);
+          if (!agent) continue;
+          agent.status = "running";
+          notifyStateChanged("daemon.ts:handleMessage:session-clear-agent");
+          await log(
+            "session_clear_agent_reset",
+            `${formatPair(c.surface, agent.surface, "C", "A")} new_status=running`
+          );
+          break;
+        }
+      }
       break;
     }
 
@@ -2202,6 +2228,7 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
         role: a.role,
         sessionId: a.sessionId,
         pid: a.pid,
+        status: a.status,
       })),
     }));
     // アトミック書き込み: tmp → rename で中途半端な書き込みを防止
