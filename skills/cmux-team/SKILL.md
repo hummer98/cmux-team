@@ -87,7 +87,7 @@ description: >
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
-| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body` 任意） |
+| `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body`, `--depends-on`, `--base-branch`, `--run-after-all`, `--exclusive` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id`, `--status` 必須） |
 | `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal` 任意） |
 | `cmux-team await-task` | タスク完了待ち（`--task-id` 必須、`--timeout` 任意） |
@@ -271,3 +271,25 @@ cmux-team await-task --task-id 108
 |------|------|
 | `depends-on` (frontmatter) | 自動チェーン: A → B の順序保証。Manager が自動で B を発火 |
 | `await-task` (CLI) | 手動チェーン: A の結果を**見てから**次を判断するケース |
+
+## 5. タスク属性
+
+タスク frontmatter で表現される実行制御属性。`create-task` の CLI フラグで指定すると永続化される。
+
+| 属性 | 意味 | CLI フラグ |
+|------|------|-----------|
+| `run_after_all: true` | 全 open タスク closed 後に実行（非排他 drain） | `--run-after-all` |
+| `exclusive: true` | drain 後に単独実行。assigned の間は他の全 assignment を停止（closed 後に再開）。`--run-after-all` を暗黙に含む | `--exclusive` |
+
+### exclusive の 3 フェーズ
+
+1. **drain** — 他の全 open タスクが closed になるまで `ready` で待機
+2. **exclusive run** — assigned 後、他の全タスクの assignment を停止（単独実行）
+3. **resume** — closed 後の次 tick から通常 assignment 再開
+
+### 競合ルール
+
+- `--exclusive` 同士は共存可能（ID 昇順に順次排他実行）
+- `--exclusive` ↔ 非排他 `--run-after-all` は共存不可（どちら側から起票しても `RUN_AFTER_ALL_CONFLICT`）
+- 非排他 `--run-after-all` 同士は 1 つまで（従来通り）
+- `--run-after-all` と `--exclusive` を同時指定すると警告のみで処理継続

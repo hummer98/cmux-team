@@ -107,6 +107,32 @@ cmux-team update-task --task-id NNN --status ready
 **Normal flow:** Create as draft → Confirm content with user → Set to ready after approval.
 **Immediate execution:** If the user says "do it now", create with `--status ready` (auto-notification sent). Minor tasks can also be immediately executed with the same flow.
 
+## Proposing Exclusive Tasks
+
+`--exclusive` makes a task run alone after drain: while it is assigned, no other task
+assignments are dispatched (resumes after it closes). It implies `--run-after-all`.
+When you detect the following patterns, **ask the user** whether to mark the task
+exclusive. Never auto-apply:
+
+- **Conflict resolution** — coordinating merge order of multiple PRs, manual conflict fixes
+- **Release work** — tagging, version bumping, `npm publish`
+- **cmux-team self-update** — tasks with `kind: cmux-team-update`
+- **Destructive dependency changes** — major version bumps of shared libs, full lockfile rewrites
+- **Coordinator tasks for multi-task edits on the same files** — large refactor rollups
+- **When the user uses strong phrasing** like "critical", "carefully", "stop everything else"
+
+Suggested proposal format:
+
+> This task matches the `<pattern>` pattern, so I recommend running it exclusively
+> (`--exclusive`). It will run alone after all other tasks are closed. Shall I file it
+> as exclusive?
+
+After user approval, create the task with `--exclusive`:
+
+```bash
+cmux-team create-task --title "Task name" --status ready --exclusive --body "Details"
+```
+
 ## Progress Reporting
 
 When the user asks "What's the status?":

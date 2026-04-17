@@ -13,6 +13,11 @@ export interface TaskMeta {
   priority: string;
   dependsOn: string[];
   runAfterAll: boolean;
+  /**
+   * 排他実行。true の場合、drain 後に単独実行され、assigned の間は他の全 assignment
+   * が停止する。暗黙に runAfterAll: true のセマンティクスを含む（parseTaskMeta で強制）。
+   */
+  exclusive: boolean;
   filePath: string;
   fileName: string;
   createdAt: string;  // ISO 8601 datetime
@@ -79,7 +84,10 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     }
   }
 
-  const runAfterAll = fm.match(/^run_after_all:\s*(.+)$/m)?.[1]?.trim() === "true";
+  const runAfterAllRaw = fm.match(/^run_after_all:\s*(.+)$/m)?.[1]?.trim() === "true";
+  const exclusive = fm.match(/^exclusive:\s*(.+)$/m)?.[1]?.trim() === "true";
+  // exclusive=true は run_after_all=true を暗黙に含む（drain 待ちセマンティクス）
+  const runAfterAll = runAfterAllRaw || exclusive;
 
   return {
     id: id || fileName.match(/^(\d+)/)?.[1] || "",
@@ -88,6 +96,7 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
     priority,
     dependsOn,
     runAfterAll,
+    exclusive,
     filePath,
     fileName,
     createdAt,
@@ -288,9 +297,13 @@ export function cascadeAbortToChildren(
  */
 export function sortByPriority(tasks: TaskMeta[]): TaskMeta[] {
   const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  return [...tasks].sort(
-    (a, b) => (order[a.priority] ?? 1) - (order[b.priority] ?? 1)
-  );
+  return [...tasks].sort((a, b) => {
+    const pa = order[a.priority] ?? 1;
+    const pb = order[b.priority] ?? 1;
+    if (pa !== pb) return pa - pb;
+    // 同一 priority 内は ID 昇順で決定化（exclusive 同士の順序保証にも使う）
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /** ダッシュボード表示用: open タスクを createdAt 降順（新しい順）にソート */
@@ -318,6 +331,10 @@ export async function createTaskProgrammatic(
     baseBranch?: string;
     dependsOn?: string[];
     runAfterAll?: boolean;
+    /**
+     * 排他実行。暗黙に runAfterAll=true を含む（内部で強制セットされる）。
+     */
+    exclusive?: boolean;
     kind?: string;
     /** tasks セクションのヘッダ（i18n 用）。デフォルト "タスク内容" */
     sectionHeader?: string;
@@ -331,22 +348,29 @@ export async function createTaskProgrammatic(
   const body = opts.body ?? "";
   const baseBranch = opts.baseBranch ?? "";
   const dependsOn = opts.dependsOn ?? [];
-  const runAfterAll = opts.runAfterAll ?? false;
+  const exclusive = opts.exclusive ?? false;
+  // exclusive は run_after_all を暗黙に含む
+  const runAfterAll = (opts.runAfterAll ?? false) || exclusive;
   const kind = opts.kind ?? "";
   const sectionHeader = opts.sectionHeader ?? "タスク内容";
 
   // run_after_all 競合チェック
+  // - exclusive 同士は共存可能（ID 順で drain → 順次排他実行）
+  // - 非排他 run_after_all と他の未クローズ run_after_all（exclusive 含む）は競合
   if (runAfterAll) {
     const { tasks } = await loadTasks(projectRoot);
-    const existingRunAfterAll = tasks.find(
-      (t) => t.runAfterAll && t.status !== "closed",
+    const conflict = tasks.find(
+      (t) =>
+        t.runAfterAll &&
+        t.status !== "closed" &&
+        !(exclusive && t.exclusive),
     );
-    if (existingRunAfterAll) {
+    if (conflict) {
       const err = new Error(
-        `run_after_all task already exists: ${existingRunAfterAll.id} (${existingRunAfterAll.title})`,
+        `run_after_all task already exists: ${conflict.id} (${conflict.title})`,
       );
       (err as any).code = "RUN_AFTER_ALL_CONFLICT";
-      (err as any).existingTaskId = existingRunAfterAll.id;
+      (err as any).existingTaskId = conflict.id;
       throw err;
     }
   }
@@ -384,6 +408,7 @@ export async function createTaskProgrammatic(
   ];
   if (baseBranch) frontmatterLines.push(`base_branch: ${baseBranch}`);
   if (runAfterAll) frontmatterLines.push(`run_after_all: true`);
+  if (exclusive) frontmatterLines.push(`exclusive: true`);
   if (dependsOn.length > 0) {
     frontmatterLines.push(`depends_on: [${dependsOn.join(", ")}]`);
   }

@@ -300,6 +300,8 @@ Options:
   --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
   --base-branch <branch>  merge target branch (optional, default: none → merges to main)
   --run-after-all         run after all regular tasks complete (optional)
+  --exclusive             run exclusively: after drain, block all other assignments
+                          until this task is closed (implies --run-after-all)
 
 Examples:
   cmux-team create-task --title "Fix bug" --status ready --body "Login screen error"
@@ -307,6 +309,7 @@ Examples:
   cmux-team create-task --title "Refactor" --depends-on "081,082" --status ready
   cmux-team create-task --title "hotfix" --base-branch develop --status ready
   cmux-team create-task --title "Release v3.5.0" --run-after-all --status ready
+  cmux-team create-task --title "Release v3.53.0" --exclusive --status ready
 
 Notes:
   - If status is ready, a TASK_CREATED message is automatically sent
@@ -314,6 +317,11 @@ Notes:
   - If draft, it will not be assigned. Use update-task --status ready to start
   - Only one --run-after-all task may exist at a time (error if one already exists unclosed)
   - The run_after_all task runs automatically after all regular tasks are closed
+  - --exclusive implies --run-after-all (drain) and additionally blocks all other
+    task assignments while this task is running (resumes after it closes)
+  - Multiple --exclusive tasks may coexist; they run sequentially in ID order.
+    A non-exclusive --run-after-all cannot coexist with any unclosed --exclusive
+    task (create-task errors with RUN_AFTER_ALL_CONFLICT in either direction)
 `,
 
   help_update_task: `
@@ -573,7 +581,7 @@ Usage:
   cmux-team close-agent --surface <surface>    close an agent (normal exit)
   cmux-team kill-agent --surface <surface>     kill an agent (crash/force)
   cmux-team send-agent --surface <surface> <message>    send a message to a spawned Agent
-  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all] [--exclusive]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team await-task --task-id <id> [--timeout <sec>]    wait for task completion
@@ -869,6 +877,8 @@ Options:
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
   --base-branch <branch>  マージ先ブランチ（任意、デフォルト: 指定なし → main にマージ）
   --run-after-all         全通常タスク完了後に実行（任意）
+  --exclusive             排他実行: drain 後、自身が closed になるまで他の全 assignment を停止
+                          （--run-after-all を暗黙に含む。リリースや移行作業向け）
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
@@ -876,6 +886,7 @@ Examples:
   cmux-team create-task --title "リファクタ" --depends-on "081,082" --status ready
   cmux-team create-task --title "hotfix" --base-branch develop --status ready
   cmux-team create-task --title "リリース v3.5.0" --run-after-all --status ready
+  cmux-team create-task --title "リリース v3.53.0" --exclusive --status ready
 
 Notes:
   - status が ready の場合、TASK_CREATED メッセージが自動送信され、
@@ -884,6 +895,11 @@ Notes:
   - --run-after-all タスクはシステム内に1つだけ存在可能です（未クローズの
     run_after_all タスクがあるとエラーになります）
   - run_after_all タスクは全通常タスクが closed になった後に自動実行されます
+  - --exclusive は --run-after-all（drain）を暗黙に含み、さらに自身が assigned の間
+    他の全タスク assignment を停止します（closed になると再開）
+  - --exclusive タスク同士は共存可能で、ID 昇順に順次排他実行されます。
+    非排他 --run-after-all と --exclusive は共存できません（どちら側から起票しても
+    create-task が RUN_AFTER_ALL_CONFLICT でエラーになります）
 `,
 
   help_update_task: `
@@ -1143,7 +1159,7 @@ Usage:
   cmux-team close-agent --surface <surface>    Agent を正常終了
   cmux-team kill-agent --surface <surface>     Agent を強制停止（crash 扱い）
   cmux-team send-agent --surface <surface> <message>    Agent にメッセージ送信
-  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
+  cmux-team create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all] [--exclusive]
   cmux-team update-task --task-id <id> --status <status>
   cmux-team close-task --task-id <id> [--journal <text>]
   cmux-team await-task --task-id <id> [--timeout <sec>]    タスク完了待ち

@@ -103,7 +103,7 @@ See `cmux-team --help` for the full list. Common commands:
 **Task management**
 | Command | What it does |
 |---------|-------------|
-| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all]` | Create a task |
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all] [--exclusive]` | Create a task (`--exclusive`: run alone after drain; implies `--run-after-all`) |
 | `cmux-team update-task --task-id <id> --status <s>` | Update task status |
 | `cmux-team close-task --task-id <id> [--journal <text>]` | Close a task |
 | `cmux-team abort-task --task-id <id>` | Abort a running task |

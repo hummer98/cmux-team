@@ -492,6 +492,33 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
   ```
 - 将来的に CLI サブコマンド化する可能性あり
 
+## タスク属性
+
+タスク frontmatter で表現される実行制御属性。CLI で指定すると frontmatter に永続化される。
+
+| 属性 | 意味 | CLI フラグ |
+|------|------|-----------|
+| `run_after_all: true` | 全 open タスクが closed になってから実行（非排他 drain） | `--run-after-all` |
+| `exclusive: true` | drain 後に単独実行。assigned の間は他の全 assignment を停止（closed になると再開）。`--run-after-all` を暗黙に含む | `--exclusive` |
+
+### exclusive の 3 フェーズモデル
+
+1. **drain** — 他の全 open タスクが closed になるまで `ready` で待機（run_after_all と同一セマンティクス）
+2. **exclusive run** — 自身が `assigned` になった後、他のタスク（exclusive / 通常 / run_after_all）の assignment を停止
+3. **resume** — 自身が `closed` になった次 tick から通常 assignment を再開
+
+### 競合ルール
+
+- `--exclusive` 同士は共存可能（ID 昇順に順次排他実行）
+- `--exclusive` と非排他 `--run-after-all` は共存不可（どちら側から起票しても `RUN_AFTER_ALL_CONFLICT`）
+- 非排他 `--run-after-all` 同士は従来通り共存不可（1 つまで）
+- `--run-after-all` と `--exclusive` の冗長指定は `create_task_redundant_flags` 警告のみで処理継続
+
+### 用途
+
+- **`--run-after-all`**: 「全タスク完了後の後片付け」用（並列実行はしないが、走行中の他タスクの停止はしない）
+- **`--exclusive`**: リリース作業・コンフリクト解消・破壊的依存変更・cmux-team 自身の更新など、他タスクを全て止めて単独で走らせたい作業
+
 ## 通信プロトコル
 
 ### ファイルベース通信

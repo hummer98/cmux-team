@@ -1,11 +1,11 @@
 ---
 allowed-tools: Bash
-description: "リリース作業を --run-after-all タスクとして起票する（全オープンタスク完了後に Conductor が実行）"
+description: "リリース作業を --exclusive タスクとして起票する（全オープンタスク完了後に Conductor が単独実行）"
 ---
 
 # /cmux-team:release
 
-cmux-team のリリース作業を `--run-after-all` タスクとして起票する。Master 自身は作業しない。オープンタスクが全て closed になった後、idle Conductor が release タスクを実行する。
+cmux-team のリリース作業を `--exclusive` タスクとして起票する。Master 自身は作業しない。オープンタスクが全て closed になった後、idle Conductor が release タスクを単独実行する（走行中は他の assignment が停止される）。
 
 ## 引数
 
@@ -30,7 +30,7 @@ cmux-team create-task \
   --title "$TITLE" \
   --status ready \
   --priority high \
-  --run-after-all \
+  --exclusive \
   --body "$(cat <<'TASK_BODY'
 # リリースタスク
 
@@ -185,6 +185,7 @@ TASK_BODY
 
 ## 注意事項
 
-- 既に `--run-after-all` タスクが存在する状態で `/release` を実行すると create-task がエラーを返す
+- 既に `--exclusive` タスクが存在しても `/release` は許可され、先行タスクが closed になってから自タスクが drain → 排他実行される（`--exclusive` 同士は共存可能）
+- ただし非排他 `--run-after-all` タスクが既に存在する場合は `RUN_AFTER_ALL_CONFLICT` でエラーになる
 - バージョン引数はタスクタイトルに埋め込まれ、Conductor がそれを読み取る
 - Master はタスク作成以降リリース作業に関与しない

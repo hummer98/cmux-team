@@ -103,7 +103,7 @@ Claude: → cmux-team create-task --title "..." --status ready
 **タスク管理**
 | コマンド | やること |
 |---------|---------|
-| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all]` | タスク作成 |
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all] [--exclusive]` | タスク作成（`--exclusive`: drain 後に単独実行。他タスクを全て止めたい作業用。`--run-after-all` を含む） |
 | `cmux-team update-task --task-id <id> --status <s>` | タスク状態更新 |
 | `cmux-team close-task --task-id <id> [--journal <text>]` | タスク close |
 | `cmux-team abort-task --task-id <id>` | 実行中タスクを中止 |

@@ -143,7 +143,7 @@
 - タスク中心フォルダ集約（`tasks/TNNN-slug/task.md` ＋ `runs/<taskRunId>/` にプロンプト・成果物を集約）
 - 依存関係解決（`depends_on` フィールド）
 - 優先度ソート（high/medium/low）
-- `base_branch`, `run_after_all` 属性のサポート
+- `base_branch`, `run_after_all`, `exclusive` 属性のサポート
 
 ### Task 6.7: トレースDB — 完了
 - SQLite FTS5 データベース（`trace-store.ts`）
@@ -338,6 +338,7 @@ v3.44.0〜v3.45.0 で実施された主要改善:
 
 ### リリース運用
 - **`--run-after-all` の release タスク自動化（T188）** — Conductor が直接 `npm version` → `git push` → `npm publish` を実行するオペレーショナルタスク
+- **排他タスク属性 `exclusive`（T246）** — `--exclusive` フラグ追加。drain 後に単独実行され、assigned の間は他の全 assignment を停止する（closed になると再開）。`--run-after-all` を暗黙に含む。`parseTaskMeta` で `exclusive=true` なら `runAfterAll=true` を強制。`sortByPriority` に ID 昇順二次キー追加（exclusive 同士の順序保証）。`RUN_AFTER_ALL_CONFLICT` 緩和で exclusive 同士のみ共存可能、非排他 run_after_all と exclusive は共存不可。release.md を `--exclusive` に移行
 
 ---
 

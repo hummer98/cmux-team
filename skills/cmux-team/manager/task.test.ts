@@ -115,6 +115,7 @@ describe("filterExecutableTasks", () => {
     fileName: `${id}.md`,
     createdAt: "",
     runAfterAll: false,
+    exclusive: false,
   });
 
   test("ready かつ依存なしのタスクは実行可能", () => {
@@ -229,6 +230,7 @@ describe("sortByPriority", () => {
     fileName: "",
     createdAt: "",
     runAfterAll: false,
+    exclusive: false,
   });
 
   test("high > medium > low の順でソートされる", () => {
@@ -241,11 +243,11 @@ describe("sortByPriority", () => {
     expect(sorted.map((t) => t.id)).toEqual(["2", "3", "1"]);
   });
 
-  test("同じ優先度は元の順序を維持する", () => {
+  test("同じ優先度は ID 昇順で決定的に並ぶ", () => {
     const tasks = [
+      makeMeta("3", "medium"),
       makeMeta("1", "medium"),
       makeMeta("2", "medium"),
-      makeMeta("3", "medium"),
     ];
     const sorted = sortByPriority(tasks);
     expect(sorted.map((t) => t.id)).toEqual(["1", "2", "3"]);
@@ -343,5 +345,45 @@ describe("cascadeAbortToChildren (T241)", () => {
     };
     cascadeAbortToChildren(state, tasks, "1");
     expect(state["2"]?.journal).toBe("prev note; parent_aborted: 1");
+  });
+});
+
+describe("parseTaskMeta — exclusive", () => {
+  test("exclusive: true を抽出できる", () => {
+    const content = `---
+id: 100
+title: release
+status: ready
+exclusive: true
+---
+`;
+    const meta = parseTaskMeta(content, "100-release.md", "/path/100-release.md");
+    expect(meta!.exclusive).toBe(true);
+  });
+
+  test("exclusive: true のみ指定でも runAfterAll=true が強制される", () => {
+    const content = `---
+id: 101
+title: release only exclusive
+status: ready
+exclusive: true
+---
+`;
+    const meta = parseTaskMeta(content, "101-release.md", "/path/101-release.md");
+    expect(meta!.exclusive).toBe(true);
+    expect(meta!.runAfterAll).toBe(true);
+  });
+
+  test("exclusive 未指定時は false で runAfterAll は frontmatter 由来", () => {
+    const content = `---
+id: 102
+title: normal
+status: ready
+run_after_all: true
+---
+`;
+    const meta = parseTaskMeta(content, "102-normal.md", "/path/102-normal.md");
+    expect(meta!.exclusive).toBe(false);
+    expect(meta!.runAfterAll).toBe(true);
   });
 });

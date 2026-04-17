@@ -2405,8 +2405,19 @@ async function cmdCreateTask(): Promise<void> {
   const body = getArg("body") || "";
   const baseBranch = getArg("base-branch") || "";
   const dependsOnRaw = getArg("depends-on") || "";
-  const runAfterAll = process.argv.includes("--run-after-all");
+  const runAfterAllArg = process.argv.includes("--run-after-all");
+  const exclusiveArg = process.argv.includes("--exclusive");
+  // --exclusive は --run-after-all を暗黙に含む
+  const runAfterAll = runAfterAllArg || exclusiveArg;
+  const exclusive = exclusiveArg;
   const kind = getArg("kind") || "";
+
+  if (runAfterAllArg && exclusiveArg) {
+    await log(
+      "create_task_redundant_flags",
+      `title=${title} note=--exclusive implies --run-after-all`,
+    );
+  }
 
   const dependsOn = dependsOnRaw
     ? dependsOnRaw.split(",").map(s => s.trim()).filter(Boolean)
@@ -2422,6 +2433,7 @@ async function cmdCreateTask(): Promise<void> {
       baseBranch: baseBranch || undefined,
       dependsOn,
       runAfterAll,
+      exclusive,
       kind: kind || undefined,
       sectionHeader: t("task_section_header"),
       // T229: 作成元 surface を CMUX_SURFACE から拾い createdBy として記録する

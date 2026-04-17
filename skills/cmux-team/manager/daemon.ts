@@ -1830,6 +1830,22 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     return;
   }
 
+  // === Exclusive lock ガード ===
+  // exclusive: true のタスクが assigned の間は他の全 assignment を停止する。
+  // drain は parseTaskMeta で exclusive=true → runAfterAll=true に強制されるため
+  // 既存の run_after_all 経路に乗る。ここでは「exclusive run 中は後続を出さない」
+  // ことを保証する。
+  const assignedExclusiveTaskIds = new Set(
+    tasks.filter((t) => t.exclusive && assignedIds.has(t.id)).map((t) => t.id),
+  );
+  if (assignedExclusiveTaskIds.size > 0 && allExecutable.length > 0) {
+    await log(
+      "exclusive_lock_active",
+      `task_ids=${[...assignedExclusiveTaskIds].join(",")} pending=${allExecutable.length}`,
+    );
+    return;
+  }
+
   for (const task of allExecutable) {
     // idle Conductor を探す
     const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");

@@ -67,6 +67,16 @@
 - 新規タスクは `draft` から開始（Manager は `ready` になるまで無視）
 - `ready` になると Manager が Conductor に割り当て
 
+**create-task の主なオプション:**
+- `--title <title>` — タスクタイトル（必須）
+- `--body <text>` — タスク本文
+- `--priority <high|medium|low>` — 優先度（デフォルト medium）
+- `--status <draft|ready>` — 初期ステータス（デフォルト draft）
+- `--depends-on <ids>` — 依存タスク ID（カンマ区切り）
+- `--base-branch <branch>` — マージ先ブランチ（デフォルト main）
+- `--run-after-all` — 全通常タスク完了後に実行（非排他 drain、1 つまで）
+- `--exclusive` — 排他実行。drain 後に単独実行し、assigned の間は他の全 assignment を停止（closed になると再開）。`--run-after-all` を暗黙に含む。リリース・コンフリクト解消・破壊的依存変更・cmux-team 自身の更新など単独実行が必要な作業に使う
+
 **Arguments:** サブコマンド + 引数
 
 **allowed-tools:** `Bash, Read, Write, Edit, Glob, Grep`
