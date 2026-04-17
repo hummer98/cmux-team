@@ -107,6 +107,33 @@ cmux-team update-task --task-id NNN --status ready
 **Normal flow:** Create as draft → Confirm content with user → Set to ready after approval.
 **Immediate execution:** If the user says "do it now", create with `--status ready` (auto-notification sent). Minor tasks can also be immediately executed with the same flow.
 
+## Task Dependencies
+
+To establish ordering between two independent tasks, use `--depends-on`. Manager detects when the dependency is `closed` and automatically assigns the dependent task:
+
+```bash
+# T191 runs after T189 is closed
+cmux-team create-task \
+  --title "Follow-up task" \
+  --depends-on 189 \
+  --status ready \
+  --body "..."
+
+# Multiple dependencies (comma-separated = AND)
+cmux-team create-task --title "..." --depends-on "189,190" --status ready
+```
+
+**When to use:**
+- Split a large change into pipelined tasks
+- A follow-up task consumes the predecessor's byproducts (type definitions, design decisions, etc.)
+- Guarantee merge ordering before a release
+
+**When NOT to use:**
+- Independent tasks that can run in parallel (just submit both as ready and let Manager assign in parallel)
+- Adding instructions to an in-progress task (use the procedure in §Supplementing / Adding Instructions to a Task)
+
+**Master does not block and wait** — `await-task` is not needed. Dependency resolution is Manager's responsibility.
+
 ## Proposing Exclusive Tasks
 
 `--exclusive` makes a task run alone after drain: while it is assigned, no other task
@@ -132,6 +159,7 @@ After user approval, create the task with `--exclusive`:
 ```bash
 cmux-team create-task --title "Task name" --status ready --exclusive --body "Details"
 ```
+
 
 ## Progress Reporting
 

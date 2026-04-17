@@ -107,6 +107,33 @@ cmux-team update-task --task-id NNN --status ready
 **通常フロー:** draft で作成 → ユーザーに内容を確認 → 承認後に ready。
 **即時実行:** ユーザーが「すぐやって」と指示した場合は `--status ready` で作成（自動通知される）。軽微な作業も同じフローで即時実行できる。
 
+## タスク間依存
+
+独立した 2 つのタスクに先後関係を付けたい場合は `--depends-on` を使う。Manager が依存元の `closed` を検出してから自動的に assigned する:
+
+```bash
+# T189 が closed になってから T191 を起動
+cmux-team create-task \
+  --title "後続タスク" \
+  --depends-on 189 \
+  --status ready \
+  --body "..."
+
+# 複数依存（カンマ区切り = AND）
+cmux-team create-task --title "..." --depends-on "189,190" --status ready
+```
+
+**使うべき場面:**
+- 大きな変更を複数タスクに分解してパイプライン化する
+- 先行タスクの副産物（型定義・設計判断など）を後続タスクが使う
+- リリース前のマージ順序を保証する
+
+**使うべきでない場面:**
+- 独立に並列実行できるタスク（そのまま ready で複数投入し、Manager に並列割り当てさせる）
+- 実行中タスクへの追加指示（§タスクへの補足・追加指示 の手順を使う）
+
+**Master は blocking で待つ必要なし** — `await-task` は不要。依存の解決は Manager の責務。
+
 ## 排他タスクの提案
 
 `--exclusive` は drain 後に単独実行され、assigned の間は他の全 assignment を停止する
@@ -130,6 +157,7 @@ cmux-team update-task --task-id NNN --status ready
 ```bash
 cmux-team create-task --title "タスク名" --status ready --exclusive --body "詳細"
 ```
+
 
 ## 進捗報告
 
