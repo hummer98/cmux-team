@@ -38,7 +38,7 @@ Follow the delivery method (local merge or PR) as specified in conductor-role.md
 
 When all processing is complete:
 
-1. Display a completion report on the session (refer to conductor-role.md "Completion Procedures" step 8. Concisely output design decisions, trial-and-error, independent judgments, concerns, and key outcomes)
+1. Display a completion report on the session (refer to conductor-role.md "Completion Procedures" Step 12. Concisely output design decisions, trial-and-error, independent judgments, concerns, and key outcomes)
 2. Send the completion notification:
    ```bash
    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true

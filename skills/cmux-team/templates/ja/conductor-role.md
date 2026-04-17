@@ -442,14 +442,50 @@ git add .team/artifacts/
 git diff --cached --quiet || git commit -m "feat: <タスク概要>"
 ```
 
-### Step 8: 成果物の納品 — 以下のいずれかを選択
+### Step 8: origin/{{MAIN_BRANCH}} に rebase する
+
+commit 後、worktree 内で最新の origin を取り込み、その上に自分の commit を rebase する。
+これにより main 側で conflict が surface することを防ぎ、納品時に常に fast-forward できる状態にする。
+
+**このステップは `base_branch:` frontmatter 未指定タスクを前提とする。`base_branch:` を明示したタスクで
+rebase 先を `{{MAIN_BRANCH}}` 以外にしたい場合は、本ステップを skip して手動で rebase するか、
+別タスクで `{{BASE_BRANCH}}` 対応を行う。**
+
+```bash
+# Step 7 の時点で cd <WORKTREE_PATH> 済み
+git fetch --quiet origin {{MAIN_BRANCH}}
+git rebase origin/{{MAIN_BRANCH}}
+```
+
+rebase が成功した場合 → Step 9（納品）へ進む。
+
+rebase がコンフリクトで失敗した場合 → 自動解決を試みず、即座に abort して判断必要レポートを返す:
+
+```bash
+git rebase --abort
+```
+
+完了レポートは【判断必要】を明記し、以下を伝える:
+- 衝突したファイル一覧（`git status` の出力）
+- rebase 前の HEAD commit SHA
+- worktree は削除せず残す（人間が手動で rebase / 再投入できるよう）
+- タスク状態: `assigned` のまま残ります。再投入するか中止する場合は `cmux-team abort-task --task-id <TASK_ID>` を実行してください。
+
+完了通知は `--success false` で送信する:
+
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
+```
+
+**この場合 `close-task` は呼ばない。** タスクは open のまま残し、人間の再判断に委ねる。
+
+### Step 9: 成果物の納品 — 以下のいずれかを選択
 
 - **ローカルマージ**: 小さな変更、個人プロジェクト、自明な修正
   ```bash
   cd {{PROJECT_ROOT}}
-  git merge <タスク割り当てで指定されたブランチ名>
+  git merge --ff-only <タスク割り当てで指定されたブランチ名>
   ```
-  コンフリクトが発生した場合は Conductor が内容を判断して解決する。
 - **Pull Request**: レビューが必要な変更、共有リポジトリ、破壊的変更
   ```bash
   cd <WORKTREE_PATH>
@@ -458,7 +494,7 @@ git diff --cached --quiet || git commit -m "feat: <タスク概要>"
   ```
 判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
 
-### Step 9: worktree を削除する（Conductor の責務）
+### Step 10: worktree を削除する（Conductor の責務）
 
 ```bash
 cd {{PROJECT_ROOT}}
@@ -466,13 +502,13 @@ git worktree remove <WORKTREE_PATH> --force 2>/dev/null || true
 git branch -d <タスク割り当てで指定されたブランチ名> 2>/dev/null || true
 ```
 
-### Step 10: タスクを close する（task-state.json に状態を記録）
+### Step 11: タスクを close する（task-state.json に状態を記録）
 
 ```bash
 cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
 ```
 
-### Step 11: 完了レポートをセッション上に表示する
+### Step 12: 完了レポートをセッション上に表示する
 
 以下の形式で勘所を出力する。該当しない項目は省略し、該当する項目だけを簡潔に書く:
 

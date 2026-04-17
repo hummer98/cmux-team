@@ -395,14 +395,50 @@ Extract `Axxx` from the stdout of `cmux-team artifacts add` and include it in th
 git diff --cached --quiet || git commit -m "feat: <task summary>"
 ```
 
-### Step 8: Deliver the deliverables — choose one of the following
+### Step 8: Rebase onto origin/{{MAIN_BRANCH}}
+
+After committing, fetch the latest origin inside the worktree and rebase your commits on top of it.
+This prevents conflicts from surfacing on the main side and keeps the delivery path always fast-forwardable.
+
+**This step assumes the task has no `base_branch:` frontmatter. If the task specifies `base_branch:`
+and you want to rebase onto something other than `{{MAIN_BRANCH}}`, skip this step and rebase manually,
+or handle `{{BASE_BRANCH}}` support in a separate task.**
+
+```bash
+# You are already cd'd into <WORKTREE_PATH> from Step 7
+git fetch --quiet origin {{MAIN_BRANCH}}
+git rebase origin/{{MAIN_BRANCH}}
+```
+
+If rebase succeeds → proceed to Step 9 (delivery).
+
+If rebase fails due to conflicts → do not attempt auto-resolution; abort immediately and return a judgment-required report:
+
+```bash
+git rebase --abort
+```
+
+The completion report must be marked [Judgment Required] and must include:
+- List of conflicting files (output of `git status`)
+- HEAD commit SHA before rebase
+- The worktree is kept (not removed) so a human can rebase manually or re-queue the task
+- Task state: remains `assigned`. To re-queue or cancel, run `cmux-team abort-task --task-id <TASK_ID>`.
+
+Send the completion notification with `--success false`:
+
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
+```
+
+**In this case, do NOT call `close-task`.** The task remains open for human re-judgment.
+
+### Step 9: Deliver the deliverables — choose one of the following
 
 - **Local merge**: small changes, personal project, trivial fixes
   ```bash
   cd {{PROJECT_ROOT}}
-  git merge <branch name assigned to this task>
+  git merge --ff-only <branch name assigned to this task>
   ```
-  If conflicts occur, the Conductor resolves them by judging the content.
 - **Pull Request**: changes requiring review, shared repositories, breaking changes
   ```bash
   cd <WORKTREE_PATH>
@@ -411,7 +447,7 @@ git diff --cached --quiet || git commit -m "feat: <task summary>"
   ```
 Criteria: follow the task file instructions if specified. Default to local merge otherwise.
 
-### Step 9: Remove the worktree (Conductor's responsibility)
+### Step 10: Remove the worktree (Conductor's responsibility)
 
 ```bash
 cd {{PROJECT_ROOT}}
@@ -419,13 +455,13 @@ git worktree remove <WORKTREE_PATH> --force 2>/dev/null || true
 git branch -d <branch name assigned to this task> 2>/dev/null || true
 ```
 
-### Step 10: Close the task (record status in task-state.json)
+### Step 11: Close the task (record status in task-state.json)
 
 ```bash
 cmux-team close-task --task-id <TASK_ID> --journal "<one-line Japanese summary>"
 ```
 
-### Step 11: Display the completion report on the session
+### Step 12: Display the completion report on the session
 
 Output key takeaways in the following format. Omit sections that don't apply, and write concisely for applicable sections:
 

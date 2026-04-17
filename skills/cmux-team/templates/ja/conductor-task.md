@@ -38,7 +38,7 @@ worktree は tracked files のみ含む。作業開始前に以下を確認す�
 
 全ての処理が完了したら:
 
-1. セッション上に完了レポートを表示する（conductor-role.md「完了時の処理」ステップ 8 参照。設計判断・試行錯誤・自己判断・懸念・成果の勘所を簡潔に出力）
+1. セッション上に完了レポートを表示する（conductor-role.md「完了時の処理」Step 12 参照。設計判断・試行錯誤・自己判断・懸念・成果の勘所を簡潔に出力）
 2. 完了通知を送信する:
    ```bash
    cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
