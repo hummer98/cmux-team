@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.52.0] - 2026-04-17
+
+### Added
+- **TUI サブエージェント行に Spinner を実装（T236）**。`AgentState` に `status ("starting" | "running" | "idle")` を必須フィールドとして追加し、`AGENT_SPAWNED` / `SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` hook で status を遷移させる。dashboard は Agent 行で running/starting 時に CYAN スピナーを表示し、idle 時に role アイコンを dim 表示。Conductor idle + Agent 単独 running 時もアニメーションが前進するよう `needsAnimation` に OR 条件を追加。既存の `spinnerFrame` を再利用し、Conductor と同じ status 3 値で対称性を保つ
+- **Conductor status に `assigning` を追加し daemon `/clear` の user_clear 誤認を修正（T232）**。`assignTask` が送信した `/clear` に起因する SESSION_CLEAR hook を daemon が「ユーザー手動 /clear」と誤認して task-state.json を aborted に書き換える race condition を解消。`assigning` 状態中の SESSION_CLEAR は早期 break で destructive 処理を完全スキップし、SESSION_STARTED / SESSION_IDLE / SESSION_ACTIVE には `assigning → running` 分岐を追加。60s assigning timeout で固着時は `disconnected` に倒し、`scanTasks` catch にも assigning fallback を組み込み構造的にレースを排除
+- **Master を self-register 方式に変更（T230）**。任意の pane から `cmux-team spawn-master` で Master を追加できるようにするため、daemon の `spawnAndRegisterMaster` 直書き方式から Master 実行プロセス自身 (`cmdLaunchMaster`) が `MASTER_REGISTERED` を daemon に POST する self-register 方式に変更。`daemon.ts` に `MASTER_REGISTERED` ハンドラを追加し、SESSION_STARTED の master 経路に F1 fallback を組み込み（MASTER_REGISTERED 先着前の SESSION_STARTED 仮登録 + PID watcher 起動）。複数 Master の並行運用が可能に
+- **Master を複数受け入れる基盤整備（T229）**。singleton の `state.masterSurface / masterPid / masterStatus / masterPromptPreview / masterPromptAt / masterPidWatcherInterval` を `state.masters: Map<surface, MasterState>` に置換し、Master を N 個受け入れられるよう daemon 内部を全面改修。`.team/masters/<surface>.json` への per-master 永続化、旧 `.team/master.surface` + `team.json.master.pid` からの冪等マイグレーション、`proxy.ts` POST `/master-state` の surface 必須化（2 Master 以上で未指定なら HTTP 400）、GET `/state` body の `masters` を配列化
+- **`close-agent` コマンド追加（T231）**。Agent の正常完了と強制終了でシグナルを分離した。`close-agent` は `reason=close-agent` → `agent_done status=completed`、既存の `kill-agent` は `reason=kill-agent` → `agent_done status=crashed` とする後方互換を維持。Conductor テンプレート（ja/en × `conductor.md` / `conductor-role.md`）を更新し、正常完了時は `close-agent` を使うよう指示
+- **Conductor を self-register 方式に変更（T228）**。Conductor の daemon への登録を Manager の `launchConductor` からの HTTP POST 方式から、Conductor 実行プロセス自身 (`cmdConductor` / `cmdResume`) が自分を register する方式に変更。任意の surface から手動で `cmux-team conductor` を実行しても daemon に登録されるようになった。`CONDUCTOR_REGISTERED` ハンドラを idempotent merge 化（既存 state ありは skip + ログ）、`state.conductors.size` が `maxConductors` を超える新規登録は soft cap 警告を出してから登録続行
+- **daemon 再起動時に最後の 5h/7d rate limit を復元（T227）**。`state.rateLimit` を `.team/rate-limit.json` に atomic write で永続化し、daemon boot 時に注入する。stale ガードを throttle 判定 5 箇所（dashboard / proxy / daemon 2 箇所 / 新 rate-limit-display）に追加し、復元した古いデータで新規タスク割当や spawn-agent が誤ってブロックされないようにする。`rate-limit-display.ts` を Ink 非依存の純粋関数モジュールに切り出し、stale 時は GRAY + `(stale)` ラベルを表示
+
+### Changed
+- **master / daemon 周辺を整理（T234）**。T230 Master self-register の follow-up 5 件を一括処理。`stopDaemon` で PID watcher interval を全解放（タイマー残留によるプロセス非終了を解消）、`normalizeSurfaceForPath` を `paths.ts` に集約（重複定義解消）、`master.test.ts` を新規追加（persistMasterFile / deleteMasterFile / listMasterFiles の境界 13 ケース）、F1 fallback で master 仮登録された conductor の整合処理（`CONDUCTOR_REGISTERED` で fallback 仮登録削除、`MASTER_REGISTERED` で fallback flag を落として canonical 化）、`registerSelfAsMaster` / `registerSelfAsConductor` を `registerSelf(role, surface)` に DRY 共通化
+
+### Fixed
+- **TUI ヘッダーで bar と remaining time の間に 1 スペース（T235）**。rate-limit バーの 5h/7d 表示で bar 本体の直後に残り時間が密着していた（例: `████░░░░░░5h`）。非 throttled パスの描画ロジックに 1 スペースを挿入し `████░░░░░░ 5h  7d: ...` の表示に修正。group 間の 2 スペースは従来通り
+
 ## [3.51.0] - 2026-04-17
 
 ### Added
