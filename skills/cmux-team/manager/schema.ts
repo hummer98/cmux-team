@@ -44,6 +44,10 @@ export const AgentSpawnedMessage = z.object({
   surface: z.string(),
   role: z.string().optional(),
   taskTitle: z.string().optional(),
+  // T260: spawn-agent CLI プロセスの発行元情報（broken な Conductor から
+  // Agent が spawn され続ける現象の事後追跡用）。optional で互換性維持。
+  callerPid: z.number().optional(),
+  callerSurface: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -210,6 +214,11 @@ export const ConductorState = z.object({
   disconnectedAt: z.string().datetime().optional(),
   // T181: AskUserQuestion 検出時の質問本文（hook が SESSION_ASK で通知）
   askQuestion: z.string().optional(),
+  // T260: 最後に SESSION_* hook を受信した時刻（ISO 8601）。
+  // disconnect snapshot ログ (formatConductorSnapshot) で「最後に生存確認できた時刻」として使う。
+  // team.json に永続化するため、daemon 再起動後は古い値で復元される
+  // （次の SESSION_* 受信で上書きされるので許容）。
+  lastHookAt: z.string().datetime().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {

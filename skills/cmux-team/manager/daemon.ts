@@ -836,6 +836,9 @@ export async function initializeLayout(
             startedAt: c.startedAt ?? new Date().toISOString(),
             // T250: broken / disconnected の経過時間表示用に disconnectedAt を復元する。
             disconnectedAt: c.disconnectedAt,
+            // T260: 復元時の lastHookAt は team.json に保存されていた古い値。
+            // 次の SESSION_* 受信で上書きされる想定。
+            lastHookAt: c.lastHookAt,
             sessionId: c.sessionId,
             pid: c.pid,
             agents: restoredAgents,
@@ -2388,6 +2391,8 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       startedAt: c.startedAt,
       // T250: broken Conductor が再起動後も経過時間を表示できるよう disconnectedAt を永続化する。
       disconnectedAt: c.disconnectedAt,
+      // T260: 再起動後も「最後に生存確認できた時刻」を復元できるよう永続化する（次の SESSION_* で上書きされる）。
+      lastHookAt: c.lastHookAt,
       sessionId: c.sessionId,
       pid: c.pid,
       agents: c.agents.map((a) => ({
