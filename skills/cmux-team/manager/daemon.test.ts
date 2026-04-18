@@ -705,38 +705,47 @@ describe("crashed → disconnected 遷移 (T121/T195)", () => {
   });
 
   test("2. disconnected + CONDUCTOR_DONE で late cleanup が走る", async () => {
-    const state = await createDaemon(testDir);
-    const conductor: ConductorState = {
-      surface: "surface:71",
-      startedAt: new Date().toISOString(),
-      disconnectedAt: new Date().toISOString(),
-      taskRunId: "task-010-1712345678",
-      taskId: "010",
-      taskTitle: "journal-generator",
-      // worktreePath は存在しないパスを指定する。
-      // resetConductor は existsSync ガード (conductor.ts:425) で worktree remove を
-      // スキップするため、実ファイルシステムに worktree が無くてもテストは成功する (Minor 7)。
-      worktreePath: join(testDir, ".worktrees/task-010-nothing"),
-      outputDir: ".team/output/task-010",
-      agents: [],
-      status: "disconnected",
-    };
-    state.conductors.set(conductor.surface, conductor);
+    // T251: resetConductor が surface 実在確認 (getPaneForSurface) を行うようになったため、
+    //       surface 存在ケースとしてモックする（本テストの意図は late cleanup 経路の検証）。
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    const paneSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:71",
+        startedAt: new Date().toISOString(),
+        disconnectedAt: new Date().toISOString(),
+        taskRunId: "task-010-1712345678",
+        taskId: "010",
+        taskTitle: "journal-generator",
+        // worktreePath は存在しないパスを指定する。
+        // resetConductor は existsSync ガード (conductor.ts:425) で worktree remove を
+        // スキップするため、実ファイルシステムに worktree が無くてもテストは成功する (Minor 7)。
+        worktreePath: join(testDir, ".worktrees/task-010-nothing"),
+        outputDir: ".team/output/task-010",
+        agents: [],
+        status: "disconnected",
+      };
+      state.conductors.set(conductor.surface, conductor);
 
-    await handleMessage(state, {
-      type: "CONDUCTOR_DONE",
-      surface: "surface:71",
-      success: true,
-      timestamp: new Date().toISOString(),
-    });
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:71",
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
 
-    // late cleanup 経路に入り、resetConductor で status=idle にリセット
-    expect(conductor.status).toBe("idle");
-    expect(conductor.taskRunId).toBeUndefined();
-    expect(conductor.taskId).toBeUndefined();
-    expect(conductor.worktreePath).toBeUndefined();
-    // Minor 3: resetConductor で disconnectedAt もクリアされる
-    expect(conductor.disconnectedAt).toBeUndefined();
+      // late cleanup 経路に入り、resetConductor で status=idle にリセット
+      expect(conductor.status).toBe("idle");
+      expect(conductor.taskRunId).toBeUndefined();
+      expect(conductor.taskId).toBeUndefined();
+      expect(conductor.worktreePath).toBeUndefined();
+      // Minor 3: resetConductor で disconnectedAt もクリアされる
+      expect(conductor.disconnectedAt).toBeUndefined();
+    } finally {
+      paneSpy.mockRestore();
+    }
   });
 
   test("2b. disconnected + taskRunId なし + CONDUCTOR_DONE は no_task で ignore", async () => {
@@ -2900,26 +2909,35 @@ describe("T250 broken status", () => {
   });
 
   test("CONDUCTOR_CLEAR で broken Conductor が idle に戻る（正常経路）", async () => {
-    const state = await createDaemon(testDir);
-    const conductor: ConductorState = {
-      surface: "surface:broken-cc1",
-      startedAt: new Date().toISOString(),
-      disconnectedAt: new Date().toISOString(),
-      agents: [],
-      status: "broken",
-    };
-    state.conductors.set(conductor.surface, conductor);
+    // T251: clear-conductor 経由で idle に戻す正常経路では surface は実在するため
+    //       getPaneForSurface を存在ケースでモックする。
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    const paneSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:broken-cc1",
+        startedAt: new Date().toISOString(),
+        disconnectedAt: new Date().toISOString(),
+        agents: [],
+        status: "broken",
+      };
+      state.conductors.set(conductor.surface, conductor);
 
-    await handleMessage(state, {
-      type: "CONDUCTOR_CLEAR",
-      surface: conductor.surface,
-      reason: "user_clear",
-      timestamp: new Date().toISOString(),
-    });
+      await handleMessage(state, {
+        type: "CONDUCTOR_CLEAR",
+        surface: conductor.surface,
+        reason: "user_clear",
+        timestamp: new Date().toISOString(),
+      });
 
-    expect(conductor.status).toBe("idle");
-    expect(conductor.disconnectedAt).toBeUndefined();
-    expect(conductor.taskRunId).toBeUndefined();
+      expect(conductor.status).toBe("idle");
+      expect(conductor.disconnectedAt).toBeUndefined();
+      expect(conductor.taskRunId).toBeUndefined();
+    } finally {
+      paneSpy.mockRestore();
+    }
   });
 
   test("CONDUCTOR_CLEAR が idle Conductor に来ても無視される", async () => {

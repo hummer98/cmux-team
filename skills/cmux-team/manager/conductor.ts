@@ -506,6 +506,21 @@ export async function resetConductor(
   opts?: { targetStatus?: "idle" | "broken"; reason?: string },
 ): Promise<void> {
   try {
+    // 0. surface 実在確認（T251: 幽霊 Conductor 防止）
+    //    surface が tree に存在しない場合は idle 要求であっても broken に倒す。
+    //    tree 失敗時も undefined になるが、tree が死んでいる状況で Conductor 操作は
+    //    そもそも成立しないため fail-safe に broken 判定して問題ない。
+    //    cleanup (sibling close / worktree remove / branch delete) は冪等なので
+    //    surface 不在でも従来通り最後まで実行する。
+    const pane = await cmux.getPaneForSurface(conductor.surface, workspace);
+    const surfaceMissing = pane === undefined;
+    const effectiveTargetStatus: "idle" | "broken" = surfaceMissing
+      ? "broken"
+      : (opts?.targetStatus ?? "idle");
+    // surface 不在は「なぜ broken になったか」の最も根源的な原因なので
+    // opts.reason (例: disconnect_timeout) より優先する
+    const effectiveReason = surfaceMissing ? "surface_missing" : opts?.reason;
+
     // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
     //    cmux tree 1 回で Conductor の所属 pane と同 pane の全 surface を取得し、
     //    Conductor 自身を除いた sibling surface を閉じる。
@@ -545,7 +560,7 @@ export async function resetConductor(
     }
 
     // 4. ConductorState リセット
-    const targetStatus = opts?.targetStatus ?? "idle";
+    const targetStatus = effectiveTargetStatus;
     conductor.status = targetStatus;
     conductor.taskRunId = undefined;
     conductor.taskId = undefined;
@@ -562,7 +577,7 @@ export async function resetConductor(
     // sessionId は SessionStart hook で最新値に追従するため reset では触らない
     notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
-    const reasonSuffix = opts?.reason ? ` reason=${opts.reason}` : "";
+    const reasonSuffix = effectiveReason ? ` reason=${effectiveReason}` : "";
     await log(
       targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
       `${formatSurface(conductor.surface, "C")}${reasonSuffix}`,

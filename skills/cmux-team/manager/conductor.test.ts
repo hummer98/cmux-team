@@ -336,15 +336,19 @@ describe("resetConductor targetStatus オプション (T250)", () => {
   // cmux 外部コマンドをモックする（listSiblingSurfaces は空配列を返し、closeSurface は何もしない）
   let listSiblingsSpy: ReturnType<typeof spyOn>;
   let closeSurfaceSpy: ReturnType<typeof spyOn>;
+  // T251: resetConductor 冒頭で getPaneForSurface を呼ぶため「surface 存在」をモックする
+  let getPaneForSurfaceSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     listSiblingsSpy = spyOn(cmux, "listSiblingSurfaces").mockResolvedValue([]);
     closeSurfaceSpy = spyOn(cmux, "closeSurface").mockResolvedValue(undefined as any);
+    getPaneForSurfaceSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
   });
 
   afterEach(() => {
     listSiblingsSpy.mockRestore();
     closeSurfaceSpy.mockRestore();
+    getPaneForSurfaceSpy.mockRestore();
   });
 
   test("opts 未指定ならデフォルトで idle に戻し disconnectedAt をクリアする", async () => {
@@ -411,6 +415,92 @@ describe("resetConductor targetStatus オプション (T250)", () => {
       reason: "cleared",
     });
 
+    expect(conductor.status).toBe("idle");
+    expect(conductor.disconnectedAt).toBeUndefined();
+    expect(conductor.taskRunId).toBeUndefined();
+  });
+});
+
+// --- T251: resetConductor surface 実在確認 ---
+describe("resetConductor surface 実在確認 (T251)", () => {
+  // surface 実在確認 (getPaneForSurface) の返り値をケース毎に切り替える。
+  // listSiblingSurfaces / closeSurface は副作用を抑制するため空配列 / no-op でモックする。
+  let listSiblingsSpy: ReturnType<typeof spyOn>;
+  let closeSurfaceSpy: ReturnType<typeof spyOn>;
+  let getPaneForSurfaceSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    listSiblingsSpy = spyOn(cmux, "listSiblingSurfaces").mockResolvedValue([]);
+    closeSurfaceSpy = spyOn(cmux, "closeSurface").mockResolvedValue(undefined as any);
+    // デフォルトで surface 不在 (undefined) — 各テストが必要に応じて上書きする
+    getPaneForSurfaceSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    listSiblingsSpy.mockRestore();
+    closeSurfaceSpy.mockRestore();
+    getPaneForSurfaceSpy.mockRestore();
+  });
+
+  test("surface 不在 + targetStatus 省略 (idle 要求) なら broken に倒す", async () => {
+    const conductor: ConductorState = {
+      surface: "surface:ghost-1",
+      startedAt: new Date().toISOString(),
+      taskRunId: "task-100-xxx",
+      taskId: "100",
+      agents: [],
+      status: "idle",
+    };
+
+    await resetConductor(conductor, testDir);
+
+    // surface が tree に存在しない → idle 要求でも broken に倒れる
+    expect(conductor.status).toBe("broken");
+    // cleanup 自体は実行されるため taskRunId 等はクリアされる
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.taskId).toBeUndefined();
+  });
+
+  test("surface 不在 + targetStatus='broken' 明示指定なら broken のまま disconnectedAt を保持", async () => {
+    const preservedDisconnectedAt = "2026-04-18T10:00:00.000Z";
+    const conductor: ConductorState = {
+      surface: "surface:ghost-2",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: preservedDisconnectedAt,
+      taskRunId: "task-200-xxx",
+      taskId: "200",
+      agents: [],
+      status: "disconnected",
+    };
+
+    await resetConductor(conductor, testDir, undefined, {
+      targetStatus: "broken",
+      reason: "disconnect_timeout",
+    });
+
+    expect(conductor.status).toBe("broken");
+    // broken 経路では disconnectedAt を保持する既存ロジックに従う
+    expect(conductor.disconnectedAt).toBe(preservedDisconnectedAt);
+    expect(conductor.taskRunId).toBeUndefined();
+  });
+
+  test("surface 存在 + targetStatus 省略なら従来通り idle に戻り disconnectedAt がクリアされる", async () => {
+    // surface が pane に存在するケース
+    getPaneForSurfaceSpy.mockResolvedValue("pane:42");
+
+    const conductor: ConductorState = {
+      surface: "surface:alive-1",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      taskRunId: "task-300-xxx",
+      taskId: "300",
+      agents: [],
+      status: "disconnected",
+    };
+
+    await resetConductor(conductor, testDir);
+
+    // surface が存在するので従来通り idle 経路
     expect(conductor.status).toBe("idle");
     expect(conductor.disconnectedAt).toBeUndefined();
     expect(conductor.taskRunId).toBeUndefined();
