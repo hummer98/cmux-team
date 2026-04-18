@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`mainBranch` 解決失敗時を fail-stop に変更（T253、破壊的変更）**。従来 `resolveMainBranch` は `git symbolic-ref refs/remotes/origin/HEAD` と `git symbolic-ref --short HEAD` の両方が失敗した場合にサイレントで `{ branch: "main", source: "fallback" }` を返していたため、存在しない `main` ブランチに対して commit/merge を行い破綻するリスクがあった。本変更で検出失敗時は `MainBranchResolutionError` を throw し、`cmux-team start` は `console.error` に 3 つの解決手段（`--main-branch <name>` / env `CMUX_TEAM_MAIN_BRANCH=<name>` / `.team/config.json` の `mainBranch`）を案内して `process.exit(1)` する。派生する下流フォールバック（`cmdConductor` / `cmdSpawnConductor` の `|| "main"`、`DaemonState.mainBranch` 初期値、`launchConductor` / `initializeConductorSlots` / `assignTask` / `generateConductorTaskPrompt` / `generateConductorRolePrompt` の `"main"` リテラル）も全て撤去し、空文字受領で throw する防御ガードに統一。`MainBranchSource` enum から `"fallback"` を削除。**影響:** 既に `.team/config.json` に `mainBranch` が永続化済みのプロジェクトは影響なし（T213 以降で起動した大多数）。新規 repo（push 前）・shallow clone・detached HEAD・`origin/HEAD` 未設定のプロジェクトでは env か config での明示指定が必要
+
 ## [3.54.1] - 2026-04-18
 
 ### Added

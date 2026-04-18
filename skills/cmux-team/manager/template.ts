@@ -66,6 +66,13 @@ export async function generateConductorRolePrompt(
   projectRoot: string,
   mainBranch: string
 ): Promise<string> {
+  // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
+  if (!mainBranch.trim()) {
+    throw new Error(
+      "generateConductorRolePrompt: mainBranch must be a non-empty string " +
+        "(T253: fail-stop when mainBranch is unresolved)",
+    );
+  }
   const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-role.md"))) {
     throw new Error(t("conductor_role_template_not_found"));
@@ -147,10 +154,17 @@ export async function generateConductorTaskPrompt(
   taskContent: string,
   worktreePath: string,
   outputDir: string,
-  baseBranch?: string,
-  taskDir?: string,
-  mainBranch?: string
+  baseBranch: string | undefined,
+  taskDir: string | undefined,
+  mainBranch: string
 ): Promise<string> {
+  // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
+  if (!mainBranch.trim()) {
+    throw new Error(
+      "generateConductorTaskPrompt: mainBranch must be a non-empty string " +
+        "(T253: fail-stop when mainBranch is unresolved)",
+    );
+  }
   const templateDir = await findTemplateDir();
   if (!templateDir || !existsSync(join(templateDir, "conductor-task.md"))) {
     throw new Error(t("conductor_task_template_not_found"));
@@ -171,17 +185,14 @@ export async function generateConductorTaskPrompt(
 
   let content = await readFile(join(templateDir, "conductor-task.md"), "utf-8");
 
-  // T213: 呼び出し側は state.mainBranch を渡す想定。未指定時は "main" にフォールバック
-  const resolvedMainBranch = mainBranch ?? "main";
-
   content = content
     .replace(/\{\{TASK_CONTENT\}\}/g, taskContent)
     .replace(/\{\{WORKTREE_PATH\}\}/g, worktreePath)
     .replace(/\{\{OUTPUT_DIR\}\}/g, join(projectRoot, outputDir))
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
     .replace(/\{\{CONDUCTOR_ID\}\}/g, taskRunId)
-    .replace(/\{\{MAIN_BRANCH\}\}/g, resolvedMainBranch)
-    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || resolvedMainBranch);
+    .replace(/\{\{MAIN_BRANCH\}\}/g, mainBranch)
+    .replace(/\{\{BASE_BRANCH\}\}/g, baseBranch || mainBranch);
 
   await writeFile(promptFile, content);
   await log("conductor_task_prompt_generated", `taskRunId=${taskRunId} path=${promptFile}`);

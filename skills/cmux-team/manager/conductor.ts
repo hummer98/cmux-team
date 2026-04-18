@@ -85,14 +85,21 @@ export interface ResumeAssignment {
 export async function launchConductor(
   projectRoot: string,
   surface: string,
-  opts?: { resumeTaskId?: string; mainBranch?: string },
+  opts: { resumeTaskId?: string; mainBranch: string },
 ): Promise<void> {
   // 1. 環境変数をシェルに焼き付け
   //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
-  //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdConductor が env → config → "main"
-  //       の三段フォールバックで解決するための一次ソース（race の構造的排除）
-  const mainBranchEnv = (opts?.mainBranch ?? "main").trim() || "main";
+  //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdConductor が env → config の順で
+  //       解決するための一次ソース（race の構造的排除）。T253 で暗黙 "main"
+  //       フォールバックを削除。空文字なら fail-stop（silent failure 防止）。
+  if (!opts.mainBranch.trim()) {
+    throw new Error(
+      "launchConductor: opts.mainBranch must be a non-empty string " +
+        "(T253: fail-stop when mainBranch is unresolved)",
+    );
+  }
+  const mainBranchEnv = opts.mainBranch.trim();
   await cmux.send(
     surface,
     `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1 CMUX_TEAM_MAIN_BRANCH=${mainBranchEnv}\n`,
@@ -187,8 +194,15 @@ export async function initializeConductorSlots(
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
   layout: LayoutMode = "wide",
-  mainBranch: string = "main",
+  mainBranch: string,
 ): Promise<ResumeAssignment[]> {
+  // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
+  if (!mainBranch.trim()) {
+    throw new Error(
+      "initializeConductorSlots: mainBranch must be a non-empty string " +
+        "(T253: fail-stop when mainBranch is unresolved)",
+    );
+  }
   const assignments: ResumeAssignment[] = [];
   try {
     await log("conductor_slots_creating", `count=${count} layout=${layout}`);
@@ -259,8 +273,15 @@ export async function assignTask(
   conductor: ConductorState,
   taskId: string,
   projectRoot: string,
-  mainBranch: string = "main",
+  mainBranch: string,
 ): Promise<ConductorState> {
+  // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
+  if (!mainBranch.trim()) {
+    throw new Error(
+      "assignTask: mainBranch must be a non-empty string " +
+        "(T253: fail-stop when mainBranch is unresolved)",
+    );
+  }
   const taskRunId = `task-${taskId.padStart(3, '0')}-${Math.floor(Date.now() / 1000)}`;
   const worktreePath = join(projectRoot, ".worktrees", taskRunId);
   const branch = `${taskRunId}/task`;

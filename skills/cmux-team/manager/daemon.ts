@@ -91,7 +91,10 @@ export interface DaemonState {
   /** daemon プロセスが属する cmux-team パッケージのバージョン（例: "v3.45.0"）。T192 で追加 */
   version: string;
   /** プロジェクトの主開発ブランチ（config.mainBranch で解決）。T213 で追加。
-   *  初期値は "main"。cmdStart が resolveMainBranch の結果で上書きする */
+   *  初期値は空文字。cmdStart が resolveMainBranch の結果で上書きする（T253 で
+   *  resolveMainBranch は失敗時に throw するため、設定前にこのフィールドが
+   *  Conductor 等に読まれることはない）。下流（conductor.ts / template.ts）にも
+   *  空文字ガードを置いて二重防御している。 */
   mainBranch: string;
   /** T216: hook 全送信を記録する trace DB ハンドル。initInfra で遅延初期化 */
   traceDb: Database | null;
@@ -229,7 +232,7 @@ export async function createDaemon(
     lastSidebarStatus: null,
     lastSidebarCategory: null,
     version: "v?.?.?",
-    mainBranch: "main",
+    mainBranch: "",
     traceDb: null,
   };
 }

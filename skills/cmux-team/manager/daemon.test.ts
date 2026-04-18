@@ -265,7 +265,10 @@ describe("テンプレート生成", () => {
       "42",
       "テストタスクの内容",
       "/tmp/worktree",
-      ".team/output/conductor-test"
+      ".team/output/conductor-test",
+      undefined,
+      undefined,
+      "main"
     );
 
     const content = await readFile(promptFile, "utf-8");
@@ -359,6 +362,9 @@ describe("scanTasks: assignTask エラー分離", () => {
     await createTask("100", "test-task", { priority: "high" });
 
     const state = await createDaemon(testDir);
+    // T253: 本番では cmdStart が state.mainBranch を解決済み。テストは git 失敗の
+    // 分類テストなので、assignTask が mainBranch empty で早期 throw しないよう明示セット。
+    state.mainBranch = "main";
     const fakeConductor: ConductorState = {
       surface: "surface:fake-c1",
       startedAt: new Date().toISOString(),
@@ -2700,6 +2706,9 @@ describe("depends_on cascade on parent abort/delete (T241)", () => {
     await createTask("61", "child", { dependsOn: ["60"], status: "ready" });
 
     const state = await createDaemon(testDir);
+    // T253: 本番では cmdStart が state.mainBranch を解決済み。テストは git 失敗の
+    // 分類テストなので、assignTask が mainBranch empty で早期 throw しないよう明示セット。
+    state.mainBranch = "main";
     const fakeConductor: ConductorState = {
       surface: "surface:fake-c241",
       startedAt: new Date().toISOString(),

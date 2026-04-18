@@ -631,15 +631,16 @@ Conductor が worktree 作成時のベース・マージ先として使うブラ
 
 1. **`CMUX_TEAM_MAIN_BRANCH` 環境変数** — `cmdConductor` 起動時に env から取得（daemon が `launchConductor` で注入）
 2. **`.team/config.json` の `mainBranch`** — `cmdStart` 時に解決・永続化された値
-3. **`"main"` フォールバック** — env も config も未設定の場合
 
 `cmdStart` 実行時は以下の順で `mainBranch` を決定する（config が既にあればそれを優先）:
 
 1. `.team/config.json` に `mainBranch` があればそれを採用（source=`config`）
 2. なければ `git symbolic-ref refs/remotes/origin/HEAD` で検出（source=`detected`）
-3. 検出も失敗すれば `"main"` にフォールバック（source=`fallback`）
+3. 両方失敗した場合は **fail-stop**（`process.exit(1)`）— `MainBranchResolutionError` を catch して console.error にユーザー向けガイダンス（`--main-branch` / env / config の 3 つの解決手段）を出した上で終了（T253）
 
-source が `config` 以外の場合のみ結果を `.team/config.json` に書き戻し、`main_branch_resolved branch=<name> source=<config|detected|fallback>` をログ出力する。初回起動後は常に config 経路が使われる。
+source=`detected` の場合のみ結果を `.team/config.json` に書き戻し、`main_branch_resolved branch=<name> source=<config|detected>` をログ出力する。初回起動後は常に config 経路が使われる。
+
+**T253 破壊的変更:** 従来あった「検出失敗時に `"main"` へサイレントフォールバック」する経路を撤去。main ブランチが存在しない / 検出できないプロジェクト（新規 repo で push 前 / shallow clone / detached HEAD / `origin/HEAD` 未設定）では `cmux-team start` が exit 1 する。env `CMUX_TEAM_MAIN_BRANCH=<name>` か `.team/config.json` の `mainBranch` を事前設定することで回避できる。
 
 ### worktree 作成時の start-point 解決（T242）
 

@@ -2,7 +2,11 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { resolveMainBranch, persistMainBranch } from "./main-branch";
+import {
+  resolveMainBranch,
+  persistMainBranch,
+  MainBranchResolutionError,
+} from "./main-branch";
 
 let testDir: string;
 let savedProjectRoot: string | undefined;
@@ -98,15 +102,77 @@ describe("resolveMainBranch", () => {
     expect(result).toEqual({ branch: "develop", source: "detected" });
   });
 
-  test("両方失敗で source=fallback branch=main", async () => {
-    const result = await resolveMainBranch(testDir, {
-      git: async () => {
+  test("両方失敗なら MainBranchResolutionError を throw する (T253)", async () => {
+    const fn = resolveMainBranch(testDir, {
+      git: async (args) => {
         const e: any = new Error("git not found");
-        e.stderr = "command not found: git";
+        e.stderr =
+          args[1] === "refs/remotes/origin/HEAD"
+            ? "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n"
+            : "fatal: ref HEAD is not a symbolic ref\n";
         throw e;
       },
     });
-    expect(result).toEqual({ branch: "main", source: "fallback" });
+    await expect(fn).rejects.toThrow(MainBranchResolutionError);
+  });
+
+  test("MainBranchResolutionError は stderr を保持する (T253)", async () => {
+    let caught: MainBranchResolutionError | undefined;
+    try {
+      await resolveMainBranch(testDir, {
+        git: async (args) => {
+          const e: any = new Error("boom");
+          e.stderr =
+            args[1] === "refs/remotes/origin/HEAD"
+              ? "origin-stderr-fixture"
+              : "head-stderr-fixture";
+          throw e;
+        },
+      });
+    } catch (e) {
+      caught = e as MainBranchResolutionError;
+    }
+    expect(caught).toBeInstanceOf(MainBranchResolutionError);
+    expect(caught?.originHeadStderr).toContain("origin-stderr-fixture");
+    expect(caught?.headStderr).toContain("head-stderr-fixture");
+  });
+
+  test("origin/HEAD が garbage prefix で次段へ流れ、HEAD も失敗すれば throw (T253)", async () => {
+    const fn = resolveMainBranch(testDir, {
+      git: async (args) => {
+        if (args[1] === "refs/remotes/origin/HEAD") {
+          return "unexpected/prefix/foo\n"; // prefix 不一致で次段へ
+        }
+        const e: any = new Error("boom");
+        e.stderr = "head-failed";
+        throw e;
+      },
+    });
+    await expect(fn).rejects.toThrow(MainBranchResolutionError);
+  });
+
+  test("空 configMainBranch + 両 git 失敗 → throw (T253)", async () => {
+    const fn = resolveMainBranch(testDir, {
+      configMainBranch: "",
+      git: async () => {
+        const e: any = new Error("x");
+        e.stderr = "";
+        throw e;
+      },
+    });
+    await expect(fn).rejects.toThrow(MainBranchResolutionError);
+  });
+
+  test("空白のみ configMainBranch + 両 git 失敗 → throw (T253)", async () => {
+    const fn = resolveMainBranch(testDir, {
+      configMainBranch: "   \n",
+      git: async () => {
+        const e: any = new Error("x");
+        e.stderr = "";
+        throw e;
+      },
+    });
+    await expect(fn).rejects.toThrow(MainBranchResolutionError);
   });
 });
 

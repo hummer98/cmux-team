@@ -441,8 +441,8 @@ Write to {{OUTPUT_FILE}}:
 | `{{OUTPUT_DIR}}` | conductor*, planner | 出力ディレクトリパス（planner は plan.md をここに保存） |
 | `{{TASK_CONTENT}}` | conductor-task, planner, design-reviewer, inspector | タスク定義の内容 |
 | `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
-| `{{BASE_BRANCH}}` | conductor-task | タスクの target ブランチ（未指定時は `config.mainBranch` → 検出値 → `"main"` の順でフォールバック） |
-| `{{MAIN_BRANCH}}` | conductor-role, conductor-task | プロジェクトの主開発ブランチ名（`.team/config.json` の `mainBranch` または `git symbolic-ref refs/remotes/origin/HEAD` で自動検出。T213 で追加） |
+| `{{BASE_BRANCH}}` | conductor-task | タスクの target ブランチ（未指定時は `mainBranch` と同値。T253 により `"main"` リテラルフォールバックは廃止） |
+| `{{MAIN_BRANCH}}` | conductor-role, conductor-task | プロジェクトの主開発ブランチ名（`.team/config.json` の `mainBranch` または `git symbolic-ref refs/remotes/origin/HEAD` で自動検出。T213 で追加。**T253**: `cmdStart` レベルで解決失敗は fail-stop。`generateConductorRolePrompt` / `generateConductorTaskPrompt` は空文字を受け取ったら防御的に throw する） |
 | `{{TOPIC}}` | researcher | リサーチトピック |
 | `{{SUB_QUESTIONS}}` | researcher | サブ質問リスト |
 | `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |
