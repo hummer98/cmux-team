@@ -538,3 +538,81 @@ describe("resetConductor surface 実在確認 (T251)", () => {
     expect(conductor.taskRunId).toBeUndefined();
   });
 });
+
+// --- T260: conductor_broken pid/alive 併記 ---
+describe("T260: conductor_broken ログに pid/alive を併記する", () => {
+  let listSiblingsSpy: ReturnType<typeof spyOn>;
+  let closeSurfaceSpy: ReturnType<typeof spyOn>;
+  let isAliveSpy: ReturnType<typeof spyOn>;
+  let getPaneForSurfaceSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    listSiblingsSpy = spyOn(cmux, "listSiblingSurfaces").mockResolvedValue([]);
+    closeSurfaceSpy = spyOn(cmux, "closeSurface").mockResolvedValue(undefined as any);
+    isAliveSpy = spyOn(cmux, "isAlive");
+    // デフォルトで surface 存在扱い — broken テストは targetStatus 明示なので影響なし
+    getPaneForSurfaceSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:42" as any);
+  });
+
+  afterEach(() => {
+    listSiblingsSpy.mockRestore();
+    closeSurfaceSpy.mockRestore();
+    isAliveSpy.mockRestore();
+    getPaneForSurfaceSpy.mockRestore();
+  });
+
+  test("broken 化時は pid=X alive=<bool> が出力される", async () => {
+    isAliveSpy.mockReturnValue(true);
+    const conductor: ConductorState = {
+      surface: "surface:broken-alive",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "disconnected",
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      pid: 98765,
+    };
+    await resetConductor(conductor, testDir, undefined, {
+      targetStatus: "broken",
+      reason: "disconnect_timeout",
+    });
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(log).toMatch(/conductor_broken C\[broken-alive\] reason=disconnect_timeout pid=98765 alive=true/);
+  });
+
+  test("pid 未定義の broken 化では pid=null alive=unknown を明示出力する", async () => {
+    const conductor: ConductorState = {
+      surface: "surface:broken-no-pid",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "disconnected",
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+    };
+    await resetConductor(conductor, testDir, undefined, {
+      targetStatus: "broken",
+      reason: "disconnect_timeout",
+    });
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(log).toMatch(/conductor_broken C\[broken-no-pid\] reason=disconnect_timeout pid=null alive=unknown/);
+  });
+
+  test("idle reset 経路では pid=/alive= を出さない（negative test）", async () => {
+    isAliveSpy.mockReturnValue(true);
+    const conductor: ConductorState = {
+      surface: "surface:reset-idle-no-pid-log",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      agents: [],
+      status: "disconnected",
+      pid: 11111,
+    };
+    await resetConductor(conductor, testDir, undefined, { targetStatus: "idle" });
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+    expect(resetLine).toBeDefined();
+    expect(resetLine).not.toMatch(/pid=/);
+    expect(resetLine).not.toMatch(/alive=/);
+  });
+});

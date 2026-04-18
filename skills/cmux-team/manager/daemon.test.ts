@@ -3117,6 +3117,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T253: 本番では cmdStart が state.mainBranch を解決済み。launchConductor の fail-stop を回避するため明示セット。
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [{
         taskId: "111", taskRunId: "task-111-1700000000",
@@ -3271,6 +3273,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T253: 本番では cmdStart が state.mainBranch を解決済み。initializeConductorSlots の fail-stop を回避するため明示セット。
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [
         { taskId: "201", taskRunId: "tr-201", worktreePath: testDir, sessionId: "sess-201" },
@@ -3340,6 +3344,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T253: 本番では cmdStart が state.mainBranch を解決済み。launchConductor の fail-stop を回避するため明示セット。
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [{
         taskId: "150", taskRunId: "tr-150",
@@ -3489,3 +3495,260 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
     }
   }, 15000);
 });
+
+describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {
+  test("formatConductorSnapshot は pid/alive/lastHookAt/elapsed/taskRunId を 1 行で出力", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { formatConductorSnapshot } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const conductor: ConductorState = {
+        surface: "surface:700",
+        startedAt: "2026-04-18T09:00:00.000Z",
+        taskRunId: "task-260-1712345678",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "running",
+        pid: 12345,
+      };
+      const out = formatConductorSnapshot(conductor);
+      expect(out).toContain("pid=12345");
+      expect(out).toContain("alive=true");
+      expect(out).toContain("last_hook_at=2026-04-18T09:00:00.000Z");
+      expect(out).toContain("elapsed_since_last_hook=");
+      expect(out).toContain("taskRunId=task-260-1712345678");
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("pid 未定義のとき pid=null alive=unknown を出力", async () => {
+    const { formatConductorSnapshot } = await import("./daemon");
+    const conductor: ConductorState = {
+      surface: "surface:701",
+      startedAt: "2026-04-18T09:00:00.000Z",
+      agents: [],
+      status: "broken",
+    };
+    const out = formatConductorSnapshot(conductor);
+    expect(out).toContain("pid=null");
+    expect(out).toContain("alive=unknown");
+    expect(out).toContain("last_hook_at=-");
+    expect(out).toContain("taskRunId=-");
+  });
+
+  test("SESSION_STARTED で conductor.lastHookAt が更新される", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:710",
+        startedAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "starting",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const ts = "2026-04-18T09:00:30.000Z";
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: conductor.surface,
+        pid: 4242,
+        timestamp: ts,
+      });
+
+      expect(conductor.lastHookAt).toBe(ts);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("__testSpawnPidWatcherTick の dead 経路で conductor_disconnected snapshot が出る", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { __testSpawnPidWatcherTick, createDaemon } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:720",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-pid-dead",
+        taskId: "260",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "running",
+        pid: 88888,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const result = await __testSpawnPidWatcherTick(state, conductor, 88888);
+      expect(result).toBe("dead");
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/conductor_disconnected C\[720\] reason=pid_dead pid=88888 alive=false .*taskRunId=task-260-pid-dead/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("SESSION_ENDED (non-other) で conductor_disconnected snapshot が出る", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:730",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-sess-end",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "running",
+        pid: 55555,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "SESSION_ENDED",
+        surface: conductor.surface,
+        pid: 55555,
+        reason: "manual_quit",
+        timestamp: "2026-04-18T09:01:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/conductor_disconnected C\[730\] reason=session_ended:manual_quit pid=55555 alive=false .*taskRunId=task-260-sess-end/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("broken Conductor への SESSION_STARTED は session_event_ignored_broken と broken_conductor_still_alive を並行出力する", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:750",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-broken-alive",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22222,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: conductor.surface,
+        pid: 22222,
+        source: "new_session",
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/session_event_ignored_broken C\[750\] event=SESSION_STARTED/);
+      expect(log).toMatch(/broken_conductor_still_alive C\[750\] event=SESSION_STARTED pid=22222 alive=true .*taskRunId=task-260-broken-alive/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("broken かつ pid 死亡時は broken_conductor_still_alive を出さない", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:751",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22223,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "SESSION_IDLE",
+        surface: conductor.surface,
+        pid: 22223,
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/session_event_ignored_broken C\[751\] event=SESSION_IDLE/);
+      expect(log).not.toMatch(/broken_conductor_still_alive/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("AGENT_SPAWNED の callerSurface/callerPid は agent_spawned ログに載る", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:760",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+      pid: 33333,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "AGENT_SPAWNED",
+      surface: "surface:761",
+      conductorSurface: conductor.surface,
+      role: "implementer",
+      taskTitle: "demo",
+      timestamp: "2026-04-18T09:05:00.000Z",
+      callerPid: 44444,
+      callerSurface: conductor.surface,
+    });
+
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(log).toMatch(/agent_spawned C\[760\]>A\[761\] role=implementer caller=C\[760\] caller_pid=44444/);
+  });
+
+  test("broken Conductor への AGENT_SPAWNED は broken_conductor_still_alive を出す", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:752",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-agent",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22224,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "AGENT_SPAWNED",
+        surface: "surface:999",
+        conductorSurface: conductor.surface,
+        role: "implementer",
+        taskTitle: "sample",
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/broken_conductor_still_alive C\[752\] event=AGENT_SPAWNED pid=22224 alive=true .*taskRunId=task-260-agent/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+});
+

@@ -2095,6 +2095,10 @@ async function cmdSpawnAgent(): Promise<void> {
     role,
     taskTitle,
     timestamp: new Date().toISOString(),
+    // T260: spawn-agent を実行した主体（通常は Conductor surface / pid）を記録し、
+    //       daemon 側で `caller=...` として agent_spawned ログに載せる。
+    callerPid: process.pid,
+    callerSurface: process.env.CMUX_SURFACE,
   });
 
   // --- 3. Claude Code 起動 ---
@@ -3012,8 +3016,21 @@ async function printSummaries(taskIds: string[]): Promise<void> {
   }
 }
 
-/** assigned タスクのクリーンアップ（sub-agent close, PID kill, worktree/ブランチ削除） */
-async function cleanupAssignedTask(conductor: any): Promise<void> {
+/**
+ * assigned タスクのクリーンアップ（sub-agent close, PID kill, worktree/ブランチ削除）
+ *
+ * T260: 戻り値に「どの手段で停止シグナルを送ったか」を記録し、呼び出し側で
+ *       `abort_signal_sent method=... pid=...` ログを出せるようにする。
+ * - method="sigterm"   : Conductor PID 生存 → SIGTERM を送った
+ * - method="surface_close": PID 不明 or 既に死亡。Agent surface のみ閉じた
+ * - method="none"      : agent も pid も無く、何もシグナルを出していない
+ */
+type CleanupResult = { method: "sigterm" | "surface_close" | "none"; pid?: number };
+
+async function cleanupAssignedTask(conductor: any): Promise<CleanupResult> {
+  let method: CleanupResult["method"] = "none";
+  let pid: number | undefined;
+
   // Sub-agent の surface を閉じる
   if (conductor.agents?.length > 0) {
     for (const agent of conductor.agents) {
@@ -3021,12 +3038,15 @@ async function cleanupAssignedTask(conductor: any): Promise<void> {
         await cmux.closeSurface(agent.surface);
       } catch {}
     }
+    method = "surface_close";
   }
 
   // Conductor の PID を kill
   if (conductor.pid && isProcessAlive(conductor.pid)) {
     try {
       process.kill(conductor.pid, "SIGTERM");
+      method = "sigterm";
+      pid = conductor.pid;
     } catch {}
   }
 
@@ -3055,6 +3075,8 @@ async function cleanupAssignedTask(conductor: any): Promise<void> {
       }
     }
   }
+
+  return { method, pid };
 }
 
 /**
@@ -3155,7 +3177,7 @@ async function cmdAbortTask(): Promise<void> {
     // T241: depends_on 親 abort → ready 子を draft に戻す
     const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
     await saveTaskState(PROJECT_ROOT, taskState);
-    await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+    await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
     for (const childId of revertedChildren) {
       await log(
         "child_reverted_to_draft",
@@ -3175,7 +3197,15 @@ async function cmdAbortTask(): Promise<void> {
   }
 
   // 3〜5. クリーンアップ（sub-agent close, PID kill, worktree 削除）
-  await cleanupAssignedTask(conductor);
+  const cleanup = await cleanupAssignedTask(conductor);
+  // T260: 実際にどの手段で停止シグナルを送ったか記録する。
+  //       method=none はログしない（シグナルを送っていないため）。
+  if (cleanup.method !== "none") {
+    await log(
+      "abort_signal_sent",
+      `task_id=${taskId} surface=${formatSurface(conductor.surface, "C")} reason=abort_task method=${cleanup.method}${cleanup.pid !== undefined ? ` pid=${cleanup.pid}` : ""}`
+    );
+  }
 
   // 6. タスク状態を aborted に変更
   taskState[taskId] = {
@@ -3188,7 +3218,7 @@ async function cmdAbortTask(): Promise<void> {
   const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
   await saveTaskState(PROJECT_ROOT, taskState);
 
-  await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+  await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
   for (const childId of revertedChildren) {
     await log(
       "child_reverted_to_draft",
@@ -3360,6 +3390,9 @@ async function cmdRestartTask(): Promise<void> {
   }
 
   // 3. クリーンアップ（sub-agent close, PID kill, worktree 削除）
+  // T260: cleanupAssignedTask は method/pid を返すが、restart-task 経路では
+  //       ログ文脈が「中断」ではなく「やり直し」なので abort_signal_sent は出さず
+  //       戻り値は捨てる（T260 plan Reviewer rec #3）。
   await cleanupAssignedTask(conductor);
 
   // 4. タスク状態を ready に変更

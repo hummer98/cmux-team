@@ -556,9 +556,11 @@ export async function resetConductor(
     const effectiveTargetStatus: "idle" | "broken" = surfaceMissing
       ? "broken"
       : (opts?.targetStatus ?? "idle");
-    // surface 不在は「なぜ broken になったか」の最も根源的な原因なので
-    // opts.reason (例: disconnect_timeout) より優先する
-    const effectiveReason = surfaceMissing ? "surface_missing" : opts?.reason;
+    // idle→broken 昇格時のみ surface_missing を使用する。
+    // broken を明示した呼び出しは opts.reason をそのまま使う（呼び出し側が原因を把握済みのため）。
+    const effectiveReason = (surfaceMissing && opts?.targetStatus !== "broken")
+      ? "surface_missing"
+      : opts?.reason;
 
     // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
     //    cmux tree 1 回で Conductor の所属 pane と同 pane の全 surface を取得し、
@@ -617,9 +619,15 @@ export async function resetConductor(
     notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
     const reasonSuffix = effectiveReason ? ` reason=${effectiveReason}` : "";
+    // broken 時は「本当に死んでいるか」を snapshot 側と対称に示す（pid/alive を明示）。
+    // idle 経路では pane 生存確認済みで自明なので出さない。
+    const aliveSuffix =
+      targetStatus === "broken"
+        ? ` pid=${conductor.pid ?? "null"} alive=${conductor.pid !== undefined ? String(cmux.isAlive(conductor.pid)) : "unknown"}`
+        : "";
     await log(
       targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
-      `${formatSurface(conductor.surface, "C")}${reasonSuffix}`,
+      `${formatSurface(conductor.surface, "C")}${reasonSuffix}${aliveSuffix}`,
     );
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);
