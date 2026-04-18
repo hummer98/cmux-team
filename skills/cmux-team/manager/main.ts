@@ -37,10 +37,10 @@ import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
-import { launchConductor } from "./conductor";
+import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, type TaskState } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, type TaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
@@ -586,6 +586,47 @@ async function cmdStart(): Promise<void> {
     taskTitle?: string;
   }> = [];
 
+  // --- T254: 起動時 unique 整合性チェック ---
+  //   team.json.conductors × task-state.json の cross-check。
+  //   違反 taskId は ready に戻して journal 付与、違反 surface は後段
+  //   (initializeLayout 後) で resetConductor により broken に倒す。
+  //   整合性チェック自体の失敗は本体起動を止めず error ログのみで続行する
+  //   (A015 の「パラメータ解決失敗は fail-stop」には該当しない — 不変条件の
+  //    二重防御であり、失敗時は防御が効かないだけ)。
+  const violationSurfaces = new Set<string>();
+  try {
+    const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
+    let conductorsFromTeamJson: Array<{ surface: string; taskId?: string }> = [];
+    if (existsSync(teamJsonPath)) {
+      const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
+      conductorsFromTeamJson = (teamJson.conductors ?? []).map((c: any) => ({
+        surface: c.surface,
+        taskId: c.taskId,
+      }));
+    }
+    const violations = detectStartupUniqueViolations(taskState, conductorsFromTeamJson);
+    for (const v of violations) {
+      for (const s of v.surfaces) {
+        violationSurfaces.add(s);
+      }
+      // 違反 taskId を ready に戻し journal 付与
+      const prev = taskState[v.taskId];
+      if (prev) {
+        const journal = prev.journal
+          ? `${prev.journal}; unique_violation: surfaces=[${v.surfaces.join(",")}]`
+          : `unique_violation: surfaces=[${v.surfaces.join(",")}]`;
+        taskState[v.taskId] = { ...prev, status: "ready", journal };
+        taskStateModified = true;
+      }
+      await log(
+        "task_unique_violation_startup",
+        `task_id=${v.taskId} surfaces=[${v.surfaces.join(",")}]`,
+      );
+    }
+  } catch (e: any) {
+    await log("error", `startup unique violation check failed: ${e.message}`);
+  }
+
   for (const [taskId, ts] of Object.entries(taskState)) {
     if (ts.status !== "assigned") continue;
 
@@ -652,6 +693,24 @@ async function cmdStart(): Promise<void> {
   scheduleRefresh();
   const resumeAssignments = await initializeLayout(state, daemonSurface, rawResumePlan);
   scheduleRefresh();
+
+  // --- T254: 起動時 unique violation の後追い broken 化 ---
+  //   applyRestorePlan の `conductor_taskid_reconciled` は taskState が assigned でない
+  //   surface を idle に倒す（saveTaskState は initializeLayout の後なので、
+  //   applyRestorePlan 時点では旧 disk 値を見ている）。
+  //   そのため違反 surface は team.json 由来で running として復元され得る。
+  //   ここで明示的に resetConductor(targetStatus: "broken") で上書きし、
+  //   ユーザーの `cmux-team clear-conductor` による明示的な復帰を待つ。
+  if (violationSurfaces.size > 0) {
+    for (const surface of violationSurfaces) {
+      const c = state.conductors.get(surface);
+      if (!c) continue;  // A経路で除外された / D経路で新規作成されなかった
+      await resetConductor(c, state.projectRoot, state.workspace ?? undefined, {
+        targetStatus: "broken",
+        reason: "unique_violation",
+      });
+    }
+  }
 
   // resume 割当結果を ConductorState に反映（タブ名 + state 詳細）
   for (const r of resumeAssignments) {

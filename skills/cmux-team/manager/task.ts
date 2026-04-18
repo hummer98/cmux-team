@@ -48,6 +48,99 @@ export interface TaskState {
 export type TaskStateMap = Record<string, TaskState>;
 
 /**
+ * T254: 同一 taskId が複数 Conductor に assign されている不変条件違反を表す。
+ * `surfaces` は違反に関与した全 Conductor の surface（例: `["surface:5", "surface:7"]`）。
+ */
+export interface UniqueViolation {
+  taskId: string;
+  surfaces: string[];
+}
+
+/**
+ * T254: runtime 用 unique 検査。
+ * 対象 taskId が既に他 Conductor に assigned でないかを判定する。
+ *
+ * - `taskState[taskId]?.status === "assigned"` かつ `conductorSlot` が
+ *   `conductorSurface` と異なる場合のみ `{ conflict: true, existingSurface }` を返す。
+ * - `conductorSlot` が未設定（legacy データ・初期状態）は conflict=false を返す。
+ *   false positive を避けるため。
+ */
+export function findAssignmentConflict(
+  taskState: TaskStateMap,
+  taskId: string,
+  conductorSurface: string,
+): { conflict: boolean; existingSurface?: string } {
+  const entry = taskState[taskId];
+  if (!entry) return { conflict: false };
+  if (entry.status !== "assigned") return { conflict: false };
+  const existing = entry.conductorSlot;
+  if (!existing) return { conflict: false };
+  if (existing === conductorSurface) return { conflict: false };
+  return { conflict: true, existingSurface: existing };
+}
+
+/**
+ * T254: 起動時の unique 整合性チェック。
+ * team.json.conductors × task-state.json の cross-check で、
+ * 同一 taskId を複数 surface が主張する状況を検出する。
+ *
+ * 検査ロジック:
+ * 1. team.json.conductors を走査して同一 taskId を持つ surface をグルーピング。
+ *    グループサイズ >= 2 は violation。
+ * 2. task-state.json の assigned エントリで `conductorSlot=S_A` が設定されており、
+ *    かつ team.json.conductors に `{surface: S_B, taskId: X}` (S_A !== S_B) が存在する場合、
+ *    同一 taskId に対して異なる surface を主張する cross-source 不一致 → violation。
+ *    (R3: conductorSlot が team.json に一切現れない「stale slot」は既存の
+ *    resume_fallback_to_ready / conductor_taskid_reconciled 経路に委ねるため検出しない)
+ */
+export function detectStartupUniqueViolations(
+  taskState: TaskStateMap,
+  conductorsFromTeamJson: Array<{ surface: string; taskId?: string }>,
+): UniqueViolation[] {
+  const violationMap = new Map<string, Set<string>>();
+
+  // 1. team.json.conductors で同一 taskId をグルーピング
+  const taskToSurfaces = new Map<string, string[]>();
+  for (const c of conductorsFromTeamJson) {
+    if (!c.taskId) continue;
+    const arr = taskToSurfaces.get(c.taskId) ?? [];
+    arr.push(c.surface);
+    taskToSurfaces.set(c.taskId, arr);
+  }
+  for (const [taskId, surfaces] of taskToSurfaces.entries()) {
+    if (surfaces.length >= 2) {
+      const set = violationMap.get(taskId) ?? new Set<string>();
+      for (const s of surfaces) set.add(s);
+      violationMap.set(taskId, set);
+    }
+  }
+
+  // 2. task-state.json × team.json cross-check
+  //    conductorSlot=S_A が設定されており、team.json.conductors に
+  //    {surface: S_B, taskId: X} が存在し S_A !== S_B なら violation
+  for (const [taskId, entry] of Object.entries(taskState)) {
+    if (entry.status !== "assigned") continue;
+    const slot = entry.conductorSlot;
+    if (!slot) continue;
+    const surfacesInTeam = taskToSurfaces.get(taskId) ?? [];
+    for (const s of surfacesInTeam) {
+      if (s !== slot) {
+        const set = violationMap.get(taskId) ?? new Set<string>();
+        set.add(slot);
+        set.add(s);
+        violationMap.set(taskId, set);
+      }
+    }
+  }
+
+  const result: UniqueViolation[] = [];
+  for (const [taskId, surfaces] of violationMap.entries()) {
+    result.push({ taskId, surfaces: [...surfaces].sort() });
+  }
+  return result;
+}
+
+/**
  * YAML frontmatter からメタデータを抽出
  */
 export function parseTaskMeta(content: string, fileName: string, filePath: string): TaskMeta | null {
