@@ -43,6 +43,7 @@ import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHook
 import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, type TaskState } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
+import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
@@ -266,6 +267,14 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
+  // --- T259: pidfile による多重起動防止 ---
+  // preflight 成功後・副作用発生前（direnv / resolveMainBranch / createDaemon）に排他を取る。
+  // 既に生きている cmux-team daemon があれば console.error + exit(1) する。
+  // stale pidfile（死亡プロセス or PID 再利用）は自動的に上書きされる。
+  const pidFilePath = join(PROJECT_ROOT, ".team/daemon.pid");
+  await acquireOrExit(pidFilePath, PROJECT_ROOT);
+  await log("pidfile_acquired", `path=${pidFilePath} pid=${process.pid}`);
+
   // --- direnv allow fail-fast チェック ---
   // .envrc が未 allow のまま daemon を起動すると CLAUDE_CODE_OAUTH_TOKEN 等が
   // ロードされず Conductor / Agent が意図しない認証経路で立ち上がるため、
@@ -451,6 +460,8 @@ async function cmdStart(): Promise<void> {
     }
     await log("daemon_stopped");
     await updateTeamJson(state);
+    // T259: pidfile を最後に release（team.json 更新後、process.exit の直前）
+    await releasePidFile(pidFilePath);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
@@ -468,6 +479,10 @@ async function cmdStart(): Promise<void> {
       stopDaemon(state);
       state.fileWatcherAbort?.abort();
       state.fileWatcherAbort = null;
+      // T259: 子 daemon が acquire できるよう親は execFileSync より前に pidfile を release する。
+      // 親自身は execFileSync でブロッキングするためシグナルを受け取れず、pidfile を握り
+      // 続けると子が自分自身を "alive cmux-team" と誤検知して fail-stop する。
+      await releasePidFile(pidFilePath);
       const { execFileSync } = require("child_process");
       // exit 42（auto_restart）が来た場合も再起動ループを継続する（cmux-team.js と同じ挙動）
       // これがないと proxy_reused した子 daemon が auto_restart で終了した瞬間に
@@ -532,6 +547,8 @@ async function cmdStart(): Promise<void> {
       state.fileWatcherAbort?.abort();
       state.fileWatcherAbort = null;
       await updateTeamJson(state);
+      // T259: pidfile を release（onFullQuit は shutdown() を通らない経路）
+      await releasePidFile(pidFilePath);
       process.exit(0);
     },
   });
@@ -733,6 +750,10 @@ async function cmdStart(): Promise<void> {
     unmountDashboard();
     await log("daemon_auto_restart");
     await updateTeamJson(state);
+    // T259: state 永続化の後・process.exit(42) の直前に release（順序厳守）。
+    // 親が execFileSync でブロックする onReload 経路でも、restart 直前に所有権を
+    // 手放すことで子が新 PID で acquire できるようにする。
+    await releasePidFile(pidFilePath);
     process.exit(42);
   }
 
@@ -1850,6 +1871,21 @@ async function cmdStop(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
   console.log("SHUTDOWN sent");
+
+  // T259: 正規経路では daemon 側の shutdown が pidfile を release する。
+  // ここはあくまで保険 — pidfile が残っていて、かつ記録 PID が dead なら即削除する。
+  // sleep ループはしない（cmdStop の体感レスポンスを遅らせないため）。
+  const pidFilePath = join(PROJECT_ROOT, ".team/daemon.pid");
+  if (existsSync(pidFilePath)) {
+    try {
+      const content = (await readFile(pidFilePath, "utf-8")).trim();
+      const pid = parseInt(content, 10);
+      if (!isNaN(pid) && !cmux.isAlive(pid)) {
+        await releasePidFile(pidFilePath);
+        await log("pidfile_cleanup_after_stop", `stale_pid=${pid}`);
+      }
+    } catch { /* 読み取り失敗は無視 */ }
+  }
 }
 
 async function cmdSpawnConductor(): Promise<void> {

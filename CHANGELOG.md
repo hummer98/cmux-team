@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **daemon 多重起動を pidfile ロックで防止（T259）**。`cmdStart` 冒頭（preflight 成功後・direnv / resolveMainBranch / `createDaemon` の前）で `.team/daemon.pid` を `writeFile(..., { flag: "wx" })` により atomic に取得する。既に生きている cmux-team daemon があれば `PidFileLockedError` → `console.error` + exit 1。stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に `main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗時は保守的に locked 扱い。pidfile は shutdown / onFullQuit / restartRequested / onReload(execFileSync 直前) / cmdStop(保険) の全経路で release され、正常系では必ず削除される。auto-restart ループ（exit 42）では親が release → 子が acquire の順で所有権が移り、親が execFileSync でブロックしていても子が "alive cmux-team" を誤検知せず連続再起動できる。pidfile は daemon main.ts プロセスのみを指し proxy は別ライフサイクル
+
 ## [3.54.1] - 2026-04-18
 
 ### Added
