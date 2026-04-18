@@ -147,6 +147,25 @@ export async function tree(workspace?: string, opts?: TreeOpts): Promise<string>
   return stdout;
 }
 
+/**
+ * 指定 workspace の生存 surface 集合を返す（T255）。
+ *
+ * - workspace 未指定 → null（initializeLayout の degrade パスに乗せるため fail-fast）
+ * - tree 失敗 → null + tree_fetch_failed ログ。呼び出し元は pid_only モードに degrade
+ * - 成功 → tree 出力から `surface:N` を集合化して返す
+ */
+export async function fetchLiveSurfaces(workspace?: string): Promise<Set<string> | null> {
+  if (!workspace) return null;
+  try {
+    const output = await tree(workspace);
+    const matches = output.match(/surface:\d+/g) ?? [];
+    return new Set(matches);
+  } catch (e: any) {
+    await log("tree_fetch_failed", `workspace=${workspace} ${formatExecError(e)} degrade=pid_only`);
+    return null;
+  }
+}
+
 export async function getPaneForSurface(surface: string, workspace?: string): Promise<string | undefined> {
   try {
     const output = await tree(workspace);

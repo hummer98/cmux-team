@@ -7,12 +7,14 @@ import { join, dirname } from "path";
 import {
   collectResults,
   initializeConductorSlots,
+  launchConductor,
   assignTask,
   resetConductor,
   AssignTaskError,
   type ResumePlanItem,
   type ResumeAssignment,
 } from "./conductor";
+import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./layout-restore";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren } from "./task";
@@ -779,18 +781,234 @@ export async function removeMaster(
   notifyStateChanged(`daemon.ts:removeMaster:${reason}`);
 }
 
+/**
+ * team.json の conductor 生データから ConductorState を構築する（A 経路の復元用）。
+ * agents の PID alive 判定もここで行う。
+ */
+function restoreConductorState(c: any): ConductorState {
+  const restoredAgents: AgentState[] = (c.agents ?? []).map((a: any) => ({
+    surface: a.surface,
+    role: a.role,
+    sessionId: a.sessionId,
+    spawnedAt: a.spawnedAt ?? new Date().toISOString(),
+    pid: (typeof a.pid === "number" && cmux.isAlive(a.pid)) ? a.pid : undefined,
+    // T236: 旧 team.json に status が無ければ "idle" にフォールバック。
+    status: (a.status as AgentState["status"]) ?? "idle",
+  }));
+  return {
+    surface: c.surface,
+    taskRunId: c.taskRunId,
+    taskId: c.taskId,
+    taskTitle: c.taskTitle,
+    worktreePath: c.worktreePath,
+    outputDir: c.outputDir,
+    startedAt: c.startedAt ?? new Date().toISOString(),
+    disconnectedAt: c.disconnectedAt,
+    sessionId: c.sessionId,
+    pid: c.pid,
+    agents: restoredAgents,
+    // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
+    status:
+      c.status === "running" ? "running"
+      : c.status === "disconnected" ? "disconnected"
+      : c.status === "broken" ? "broken"
+      : "idle",
+  };
+}
+
+/**
+ * 単一タスクの task-state を ready に戻す（unmatched / launch 失敗 / worktree 消失の救済）。
+ * 失敗時は error ログのみで握りつぶす（呼び出し側のフローを止めない）。
+ */
+async function revertTaskToReady(
+  projectRoot: string,
+  taskId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    const ts = await loadTaskState(projectRoot);
+    if (ts[taskId]) {
+      ts[taskId] = { ...ts[taskId], status: "ready" };
+      await saveTaskState(projectRoot, ts);
+    }
+  } catch (e: any) {
+    await log("error", `revertTaskToReady failed: task_id=${taskId} reason=${reason} ${e.message}`);
+  }
+}
+
+/**
+ * planLayoutRestore で組み立てた復帰計画を実際に適用する（T255 §4）。
+ *
+ * 副作用:
+ *   - state.conductors を一括置換（A 経路 + B 経路の pre-set）
+ *   - PID watcher を再起動（A 経路）
+ *   - C 経路の残骸 surface を close
+ *   - B 経路は launchConductor で resume 起動。失敗時は state rollback + task-state を ready に戻す
+ *   - taskId 整合性リコンサイル（A 経路で taskState が assigned でなければ taskId クリア）
+ *   - unmatched + D 経路を task-state ready 戻しに合流（pane 新規分割しない方針 R7）
+ *
+ * @returns A/B 経路で確定した resume assignments（呼び出し元で main.ts の状態反映ループに渡す）
+ */
+async function applyRestorePlan(
+  state: DaemonState,
+  plan: LayoutRestorePlan,
+): Promise<ResumeAssignment[]> {
+  state.conductors.clear();
+
+  // A: keep-alive
+  //    state 登録 + PID watcher 再起動 + taskId 整合性リコンサイル
+  const taskState = await loadTaskState(state.projectRoot);
+  let taskStateModified = false;
+  for (const entry of plan.alive) {
+    const c = restoreConductorState(entry.raw);
+
+    // taskId 整合性リコンサイル: taskState が assigned でなければ task 紐付けをクリア
+    if (c.taskId) {
+      const ts = taskState[c.taskId];
+      if (!ts || ts.status !== "assigned") {
+        await log(
+          "conductor_taskid_reconciled",
+          `${formatSurface(c.surface, "C")} task_id=${c.taskId} task_status=${ts?.status ?? "missing"} cleared=true`,
+        );
+        c.taskId = undefined;
+        c.taskRunId = undefined;
+        c.worktreePath = undefined;
+        c.taskTitle = undefined;
+        c.status = "idle";
+      }
+    }
+
+    state.conductors.set(c.surface, c);
+    if (typeof c.pid === "number") {
+      spawnPidWatcher(state, c, c.pid);
+    }
+    for (const a of c.agents) {
+      if (typeof a.pid === "number") {
+        spawnAgentPidWatcher(state, c, a, a.pid);
+      }
+    }
+  }
+
+  // C: cleanup-stale — pid_dead + idle の残骸 pane を close
+  for (const surface of plan.cleanup) {
+    await cmux.closeSurface(surface);
+    await log(
+      "conductor_stale_surface_closed",
+      `${formatSurface(surface, "C")} reason=pid_dead_idle`,
+    );
+  }
+
+  // E: discarded — log のみ（plan.cleanup に含まれない surface_missing_no_task ぶん）
+  for (const d of plan.discarded) {
+    if (d.reason === "surface_missing_no_task") {
+      await log(
+        "conductor_discarded",
+        `${formatSurface(d.surface, "C")} reason=${d.reason}`,
+      );
+    }
+  }
+
+  // B: resume-existing — sequential に launchConductor (resumeTaskId) を発火
+  //    Promise.all で並列化しないこと（Claude Max レート制限回避）
+  const assignments: ResumeAssignment[] = [];
+  for (const entry of plan.resumeExisting) {
+    const surface: string = entry.raw.surface;
+    const item = entry.resume!;
+
+    // worktree 消失の late check（main.ts の事前チェック後に削除されるレース対策）
+    if (!existsSync(item.worktreePath)) {
+      await log(
+        "resume_worktree_missing_late",
+        `task_id=${item.taskId} ${formatSurface(surface, "C")} worktree=${item.worktreePath}`,
+      );
+      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
+      taskStateModified = true;
+      continue;
+    }
+
+    // pre-set: CONDUCTOR_REGISTERED ハンドラが既存エントリを skip するため、
+    //   ここで task 紐付け済み state を立てておけば後続の self-register が
+    //   破壊的に上書きしない（T228 idempotent merge）。
+    state.conductors.set(surface, {
+      surface,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      taskId: item.taskId,
+      taskRunId: item.taskRunId,
+      worktreePath: item.worktreePath,
+      taskTitle: item.taskTitle,
+    });
+
+    try {
+      await launchConductor(state.projectRoot, surface, {
+        resumeTaskId: item.taskId,
+        mainBranch: state.mainBranch,
+      });
+      assignments.push({
+        surface,
+        taskId: item.taskId,
+        taskRunId: item.taskRunId,
+        worktreePath: item.worktreePath,
+        sessionId: item.sessionId,
+        taskTitle: item.taskTitle,
+      });
+    } catch (e: any) {
+      // rollback: pre-set state を消し、task-state を ready に戻す
+      state.conductors.delete(surface);
+      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
+      taskStateModified = true;
+      await log(
+        "conductor_resume_launch_failed",
+        `task_id=${item.taskId} ${formatSurface(surface, "C")} ${e?.message ?? e}`,
+      );
+    }
+  }
+
+  // D: resume-new-surface + 未マッチ resume → task-state を ready に戻す
+  //    R7: 復帰時は pane 新規作成しない方針のため、合流先がないので両方とも ready 戻し
+  const allUnmatched: ResumePlanItem[] = [
+    ...plan.unmatchedResumes,
+    ...plan.resumeNewSurface
+      .map(e => e.resume)
+      .filter((r): r is ResumePlanItem => !!r),
+  ];
+  for (const item of allUnmatched) {
+    if (taskState[item.taskId]) {
+      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
+      taskStateModified = true;
+    }
+    await log(
+      "resume_unmatched_to_ready",
+      `task_id=${item.taskId} session_id=${item.sessionId}`,
+    );
+  }
+
+  if (taskStateModified) {
+    try {
+      await saveTaskState(state.projectRoot, taskState);
+    } catch (e: any) {
+      await log("error", `applyRestorePlan saveTaskState failed: ${e.message}`);
+    }
+  }
+
+  notifyStateChanged("daemon.ts:applyRestorePlan:restore-applied");
+  return assignments;
+}
+
 export async function initializeLayout(
   state: DaemonState,
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
 ): Promise<ResumeAssignment[]> {
-  // team.json から既存 Conductor を復元
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
+  let conductorsFromJson: any[] = [];
+
+  // team.json 読み込み + layout mismatch 早期通知（plan §3.2 step 1）
   try {
     if (existsSync(teamJsonPath)) {
       const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
-      const conductors: any[] = teamJson.conductors ?? [];
-      // 旧 team.json（layout フィールド無し）は "wide" として扱う
+      conductorsFromJson = teamJson.conductors ?? [];
       const restoredLayout: LayoutMode =
         teamJson.layout === "16x9" ? "16x9" : "wide";
       if (restoredLayout !== state.layout) {
@@ -799,108 +1017,60 @@ export async function initializeLayout(
           `restored=${restoredLayout} current=${state.layout} — existing panes will be kept; run 'cmux-team stop' then 'start --layout=${state.layout}' to rebuild`,
         );
       }
-
-      if (conductors.length > 0) {
-        const restored: ConductorState[] = [];
-        for (const c of conductors) {
-          if (!c.surface) continue;
-          // T195: PID alive check で復元判定する。
-          // PID が死んでいるものは restored に含めない — 新規作成パスへフォールバックさせる。
-          // （full-quit 後の再起動で古い surface を死んだまま復元していたバグへの対策）
-          const conductorAlive = typeof c.pid === "number" && cmux.isAlive(c.pid);
-          if (!conductorAlive) {
-            await log(
-              "conductor_restore_skipped",
-              `${formatSurface(c.surface, "C")} reason=pid_dead pid=${typeof c.pid === "number" ? c.pid : "null"}`
-            );
-            continue;
-          }
-          const restoredAgents: AgentState[] = (c.agents ?? []).map((a: any) => ({
-            surface: a.surface,
-            role: a.role,
-            sessionId: a.sessionId,
-            spawnedAt: a.spawnedAt ?? new Date().toISOString(),
-            pid: (typeof a.pid === "number" && cmux.isAlive(a.pid)) ? a.pid : undefined,
-            // T236: 旧 team.json に status が無ければ "idle" にフォールバック。
-            //       PID 生存だけでは running/idle を判別できず、次の SESSION_STARTED/IDLE
-            //       到達までは false-running spinner を避けるため idle 側に倒す。
-            status: (a.status as AgentState["status"]) ?? "idle",
-          }));
-          const restoredConductor: ConductorState = {
-            surface: c.surface,
-            taskRunId: c.taskRunId,
-            taskId: c.taskId,
-            taskTitle: c.taskTitle,
-            worktreePath: c.worktreePath,
-            outputDir: c.outputDir,
-            startedAt: c.startedAt ?? new Date().toISOString(),
-            // T250: broken / disconnected の経過時間表示用に disconnectedAt を復元する。
-            disconnectedAt: c.disconnectedAt,
-            sessionId: c.sessionId,
-            pid: c.pid,
-            agents: restoredAgents,
-            // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
-            status:
-              c.status === "running" ? "running"
-              : c.status === "disconnected" ? "disconnected"
-              : c.status === "broken" ? "broken"
-              : "idle",
-          };
-          restored.push(restoredConductor);
-        }
-
-        if (restored.length > 0) {
-          state.conductors.clear();
-          for (const c of restored) {
-            state.conductors.set(c.surface, c);
-            // PID watcher を再起動
-            if (typeof c.pid === "number") {
-              spawnPidWatcher(state, c, c.pid);
-            }
-            for (const a of c.agents) {
-              if (typeof a.pid === "number") {
-                spawnAgentPidWatcher(state, c, a, a.pid);
-              }
-            }
-          }
-          await log(
-            "conductors_restored",
-            `count=${restored.length} surfaces=${restored.map(c => formatSurface(c.surface, "C")).join(",")}`
-          );
-          // team.json 復元パスでは Claude が既に稼働中の前提。
-          // resumePlan で与えられた assigned タスクには何もしない（resume 命令は送らない）。
-          // 旧コードでは resume_skipped が出ていたため、観測性確保のため noop ログを残す。
-          if (resumePlan && resumePlan.length > 0) {
-            for (const item of resumePlan) {
-              await log(
-                "conductor_resume_noop",
-                `task_id=${item.taskId} reason=team_json_restored session_id=${item.sessionId}`
-              );
-            }
-          }
-          return [];
-        }
-      }
     }
   } catch (e: any) {
-    await log("error", `initializeLayout team.json restore failed: ${e.message}`);
+    await log("error", `initializeLayout team.json read failed: ${e.message}`);
+    conductorsFromJson = [];
   }
 
-  // 既存なし → 新規作成
-  await log(
-    "layout_creating_new_slots",
-    `count=${state.maxConductors} layout=${state.layout}`,
+  // team.json が空 (or 読めない) → 新規スロット作成パス
+  if (conductorsFromJson.length === 0) {
+    await log(
+      "layout_creating_new_slots",
+      `count=${state.maxConductors} layout=${state.layout}`,
+    );
+    const assignments = await initializeConductorSlots(
+      state.projectRoot,
+      state.conductors,
+      state.maxConductors,
+      daemonSurface,
+      resumePlan,
+      state.layout,
+      state.mainBranch,
+    );
+    return assignments;
+  }
+
+  // 既存 conductor あり → planLayoutRestore でマトリクス分類 → applyRestorePlan で副作用適用
+  const liveSurfaces = await cmux.fetchLiveSurfaces(state.workspace ?? undefined);
+  const plan = planLayoutRestore(
+    conductorsFromJson,
+    liveSurfaces,
+    cmux.isAlive,
+    resumePlan ?? [],
   );
-  const assignments = await initializeConductorSlots(
-    state.projectRoot,
-    state.conductors,
-    state.maxConductors,
-    daemonSurface,
-    resumePlan,
-    state.layout,
-    state.mainBranch,
-  );
-  // 状態登録は CONDUCTOR_REGISTERED メッセージハンドラ（+ フォールバック）で完了済み
+
+  const assignments = await applyRestorePlan(state, plan);
+
+  // 観測性: 復元結果のサマリーログ
+  const keptSurfaces = [
+    ...plan.alive.map(e => e.raw.surface as string),
+    ...plan.resumeExisting.map(e => e.raw.surface as string),
+  ];
+  if (keptSurfaces.length > 0) {
+    await log(
+      "conductors_restored",
+      `count=${keptSurfaces.length} surfaces=${keptSurfaces.map(s => formatSurface(s, "C")).join(",")}`,
+    );
+  }
+  // partial restore: 復元 pane 数が maxConductors 未満（R7 の可観測化）
+  if (keptSurfaces.length > 0 && keptSurfaces.length < state.maxConductors) {
+    await log(
+      "layout_kept_partial",
+      `kept=${keptSurfaces.length} max=${state.maxConductors} — pane 補充は行わない（次起動で再構成可能）`,
+    );
+  }
+
   return assignments;
 }
 

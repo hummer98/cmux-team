@@ -3044,8 +3044,8 @@ describe("T250 broken status", () => {
     expect(persisted.disconnectedAt).toBe(brokenDisconnectedAt);
     expect(persisted.sessionId).toBe("uuid-broken-rt");
 
-    // restoreConductors 相当: initializeLayout (daemon.ts:840-845) の switch と同じロジックで
-    // 復元時も broken を保持することを確認する
+    // restoreConductors 相当: initializeLayout (daemon.ts:restoreConductorState 内 status switch) と
+    // 同じロジックで復元時も broken を保持することを確認する（T255 で関数抽出済み）
     const restoredStatus =
       persisted.status === "running" ? "running"
       : persisted.status === "disconnected" ? "disconnected"
@@ -3055,3 +3055,428 @@ describe("T250 broken status", () => {
   });
 });
 
+// --- T255: initializeLayout マトリクス復帰 統合テスト (M6〜M16) ---
+//
+// pure 関数 (planLayoutRestore) のマトリクス分類は layout-restore.test.ts で検証済み。
+// ここでは initializeLayout 全体の副作用 (state mutation / cleanup / resume 起動 / task-state 更新) を確認する。
+describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => {
+  /**
+   * team.json を書き出すヘルパー（initializeLayout が読み込む）。
+   * conductors 配列と layout のみ指定可能。
+   */
+  async function writeTeamJson(
+    conductors: any[],
+    layout: "wide" | "16x9" = "wide",
+  ): Promise<void> {
+    await writeFile(
+      join(testDir, ".team/team.json"),
+      JSON.stringify({ phase: "ready", masters: [], manager: {}, conductors, layout }),
+    );
+  }
+
+  /**
+   * launchConductor の cmux 副作用を全 stub する（M6/M16 等で使う）。
+   * 実 cmux は呼べないので send / sendKey / closeSurface / renameTab を no-op に置き換える。
+   */
+  async function stubCmuxIO() {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    return {
+      send: spyOn(cmux, "send").mockImplementation(async () => {}),
+      sendKey: spyOn(cmux, "sendKey").mockImplementation(async () => {}),
+      closeSurface: spyOn(cmux, "closeSurface").mockImplementation(async () => {}),
+      renameTab: spyOn(cmux, "renameTab").mockImplementation(async () => {}),
+    };
+  }
+
+  test("M6: pid_dead 2 + alive 1 + running task 1 → A 1 件 + B 1 件 + C 1 件 (部分復元バグ再現)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 6001);
+    __setTreeImpl(async () => "surface:600\nsurface:601\nsurface:602\n");
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([
+        { surface: "surface:600", pid: 6001 },
+        { surface: "surface:601", pid: 6002, taskId: "111", taskRunId: "task-111-1700000000", worktreePath: testDir },
+        { surface: "surface:602", pid: 6003 },
+      ]);
+      // task-state に taskId=111 を assigned で登録
+      const { saveTaskState } = await import("./task");
+      await saveTaskState(testDir, {
+        "111": { status: "assigned", assignedAt: new Date().toISOString(), sessionId: "sess-111", worktreePath: testDir, taskRunId: "task-111-1700000000" },
+      });
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [{
+        taskId: "111", taskRunId: "task-111-1700000000",
+        worktreePath: testDir, sessionId: "sess-111",
+      }];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      // A 経路: surface:600 が keep-alive で state に残る
+      expect(state.conductors.has("surface:600")).toBe(true);
+      // B 経路: surface:601 が state に残り、taskId 紐付け維持 + assignment 1 件
+      expect(state.conductors.has("surface:601")).toBe(true);
+      expect(state.conductors.get("surface:601")?.taskId).toBe("111");
+      expect(assignments).toHaveLength(1);
+      expect(assignments[0]?.taskId).toBe("111");
+      // C 経路: surface:602 は close 呼ばれて state には残らない
+      expect(state.conductors.has("surface:602")).toBe(false);
+      expect(stubs.closeSurface).toHaveBeenCalled();
+      const closeCalls = stubs.closeSurface.mock.calls.map((c: any[]) => c[0]);
+      expect(closeCalls).toContain("surface:602");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M7: tree() 失敗時は pid_only に degrade — pid dead でも cleanup/B/D に倒さない", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 7001);
+    __setTreeImpl(async () => { throw new Error("tree timeout"); });
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([
+        { surface: "surface:700", pid: 7001 },
+        { surface: "surface:701", pid: 7002, taskId: "077", taskRunId: "tr-077", worktreePath: testDir },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [{
+        taskId: "077", taskRunId: "tr-077",
+        worktreePath: testDir, sessionId: "sess-077",
+      }];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      // 全 entry が A 相当に倒れて state に残る
+      expect(state.conductors.has("surface:700")).toBe(true);
+      expect(state.conductors.has("surface:701")).toBe(true);
+      // B/D 経路に入らないので resume assignment は 0 件
+      expect(assignments).toHaveLength(0);
+      // cleanup が呼ばれていないこと（C 経路に入らない）
+      expect(stubs.closeSurface).not.toHaveBeenCalled();
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M10: A 復元時に task-state が assigned でなければ taskId を reconcile (クリア)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 1001);
+    __setTreeImpl(async () => "surface:100\n");
+    const stubs = await stubCmuxIO();
+    try {
+      // surface:100 alive + taskId=999 を持つが task-state では closed
+      await writeTeamJson([
+        { surface: "surface:100", pid: 1001, taskId: "999", taskRunId: "tr-999", worktreePath: "/tmp/wt" },
+      ]);
+      const { saveTaskState } = await import("./task");
+      await saveTaskState(testDir, {
+        "999": { status: "closed", closedAt: new Date().toISOString() },
+      });
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      // taskId 紐付けがクリアされて idle 状態に reset されている
+      const c = state.conductors.get("surface:100");
+      expect(c).toBeDefined();
+      expect(c?.taskId).toBeUndefined();
+      expect(c?.taskRunId).toBeUndefined();
+      expect(c?.worktreePath).toBeUndefined();
+      expect(c?.status).toBe("idle");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M11: workspace 不明 (state.workspace=null) 時は fetchLiveSurfaces=null → pid_only degrade", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 8001);
+    let treeCalled = false;
+    __setTreeImpl(async () => { treeCalled = true; return ""; });
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([
+        { surface: "surface:800", pid: 8001 },
+        { surface: "surface:801", pid: 8002 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = null; // workspace 不明
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      // tree は呼ばれない (fetchLiveSurfaces で early return)
+      expect(treeCalled).toBe(false);
+      // pid alive のみ keep、pid dead も degrade で keep
+      expect(state.conductors.has("surface:800")).toBe(true);
+      expect(state.conductors.has("surface:801")).toBe(true);
+      expect(stubs.closeSurface).not.toHaveBeenCalled();
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M12: team.json 空 + resumePlan 非空 → initializeConductorSlots に resumePlan が透過される", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    // newSplit を stub — Conductor 用 pane を順に "surface:c1" / "surface:c2" / "surface:c3" として返す
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:c${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      // team.json が空
+      await writeTeamJson([]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [
+        { taskId: "201", taskRunId: "tr-201", worktreePath: testDir, sessionId: "sess-201" },
+        { taskId: "202", taskRunId: "tr-202", worktreePath: testDir, sessionId: "sess-202" },
+      ];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      // resumePlan の 2 件が assignment として返る (initializeConductorSlots 経路)
+      expect(assignments).toHaveLength(2);
+      expect(assignments.map(a => a.taskId).sort()).toEqual(["201", "202"]);
+      // pre-set state.conductors に 2 件登録されている
+      expect(state.conductors.size).toBe(2);
+    } finally {
+      __setIsAliveImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M14: layout_mismatch_on_resume が team.json 読み込み直後に出力される", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    __setTreeImpl(async () => "surface:140\n");
+    const stubs = await stubCmuxIO();
+    try {
+      // team.json は 16x9 で書き出すが、daemon の layout は wide
+      await writeTeamJson([{ surface: "surface:140", pid: 14001 }], "16x9");
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.layout = "wide";
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(logContent).toContain("layout_mismatch_on_resume");
+      expect(logContent).toContain("restored=16x9");
+      expect(logContent).toContain("current=wide");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M15: B 経路の pre-set state は CONDUCTOR_REGISTERED ハンドラで上書きされない (T228 idempotent)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 1500); // surface:150 のみ alive
+    __setTreeImpl(async () => "surface:150\nsurface:151\n");
+    const stubs = await stubCmuxIO();
+    try {
+      // surface:151 は pid_dead + running task → B 経路
+      await writeTeamJson([
+        { surface: "surface:150", pid: 1500 },
+        { surface: "surface:151", pid: 1501, taskId: "150", taskRunId: "tr-150", worktreePath: testDir, taskTitle: "preserved-title" },
+      ]);
+      const { saveTaskState } = await import("./task");
+      await saveTaskState(testDir, {
+        "150": { status: "assigned", assignedAt: new Date().toISOString(), sessionId: "sess-150", worktreePath: testDir, taskRunId: "tr-150" },
+      });
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [{
+        taskId: "150", taskRunId: "tr-150",
+        worktreePath: testDir, sessionId: "sess-150", taskTitle: "preserved-title",
+      }];
+      await initializeLayout(state, undefined, resumePlan);
+
+      // pre-set state を確認
+      const preSet = state.conductors.get("surface:151");
+      expect(preSet?.taskId).toBe("150");
+      expect(preSet?.taskRunId).toBe("tr-150");
+      expect(preSet?.worktreePath).toBe(testDir);
+      expect(preSet?.taskTitle).toBe("preserved-title");
+
+      // CONDUCTOR_REGISTERED が late に来ても skip 経路に入る (既存 entry は touch しない)
+      await handleMessage(state, {
+        type: "CONDUCTOR_REGISTERED",
+        surface: "surface:151",
+        timestamp: new Date().toISOString(),
+      });
+
+      // pre-set した値が破壊されていない
+      const after = state.conductors.get("surface:151");
+      expect(after?.taskId).toBe("150");
+      expect(after?.taskRunId).toBe("tr-150");
+      expect(after?.worktreePath).toBe(testDir);
+      expect(after?.taskTitle).toBe("preserved-title");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M16: B 経路の launchConductor 失敗 → state rollback + task-state ready 戻し", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => false);
+    __setTreeImpl(async () => "surface:160\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    // cmux.send が throw する → launchConductor 失敗
+    const sendSpy = spyOn(cmux, "send").mockImplementation(async () => {
+      throw new Error("injected launch failure");
+    });
+    const sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+    const closeSurfaceSpy = spyOn(cmux, "closeSurface").mockImplementation(async () => {});
+    const renameTabSpy = spyOn(cmux, "renameTab").mockImplementation(async () => {});
+    try {
+      await writeTeamJson([
+        { surface: "surface:160", pid: 1601, taskId: "160", taskRunId: "tr-160", worktreePath: testDir },
+      ]);
+      const { saveTaskState, loadTaskState } = await import("./task");
+      await saveTaskState(testDir, {
+        "160": { status: "assigned", assignedAt: new Date().toISOString(), sessionId: "sess-160", worktreePath: testDir, taskRunId: "tr-160" },
+      });
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [{
+        taskId: "160", taskRunId: "tr-160",
+        worktreePath: testDir, sessionId: "sess-160",
+      }];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      // assignment は 0 件 (rollback のため)
+      expect(assignments).toHaveLength(0);
+      // state.conductors から削除されている
+      expect(state.conductors.has("surface:160")).toBe(false);
+      // task-state が ready に戻されている
+      const ts = await loadTaskState(testDir);
+      expect(ts["160"]?.status).toBe("ready");
+      // ログに conductor_resume_launch_failed が記録されている
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(logContent).toContain("conductor_resume_launch_failed");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      sendSpy.mockRestore();
+      sendKeySpy.mockRestore();
+      closeSurfaceSpy.mockRestore();
+      renameTabSpy.mockRestore();
+    }
+  }, 15000);
+
+  test("layout_kept_partial: kept < maxConductors なら part 復元ログを出す", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 9001);
+    __setTreeImpl(async () => "surface:900\n");
+    const stubs = await stubCmuxIO();
+    try {
+      // 1 件のみ alive — maxConductors=3 (wide のデフォルト) より少ない
+      await writeTeamJson([{ surface: "surface:900", pid: 9001 }]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(logContent).toContain("layout_kept_partial");
+      expect(logContent).toMatch(/kept=1/);
+      expect(logContent).toMatch(/max=3/);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("conductor_resume_noop ログは廃止 — 出力されないこと", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 5001);
+    __setTreeImpl(async () => "surface:500\n");
+    const stubs = await stubCmuxIO();
+    try {
+      // alive 1 件 + resumePlan 1 件 (taskId 不一致で unmatched) → 旧コードでは noop ログ出力
+      await writeTeamJson([{ surface: "surface:500", pid: 5001 }]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [{
+        taskId: "999", taskRunId: "tr-999",
+        worktreePath: testDir, sessionId: "sess-999",
+      }];
+      await initializeLayout(state, undefined, resumePlan);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(logContent).not.toContain("conductor_resume_noop");
+      // 代わりに resume_unmatched_to_ready が出る
+      expect(logContent).toContain("resume_unmatched_to_ready");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+});
