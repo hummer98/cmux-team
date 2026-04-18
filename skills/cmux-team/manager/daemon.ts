@@ -1983,7 +1983,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
           await saveTaskState(state.projectRoot, ts);
           await log(
             "task_aborted",
-            `task_id=${task.id} title=${task.title} journal_summary=assign_failed: ${e.reason}`
+            `task_id=${task.id} reason=assign_failed title=${task.title} journal_summary=assign_failed: ${e.reason}`
           );
           for (const childId of revertedChildren) {
             await log(

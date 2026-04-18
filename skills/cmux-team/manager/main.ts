@@ -3029,7 +3029,7 @@ async function cmdAbortTask(): Promise<void> {
     // T241: depends_on 親 abort → ready 子を draft に戻す
     const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
     await saveTaskState(PROJECT_ROOT, taskState);
-    await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+    await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
     for (const childId of revertedChildren) {
       await log(
         "child_reverted_to_draft",
@@ -3062,7 +3062,7 @@ async function cmdAbortTask(): Promise<void> {
   const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
   await saveTaskState(PROJECT_ROOT, taskState);
 
-  await log("task_aborted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+  await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
   for (const childId of revertedChildren) {
     await log(
       "child_reverted_to_draft",
