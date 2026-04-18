@@ -183,6 +183,22 @@ function findConductor(state: DaemonState, surface: string): ConductorState | un
   return undefined;
 }
 
+/**
+ * T260: disconnect / disconnect_timeout / broken 遷移時のスナップショットログ用フォーマッタ。
+ * 1 行で pid 生存 / 最終 hook 受信時刻 / 経過 / taskRunId を出力する。
+ * cmux.isAlive (`process.kill(pid, 0)`) を 1 回だけ同期呼び出しするため
+ * blocking はコンマ秒以下で、disconnect 遷移時 / broken 化時のような低頻度経路でのみ呼ぶ。
+ */
+export function formatConductorSnapshot(conductor: ConductorState): string {
+  const pidStr = conductor.pid !== undefined ? String(conductor.pid) : "null";
+  const aliveStr = conductor.pid !== undefined ? String(cmux.isAlive(conductor.pid)) : "unknown";
+  const lastHook = conductor.lastHookAt ?? "-";
+  const elapsed = conductor.lastHookAt
+    ? `${Math.round((Date.now() - new Date(conductor.lastHookAt).getTime()) / 1000)}s`
+    : "-";
+  return `pid=${pidStr} alive=${aliveStr} last_hook_at=${lastHook} elapsed_since_last_hook=${elapsed} taskRunId=${conductor.taskRunId ?? "-"}`;
+}
+
 export async function createDaemon(
   projectRoot: string,
   layout: LayoutMode = "wide",
@@ -1147,6 +1163,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (message.sessionId) conductor.sessionId = message.sessionId;
         conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
+        // T260: 最後に生存確認できた時刻を記録
+        conductor.lastHookAt = message.timestamp;
         notifyStateChanged("daemon.ts:handleMessage:session-started-conductor");
         spawnPidWatcher(state, conductor, message.pid);
 
@@ -1411,11 +1429,18 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         conductor.status = "disconnected";
         conductor.disconnectedAt = message.timestamp;
+        // T260: disconnect ログのため snapshot を pid クリア前に撮る
+        const snapshot = formatConductorSnapshot(conductor);
         conductor.pid = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-ended-conductor");
         await log(
           "session_ended",
           `${formatSurface(message.surface, "C")} status=disconnected${message.reason ? ` reason=${message.reason}` : ""}`
+        );
+        // T260: SESSION_ENDED (reason != other) 由来の disconnect を snapshot 付きで出す。
+        await log(
+          "conductor_disconnected",
+          `${formatSurface(message.surface, "C")} reason=session_ended${message.reason ? `:${message.reason}` : ""} ${snapshot}`
         );
       } else {
         // Agent surface かチェック (T181: done マーカーを書き出す)
@@ -1478,6 +1503,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           break;
         }
         conductor.disconnectedAt = undefined;
+        // T260: 最後に生存確認できた時刻を記録
+        conductor.lastHookAt = message.timestamp;
         if (message.pid) conductor.pid = message.pid;
         if (conductor.status === "disconnected") {
           conductor.status = "running";
@@ -1566,6 +1593,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           break;
         }
         conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
+        // T260: 最後に生存確認できた時刻を記録
+        conductor.lastHookAt = message.timestamp;
         if (message.pid) conductor.pid = message.pid;
         // T181: asking → idle/running に戻る経路（Ask 解決後の通常 stop）
         if (conductor.status === "asking") {
@@ -1658,6 +1687,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         conductor.status = "asking";
         if (message.pid) conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
+        // T260: 最後に生存確認できた時刻を記録
+        conductor.lastHookAt = message.timestamp;
         notifyStateChanged("daemon.ts:handleMessage:session-ask-conductor");
         await log(
           "conductor_asking",
@@ -1735,6 +1766,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
         conductor.status = "idle";
         conductor.disconnectedAt = undefined;
+        // T260: 最後に生存確認できた時刻を記録
+        conductor.lastHookAt = message.timestamp;
         // T195: pid 更新は SESSION_STARTED の責務に統一。SESSION_CLEAR で pid を触らない
         notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
         await log(event, `${formatSurface(message.surface, "C")} via=SESSION_CLEAR`);
@@ -1969,7 +2002,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
             notifyStateChanged("daemon.ts:scanTasks:assigning-fallback-disconnected");
             await log(
               "conductor_disconnected",
-              `${formatSurface(idleConductor.surface, "C")} reason=assigning_stuck kind=task task_id=${task.id}`
+              `${formatSurface(idleConductor.surface, "C")} reason=assigning_stuck kind=task task_id=${task.id} ${formatConductorSnapshot(idleConductor)}`
             );
           }
           // 次のタスクへ。idle Conductor はそのまま維持
@@ -1981,7 +2014,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
         notifyStateChanged("daemon.ts:scanTasks:conductor-disconnected");
         await log(
           "conductor_disconnected",
-          `${formatSurface(idleConductor.surface, "C")} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason}`
+          `${formatSurface(idleConductor.surface, "C")} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason} ${formatConductorSnapshot(idleConductor)}`
         );
         continue;
       }
@@ -2029,6 +2062,9 @@ export async function __testSpawnPidWatcherTick(
   if (conductor.pid !== pid) return "stale";
   conductor.status = "disconnected";
   conductor.disconnectedAt = new Date().toISOString();
+  // T260: disconnect ログのため snapshot を pid クリア前に撮る
+  //       (formatConductorSnapshot は conductor.pid を参照するため)
+  const snapshot = formatConductorSnapshot(conductor);
   conductor.pid = undefined;
   notifyStateChanged("daemon.ts:spawnPidWatcher:conductor-disconnected");
   // sessionId は保持する（resume で必要）。
@@ -2036,6 +2072,11 @@ export async function __testSpawnPidWatcherTick(
   await log(
     "session_ended",
     `${formatSurface(conductor.surface, "C")} pid=${pid} status=disconnected reason=pid_watcher`
+  );
+  // T260: disconnect 遷移の原因・状態を一本で追跡できるよう snapshot 付きで出す。
+  await log(
+    "conductor_disconnected",
+    `${formatSurface(conductor.surface, "C")} reason=pid_dead ${snapshot}`
   );
   return "dead";
 }
@@ -2249,9 +2290,10 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
       if (conductor.disconnectedAt) {
         const elapsed = (Date.now() - new Date(conductor.disconnectedAt).getTime()) / 1000;
         if (elapsed > DISCONNECT_TIMEOUT_SEC) {
+          // T260: taskRunId は snapshot 内で 1 回だけ出す（二重出力を避ける）。
           await log(
             "conductor_disconnect_timeout",
-            `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
+            `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s ${formatConductorSnapshot(conductor)}`
           );
           await forceCloseDisconnectedConductor(state, conductor);
         }
