@@ -3165,5 +3165,104 @@ describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {
       __setIsAliveImpl(null);
     }
   });
+
+  test("broken Conductor への SESSION_STARTED は session_event_ignored_broken と broken_conductor_still_alive を並行出力する", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:750",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-broken-alive",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22222,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: conductor.surface,
+        pid: 22222,
+        source: "new_session",
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/session_event_ignored_broken C\[750\] event=SESSION_STARTED/);
+      expect(log).toMatch(/broken_conductor_still_alive C\[750\] event=SESSION_STARTED pid=22222 alive=true .*taskRunId=task-260-broken-alive/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("broken かつ pid 死亡時は broken_conductor_still_alive を出さない", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => false);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:751",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22223,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "SESSION_IDLE",
+        surface: conductor.surface,
+        pid: 22223,
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/session_event_ignored_broken C\[751\] event=SESSION_IDLE/);
+      expect(log).not.toMatch(/broken_conductor_still_alive/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("broken Conductor への AGENT_SPAWNED は broken_conductor_still_alive を出す", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    __setIsAliveImpl(() => true);
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:752",
+        startedAt: new Date().toISOString(),
+        taskRunId: "task-260-agent",
+        lastHookAt: "2026-04-18T09:00:00.000Z",
+        agents: [],
+        status: "broken",
+        disconnectedAt: "2026-04-18T08:50:00.000Z",
+        pid: 22224,
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "AGENT_SPAWNED",
+        surface: "surface:999",
+        conductorSurface: conductor.surface,
+        role: "implementer",
+        taskTitle: "sample",
+        timestamp: "2026-04-18T09:05:00.000Z",
+      });
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/broken_conductor_still_alive C\[752\] event=AGENT_SPAWNED pid=22224 alive=true .*taskRunId=task-260-agent/);
+    } finally {
+      __setIsAliveImpl(null);
+    }
+  });
 });
 

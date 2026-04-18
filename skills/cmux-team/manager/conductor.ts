@@ -563,9 +563,15 @@ export async function resetConductor(
     notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
     const reasonSuffix = opts?.reason ? ` reason=${opts.reason}` : "";
+    // broken 時は「本当に死んでいるか」を snapshot 側と対称に示す（pid/alive を明示）。
+    // idle 経路では pane 生存確認済みで自明なので出さない。
+    const aliveSuffix =
+      targetStatus === "broken"
+        ? ` pid=${conductor.pid ?? "null"} alive=${conductor.pid !== undefined ? String(cmux.isAlive(conductor.pid)) : "unknown"}`
+        : "";
     await log(
       targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
-      `${formatSurface(conductor.surface, "C")}${reasonSuffix}`,
+      `${formatSurface(conductor.surface, "C")}${reasonSuffix}${aliveSuffix}`,
     );
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);

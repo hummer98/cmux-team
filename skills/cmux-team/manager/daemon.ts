@@ -199,6 +199,26 @@ export function formatConductorSnapshot(conductor: ConductorState): string {
   return `pid=${pidStr} alive=${aliveStr} last_hook_at=${lastHook} elapsed_since_last_hook=${elapsed} taskRunId=${conductor.taskRunId ?? "-"}`;
 }
 
+/**
+ * T260: broken 状態で SESSION_* を受信したときのログ。
+ * 既存の `session_event_ignored_broken` は互換のため残しつつ、
+ * broken にしたのに hook が届いている＝プロセスが生きている疑いを
+ * 並行ログ `broken_conductor_still_alive` として可視化する。
+ * 実際に alive かどうかは cmux.isAlive で確かめてから出す。
+ */
+async function logBrokenIgnore(conductor: ConductorState, event: string): Promise<void> {
+  await log(
+    "session_event_ignored_broken",
+    `${formatSurface(conductor.surface, "C")} event=${event} reason=broken_requires_manual_clear`
+  );
+  if (conductor.pid !== undefined && cmux.isAlive(conductor.pid)) {
+    await log(
+      "broken_conductor_still_alive",
+      `${formatSurface(conductor.surface, "C")} event=${event} ${formatConductorSnapshot(conductor)}`
+    );
+  }
+}
+
 export async function createDaemon(
   projectRoot: string,
   layout: LayoutMode = "wide",
@@ -1095,6 +1115,15 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
       const conductor = findConductor(state, message.conductorSurface);
       if (conductor) {
+        // T260: broken 状態の Conductor から Agent が spawn されるのは
+        //       「Conductor を broken 化したが実は生きていた」強い証拠。
+        //       SESSION_* と対称に broken_conductor_still_alive を記録する。
+        if (conductor.status === "broken") {
+          await log(
+            "broken_conductor_still_alive",
+            `${formatSurface(conductor.surface, "C")} event=AGENT_SPAWNED ${formatConductorSnapshot(conductor)}`
+          );
+        }
         conductor.agents.push({
           surface: message.surface,
           role: message.role,
@@ -1136,10 +1165,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T250: broken は明示的クリア (clear-conductor) 以外で解除しない。
         //       自動復帰経路を塞ぎ、観測のため ignore ログを残す。
         if (conductor.status === "broken") {
-          await log(
-            "session_event_ignored_broken",
-            `${formatSurface(conductor.surface, "C")} event=SESSION_STARTED reason=broken_requires_manual_clear`
-          );
+          await logBrokenIgnore(conductor, "SESSION_STARTED");
           break;
         }
         // n1: 既存の starting/disconnected → idle 遷移ロジックは残す
@@ -1496,10 +1522,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (conductor) {
         // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
         if (conductor.status === "broken") {
-          await log(
-            "session_event_ignored_broken",
-            `${formatSurface(conductor.surface, "C")} event=SESSION_ACTIVE reason=broken_requires_manual_clear`
-          );
+          await logBrokenIgnore(conductor, "SESSION_ACTIVE");
           break;
         }
         conductor.disconnectedAt = undefined;
@@ -1586,10 +1609,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       if (conductor) {
         // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
         if (conductor.status === "broken") {
-          await log(
-            "session_event_ignored_broken",
-            `${formatSurface(conductor.surface, "C")} event=SESSION_IDLE reason=broken_requires_manual_clear`
-          );
+          await logBrokenIgnore(conductor, "SESSION_IDLE");
           break;
         }
         conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
@@ -1745,10 +1765,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
       //       assigning ガードよりも前に置き、下流の destructive 処理に落ちないようにする。
       if (conductor && conductor.status === "broken") {
-        await log(
-          "session_event_ignored_broken",
-          `${formatSurface(conductor.surface, "C")} event=SESSION_CLEAR reason=broken_requires_manual_clear`
-        );
+        await logBrokenIgnore(conductor, "SESSION_CLEAR");
         break;
       }
       // T232: assigning 中の SESSION_CLEAR は daemon 自身が送った /clear の遅延発火。
