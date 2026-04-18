@@ -419,6 +419,18 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 - **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
 - **状態確認**: `cmux-team status` で daemon 状態・Conductor 一覧・タスク数・ログ末尾を表示
 
+### 多重起動防止（pidfile ロック — T259）
+
+`cmdStart` 冒頭（preflight 成功後・direnv / resolveMainBranch / `createDaemon` の前）で
+`.team/daemon.pid` を `writeFile(..., { flag: "wx" })` により atomic に取得する。
+既に生きている cmux-team daemon があれば `PidFileLockedError` を経由して exit 1。
+stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に
+`main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗
+（空文字）時は保守的に locked 扱いとする。pidfile は shutdown / onFullQuit /
+restartRequested / onReload / cmdStop（保険）の全経路で release され、正常系では
+必ず削除される。pidfile は daemon main.ts プロセスのみを指し、proxy は別ライフ
+サイクル。
+
 ### タスク検出
 
 `task-state.json` で `status: ready` のタスクを検出し Conductor に割り当てる。なければ待機して再チェック。
@@ -541,6 +553,7 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
 ├── traces/            # SQLite トレースDB（traces.db）
 ├── sessions/          # セッション情報
 ├── proxy-port         # プロキシポート番号
+├── daemon.pid         # daemon 多重起動防止の pidfile（T259）
 └── team.json          # チーム構成（daemon が自動更新）
 ```
 

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **daemon 多重起動を pidfile ロックで防止（T259）**。`cmdStart` 冒頭（preflight 成功後・direnv / resolveMainBranch / `createDaemon` の前）で `.team/daemon.pid` を `writeFile(..., { flag: "wx" })` により atomic に取得する。既に生きている cmux-team daemon があれば `PidFileLockedError` → `console.error` + exit 1。stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に `main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗時は保守的に locked 扱い。pidfile は shutdown / onFullQuit / restartRequested / onReload(execFileSync 直前) / cmdStop(保険) の全経路で release され、正常系では必ず削除される。auto-restart ループ（exit 42）では親が release → 子が acquire の順で所有権が移り、親が execFileSync でブロックしていても子が "alive cmux-team" を誤検知せず連続再起動できる。pidfile は daemon main.ts プロセスのみを指し proxy は別ライフサイクル
+
 ### Changed
 
 - **`mainBranch` 解決失敗時を fail-stop に変更（T253、破壊的変更）**。従来 `resolveMainBranch` は `git symbolic-ref refs/remotes/origin/HEAD` と `git symbolic-ref --short HEAD` の両方が失敗した場合にサイレントで `{ branch: "main", source: "fallback" }` を返していたため、存在しない `main` ブランチに対して commit/merge を行い破綻するリスクがあった。本変更で検出失敗時は `MainBranchResolutionError` を throw し、`cmux-team start` は `console.error` に 3 つの解決手段（`--main-branch <name>` / env `CMUX_TEAM_MAIN_BRANCH=<name>` / `.team/config.json` の `mainBranch`）を案内して `process.exit(1)` する。派生する下流フォールバック（`cmdConductor` / `cmdSpawnConductor` の `|| "main"`、`DaemonState.mainBranch` 初期値、`launchConductor` / `initializeConductorSlots` / `assignTask` / `generateConductorTaskPrompt` / `generateConductorRolePrompt` の `"main"` リテラル）も全て撤去し、空文字受領で throw する防御ガードに統一。`MainBranchSource` enum から `"fallback"` を削除。**影響:** 既に `.team/config.json` に `mainBranch` が永続化済みのプロジェクトは影響なし（T213 以降で起動した大多数）。新規 repo（push 前）・shallow clone・detached HEAD・`origin/HEAD` 未設定のプロジェクトでは env か config での明示指定が必要
