@@ -306,7 +306,7 @@ export const LAYOUT_MAX_CONDUCTORS: Record<LayoutMode, number> = {
 
 // --- Main branch resolution (T213) ---
 
-export const MainBranchSource = z.enum(["config", "detected", "fallback"]);
+export const MainBranchSource = z.enum(["config", "detected"]);
 export type MainBranchSource = z.infer<typeof MainBranchSource>;
 
 export interface MainBranchResolution {

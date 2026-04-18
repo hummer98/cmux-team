@@ -305,13 +305,59 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
-  // T213: main ブランチ解決（config > git 自動検出 > "main" フォールバック）。
+  // T213: main ブランチ解決（config > git 自動検出）。T253 で暗黙 "main" フォールバックを削除し、
+  //   全て失敗時は fail-stop（process.exit(1)）する。
   //   createDaemon → initializeConductorSlots より前に解決・永続化することで
   //   Conductor 子プロセスが loadConfig する時点で config.mainBranch が必ず揃っている。
-  const { resolveMainBranch, persistMainBranch } = await import("./main-branch");
-  const mainBranchResolution = await resolveMainBranch(PROJECT_ROOT, {
-    configMainBranch: startConfig.mainBranch,
-  });
+  const { resolveMainBranch, persistMainBranch, MainBranchResolutionError } =
+    await import("./main-branch");
+  let mainBranchResolution;
+  try {
+    mainBranchResolution = await resolveMainBranch(PROJECT_ROOT, {
+      configMainBranch: startConfig.mainBranch,
+    });
+  } catch (e: any) {
+    if (e instanceof MainBranchResolutionError) {
+      const originEsc = (e.originHeadStderr ?? "").replace(/\n/g, "\\n").trim() || "(empty)";
+      const headEsc = (e.headStderr ?? "").replace(/\n/g, "\\n").trim() || "(empty)";
+      console.error(
+        [
+          "Error: Failed to detect the project's main branch.",
+          "",
+          "cmux-team は以下の順で main ブランチを解決します:",
+          "  1. .team/config.json の \"mainBranch\" フィールド",
+          "  2. git symbolic-ref refs/remotes/origin/HEAD",
+          "  3. git symbolic-ref --short HEAD",
+          "",
+          "全て失敗しました。以下のいずれかで明示してください:",
+          "",
+          "  (A) .team/config.json に追記:",
+          "      {",
+          "        \"mainBranch\": \"<your-main-branch>\"",
+          "      }",
+          "",
+          "  (B) または環境変数で一時指定:",
+          "      CMUX_TEAM_MAIN_BRANCH=<your-branch> cmux-team start",
+          "",
+          "考えられる原因:",
+          "  - 新規リポジトリで push 前 (origin/HEAD 未設定)",
+          "  - shallow clone で origin/HEAD が欠落",
+          "  - detached HEAD 状態",
+          "  - リモートが存在しない (git remote add origin ... 未実行)",
+          "",
+          "診断情報:",
+          `  origin/HEAD stderr: ${originEsc}`,
+          `  HEAD stderr:        ${headEsc}`,
+        ].join("\n"),
+      );
+      await log(
+        "main_branch_resolve_exit",
+        `reason=detect_failed origin_stderr=${originEsc} head_stderr=${headEsc}`,
+      );
+      process.exit(1);
+    }
+    throw e;
+  }
   if (mainBranchResolution.source !== "config") {
     await persistMainBranch(PROJECT_ROOT, mainBranchResolution.branch);
   }
@@ -1699,18 +1745,21 @@ async function cmdConductor(): Promise<void> {
   // proxy-port 不在 / POST 失敗時は fail-fast。
   await registerSelf("conductor", surface);
 
-  // T213: main ブランチを env → config → "main" の三段フォールバックで解決。
+  // T213: main ブランチを env → config の順で解決。T253 で暗黙 "main" フォールバックを削除し
+  //   両方空なら fail-stop する。
   //   `launchConductor` が `CMUX_TEAM_MAIN_BRANCH` をシェルに焼き付けるのが第一ソース。
   //   env が欠落しても config.mainBranch（cmdStart が永続化）で救済できる。
-  //   両方空なら "main" にフォールバックしつつ警告ログを出す。
   const conductorConfig = await loadConfig(PROJECT_ROOT);
   const envMainBranch = process.env.CMUX_TEAM_MAIN_BRANCH?.trim();
-  const mainBranch = envMainBranch || conductorConfig.mainBranch || "main";
-  if (!envMainBranch && !conductorConfig.mainBranch) {
-    await log(
-      "main_branch_conductor_fallback",
-      "reason=env_and_config_missing",
+  const mainBranch = envMainBranch || conductorConfig.mainBranch?.trim() || "";
+  if (!mainBranch) {
+    console.error(
+      "Error: config.mainBranch is not set and CMUX_TEAM_MAIN_BRANCH is empty. " +
+        "Run `cmux-team start` first to detect and persist the main branch, " +
+        "or set CMUX_TEAM_MAIN_BRANCH=<your-branch> explicitly.",
     );
+    await log("conductor_main_branch_missing", "reason=env_and_config_missing");
+    process.exit(1);
   }
 
   // ロールプロンプトファイル生成
@@ -1915,7 +1964,25 @@ async function cmdSpawnConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_conductor"));
   const surface = process.env.CMUX_SURFACE ?? await cmux.getCallerSurface();
 
-  await launchConductor(PROJECT_ROOT, surface);
+  // T253: launchConductor は mainBranch required。env → config の順で解決し、
+  //   空なら fail-stop（cmdConductor と同じロジック）
+  const spawnConfig = await loadConfig(PROJECT_ROOT);
+  const envMainBranch = process.env.CMUX_TEAM_MAIN_BRANCH?.trim();
+  const mainBranch = envMainBranch || spawnConfig.mainBranch?.trim() || "";
+  if (!mainBranch) {
+    console.error(
+      "Error: config.mainBranch is not set and CMUX_TEAM_MAIN_BRANCH is empty. " +
+        "Run `cmux-team start` first to detect and persist the main branch, " +
+        "or set CMUX_TEAM_MAIN_BRANCH=<your-branch> explicitly.",
+    );
+    await log(
+      "spawn_conductor_main_branch_missing",
+      "reason=env_and_config_missing",
+    );
+    process.exit(1);
+  }
+
+  await launchConductor(PROJECT_ROOT, surface, { mainBranch });
   console.log(`SURFACE=${surface}`);
 }
 

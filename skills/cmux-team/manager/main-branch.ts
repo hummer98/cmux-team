@@ -21,12 +21,34 @@ export interface ResolveMainBranchOptions {
 }
 
 /**
+ * main ブランチの自動検出が全て失敗したときに throw される例外（T253）。
+ * 診断用に origin/HEAD と HEAD の stderr を保持する。
+ */
+export class MainBranchResolutionError extends Error {
+  readonly originHeadStderr?: string;
+  readonly headStderr?: string;
+  constructor(detail: { originHeadStderr?: string; headStderr?: string }) {
+    super(
+      "Failed to detect main branch: both `git symbolic-ref refs/remotes/origin/HEAD` " +
+        "and `git symbolic-ref --short HEAD` failed.",
+    );
+    this.name = "MainBranchResolutionError";
+    this.originHeadStderr = detail.originHeadStderr;
+    this.headStderr = detail.headStderr;
+  }
+}
+
+/**
  * プロジェクトの main ブランチを以下の優先順位で解決する:
  *
  * 1. `config.mainBranch`（trim 後に空でない場合のみ採用）
  * 2. `git symbolic-ref refs/remotes/origin/HEAD`（例: `refs/remotes/origin/main` → `main`）
  * 3. `git symbolic-ref --short HEAD`（現在の HEAD 名。detached ならスキップ）
- * 4. フォールバックで `"main"` を返す
+ *
+ * 全て失敗した場合は T253 で暗黙 `"main"` フォールバックが削除されたため
+ * `MainBranchResolutionError` を throw する。呼び出し元（`cmdStart`）で catch し
+ * `.team/config.json` の明示指定 or `CMUX_TEAM_MAIN_BRANCH` env を促す
+ * エラーメッセージを出した上で `process.exit(1)` すること。
  *
  * 空文字 / 改行のみの `configMainBranch` は無効値として自動検出へフォールスルーする。
  */
@@ -45,14 +67,18 @@ export async function resolveMainBranch(
       return stdout.trim();
     });
 
+  let originHeadStderr: string | undefined;
+  let headStderr: string | undefined;
+
   try {
     const out = await git(["symbolic-ref", "refs/remotes/origin/HEAD"]);
     const m = out.match(/^refs\/remotes\/origin\/(.+)$/);
     if (m && m[1]) return { branch: m[1], source: "detected" };
   } catch (e: any) {
+    originHeadStderr = (e?.stderr ?? "").toString().trim();
     await log(
       "main_branch_detect_failed",
-      `step=origin_head stderr=${(e?.stderr ?? "").toString().trim()}`,
+      `step=origin_head stderr=${originHeadStderr}`,
     );
   }
 
@@ -60,14 +86,14 @@ export async function resolveMainBranch(
     const out = await git(["symbolic-ref", "--short", "HEAD"]);
     if (out) return { branch: out, source: "detected" };
   } catch (e: any) {
+    headStderr = (e?.stderr ?? "").toString().trim();
     await log(
       "main_branch_detect_failed",
-      `step=head stderr=${(e?.stderr ?? "").toString().trim()}`,
+      `step=head stderr=${headStderr}`,
     );
   }
 
-  await log("main_branch_fallback", "reason=git_detect_failed");
-  return { branch: "main", source: "fallback" };
+  throw new MainBranchResolutionError({ originHeadStderr, headStderr });
 }
 
 /**

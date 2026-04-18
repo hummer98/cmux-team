@@ -59,7 +59,7 @@ describe("assignTask エラー分類", () => {
   test("タスクファイル不在は task kind でエラーを throw する", async () => {
     const conductor = fakeConductor();
     try {
-      await assignTask(conductor, "999", testDir);
+      await assignTask(conductor, "999", testDir, "main");
       throw new Error("expected assignTask to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(AssignTaskError);
@@ -77,7 +77,7 @@ describe("assignTask エラー分類", () => {
 
     const conductor = fakeConductor();
     try {
-      await assignTask(conductor, "42", testDir);
+      await assignTask(conductor, "42", testDir, "main");
       throw new Error("expected assignTask to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(AssignTaskError);
@@ -92,13 +92,45 @@ describe("assignTask エラー分類", () => {
   test("タスクファイル不在ケースでは worktree を作成しない", async () => {
     const conductor = fakeConductor();
     try {
-      await assignTask(conductor, "999", testDir);
+      await assignTask(conductor, "999", testDir, "main");
     } catch {
       // 期待通り throw
     }
     // .worktrees ディレクトリは作られていない
     const { existsSync } = await import("fs");
     expect(existsSync(join(testDir, ".worktrees"))).toBe(false);
+  });
+});
+
+// --- T253: assignTask / launchConductor は mainBranch 空文字で throw する ---
+
+describe("mainBranch required 化 (T253)", () => {
+  test("assignTask は mainBranch が空文字なら throw する", async () => {
+    const conductor = fakeConductor();
+    await expect(
+      assignTask(conductor, "999", testDir, ""),
+    ).rejects.toThrow(/mainBranch must be a non-empty string/);
+  });
+
+  test("assignTask は mainBranch が空白のみなら throw する", async () => {
+    const conductor = fakeConductor();
+    await expect(
+      assignTask(conductor, "999", testDir, "  \n"),
+    ).rejects.toThrow(/mainBranch must be a non-empty string/);
+  });
+
+  test("launchConductor は opts.mainBranch が空文字なら throw する", async () => {
+    const { launchConductor } = await import("./conductor");
+    await expect(
+      launchConductor(testDir, "surface:100", { mainBranch: "" }),
+    ).rejects.toThrow(/mainBranch must be a non-empty string/);
+  });
+
+  test("launchConductor は opts.mainBranch が空白のみなら throw する", async () => {
+    const { launchConductor } = await import("./conductor");
+    await expect(
+      launchConductor(testDir, "surface:100", { mainBranch: "  \n" }),
+    ).rejects.toThrow(/mainBranch must be a non-empty string/);
   });
 });
 
