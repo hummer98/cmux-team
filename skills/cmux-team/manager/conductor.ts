@@ -6,7 +6,7 @@ import { promisify } from "util";
 import { existsSync } from "fs";
 import { readFile, mkdir, readdir, rm, stat, copyFile } from "fs/promises";
 import { join, relative, dirname } from "path";
-import { loadTaskState } from "./task";
+import { loadTaskState, findAssignmentConflict } from "./task";
 import * as cmux from "./cmux";
 import { generateConductorTaskPrompt } from "./template";
 import { log, formatSurface } from "./logger";
@@ -267,6 +267,24 @@ export async function assignTask(
   let worktreeCreated = false;
 
   try {
+    // --- 0. Unique 検査（T254: 同一 taskId の二重 assign 防止） ---
+    //   worktree 作成より前に検査することで違反時の cleanup コストを回避する。
+    //   違反検出時は AssignTaskError("task", ...) を throw し、scanTasks の既存
+    //   エラーハンドラで task abort + Conductor idle 維持の経路に乗せる
+    //   （kind=conductor にしない。Conductor 自体は壊れていない）。
+    const currentTaskState = await loadTaskState(projectRoot);
+    const conflict = findAssignmentConflict(currentTaskState, taskId, conductor.surface);
+    if (conflict.conflict) {
+      await log(
+        "task_unique_violation_runtime",
+        `task_id=${taskId} existing_surface=${conflict.existingSurface} conflict_surface=${conductor.surface}`,
+      );
+      throw new AssignTaskError(
+        "task",
+        `task_already_assigned_to=${conflict.existingSurface}`,
+      );
+    }
+
     // --- 1. タスクファイル検索（ハイブリッド対応） ---
     const tasksDir = join(projectRoot, ".team/tasks");
     let entries: string[];
