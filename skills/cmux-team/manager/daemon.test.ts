@@ -3231,6 +3231,33 @@ describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {
     }
   });
 
+  test("AGENT_SPAWNED の callerSurface/callerPid は agent_spawned ログに載る", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:760",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+      pid: 33333,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "AGENT_SPAWNED",
+      surface: "surface:761",
+      conductorSurface: conductor.surface,
+      role: "implementer",
+      taskTitle: "demo",
+      timestamp: "2026-04-18T09:05:00.000Z",
+      callerPid: 44444,
+      callerSurface: conductor.surface,
+    });
+
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(log).toMatch(/agent_spawned C\[760\]>A\[761\] role=implementer caller=C\[760\] caller_pid=44444/);
+  });
+
   test("broken Conductor への AGENT_SPAWNED は broken_conductor_still_alive を出す", async () => {
     const { __setIsAliveImpl } = await import("./cmux");
     const { createDaemon, handleMessage } = await import("./daemon");

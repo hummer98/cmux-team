@@ -1132,9 +1132,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           status: "starting",
         });
         notifyStateChanged("daemon.ts:handleMessage:agent-spawned");
+        // T260: callerSurface/callerPid を agent_spawned ログに載せて、
+        //       「想定外の主体（broken Conductor など）からの spawn」を可視化する。
+        const callerSuffix = [
+          message.callerSurface ? `caller=${formatSurface(message.callerSurface, "C")}` : "",
+          message.callerPid !== undefined ? `caller_pid=${message.callerPid}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         await log(
           "agent_spawned",
-          `${formatPair(message.conductorSurface, message.surface, "C", "A")}${message.role ? ` role=${message.role}` : ""}`
+          `${formatPair(message.conductorSurface, message.surface, "C", "A")}${message.role ? ` role=${message.role}` : ""}${callerSuffix ? ` ${callerSuffix}` : ""}`
         );
       }
       break;
