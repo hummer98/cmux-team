@@ -422,7 +422,7 @@ The completion report must be marked [Judgment Required] and must include:
 - List of conflicting files (output of `git status`)
 - HEAD commit SHA before rebase
 - The worktree is kept (not removed) so a human can rebase manually or re-queue the task
-- Task state: remains `assigned`. To re-queue or cancel, run `cmux-team abort-task --task-id <TASK_ID>`.
+- Task state: transitions to `aborted` (worktree / branch preserved). To re-run, execute `cmux-team restart-task --task-id <TASK_ID>`. To cancel, leave it aborted or run `cmux-team delete-task --task-id <TASK_ID>`.
 
 Send the completion notification with `--success false`:
 
@@ -430,7 +430,7 @@ Send the completion notification with `--success false`:
 cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
 ```
 
-**In this case, do NOT call `close-task`.** The task remains open for human re-judgment.
+**In this case, do NOT call `close-task`.** The daemon sets task-state to `aborted` and records `conductor_done_unresolved` in the journal (reason=judgment_pending). A human then decides whether to re-run via `restart-task`.
 
 ### Step 9: Deliver the deliverables — choose one of the following
 

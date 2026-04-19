@@ -761,6 +761,28 @@ Conductor が worktree を作成する際、start-point は以下の優先順位
 ログは `resume_marked_aborted` → `task_aborted reason=resume_*` →
 `child_reverted_to_draft`（cascade 副作用）の順で emit される。
 
+### CONDUCTOR_DONE の state 遷移（T263 / T269）
+
+Conductor は完遂結果を `CONDUCTOR_DONE --success <bool> [--reason ...]` で
+daemon に報告する。daemon 側 `handleConductorDone` は success と task-state の
+現在値の組み合わせから以下の 3 パターンに分岐する:
+
+| success | task-state before | 挙動 |
+|---|---|---|
+| `true` | any | `task_completed`（Conductor 側で `close-task` 済み想定）, worktree 削除, ConductorState=idle |
+| `false` | `closed` / `aborted` / `deleted` | `task_completed`（late failure regression guard）, worktree 削除, ConductorState=idle |
+| `false` | `assigned` / missing | **`task_aborted reason=judgment_pending`**, **worktree=preserved**, ConductorState=idle |
+
+3 番目（preserveWorktree 経路）は「Conductor が自力完遂できず人間判断待ち」。
+task-state は `aborted` に倒すが worktree / branch は温存するため、
+`cmux-team restart-task --task-id <X>` で再投入できる（T269 で
+`assigned` のまま残す旧挙動から変更。旧挙動は daemon 再起動時の
+applyResumeTransitions が resume 可能と誤分類する事故を招いていた）。
+
+journal には `conductor_done_unresolved: <reason> (worktree=<path>) taskRunId=<id>`
+形式で因果が記録され、`cmux-team show-task <X>` または task-state.json の
+journal フィールドで確認できる。
+
 ### 依存タスクの cascade（T241）
 
 親タスクが `aborted` / `deleted` に遷移したとき、`depends_on` に親を含む
@@ -771,13 +793,14 @@ Conductor が worktree を作成する際、start-point は以下の優先順位
 - `assigned` 子: 変更なし（走行中の作業は止めない）
 - `closed` / `aborted` / `deleted` 子: 変更なし
 
-cascade は以下 6 経路で同期的に走る:
+cascade は以下 7 経路で同期的に走る:
 1. `cmux-team abort-task` CLI
 2. `cmux-team delete-task` CLI
 3. Conductor forced close（disconnect timeout）
 4. user_clear（手動 /clear で running を abort）
 5. assign_failed（worktree 作成失敗等）
 6. `resume_marked_aborted`（cmdStart 起動時、assigned タスクの resume 不可検出 — T264）
+7. `handleConductorDone` unresolved 分岐（CONDUCTOR_DONE --success=false で assigned task を aborted — T269）
 
 ログ: `child_reverted_to_draft parent=<X> child=<Y> reason=parent_aborted`
 （delete 経路でも `reason=parent_aborted` で統一）

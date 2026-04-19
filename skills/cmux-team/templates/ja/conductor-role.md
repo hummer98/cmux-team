@@ -469,7 +469,7 @@ git rebase --abort
 - 衝突したファイル一覧（`git status` の出力）
 - rebase 前の HEAD commit SHA
 - worktree は削除せず残す（人間が手動で rebase / 再投入できるよう）
-- タスク状態: `assigned` のまま残ります。再投入するか中止する場合は `cmux-team abort-task --task-id <TASK_ID>` を実行してください。
+- タスク状態: `aborted` に遷移します（worktree / branch は温存）。再投入するには `cmux-team restart-task --task-id <TASK_ID>` を実行してください。中止したい場合はそのまま放置するか `cmux-team delete-task --task-id <TASK_ID>` で削除します。
 
 完了通知は `--success false` で送信する:
 
@@ -477,7 +477,7 @@ git rebase --abort
 cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
 ```
 
-**この場合 `close-task` は呼ばない。** タスクは open のまま残し、人間の再判断に委ねる。
+**この場合 `close-task` は呼ばない。** daemon 側で task-state を `aborted` に倒し、journal に `conductor_done_unresolved` を記録します（reason=judgment_pending）。人間は `restart-task` で再投入するか判断します。
 
 ### Step 9: 成果物の納品 — 以下のいずれかを選択
 

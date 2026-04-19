@@ -4186,6 +4186,16 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
       expect(resetLine).toBeDefined();
       expect(resetLine).toContain("worktree_preserved=true");
+      // T269: task-state が aborted に遷移し、journal に原因が記録される
+      const { loadTaskState: loadTaskStateC9 } = await import("./task");
+      const tsAfter = await loadTaskStateC9(testDir);
+      expect(tsAfter["263"]?.status).toBe("aborted");
+      expect(tsAfter["263"]?.abortedAt).toBeDefined();
+      expect(tsAfter["263"]?.journal).toContain("conductor_done_unresolved");
+      expect(tsAfter["263"]?.journal).toContain("rebase_conflict");
+      expect(tsAfter["263"]?.journal).toContain(`worktree=${worktreePath}`);
+      // task_aborted ログに reason=judgment_pending が記録される
+      expect(log).toMatch(/task_aborted task_id=263 reason=judgment_pending/);
     } finally {
       paneSpy.mockRestore();
     }
@@ -4229,6 +4239,8 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
       expect(resetLine).toBeDefined();
       expect(resetLine).not.toContain("worktree_preserved=true");
+      // T269 regression guard: 成功経路では judgment_pending を出さない
+      expect(log).not.toMatch(/task_aborted .*reason=judgment_pending/);
     } finally {
       paneSpy.mockRestore();
     }
@@ -4269,6 +4281,8 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
       expect(log).toMatch(/task_completed .*task_id=265/);
       expect(log).not.toMatch(/conductor_done_unresolved.*task_id=265/);
+      // T269 regression guard: closed 経路では judgment_pending を出さない（冪等）
+      expect(log).not.toMatch(/task_aborted task_id=265 reason=judgment_pending/);
     } finally {
       paneSpy.mockRestore();
     }
@@ -4313,6 +4327,150 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       // conductor_reset に worktree_preserved=true
       const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
       expect(resetLine).toContain("worktree_preserved=true");
+      // T269: missing エントリも user_clear 経路と同挙動で aborted エントリを新規作成
+      const { loadTaskState: loadTaskStateC10 } = await import("./task");
+      const tsAfter = await loadTaskStateC10(testDir);
+      expect(tsAfter["266"]?.status).toBe("aborted");
+      expect(tsAfter["266"]?.journal).toContain("conductor_done_unresolved");
+      expect(log).toMatch(/task_aborted task_id=266 reason=judgment_pending/);
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+});
+
+// --- T269: preserveWorktree 経路で aborted 化されたタスクが resume 対象外になる ---
+//
+// handleConductorDone で unresolved 分岐を通ると task-state は `aborted` になり、
+// worktree は温存される。applyResumeTransitions は `status === "assigned"` のみ
+// 走査するため、T269 後は同タスクが resume 対象から外れる。これにより daemon
+// 再起動時の勝手な resume → /clear → user_clear 事故が防がれる。
+describe("T269: preserveWorktree 経路のタスクが restart 時に resume されない", () => {
+  async function setupRealGitWithWorktree(taskRunId: string): Promise<string> {
+    const { execFile: ef } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(ef);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["config", "user.email", "test@test.local"], { cwd: testDir });
+    await execFile("git", ["config", "user.name", "Test"], { cwd: testDir });
+    await writeFile(join(testDir, "README.md"), "test");
+    await execFile("git", ["add", "."], { cwd: testDir });
+    await execFile("git", ["commit", "-q", "-m", "init"], { cwd: testDir });
+    const worktreePath = join(testDir, ".worktrees", taskRunId);
+    await execFile("git", ["worktree", "add", worktreePath, "-b", `${taskRunId}/task`], { cwd: testDir });
+    return worktreePath;
+  }
+
+  async function stubPaneForSurface() {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    return spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+  }
+
+  test("preserveWorktree → aborted → applyResumeTransitions で resume 対象外", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-269r-1700269000";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("269", "judgment-pending");
+      const { loadTaskState: loadTS, saveTaskState: saveTS } = await import("./task");
+      const tsBefore = await loadTS(testDir);
+      // 再起動 resume 判定で必要な 4 条件を満たす状態を作る（plan §1-2 相当）
+      tsBefore["269"] = {
+        status: "assigned",
+        sessionId: "session-269",
+        taskRunId,
+        worktreePath,
+        assignedAt: new Date().toISOString(),
+      };
+      await saveTS(testDir, tsBefore);
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t269-r1",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "269",
+        taskTitle: "judgment-pending",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      // Conductor が自力完遂不能を報告
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t269-r1",
+        success: false,
+        reason: "rebase_conflict",
+        timestamp: new Date().toISOString(),
+      });
+
+      // 期待: task-state は aborted、worktree 温存
+      const tsAfter = await loadTS(testDir);
+      expect(tsAfter["269"]?.status).toBe("aborted");
+      expect(existsSync(worktreePath)).toBe(true);
+
+      // 再起動を模した resume 判定を直接呼ぶ
+      const { applyResumeTransitions } = await import("./main");
+      const { loadTasks } = await import("./task");
+      const { tasks } = await loadTasks(testDir);
+      const result = await applyResumeTransitions(tsAfter, tasks, {
+        findTaskFile: async () => undefined,
+        exists: () => true,
+        now: () => new Date().toISOString(),
+      });
+
+      // 期待: resume plan にも abortedTaskIds にも含まれない（既に aborted なので走査対象外）
+      expect(result.resumePlan.map((p) => p.taskId)).not.toContain("269");
+      expect(result.abortedTaskIds).not.toContain("269");
+      expect(result.modified).toBe(false);
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("cascade: 親 269 aborted → depends_on:[269] の ready 子 270 が draft に戻る", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-269c-1700269100";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("269", "parent-task");
+      await createTask("270", "child-task", { dependsOn: ["269"] });
+      const { loadTaskState: loadTS, saveTaskState: saveTS } = await import("./task");
+      const tsBefore = await loadTS(testDir);
+      tsBefore["269"] = { status: "assigned", assignedAt: new Date().toISOString() };
+      tsBefore["270"] = { status: "ready" };
+      await saveTS(testDir, tsBefore);
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t269-casc",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "269",
+        taskTitle: "parent-task",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t269-casc",
+        success: false,
+        reason: "rebase_conflict",
+        timestamp: new Date().toISOString(),
+      });
+
+      const tsAfter = await loadTS(testDir);
+      expect(tsAfter["269"]?.status).toBe("aborted");
+      expect(tsAfter["270"]?.status).toBe("draft");
+
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/child_reverted_to_draft parent=269 child=270 reason=parent_aborted/);
     } finally {
       paneSpy.mockRestore();
     }

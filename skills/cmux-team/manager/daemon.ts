@@ -2932,6 +2932,38 @@ async function handleConductorDone(
         (conductor.taskTitle ? ` title=${conductor.taskTitle}` : "") +
         (journalSummary ? ` journal_summary=${journalSummary}` : "")
     );
+    // T269: preserveWorktree 経路でも task-state は `aborted` に倒す。
+    //       assigned のまま残すと applyResumeTransitions が resume 対象と誤分類する。
+    //       共通パターン: user_clear (daemon.ts:2132) と同形。将来 markTaskAborted
+    //       ヘルパーに抽出予定（Decision D1）。journal には opts?.reason を埋めて
+    //       事故後に grep で因果追跡できるようにする（Decision D3）。
+    try {
+      const current = taskState[taskId];
+      if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
+        const journal = `conductor_done_unresolved: ${opts?.reason ?? "-"} (worktree=${conductor.worktreePath ?? "-"}) taskRunId=${conductor.taskRunId ?? "-"}`;
+        taskState[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
+        const { tasks } = await loadTasks(state.projectRoot);
+        const { revertedChildren } = cascadeAbortToChildren(taskState, tasks, taskId);
+        await saveTaskState(state.projectRoot, taskState);
+        await log("task_aborted", `task_id=${taskId} reason=judgment_pending`);
+        for (const childId of revertedChildren) {
+          await log(
+            "child_reverted_to_draft",
+            `parent=${taskId} child=${childId} reason=parent_aborted`
+          );
+        }
+        if (revertedChildren.length > 0) {
+          notifyStateChanged("daemon.ts:handleConductorDone:unresolved-cascade");
+        }
+      } else {
+        await log(
+          "conductor_done_unresolved_skip",
+          `task_id=${taskId} reason=already_closed_or_aborted status=${current?.status}`
+        );
+      }
+    } catch (e: any) {
+      await log("error", `handleConductorDone judgment_pending update failed: task_id=${taskId} ${e.message}`);
+    }
   } else {
     await log(
       "task_completed",
