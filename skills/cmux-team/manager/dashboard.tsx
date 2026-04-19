@@ -26,6 +26,20 @@ import { listProjectInstructions, readProjectInstructions } from "./agent-instru
 import { loadConfig, type TeamConfig } from "./config";
 import type { AgentRole } from "./schema";
 import { AGENT_ROLES } from "./schema";
+import { resolveOriginRepo } from "./gh-cache-repo";
+import { resolveGithubToken, tokenHash } from "./gh-cache-auth";
+import {
+  openGhCacheDB,
+  listIssues,
+  getIssueLabels,
+  getIssueAssignees,
+  getSyncMeta,
+} from "./gh-cache-store";
+import { displayState } from "./gh-cache-format";
+import type { IssueRow, LabelRow, AssigneeRow } from "./gh-cache-types";
+import { syncIncremental, RateLimitExhaustedError } from "./gh-cache-sync";
+import { writeFile } from "fs/promises";
+import { tmpdir } from "os";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
@@ -368,9 +382,15 @@ type SettingsItem =
       value: string;
     };
 
-interface AppState {
+export interface IssueListItem {
+  issue: IssueRow;
+  labels: LabelRow[];
+  assignees: AssigneeRow[];
+}
+
+export interface AppState {
   daemon: DaemonState;
-  activeTab: "journal" | "artifacts" | "log" | "settings";
+  activeTab: "journal" | "artifacts" | "log" | "settings" | "issues";
   journalEntries: JournalEntry[];
   logLines: string[];
   artifacts: ArtifactMeta[];
@@ -385,11 +405,18 @@ interface AppState {
   logScrollOffset: number;   // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   logAutoScroll: boolean;    // true = 最新に自動追従
   spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
-  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts" | "settings";
+  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts" | "settings" | "issues";
   journalScrollOffset: number;  // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   journalAutoScroll: boolean;   // true = 最新に自動追従
   settingsItems: SettingsItem[];
   settingsCursor: number;
+  // ── gh-cache Issues タブ (T272 Phase 3) ─────────────────────────
+  issuesAvailability: "available" | "non_git" | "no_auth" | "unknown";
+  issueItems: IssueListItem[];
+  issueCursor: number;
+  issueSyncing: boolean;
+  issueLastSync: string | null;  // 表示用（ISO 文字列 or null）
+  issueLastError: string | null;
 }
 
 // --- スピナー定義 ---
@@ -865,6 +892,63 @@ function buildArtifactRows(state: AppState): any[] {
   return rows;
 }
 
+/**
+ * gh-cache Issues タブの行を描画する (T272 Phase 3)
+ *
+ * - 非 git / 認証なしなら disabled メッセージ
+ * - sync 中はプログレス行
+ * - エラーがあれば最下行に表示
+ */
+export function buildIssueRows(state: AppState): any[] {
+  if (state.issuesAvailability === "non_git") {
+    return [ui.text(t("gh_tui_disabled_non_git"), { dim: true })];
+  }
+  if (state.issuesAvailability === "no_auth") {
+    return [ui.text(t("gh_tui_disabled_no_auth"), { dim: true })];
+  }
+
+  const rows: any[] = [];
+  if (state.issueLastSync) {
+    rows.push(
+      ui.text(
+        `last sync: ${state.issueLastSync}${state.issueSyncing ? " • " + t("gh_tui_syncing") : ""}`,
+        { dim: true },
+      ),
+    );
+  } else if (state.issueSyncing) {
+    rows.push(ui.text(t("gh_tui_syncing"), { dim: true }));
+  }
+
+  if (state.issueItems.length === 0) {
+    rows.push(ui.text(t("gh_issue_empty"), { dim: true }));
+  } else {
+    for (let i = 0; i < state.issueItems.length; i++) {
+      const item = state.issueItems[i]!;
+      const isSelected = i === state.issueCursor;
+      const stateStr = displayState(item.issue).padEnd(7);
+      const typePrefix = item.issue.type === "pr" ? "PR" : "  ";
+      const parts = [
+        ui.text(isSelected ? ">" : " ", isSelected ? { bold: true } : {}),
+        ui.text(typePrefix, { dim: true }),
+        ui.text(`#${item.issue.number}`, { style: { bold: isSelected, fg: GRAY } }),
+        ui.text(stateStr, { dim: true }),
+        ui.text(item.issue.title, isSelected ? { bold: true } : {}),
+        item.labels.length > 0
+          ? ui.text(`[${item.labels.map((l) => l.name).join(", ")}]`, { dim: true })
+          : null,
+      ];
+      rows.push(ui.row({ gap: 1 }, parts));
+    }
+  }
+
+  if (state.issueLastError) {
+    rows.push(ui.text(""));
+    rows.push(ui.text(state.issueLastError, { dim: true }));
+  }
+
+  return rows;
+}
+
 function buildLogRows(lines: string[]) {
   if (lines.length === 0) {
     return [ui.text("no log entries", { dim: true })];
@@ -1073,6 +1157,12 @@ export async function startDashboard(
       journalAutoScroll: true,
       settingsItems: [],
       settingsCursor: 0,
+      issuesAvailability: "unknown",
+      issueItems: [],
+      issueCursor: 0,
+      issueSyncing: false,
+      issueLastSync: null,
+      issueLastError: null,
     },
     config: { executionMode: "inline" },
   });
@@ -1224,6 +1314,13 @@ export async function startDashboard(
             style: state.activeTab === "settings" ? { bold: true } : { dim: true },
             onPress: () => switchTab("settings"),
           }),
+          ui.button({
+            id: "tab-issues",
+            label: t("gh_tui_tab_title"),
+            px: 1,
+            style: state.activeTab === "issues" ? { bold: true } : { dim: true },
+            onPress: () => switchTab("issues"),
+          }),
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
@@ -1239,6 +1336,8 @@ export async function startDashboard(
             ? buildArtifactRows(state)
             : state.activeTab === "settings"
             ? buildSettingsRows(state)
+            : state.activeTab === "issues"
+            ? buildIssueRows(state)
             : (() => {
                 // 逆順表示: 最新が先頭、offset=0 で最新を表示
                 const reversed = [...state.logLines].reverse();
@@ -1302,12 +1401,22 @@ export async function startDashboard(
               ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
+          : state.focusedArea === "issues"
+          ? [
+              ui.kbd("↑/↓"), ui.text("select"),
+              ui.kbd("Enter/O"), ui.text("view"),
+              ui.kbd("R"), ui.text("sync"),
+              ui.kbd("B"), ui.text("browser"),
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("ESC"), ui.text("back"),
+            ]
           : [ // global
               ui.kbd("T"), ui.text("tasks"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("L"), ui.text("log"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("4"), ui.text("settings"),
+              ui.kbd("5"), ui.text("issues"),
               ui.kbd("r"), ui.text("reload"),
               ui.kbd("q"), ui.text("quit"),
               ui.kbd("Q"), ui.text("full quit"),
@@ -1325,6 +1434,7 @@ export async function startDashboard(
     artifacts: "artifacts",
     log: "log",
     settings: "settings",
+    issues: "issues",
   };
   // D17: refresh() が settings 再読み込みすべきかどうか判定するためのミラー
   let currentActiveTab: TabId = "journal";
@@ -1335,6 +1445,10 @@ export async function startDashboard(
       // settings に切り替えた直後は即時ロード
       if (tab === "settings") {
         refresh().catch(() => {});
+      }
+      // issues に切り替えたら cache から即時ロード
+      if (tab === "issues") {
+        loadIssuesFromCache().catch(() => {});
       }
     } catch {}
   }
@@ -1364,6 +1478,9 @@ export async function startDashboard(
           while (c >= 0 && s.settingsItems[c]?.kind === "section") c--;
           return { ...s, settingsCursor: Math.max(c, 0) };
         }
+        case "issues": {
+          return { ...s, issueCursor: Math.max(s.issueCursor - 1, 0) };
+        }
         default:
           return s;
       }
@@ -1392,6 +1509,10 @@ export async function startDashboard(
           while (c <= max && s.settingsItems[c]?.kind === "section") c++;
           return { ...s, settingsCursor: Math.min(c, max) };
         }
+        case "issues": {
+          const max = Math.max(s.issueItems.length - 1, 0);
+          return { ...s, issueCursor: Math.min(s.issueCursor + 1, max) };
+        }
         default:
           return s;
       }
@@ -1400,8 +1521,9 @@ export async function startDashboard(
     "2": () => switchTab("artifacts"),
     "3": () => switchTab("log"),
     "4": () => switchTab("settings"),
+    "5": () => switchTab("issues"),
     Tab: (ctx) => {
-      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings"];
+      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings", "issues"];
       const idx = tabs.indexOf(ctx.state.activeTab);
       const next = tabs[(idx + 1) % tabs.length]!;
       switchTab(next);
@@ -1410,6 +1532,29 @@ export async function startDashboard(
     J: () => switchTab("journal"),
     L: () => switchTab("log"),
     A: () => switchTab("artifacts"),
+    I: () => switchTab("issues"),
+    R: (ctx) => {
+      if (ctx.state.focusedArea !== "issues") return;
+      syncIssuesFromGh().catch((e: any) => {
+        log("issues_sync_error", e?.message ?? String(e)).catch(() => {});
+      });
+    },
+    B: (ctx) => {
+      if (ctx.state.focusedArea !== "issues") return;
+      const item = ctx.state.issueItems[ctx.state.issueCursor];
+      if (!item?.issue.html_url) return;
+      try {
+        Bun.spawn(["open", item.issue.html_url], { stdio: ["ignore", "ignore", "ignore"] });
+      } catch (e: any) {
+        log("issues_open_browser_failed", e?.message ?? String(e)).catch(() => {});
+      }
+    },
+    O: (ctx) => {
+      if (ctx.state.focusedArea !== "issues") return;
+      openSelectedIssueInViewer(ctx.state).catch((e: any) => {
+        log("viewer_error", e?.message ?? String(e)).catch(() => {});
+      });
+    },
     // Artifacts タブ専用キー
     Enter: (ctx) => {
       const currentState = ctx.state;
@@ -1448,6 +1593,13 @@ export async function startDashboard(
             refresh();
           },
         ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+        return;
+      }
+      // issues タブ: 選択中 issue を formatIssueShow でビューアに表示
+      if (currentState.focusedArea === "issues") {
+        openSelectedIssueInViewer(currentState).catch((e: any) => {
+          log("viewer_error", e?.message ?? String(e)).catch(() => {});
+        });
         return;
       }
 
@@ -1531,6 +1683,137 @@ export async function startDashboard(
   });
 
   appInstance = app;
+
+  // --- gh-cache Issues タブ用ヘルパ (T272 Phase 3) ---
+
+  /**
+   * キャッシュ DB から issue/PR 一覧を読み出して state に反映する。
+   * 非 git / 認証なしの場合は availability を更新して早期 return する。
+   */
+  async function loadIssuesFromCache(): Promise<void> {
+    const projectRoot = getState().projectRoot;
+    try {
+      const repoInfo = await resolveOriginRepo(projectRoot);
+      if (!repoInfo) {
+        app.update((s) => ({ ...s, issuesAvailability: "non_git" }));
+        return;
+      }
+      const auth = await resolveGithubToken(repoInfo.host);
+      if (!auth.token) {
+        app.update((s) => ({ ...s, issuesAvailability: "no_auth" }));
+        return;
+      }
+      const db = openGhCacheDB(projectRoot, repoInfo, tokenHash(auth.token));
+      try {
+        const rows = listIssues(db, { state: "open", limit: 100 });
+        const items: IssueListItem[] = rows.map((r) => ({
+          issue: r,
+          labels: getIssueLabels(db, r.number),
+          assignees: getIssueAssignees(db, r.number),
+        }));
+        const meta = getSyncMeta(db);
+        app.update((s) => ({
+          ...s,
+          issuesAvailability: "available",
+          issueItems: items,
+          issueCursor: Math.min(s.issueCursor, Math.max(items.length - 1, 0)),
+          issueLastSync: meta?.last_incremental_sync ?? meta?.last_full_sync ?? null,
+          issueLastError: null,
+        }));
+      } finally {
+        db.close();
+      }
+    } catch (e: any) {
+      log("issues_load_error", e?.message ?? String(e)).catch(() => {});
+      app.update((s) => ({
+        ...s,
+        issueLastError: e?.message ?? String(e),
+      }));
+    }
+  }
+
+  /**
+   * incremental sync を走らせてから再ロードする。
+   * R キーから呼ばれる。rate limit 到達時はエラー表示のみ。
+   */
+  async function syncIssuesFromGh(): Promise<void> {
+    const projectRoot = getState().projectRoot;
+    const repoInfo = await resolveOriginRepo(projectRoot);
+    if (!repoInfo) {
+      app.update((s) => ({ ...s, issuesAvailability: "non_git" }));
+      return;
+    }
+    const auth = await resolveGithubToken(repoInfo.host);
+    if (!auth.token) {
+      app.update((s) => ({ ...s, issuesAvailability: "no_auth" }));
+      return;
+    }
+    app.update((s) => ({ ...s, issueSyncing: true, issueLastError: null }));
+    const db = openGhCacheDB(projectRoot, repoInfo, tokenHash(auth.token));
+    try {
+      await syncIncremental({
+        db,
+        repoInfo,
+        auth: { ...auth, token: auth.token },
+      });
+      app.update((s) => ({ ...s, issueSyncing: false }));
+    } catch (e: any) {
+      const msg =
+        e instanceof RateLimitExhaustedError
+          ? `rate limit: remaining=${e.rateLimit.remaining ?? "?"} reset=${e.rateLimit.resetAt ?? "?"}`
+          : e?.message ?? String(e);
+      app.update((s) => ({ ...s, issueSyncing: false, issueLastError: msg }));
+    } finally {
+      db.close();
+    }
+    await loadIssuesFromCache();
+  }
+
+  /**
+   * 選択中 issue を formatIssueShow でファイルに吐き、openArtifactInViewer で開く。
+   */
+  async function openSelectedIssueInViewer(state: AppState): Promise<void> {
+    const item = state.issueItems[state.issueCursor];
+    if (!item) return;
+    const { formatIssueShow } = await import("./gh-cache-format");
+    const { getIssueComments, getPrReviews, getPrReviewComments } = await import(
+      "./gh-cache-store"
+    );
+    const projectRoot = getState().projectRoot;
+    const repoInfo = await resolveOriginRepo(projectRoot);
+    if (!repoInfo) return;
+    const auth = await resolveGithubToken(repoInfo.host);
+    if (!auth.token) return;
+    const db = openGhCacheDB(projectRoot, repoInfo, tokenHash(auth.token));
+    let content: string;
+    try {
+      const comments = getIssueComments(db, item.issue.number);
+      const rel: any = {
+        issue: item.issue,
+        labels: item.labels,
+        assignees: item.assignees,
+        comments,
+      };
+      if (item.issue.type === "pr") {
+        rel.reviews = getPrReviews(db, item.issue.number);
+        rel.reviewComments = getPrReviewComments(db, item.issue.number);
+      }
+      content = formatIssueShow(rel);
+    } finally {
+      db.close();
+    }
+    const tmpPath = join(tmpdir(), `cmux-team-issue-${item.issue.number}.md`);
+    await writeFile(tmpPath, content, "utf-8");
+    await openArtifactInViewer(app, tmpPath, () => {
+      dashboardActive = true;
+      spinnerInterval = setInterval(() => {
+        try {
+          app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 }));
+        } catch {}
+      }, SPINNER_INTERVAL);
+      refresh();
+    });
+  }
 
   // 2000ms ごとに状態更新
   const refresh = async () => {
