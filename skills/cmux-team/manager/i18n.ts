@@ -703,6 +703,67 @@ Usage:
   cmux-team self-update                            manually queue an update task
 
 For details on each command: cmux-team <command> --help`,
+
+  // ── gh-cache (T272) ───────────────────────────────────────────────────────
+  gh_not_a_github_repo:
+    "Error: not a git repository, or origin is not GitHub / GHE.\n" +
+    "  cmux-team issue/pr requires a git repo with an origin on github.com or an enterprise instance.",
+  gh_auth_missing:
+    "Error: No GitHub token found for host {host}.\n" +
+    "  checked: {checked}\n" +
+    "Run one of:\n" +
+    "  gh auth login\n" +
+    "  export GITHUB_TOKEN=<your token>",
+  gh_rate_limit_exhausted:
+    "Error: GitHub rate limit exhausted. remaining={remaining} reset_at={reset_at}\n" +
+    "  Try `cmux-team issue list --stale-ok` to read from cache without syncing.",
+  gh_me_not_resolved:
+    "Error: @me cannot be resolved. Run `cmux-team gh sync` first so the cache knows your viewer login.",
+  gh_unknown_subcommand:
+    "Unknown subcommand: {sub}. Run `cmux-team gh --help`.",
+  gh_cache_not_initialized:
+    "Error: gh-cache.db is empty. Run `cmux-team gh sync --full` first.",
+  gh_stale_warning:
+    "Warning: last full sync was {days} days ago. Consider `cmux-team gh sync --full`.",
+  gh_issue_empty: "(no issues / PRs matched)",
+  gh_sync_success:
+    "Synced {mode}: issues={issues} comments={comments} reviews={reviews} duration={duration_ms}ms",
+  gh_sync_not_modified: "Not modified (304). last_sync={last_sync}",
+  gh_status_header: "GitHub cache status",
+  gh_status_last_full: "Last full sync:        {when}",
+  gh_status_last_incremental: "Last incremental sync: {when}",
+  gh_status_host: "host:                  {host}",
+  gh_status_repo: "repo:                  {owner}/{repo}",
+  gh_status_viewer: "viewer:                {viewer}",
+  gh_status_issue_counts:
+    "issue:                 {total} (open={open}, closed={closed})",
+  gh_status_pr_counts:
+    "PR:                    {total} (open={open}, closed={closed}, merged={merged})",
+  gh_status_comments: "comments:              {count}",
+  gh_status_rate: "rate limit:            {remaining} / {limit} (reset {reset})",
+  gh_status_token: "token hash:            {hash}",
+  gh_status_never_synced: "(never)",
+  gh_tui_tab_title: "Issues",
+  gh_tui_help_line:
+    "[R] sync  [Enter/O] open in viewer  [B] open in browser",
+  gh_tui_syncing: "Syncing...",
+  gh_tui_disabled_non_git:
+    "Issues tab disabled (not a git repo or origin not GitHub).",
+  gh_tui_disabled_no_auth:
+    "Issues tab needs authentication: run `gh auth login` or set GITHUB_TOKEN.",
+  gh_help: `cmux-team gh — GitHub issue/PR cache management
+
+Usage:
+  cmux-team gh sync [--full]          sync issues/PRs into .team/gh-cache.db
+  cmux-team gh status                 show cache status + rate limit
+
+Flags:
+  --full    fetch the last 500 issues/PRs (plus attachments) from scratch
+            (use on first run, after token rotation, or once a month)
+
+Without --full, sync uses If-None-Match + since= to fetch only changes.
+Non-git directories / non-GitHub origins exit 2. Missing auth exits 3.
+Rate-limit exhaustion exits 4.`,
 };
 
 const ja: typeof en = {
@@ -1383,6 +1444,67 @@ Usage:
   cmux-team self-update                            update タスクを手動起票
 
 各コマンドの詳細: cmux-team <command> --help`,
+
+  // ── gh-cache (T272) ───────────────────────────────────────────────────────
+  gh_not_a_github_repo:
+    "Error: git リポジトリ外、または origin が GitHub / GHE ではありません。\n" +
+    "  cmux-team issue/pr は origin が github.com または Enterprise インスタンスである必要があります。",
+  gh_auth_missing:
+    "Error: host {host} の GitHub トークンが見つかりません。\n" +
+    "  確認先: {checked}\n" +
+    "以下のいずれかを実行してください:\n" +
+    "  gh auth login\n" +
+    "  export GITHUB_TOKEN=<your token>",
+  gh_rate_limit_exhausted:
+    "Error: GitHub API のレート制限に到達しました。remaining={remaining} reset_at={reset_at}\n" +
+    "  `cmux-team issue list --stale-ok` でキャッシュから読み取れます（同期せずに表示）。",
+  gh_me_not_resolved:
+    "Error: @me を解決できません。先に `cmux-team gh sync` を実行して viewer login をキャッシュしてください。",
+  gh_unknown_subcommand:
+    "Unknown subcommand: {sub}. `cmux-team gh --help` を参照してください。",
+  gh_cache_not_initialized:
+    "Error: gh-cache.db が空です。先に `cmux-team gh sync --full` を実行してください。",
+  gh_stale_warning:
+    "Warning: 最後の full sync から {days} 日経過しています。`cmux-team gh sync --full` の実行を検討してください。",
+  gh_issue_empty: "(該当する issue / PR はありません)",
+  gh_sync_success:
+    "同期完了 {mode}: issues={issues} comments={comments} reviews={reviews} duration={duration_ms}ms",
+  gh_sync_not_modified: "変更なし (304)。last_sync={last_sync}",
+  gh_status_header: "GitHub cache status",
+  gh_status_last_full: "最終 full sync:        {when}",
+  gh_status_last_incremental: "最終 incremental sync: {when}",
+  gh_status_host: "host:                  {host}",
+  gh_status_repo: "repo:                  {owner}/{repo}",
+  gh_status_viewer: "viewer:                {viewer}",
+  gh_status_issue_counts:
+    "issue:                 {total} (open={open}, closed={closed})",
+  gh_status_pr_counts:
+    "PR:                    {total} (open={open}, closed={closed}, merged={merged})",
+  gh_status_comments: "comments:              {count}",
+  gh_status_rate: "rate limit:            {remaining} / {limit} (reset {reset})",
+  gh_status_token: "token hash:            {hash}",
+  gh_status_never_synced: "(未実行)",
+  gh_tui_tab_title: "Issues",
+  gh_tui_help_line:
+    "[R] 同期  [Enter/O] ビューアで開く  [B] ブラウザで開く",
+  gh_tui_syncing: "同期中...",
+  gh_tui_disabled_non_git:
+    "Issues タブは無効（git リポジトリでないか、origin が GitHub ではありません）。",
+  gh_tui_disabled_no_auth:
+    "Issues タブには認証が必要です。`gh auth login` を実行するか GITHUB_TOKEN を設定してください。",
+  gh_help: `cmux-team gh — GitHub issue/PR キャッシュ管理
+
+Usage:
+  cmux-team gh sync [--full]          issue/PR を .team/gh-cache.db に同期
+  cmux-team gh status                 キャッシュ状態とレート制限を表示
+
+Flags:
+  --full    直近 500 件の issue/PR（とその添付）を最初から取得する
+            （初回実行・トークンローテーション後・月次メンテ時に使用）
+
+--full なしの場合、If-None-Match + since= で差分だけを取得します。
+非 git ディレクトリ / 非 GitHub origin は exit 2、認証欠如は exit 3、
+レート制限到達は exit 4 で終了します。`,
 };
 
 const messages = { en, ja };

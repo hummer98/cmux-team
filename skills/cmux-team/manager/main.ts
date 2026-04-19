@@ -65,6 +65,19 @@ import {
   AGENT_INSTRUCTIONS_MAX_BYTES,
 } from "./agent-instructions";
 import { expandProjectInstructions } from "./template";
+import { resolveOriginRepo } from "./gh-cache-repo";
+import { resolveGithubToken, tokenHash } from "./gh-cache-auth";
+import {
+  openGhCacheDB,
+  getSyncMeta,
+  getCacheStats,
+} from "./gh-cache-store";
+import {
+  syncFull,
+  syncIncremental,
+  RateLimitExhaustedError,
+  SyncHttpError,
+} from "./gh-cache-sync";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -4174,6 +4187,172 @@ async function cmdSelfUpdate(): Promise<void> {
   }
 }
 
+// --- gh サブコマンド (T272) ---
+/**
+ * cmux-team gh — GitHub issue/PR キャッシュ管理
+ *   gh sync [--full]
+ *   gh status
+ *
+ * Exit codes:
+ *   0 success
+ *   1 generic
+ *   2 non-git / non-GitHub origin
+ *   3 auth missing
+ *   4 rate limit exhausted
+ */
+async function cmdGh(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("gh_help"));
+  const sub = args[1];
+  switch (sub) {
+    case "sync":
+      await cmdGhSync();
+      break;
+    case "status":
+      await cmdGhStatus();
+      break;
+    default:
+      console.error(t("gh_unknown_subcommand", { sub: sub ?? "" }));
+      process.exit(1);
+  }
+}
+
+/**
+ * `openGhCacheDB` に渡す前段: repo / token を解決して正規化した env を返す。
+ * 失敗時は各 exit code で process.exit する。
+ */
+async function resolveGhContext(): Promise<{
+  db: ReturnType<typeof openGhCacheDB>;
+  repoInfo: NonNullable<Awaited<ReturnType<typeof resolveOriginRepo>>>;
+  auth: Awaited<ReturnType<typeof resolveGithubToken>> & { token: string };
+}> {
+  const repoInfo = await resolveOriginRepo(PROJECT_ROOT);
+  if (!repoInfo) {
+    console.error(t("gh_not_a_github_repo"));
+    process.exit(2);
+  }
+  const auth = await resolveGithubToken(repoInfo.host);
+  if (auth.kind === "none" || !auth.token) {
+    console.error(
+      t("gh_auth_missing", {
+        host: repoInfo.host,
+        checked: auth.checked.join(", "),
+      }),
+    );
+    process.exit(3);
+  }
+  const db = openGhCacheDB(PROJECT_ROOT, repoInfo, tokenHash(auth.token));
+  return { db, repoInfo, auth: auth as typeof auth & { token: string } };
+}
+
+async function cmdGhSync(): Promise<void> {
+  const full = hasFlag("full");
+  const { db, repoInfo, auth } = await resolveGhContext();
+
+  try {
+    const result = full
+      ? await syncFull({ db, repoInfo, auth })
+      : await syncIncremental({ db, repoInfo, auth });
+
+    if (result.notModified) {
+      const meta = getSyncMeta(db);
+      console.log(
+        t("gh_sync_not_modified", {
+          last_sync: meta?.last_incremental_sync ?? meta?.last_full_sync ?? "-",
+        }),
+      );
+    } else {
+      console.log(
+        t("gh_sync_success", {
+          mode: result.mode,
+          issues: String(result.fetchedIssues),
+          comments: String(result.fetchedComments),
+          reviews: String(result.fetchedReviews),
+          duration_ms: String(result.durationMs),
+        }),
+      );
+    }
+    process.exit(0);
+  } catch (e) {
+    if (e instanceof RateLimitExhaustedError) {
+      console.error(
+        t("gh_rate_limit_exhausted", {
+          remaining: String(e.rateLimit.remaining ?? "?"),
+          reset_at: e.rateLimit.resetAt ?? "?",
+        }),
+      );
+      process.exit(4);
+    }
+    if (e instanceof SyncHttpError) {
+      console.error(`Error: GitHub API ${e.status}: ${e.message}`);
+      process.exit(1);
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Error: ${msg}`);
+    process.exit(1);
+  }
+}
+
+async function cmdGhStatus(): Promise<void> {
+  const repoInfo = await resolveOriginRepo(PROJECT_ROOT);
+  if (!repoInfo) {
+    console.error(t("gh_not_a_github_repo"));
+    process.exit(2);
+  }
+  const auth = await resolveGithubToken(repoInfo.host);
+  if (auth.kind === "none" || !auth.token) {
+    console.error(
+      t("gh_auth_missing", {
+        host: repoInfo.host,
+        checked: auth.checked.join(", "),
+      }),
+    );
+    process.exit(3);
+  }
+  const db = openGhCacheDB(PROJECT_ROOT, repoInfo, tokenHash(auth.token));
+  const meta = getSyncMeta(db);
+  const stats = getCacheStats(db);
+
+  console.log(t("gh_status_header"));
+  console.log(
+    t("gh_status_last_full", { when: meta?.last_full_sync ?? t("gh_status_never_synced") }),
+  );
+  console.log(
+    t("gh_status_last_incremental", {
+      when: meta?.last_incremental_sync ?? t("gh_status_never_synced"),
+    }),
+  );
+  console.log(t("gh_status_host", { host: repoInfo.host }));
+  console.log(
+    t("gh_status_repo", { owner: repoInfo.owner, repo: repoInfo.repo }),
+  );
+  console.log(t("gh_status_viewer", { viewer: meta?.viewer_login ?? "-" }));
+  console.log(
+    t("gh_status_issue_counts", {
+      total: String(stats.issueCount),
+      open: String(stats.issueOpenCount),
+      closed: String(stats.issueClosedCount),
+    }),
+  );
+  console.log(
+    t("gh_status_pr_counts", {
+      total: String(stats.prCount),
+      open: String(stats.prOpenCount),
+      closed: String(stats.prClosedCount),
+      merged: String(stats.prMergedCount),
+    }),
+  );
+  console.log(t("gh_status_comments", { count: String(stats.commentCount) }));
+  console.log(
+    t("gh_status_rate", {
+      remaining: meta?.rate_limit_remaining != null ? String(meta.rate_limit_remaining) : "?",
+      limit: "?",
+      reset: meta?.rate_limit_reset ?? "-",
+    }),
+  );
+  console.log(t("gh_status_token", { hash: tokenHash(auth.token) }));
+  process.exit(0);
+}
+
 // --- artifacts サブコマンド ---
 async function cmdArtifacts(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_artifacts"));
@@ -4445,6 +4624,9 @@ switch (command) {
     break;
   case "list-agent-instructions":
     await cmdListAgentInstructions();
+    break;
+  case "gh":
+    await cmdGh();
     break;
   default:
     if (!command || hasHelpFlag()) {
