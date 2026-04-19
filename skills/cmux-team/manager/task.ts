@@ -3,7 +3,7 @@
  */
 import { readdir, readFile, writeFile, rename, stat, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, dirname, basename } from "path";
 import { log } from "./logger";
 
 export interface TaskMeta {
@@ -91,7 +91,7 @@ export function findAssignmentConflict(
  *    かつ team.json.conductors に `{surface: S_B, taskId: X}` (S_A !== S_B) が存在する場合、
  *    同一 taskId に対して異なる surface を主張する cross-source 不一致 → violation。
  *    (R3: conductorSlot が team.json に一切現れない「stale slot」は既存の
- *    resume_fallback_to_ready / conductor_taskid_reconciled 経路に委ねるため検出しない)
+ *    resume_marked_aborted / conductor_taskid_reconciled 経路に委ねるため検出しない)
  */
 export function detectStartupUniqueViolations(
   taskState: TaskStateMap,
@@ -138,6 +138,67 @@ export function detectStartupUniqueViolations(
     result.push({ taskId, surfaces: [...surfaces].sort() });
   }
   return result;
+}
+
+// ---- T264: resume 不可検出 + journal 生成 ---------------------------------
+
+/**
+ * T264: cmdStart 起動時の resume 可否分類。
+ * - `resume`: sessionId / taskRunId / worktreePath 全て揃い、worktree が実在する
+ * - `abort`: いずれかが欠落している（reason で原因を区別）
+ *
+ * 検証順序は `no_session_id` → `no_task_run_id` → `no_worktree` の固定優先順位で、
+ * 最初に欠落した要素を reason として返す。
+ */
+export type ResumeClassification =
+  | { kind: "resume" }
+  | { kind: "abort"; reason: "no_worktree" | "no_session_id" | "no_task_run_id" };
+
+/**
+ * 起動時、assigned タスクが resume 可能か判定する pure function。
+ * exists はテスト注入用（デフォルト `existsSync`）。
+ */
+export function classifyResumeAction(
+  ts: TaskState,
+  exists: (p: string) => boolean = existsSync,
+): ResumeClassification {
+  if (!ts.sessionId) return { kind: "abort", reason: "no_session_id" };
+  if (!ts.taskRunId) return { kind: "abort", reason: "no_task_run_id" };
+  if (!ts.worktreePath || !exists(ts.worktreePath)) {
+    return { kind: "abort", reason: "no_worktree" };
+  }
+  return { kind: "resume" };
+}
+
+/**
+ * T264: resume 不可で aborted 化するタスクの journal を生成する。
+ *
+ * - runs ディレクトリパスは相対（`.team/tasks/<slug>/runs/<taskRunId>/`）で埋める
+ * - 単一ファイル形式（legacy flat task.md）は runs ディレクトリが構造上存在しないため
+ *   `(runs dir not found — legacy flat task file)` と代替表記
+ * - `taskFile` が undefined（`.team/tasks/<slug>/` ごと消失）は `<unknown>` を埋める
+ */
+export function buildResumeAbortJournal(
+  taskFile: string | undefined,
+  ts: TaskState,
+  reason: "no_worktree" | "no_session_id" | "no_task_run_id",
+): string {
+  const taskRunId = ts.taskRunId ?? "unknown";
+  let artifactsPath: string;
+  if (taskFile && taskFile.endsWith("/task.md")) {
+    const slug = basename(dirname(taskFile));
+    artifactsPath = `.team/tasks/${slug}/runs/${taskRunId}/`;
+  } else if (taskFile) {
+    artifactsPath = "(runs dir not found — legacy flat task file)";
+  } else {
+    artifactsPath = `.team/tasks/<unknown>/runs/${taskRunId}/`;
+  }
+  const summary = reason === "no_worktree"
+    ? "lost worktree"
+    : reason === "no_session_id"
+    ? "missing session id"
+    : "missing task run id";
+  return `[resume] ${summary} (taskRunId=${taskRunId}). artifacts preserved at ${artifactsPath}`;
 }
 
 /**

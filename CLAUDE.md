@@ -691,6 +691,25 @@ Conductor が worktree を作成する際、start-point は以下の優先順位
 
 **異常検出**: PID ベース生存確認（`spawnPidWatcher` が `process.kill(pid, 0)` を 1 秒間隔で呼ぶ）と hook push（`SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED`）で行う。`cmux read-screen` は Trust 確認検出にのみ使う。
 
+### 起動時 resume 不可検出（T264）
+
+`cmdStart` 起動時、`task-state.json` で `status=assigned` のタスクが
+`sessionId` / `taskRunId` / `worktreePath`（かつ worktree 実在）を満たさない場合、
+**ready へ差し戻さず `aborted` に倒す**（旧挙動 `resume_fallback_to_ready` は撤去）。
+
+旧 1 回目の成果物（`.team/tasks/<slug>/runs/<taskRunId>/`）を人間が確認する前に
+自動再実行されるのを防ぐための安全側設計。journal に runs ディレクトリの相対パスを
+埋め、ユーザーは `cmux-team restart-task --task-id <X>` で明示的に再走させる。
+
+| `resume_marked_aborted` reason | 対応する `task_aborted` reason | 意味 |
+|-------------------------------|-------------------------------|------|
+| `no_session_id` | `resume_no_session_id` | Claude セッション ID が未記録（SESSION_STARTED 到達前の異常終了） |
+| `no_task_run_id` | `resume_no_task_run_id` | taskRunId が未記録（assign 直後の異常終了） |
+| `no_worktree` | `resume_no_worktree` | worktreePath が null または worktree ディレクトリ不在 |
+
+ログは `resume_marked_aborted` → `task_aborted reason=resume_*` →
+`child_reverted_to_draft`（cascade 副作用）の順で emit される。
+
 ### 依存タスクの cascade（T241）
 
 親タスクが `aborted` / `deleted` に遷移したとき、`depends_on` に親を含む
@@ -701,12 +720,13 @@ Conductor が worktree を作成する際、start-point は以下の優先順位
 - `assigned` 子: 変更なし（走行中の作業は止めない）
 - `closed` / `aborted` / `deleted` 子: 変更なし
 
-cascade は以下 5 経路で同期的に走る:
+cascade は以下 6 経路で同期的に走る:
 1. `cmux-team abort-task` CLI
 2. `cmux-team delete-task` CLI
 3. Conductor forced close（disconnect timeout）
 4. user_clear（手動 /clear で running を abort）
 5. assign_failed（worktree 作成失敗等）
+6. `resume_marked_aborted`（cmdStart 起動時、assigned タスクの resume 不可検出 — T264）
 
 ログ: `child_reverted_to_draft parent=<X> child=<Y> reason=parent_aborted`
 （delete 経路でも `reason=parent_aborted` で統一）

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { parseTaskMeta, filterExecutableTasks, sortByPriority, cascadeAbortToChildren } from "./task";
-import type { TaskMeta, TaskStateMap } from "./task";
+import { parseTaskMeta, filterExecutableTasks, sortByPriority, cascadeAbortToChildren, classifyResumeAction, buildResumeAbortJournal } from "./task";
+import type { TaskMeta, TaskState, TaskStateMap } from "./task";
 
 describe("parseTaskMeta", () => {
   test("基本的なタスクをパースできる", () => {
@@ -386,5 +386,69 @@ run_after_all: true
     const meta = parseTaskMeta(content, "102-normal.md", "/path/102-normal.md");
     expect(meta!.exclusive).toBe(false);
     expect(meta!.runAfterAll).toBe(true);
+  });
+});
+
+describe("resume classify/journal (T264)", () => {
+  const fullyAssigned: TaskState = {
+    status: "assigned",
+    sessionId: "sess-1",
+    taskRunId: "task-262-1776560393",
+    worktreePath: "/tmp/worktree-262",
+  };
+
+  test("classifyResumeAction: sessionId なし → abort (no_session_id)", () => {
+    const ts: TaskState = { ...fullyAssigned, sessionId: undefined };
+    const r = classifyResumeAction(ts, () => true);
+    expect(r).toEqual({ kind: "abort", reason: "no_session_id" });
+  });
+
+  test("classifyResumeAction: taskRunId なし → abort (no_task_run_id)", () => {
+    const ts: TaskState = { ...fullyAssigned, taskRunId: undefined };
+    const r = classifyResumeAction(ts, () => true);
+    expect(r).toEqual({ kind: "abort", reason: "no_task_run_id" });
+  });
+
+  test("classifyResumeAction: worktreePath なし → abort (no_worktree)", () => {
+    const ts: TaskState = { ...fullyAssigned, worktreePath: undefined };
+    const r = classifyResumeAction(ts, () => true);
+    expect(r).toEqual({ kind: "abort", reason: "no_worktree" });
+  });
+
+  test("classifyResumeAction: worktreePath あり + exists=false → abort (no_worktree)", () => {
+    const r = classifyResumeAction(fullyAssigned, () => false);
+    expect(r).toEqual({ kind: "abort", reason: "no_worktree" });
+  });
+
+  test("classifyResumeAction: 3 点揃い + exists=true → resume", () => {
+    const r = classifyResumeAction(fullyAssigned, () => true);
+    expect(r).toEqual({ kind: "resume" });
+  });
+
+  test("buildResumeAbortJournal: ディレクトリ形式 taskFile + no_worktree", () => {
+    const ts: TaskState = { status: "assigned", taskRunId: "task-262-1776560393" };
+    const j = buildResumeAbortJournal(
+      "/proj/.team/tasks/262-conductor/task.md",
+      ts,
+      "no_worktree",
+    );
+    expect(j).toBe(
+      "[resume] lost worktree (taskRunId=task-262-1776560393). artifacts preserved at .team/tasks/262-conductor/runs/task-262-1776560393/",
+    );
+  });
+
+  test("buildResumeAbortJournal: 単一ファイル形式 taskFile", () => {
+    const ts: TaskState = { status: "assigned", taskRunId: "task-010-9999" };
+    const j = buildResumeAbortJournal("/proj/.team/tasks/010.md", ts, "no_worktree");
+    expect(j).toContain("(runs dir not found — legacy flat task file)");
+    expect(j).toContain("[resume] lost worktree (taskRunId=task-010-9999)");
+  });
+
+  test("buildResumeAbortJournal: taskFile=undefined + no_session_id", () => {
+    const ts: TaskState = { status: "assigned" };
+    const j = buildResumeAbortJournal(undefined, ts, "no_session_id");
+    expect(j).toBe(
+      "[resume] missing session id (taskRunId=unknown). artifacts preserved at .team/tasks/<unknown>/runs/unknown/",
+    );
   });
 });

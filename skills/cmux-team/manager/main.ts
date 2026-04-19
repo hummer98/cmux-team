@@ -40,7 +40,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, type TaskState } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, type TaskState, type TaskMeta } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
@@ -247,6 +247,92 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
     }
   } catch {}
   return undefined;
+}
+
+// ---- T264: cmdStart 起動時 resume 判定 wrapper -----------------------------
+
+export interface ApplyResumeTransitionsDeps {
+  findTaskFile: (taskId: string) => Promise<string | undefined>;
+  exists?: (p: string) => boolean;
+  now?: () => string;
+}
+
+export interface ApplyResumeTransitionsResult {
+  resumePlan: Array<{
+    taskId: string;
+    taskRunId: string;
+    worktreePath: string;
+    sessionId: string;
+  }>;
+  /** 新規 aborted 化された task id（既に aborted だったものは含まない） */
+  abortedTaskIds: string[];
+  abortReasons: Record<string, "no_worktree" | "no_session_id" | "no_task_run_id">;
+  journals: Record<string, string>;
+  /** 親 taskId → cascade で draft に戻した子 id 群 */
+  revertedChildrenByParent: Record<string, string[]>;
+  /** state mutation が起きたかどうか（cascade 副作用も含む）。abort が 1 件でもあれば true */
+  modified: boolean;
+}
+
+/**
+ * T264: cmdStart 内 resume 判定ループを切り出した wrapper。
+ *
+ * - taskState をミュータブルに書き換える（aborted 化 + cascade 子 draft 化）
+ * - emit は呼び出し側の責務。戻り値を消費して
+ *   `resume_marked_aborted` → `task_aborted` → `child_reverted_to_draft` の
+ *   順で log() を呼ぶこと（plan v2 D12）
+ * - cascade は既存 aborted 化 4 経路と同じく `cascadeAbortToChildren` を同期呼出
+ *   （CLAUDE.md §依存タスクの cascade を 5 経路 → 6 経路に拡張）
+ */
+export async function applyResumeTransitions(
+  taskState: Record<string, TaskState>,
+  allTasks: TaskMeta[],
+  deps: ApplyResumeTransitionsDeps,
+): Promise<ApplyResumeTransitionsResult> {
+  const exists = deps.exists ?? existsSync;
+  const now = deps.now ?? (() => new Date().toISOString());
+
+  const resumePlan: ApplyResumeTransitionsResult["resumePlan"] = [];
+  const abortedTaskIds: string[] = [];
+  const abortReasons: ApplyResumeTransitionsResult["abortReasons"] = {};
+  const journals: Record<string, string> = {};
+  const revertedChildrenByParent: Record<string, string[]> = {};
+  let modified = false;
+
+  for (const [taskId, ts] of Object.entries(taskState)) {
+    if (ts.status !== "assigned") continue;
+    const action = classifyResumeAction(ts, exists);
+
+    if (action.kind === "resume") {
+      resumePlan.push({
+        taskId,
+        taskRunId: ts.taskRunId!,
+        worktreePath: ts.worktreePath!,
+        sessionId: ts.sessionId!,
+      });
+      continue;
+    }
+
+    const taskFile = await deps.findTaskFile(taskId);
+    const journal = buildResumeAbortJournal(taskFile, ts, action.reason);
+    taskState[taskId] = {
+      ...ts,
+      status: "aborted",
+      abortedAt: now(),
+      journal,
+    };
+    modified = true;
+    abortedTaskIds.push(taskId);
+    abortReasons[taskId] = action.reason;
+    journals[taskId] = journal;
+
+    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
+    if (revertedChildren.length > 0) {
+      revertedChildrenByParent[taskId] = revertedChildren;
+    }
+  }
+
+  return { resumePlan, abortedTaskIds, abortReasons, journals, revertedChildrenByParent, modified };
 }
 
 async function cmdStart(): Promise<void> {
@@ -699,30 +785,37 @@ async function cmdStart(): Promise<void> {
     await log("error", `startup unique violation check failed: ${e.message}`);
   }
 
-  for (const [taskId, ts] of Object.entries(taskState)) {
-    if (ts.status !== "assigned") continue;
+  // T241/T264: cascade 用に全タスクメタをロード（resume 不可 → aborted 遷移で使う）
+  //   別途 line 1259 で loadTasks する箇所があるが、そちらは status 表示用で
+  //   ここでは resume ループ用に先取りする（どちらも読み取り専用）
+  const { tasks: allTasksForResume } = await loadTasks(PROJECT_ROOT);
 
-    const canResume = ts.sessionId
-      && ts.worktreePath && existsSync(ts.worktreePath)
-      && ts.taskRunId;
+  // T264: resume 不可（no_worktree / no_session_id / no_task_run_id）→ aborted 遷移 + cascade
+  const resumeResult = await applyResumeTransitions(taskState, allTasksForResume, {
+    findTaskFile,
+  });
+  rawResumePlan.push(...resumeResult.resumePlan);
+  if (resumeResult.modified) taskStateModified = true;
 
-    if (!canResume) {
-      // resume 不可 → ready に戻す（次の scanTasks で再割り当て）
-      taskState[taskId] = { ...ts, status: "ready" };
-      taskStateModified = true;
+  for (const taskId of resumeResult.abortedTaskIds) {
+    const reason = resumeResult.abortReasons[taskId]!;
+    const journal = resumeResult.journals[taskId]!;
+    const ts = taskState[taskId]!;
+    await log(
+      "resume_marked_aborted",
+      `task_id=${taskId} reason=${reason} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`,
+    );
+    await log(
+      "task_aborted",
+      `task_id=${taskId} reason=resume_${reason} journal_summary=${journal}`,
+    );
+    const revertedChildren = resumeResult.revertedChildrenByParent[taskId] ?? [];
+    for (const childId of revertedChildren) {
       await log(
-        "resume_fallback_to_ready",
-        `task_id=${taskId} reason=${!ts.sessionId ? "no_session_id" : "no_worktree"} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`
+        "child_reverted_to_draft",
+        `parent=${taskId} child=${childId} reason=parent_aborted`,
       );
-      continue;
     }
-
-    rawResumePlan.push({
-      taskId,
-      taskRunId: ts.taskRunId!,
-      worktreePath: ts.worktreePath!,
-      sessionId: ts.sessionId!,
-    });
   }
 
   // 順序の安定化: taskId を数値として昇順 sort。これによりどの pane に

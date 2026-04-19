@@ -13,7 +13,9 @@ import {
   validateSendAgentTarget,
   waitForAgentRegistered,
   ensureAskDetectorScript,
+  applyResumeTransitions,
 } from "./main";
+import type { TaskMeta, TaskState } from "./task";
 import { resolveLayout, resolveAutoUpdateMode } from "./config";
 import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
@@ -1236,5 +1238,112 @@ describe("normalizeSurfaceArg (T206)", () => {
     await expect(
       normalizeSurfaceArg("a5ac4f23-70d9-4b81-8958-168cd68cf8df")
     ).rejects.toThrow(/not found in cmux tree/);
+  });
+});
+
+describe("T264: applyResumeTransitions (cmdStart resume)", () => {
+  /** テスト用 TaskMeta ファクトリ（Finding 1 対応） */
+  const makeMeta = (id: string, dependsOn: string[] = []): TaskMeta => ({
+    id,
+    title: `task-${id}`,
+    status: "ready",
+    priority: "medium",
+    dependsOn,
+    runAfterAll: false,
+    exclusive: false,
+    filePath: `/p/.team/tasks/${id}/task.md`,
+    fileName: `${id}`,
+    createdAt: "2026-04-19T00:00:00Z",
+  });
+
+  const fixedNow = () => "2026-04-19T12:00:00Z";
+
+  test("(a) assigned + worktree 生存 → resume", async () => {
+    const taskState: Record<string, TaskState> = {
+      "1": {
+        status: "assigned",
+        sessionId: "s",
+        taskRunId: "task-1-111",
+        worktreePath: "/tmp/exists",
+      },
+    };
+    const result = await applyResumeTransitions(taskState, [makeMeta("1")], {
+      findTaskFile: async () => undefined,
+      exists: () => true,
+      now: fixedNow,
+    });
+    expect(result.resumePlan).toHaveLength(1);
+    expect(result.resumePlan[0]).toEqual({
+      taskId: "1",
+      taskRunId: "task-1-111",
+      worktreePath: "/tmp/exists",
+      sessionId: "s",
+    });
+    expect(result.abortedTaskIds).toEqual([]);
+    expect(result.modified).toBe(false);
+    expect(taskState["1"]!.status).toBe("assigned");
+  });
+
+  test("(b) assigned + worktree 不在 → aborted 化 + journal", async () => {
+    const taskState: Record<string, TaskState> = {
+      "1": {
+        status: "assigned",
+        sessionId: "s",
+        taskRunId: "task-1-123",
+        worktreePath: "/tmp/gone",
+      },
+    };
+    const result = await applyResumeTransitions(taskState, [makeMeta("1")], {
+      findTaskFile: async () => "/p/.team/tasks/1-foo/task.md",
+      exists: () => false,
+      now: fixedNow,
+    });
+    expect(result.abortedTaskIds).toEqual(["1"]);
+    expect(result.abortReasons["1"]).toBe("no_worktree");
+    expect(result.journals["1"]).toContain(".team/tasks/1-foo/runs/task-1-123/");
+    expect(result.journals["1"]).toContain("[resume] lost worktree");
+    expect(result.modified).toBe(true);
+    expect(taskState["1"]!.status).toBe("aborted");
+    expect(taskState["1"]!.abortedAt).toBe("2026-04-19T12:00:00Z");
+    expect(taskState["1"]!.journal).toBe(result.journals["1"]);
+    expect(result.resumePlan).toEqual([]);
+  });
+
+  test("(c) 親 aborted → ready 子 draft に戻す（cascade 検証）", async () => {
+    const taskState: Record<string, TaskState> = {
+      "1": {
+        status: "assigned",
+        sessionId: "s",
+        taskRunId: "t1",
+        worktreePath: "/tmp/gone",
+      },
+      "2": { status: "ready" },
+    };
+    const allTasks = [makeMeta("1"), makeMeta("2", ["1"])];
+    const result = await applyResumeTransitions(taskState, allTasks, {
+      findTaskFile: async () => undefined,
+      exists: () => false,
+      now: fixedNow,
+    });
+    expect(result.abortedTaskIds).toEqual(["1"]);
+    expect(result.revertedChildrenByParent["1"]).toEqual(["2"]);
+    expect(taskState["2"]!.status).toBe("draft");
+    expect(taskState["2"]!.journal).toContain("parent_aborted: 1");
+    expect(taskState["1"]!.status).toBe("aborted");
+  });
+
+  test("(d) ready タスクは無影響", async () => {
+    const taskState: Record<string, TaskState> = {
+      "5": { status: "ready" },
+    };
+    const result = await applyResumeTransitions(taskState, [makeMeta("5")], {
+      findTaskFile: async () => undefined,
+      exists: () => true,
+      now: fixedNow,
+    });
+    expect(result.resumePlan).toEqual([]);
+    expect(result.abortedTaskIds).toEqual([]);
+    expect(result.modified).toBe(false);
+    expect(taskState["5"]!.status).toBe("ready");
   });
 });
