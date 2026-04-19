@@ -587,6 +587,15 @@ async function cmdStart(): Promise<void> {
         await cmux.closeSurface(surface).catch(() => {});
       }
 
+      // 4. 閉じた surface を state から除去してから team.json を永続化する。
+      //    これをやらないと次回起動の initializeLayout が存在しない surface を
+      //    team.json から読んで全件 discard し、R7 方針で pane を新規作成しない
+      //    ため Conductor ゼロ台で着地する（Full Quit のセマンティクスは
+      //    「全部終了して次回はゼロから」なので、truth である team.json にも
+      //    その事実を反映する）。
+      state.conductors.clear();
+      state.masters.clear();
+
       await log("full_quit_completed");
       // T234: 全 pidWatcher を停止してからプロセス終了
       stopDaemon(state);
