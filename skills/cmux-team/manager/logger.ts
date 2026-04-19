@@ -30,16 +30,21 @@ export type SurfaceRole = "C" | "A" | "M" | "U" | "S";
  * "surface:665" や "665" を "C[665]" のような表記に整形する。
  * 空入力（""/undefined）は "" を返す（呼び出し側でテンプレート連結しても安全）。
  * すでに "C[665]" 形式のものはそのまま返す（冪等）。
+ *
+ * T266: optional uuid 引数を受け取り、非空なら末尾 6 文字を大文字化して `C[665/ABC123]`
+ * 形式で付与する。冪等入力（`C[665]`）には付与しない（設計上、raw surface のみに適用）。
  */
 export function formatSurface(
   surface: string | null | undefined,
   role: SurfaceRole,
+  uuid?: string | null,
 ): string {
   if (!surface) return "";
   const alreadyFormatted = surface.match(/^[CAMUS]\[(\d+)\]$/);
   if (alreadyFormatted) return surface;
   const id = surface.startsWith("surface:") ? surface.slice("surface:".length) : surface;
-  return `${role}[${id}]`;
+  const tail = uuid ? uuid.slice(-6).toUpperCase() : "";
+  return tail ? `${role}[${id}/${tail}]` : `${role}[${id}]`;
 }
 
 /**

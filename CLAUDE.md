@@ -480,9 +480,9 @@ Manager がやらないこと:
 - **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
 - **起床トリガー**: `[TASK_CREATED]` 通知で再起動
 
-### hook 全送信ポリシー（T216）
+### hook 全送信ポリシー（T216 / T266）
 
-hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager に転送する**。
+hook（SessionStart / Stop / SessionEnd / **Notification** 等）は **全イベントを Manager に転送する**。
 フィルタリング・ルーティング・state 遷移判定は **Manager 側（daemon.ts handleMessage）で
 のみ** 行う。hook の shell スクリプトには分岐ロジックを持たせない。
 
@@ -493,6 +493,8 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
 
 **実装上の不変条件:**
 - `handleMessage` の入口（switch 分岐より前）で必ず `insertHookSignal` を呼ぶ
+- 各 case は必要に応じて `updateHookSignalEnrichment` / `updateNotificationEnrichment` で
+  enrichment 列を埋める（INSERT は case 前に完了している前提）
 - SessionEnd の `reason=other` は記録のみ行い state 遷移しない
   （`/clear` 等の曖昧な終了を disconnected と誤判定しないため）
 - hook shell は `cmux-team send ... --from-stdin` で stdin JSON を
@@ -504,6 +506,55 @@ hook（SessionStart / Stop / SessionEnd 等）は **全イベントを Manager �
   sqlite3 .team/traces/traces.db "DELETE FROM hook_signals WHERE timestamp < '2026-01-01'"
   ```
 - 将来的に CLI サブコマンド化する可能性あり
+
+### Notification hook（T266）
+
+Claude Code native の通知（permission 要求 / idle 通知等）を Manager に集約し、
+`hook_signals` テーブルに enrichment 付きで INSERT する。
+
+**対象:** Master / Conductor / Agent の全 settings.json に `Notification` hook を登録
+（`generateMasterSettings` / `generateConductorSettings` / `generateAgentSettings`）。
+
+**hook command 形式:**
+```bash
+cmux-team send NOTIFICATION --from-stdin \
+  --surface "${CMUX_SURFACE}" --pid "$PPID" \
+  --surface-uuid "${CMUX_SURFACE_UUID:-}" \
+  --workspace-uuid "${CMUX_WORKSPACE_UUID:-}" \
+  --role <master|conductor|agent>
+```
+
+**D9 Case B（空文字 → undefined 正規化）:** `CMUX_SURFACE_UUID` / `CMUX_WORKSPACE_UUID`
+の env が未設定でも `${VAR:-}` で空文字が渡る。`buildMessageFromHookInput` の
+`emptyToUndef` ヘルパが空文字を undefined に戻してから zod parse するため、
+schema 的には optional として扱える。
+
+**hook_signals enrichment 列（8 列）:**
+- `surface_uuid` — hook 送信元 surface の UUID（`CMUX_SURFACE_UUID` env 由来、空文字は undefined に正規化）
+- `workspace_uuid` — hook 送信元 workspace の UUID（`CMUX_WORKSPACE_UUID` env 由来、空文字は undefined に正規化）
+- `role` — master / conductor / agent / unknown
+- `task_id` — role=conductor / agent の場合に daemon 側で解決
+- `conductor_surface` — role=agent の場合に親 conductor の surface を解決
+- `agent_role` — role=agent の場合に conductor の assigned agent map から解決
+- `message` — stdin JSON の `message`（自由文）
+- `notification_type` — stdin JSON の `notification_type`（例: `permission_request`）
+
+**ログ形式（`notification_received`）:**
+```
+notification_received <prefix>[<ID>] role=<role> task_id=<T|-> ntype=<type> message="..."
+```
+- prefix は `U`（master）/ `C`（conductor）/ `A`（agent）/ `S`（unknown）
+- `message` は `JSON.stringify` で空白・改行をエスケープ
+
+**Notification を `cmux-team trace-hooks` で検索:**
+```bash
+cmux-team trace-hooks --type NOTIFICATION --role agent --task-id 266
+```
+
+**Manager が state 遷移しない:**
+Notification は記録 only。Agent の idle 判定や Conductor の assignment は
+従来の `SESSION_IDLE` / `SESSION_ENDED` / done マーカーで行う。Notification は
+観測のためだけに存在する（誤検知で pane を close したくないため）。
 
 ## タスク属性
 

@@ -25,7 +25,8 @@ import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
 import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
-import { initDB, insertHookSignal } from "./trace-store";
+import { initDB, insertHookSignal, updateNotificationEnrichment } from "./trace-store";
+import type { NotificationEnrichment } from "./trace-store";
 import { isStale } from "./rate-limit-persistence";
 import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths";
 
@@ -1231,9 +1232,13 @@ export async function tick(state: DaemonState): Promise<void> {
 export async function handleMessage(state: DaemonState, message: QueueMessage): Promise<void> {
   // T216: hook 全送信ポリシー — ルーティング分岐の前に全シグナルを trace DB に記録する。
   //       失敗しても daemon を落とさないよう try/catch で包む。
+  // T266: insertHookSignal は lastInsertRowid を return する。NOTIFICATION case で
+  //       updateNotificationEnrichment を呼ぶため hookSignalId を受け取っておく。
+  //       他 type では使わない（NULL のまま新 8 列が残る）。
+  let hookSignalId: number | null = null;
   if (state.traceDb) {
     try {
-      insertHookSignal(state.traceDb, message);
+      hookSignalId = insertHookSignal(state.traceDb, message);
     } catch (e: any) {
       await log("hook_signal_insert_failed", `type=${message.type} ${e?.message ?? e}`);
     }
@@ -2176,6 +2181,31 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "NOTIFICATION": {
+      // T266: Claude Code Notification hook の pure logging。
+      // - state 遷移は起こさない（native OS 通知抑止と収集のみが目的）
+      // - 入口で既に insertHookSignal 済み（T216 不変条件維持）、ここでは UPDATE で enrichment を追記
+      // - DB 不在 or 入口 INSERT 失敗時は UPDATE せず skip log のみ残す（Minor 3）
+      if (hookSignalId === null || !state.traceDb) {
+        await log(
+          "notification_skipped",
+          `reason=${state.traceDb ? "insert_failed" : "no_db"} ${formatSurface(message.surface, "S")}`,
+        );
+        break;
+      }
+      const enrichment = resolveNotificationEnrichment(state, message);
+      try {
+        updateNotificationEnrichment(state.traceDb, hookSignalId, enrichment);
+      } catch (e: any) {
+        await log(
+          "notification_enrichment_failed",
+          `id=${hookSignalId} ${e?.message ?? e}`,
+        );
+      }
+      await log("notification_received", formatNotificationLog(message, enrichment));
+      break;
+    }
+
     case "SHUTDOWN":
       await log("shutdown_requested");
       // T234: 全 pidWatcher の clearInterval も同時に実行
@@ -2183,6 +2213,150 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       notifyStateChanged("daemon.ts:handleMessage:shutdown");
       break;
   }
+}
+
+/**
+ * T266: NOTIFICATION hook の送信元 surface から role / task_id 等を逆引きする。
+ * 優先順位:
+ *   1. message.role（hook 側で埋まった canonical 値）
+ *   2. state.masters.has(surface) → master
+ *   3. findConductorBySurface(surface) → conductor + task_id
+ *   4. conductors.agents[] を走査して一致する surface → agent + 親 Conductor の task_id
+ *   5. 上記いずれも hit しない → role="unknown"
+ *
+ * notification_type / message は payload 内のキーを優先順位順に try する。
+ */
+export function resolveNotificationEnrichment(
+  state: DaemonState,
+  message: import("./schema").NotificationMessage,
+): NotificationEnrichment {
+  const surface = message.surface;
+  const payload = message.payload ?? {};
+  const payloadMessage =
+    typeof payload.message === "string"
+      ? payload.message
+      : typeof payload.body === "string"
+        ? payload.body
+        : typeof payload.title === "string"
+          ? payload.title
+          : null;
+  const payloadNType =
+    typeof payload.notification_type === "string"
+      ? payload.notification_type
+      : typeof payload.type === "string"
+        ? payload.type
+        : typeof payload.subtype === "string"
+          ? payload.subtype
+          : null;
+
+  const base: NotificationEnrichment = {
+    surfaceUuid: message.surfaceUuid ?? null,
+    workspaceUuid: message.workspaceUuid ?? null,
+    message: payloadMessage,
+    notificationType: payloadNType,
+  };
+
+  // 1. hook 側の canonical role を第一ソースとして採用
+  if (message.role === "master") {
+    return { ...base, role: "master" };
+  }
+  if (message.role === "conductor") {
+    const c = state.conductors.get(surface);
+    return {
+      ...base,
+      role: "conductor",
+      taskId: c?.taskId ?? null,
+      conductorSurface: surface,
+    };
+  }
+  if (message.role === "agent") {
+    // agent の親 Conductor を逆引き
+    for (const c of state.conductors.values()) {
+      const agent = c.agents.find((a) => a.surface === surface);
+      if (agent) {
+        return {
+          ...base,
+          role: "agent",
+          taskId: c.taskId ?? null,
+          conductorSurface: c.surface,
+          agentRole: agent.role ?? null,
+        };
+      }
+    }
+    return { ...base, role: "agent" };
+  }
+
+  // 2〜5. hook に role が無い場合の fallback 逆引き
+  if (state.masters.has(surface)) {
+    return { ...base, role: "master" };
+  }
+  const c = state.conductors.get(surface);
+  if (c) {
+    return {
+      ...base,
+      role: "conductor",
+      taskId: c.taskId ?? null,
+      conductorSurface: surface,
+    };
+  }
+  for (const conductor of state.conductors.values()) {
+    const agent = conductor.agents.find((a) => a.surface === surface);
+    if (agent) {
+      return {
+        ...base,
+        role: "agent",
+        taskId: conductor.taskId ?? null,
+        conductorSurface: conductor.surface,
+        agentRole: agent.role ?? null,
+      };
+    }
+  }
+  return { ...base, role: "unknown" };
+}
+
+/**
+ * T266: NOTIFICATION を manager.log に 1 行で記録するためのフォーマット。
+ * 例:
+ *   C[192/22D8F9] role=conductor task_id=265 ntype=idle_prompt message="..." pid=80850
+ */
+export function formatNotificationLog(
+  message: import("./schema").NotificationMessage,
+  enrichment: NotificationEnrichment,
+): string {
+  const roleChar: import("./logger").SurfaceRole =
+    enrichment.role === "master"
+      ? "U"
+      : enrichment.role === "conductor"
+        ? "C"
+        : enrichment.role === "agent"
+          ? "A"
+          : "S";
+
+  const surfaceLabel = formatSurface(
+    message.surface,
+    roleChar,
+    enrichment.surfaceUuid ?? undefined,
+  );
+
+  const parts: string[] = [surfaceLabel];
+  parts.push(`role=${enrichment.role ?? "unknown"}`);
+  if (enrichment.taskId) parts.push(`task_id=${enrichment.taskId}`);
+  if (enrichment.agentRole) parts.push(`agent_role=${enrichment.agentRole}`);
+  if (enrichment.notificationType) parts.push(`ntype=${enrichment.notificationType}`);
+  parts.push(`message=${escapeLogMessage(enrichment.message)}`);
+  parts.push(`pid=${message.pid}`);
+  return parts.join(" ");
+}
+
+/**
+ * T266: NOTIFICATION message のログ用エスケープ（D8）。
+ * JSON.stringify で quote wrap + 制御文字エスケープを一括処理し、80 文字で truncate する。
+ * truncate は JSON.stringify 前に行い、最終出力長は多少揺れる（parseability 優先 — Minor 2）。
+ */
+export function escapeLogMessage(raw: string | null | undefined): string {
+  if (raw == null) return '""';
+  const truncated = raw.length > 80 ? raw.slice(0, 77) + "..." : raw;
+  return JSON.stringify(truncated);
 }
 
 export async function scanTasks(state: DaemonState): Promise<void> {

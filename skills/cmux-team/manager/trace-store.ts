@@ -37,6 +37,30 @@ export interface HookSignalRecord {
   question: string | null;
   task_run_id: string | null;
   payload_json: string;
+  // T266: NOTIFICATION enrichment 列（他 type では NULL）
+  surface_uuid?: string | null;
+  workspace_uuid?: string | null;
+  role?: string | null;
+  task_id?: string | null;
+  conductor_surface?: string | null;
+  agent_role?: string | null;
+  message?: string | null;
+  notification_type?: string | null;
+}
+
+// T266: NOTIFICATION hook の daemon 側 enrichment。
+// handleMessage 入口で insertHookSignal 実行直後、case "NOTIFICATION" 内で
+// updateNotificationEnrichment を呼んで 8 列を追記する。
+// 未指定フィールドは NULL のまま保持される。
+export interface NotificationEnrichment {
+  surfaceUuid?: string | null;
+  workspaceUuid?: string | null;
+  role?: "master" | "conductor" | "agent" | "unknown" | null;
+  taskId?: string | null;
+  conductorSurface?: string | null;
+  agentRole?: string | null;
+  message?: string | null;
+  notificationType?: string | null;
 }
 
 const SCHEMA = `
@@ -67,7 +91,15 @@ CREATE TABLE IF NOT EXISTS hook_signals (
   source TEXT,
   question TEXT,
   task_run_id TEXT,
-  payload_json TEXT NOT NULL
+  payload_json TEXT NOT NULL,
+  surface_uuid TEXT,
+  workspace_uuid TEXT,
+  role TEXT,
+  task_id TEXT,
+  conductor_surface TEXT,
+  agent_role TEXT,
+  message TEXT,
+  notification_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_hook_signals_type ON hook_signals(type);
 CREATE INDEX IF NOT EXISTS idx_hook_signals_surface ON hook_signals(surface);
@@ -94,6 +126,7 @@ export function initDB(projectRoot: string): Database {
 
   db.exec(SCHEMA);
   ensureTaskSessionsColumns(db);
+  ensureHookSignalsColumns(db);
   return db;
 }
 
@@ -116,6 +149,45 @@ function ensureTaskSessionsColumns(db: Database): void {
       console.warn(`[trace-store] task_sessions_migrated col=${col}`);
     }
   }
+}
+
+/**
+ * T266: 既存 DB の `hook_signals` テーブルに NOTIFICATION 用 8 列が無ければ ALTER TABLE で追加（冪等）。
+ * 新規 DB では SCHEMA 内の CREATE TABLE で既に全列が揃っているため ALTER は走らない。
+ * インデックスは SCHEMA 内の `CREATE INDEX IF NOT EXISTS` で冪等に作られる。
+ */
+function ensureHookSignalsColumns(db: Database): void {
+  const rows = db
+    .prepare("PRAGMA table_info(hook_signals)")
+    .all() as Array<{ name: string }>;
+  const existing = new Set(rows.map((r) => r.name));
+  const required = [
+    "surface_uuid",
+    "workspace_uuid",
+    "role",
+    "task_id",
+    "conductor_surface",
+    "agent_role",
+    "message",
+    "notification_type",
+  ] as const;
+  for (const col of required) {
+    if (!existing.has(col)) {
+      db.exec(`ALTER TABLE hook_signals ADD COLUMN ${col} TEXT`);
+      console.warn(`[trace-store] hook_signals_migrated col=${col}`);
+    }
+  }
+  // 旧 DB で SCHEMA 側の CREATE INDEX が既に走っていない場合に備え、
+  // 追加 index も冪等に作っておく。
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_hook_signals_surface_uuid ON hook_signals(surface_uuid)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_hook_signals_role ON hook_signals(role)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_hook_signals_task_id ON hook_signals(task_id)",
+  );
 }
 
 export function insertTaskSession(db: Database, record: TaskSessionRecord): number {
@@ -226,7 +298,15 @@ export function insertHookSignal(db: Database, message: QueueMessage): number {
 
 export function getHookSignals(
   db: Database,
-  opts: { surface?: string; type?: string; taskRunId?: string; limit?: number }
+  opts: {
+    surface?: string;
+    type?: string;
+    taskRunId?: string;
+    limit?: number;
+    // T266: NOTIFICATION enrichment 列でのフィルタ
+    role?: string;
+    taskId?: string;
+  }
 ): HookSignalRecord[] {
   const conditions: string[] = [];
   const params: Record<string, any> = {};
@@ -243,6 +323,14 @@ export function getHookSignals(
     conditions.push("task_run_id = $taskRunId");
     params.$taskRunId = opts.taskRunId;
   }
+  if (opts.role) {
+    conditions.push("role = $role");
+    params.$role = opts.role;
+  }
+  if (opts.taskId) {
+    conditions.push("task_id = $taskId");
+    params.$taskId = opts.taskId;
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = opts.limit ?? 50;
@@ -251,4 +339,39 @@ export function getHookSignals(
     `SELECT * FROM hook_signals ${where} ORDER BY id DESC LIMIT ${limit}`
   );
   return stmt.all(params) as HookSignalRecord[];
+}
+
+/**
+ * T266: NOTIFICATION hook の enrichment を hook_signals 行に UPDATE で追記する。
+ * insertHookSignal で入口 INSERT 済みの `id` を引数に取り、8 列を書き換える。
+ * 未指定フィールドは明示的に NULL になる（=未指定 = NULL のまま）。
+ * 存在しない id を渡した場合は SQLite の UPDATE 仕様通り no-op。
+ */
+export function updateNotificationEnrichment(
+  db: Database,
+  id: number,
+  enrichment: NotificationEnrichment,
+): void {
+  db.prepare(
+    `UPDATE hook_signals SET
+       surface_uuid = ?,
+       workspace_uuid = ?,
+       role = ?,
+       task_id = ?,
+       conductor_surface = ?,
+       agent_role = ?,
+       message = ?,
+       notification_type = ?
+     WHERE id = ?`,
+  ).run(
+    enrichment.surfaceUuid ?? null,
+    enrichment.workspaceUuid ?? null,
+    enrichment.role ?? null,
+    enrichment.taskId ?? null,
+    enrichment.conductorSurface ?? null,
+    enrichment.agentRole ?? null,
+    enrichment.message ?? null,
+    enrichment.notificationType ?? null,
+    id,
+  );
 }

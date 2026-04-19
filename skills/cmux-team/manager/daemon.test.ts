@@ -4319,3 +4319,239 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
   }, 30000);
 });
 
+// ---------- T266: NOTIFICATION hook の daemon 集約 ----------
+
+describe("handleMessage: T216 不変条件 — 入口で必ず insertHookSignal", () => {
+  test("NOTIFICATION も他 type と同様 hook_signals に 1 行 INSERT される", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, getHookSignals } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    // 任意の型 (TASK_UPDATED) で 1 行
+    await handleMessage(state, {
+      type: "TASK_UPDATED",
+      taskId: "T266",
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    // NOTIFICATION で 1 行
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:9999",
+      pid: 11111,
+      payload: { message: "hello" },
+      timestamp: "2026-04-19T12:00:01.000Z",
+    } as any);
+
+    expect(state.traceDb).not.toBeNull();
+    const taskUpdated = getHookSignals(state.traceDb!, { type: "TASK_UPDATED" });
+    const notification = getHookSignals(state.traceDb!, { type: "NOTIFICATION" });
+    expect(taskUpdated.length).toBe(1);
+    expect(notification.length).toBe(1);
+  });
+});
+
+describe("handleMessage: NOTIFICATION case (T266)", () => {
+  test("Master: role=master / task_id NULL / manager.log に notification_received", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, getHookSignals } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    state.masters.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      pid: 1000,
+      startedAt: "2026-04-19T11:00:00.000Z",
+    });
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:100",
+      surfaceUuid: "abcdef12-3456-7890-abcd-ef0122d8f9",
+      pid: 1000,
+      payload: { message: "hello master", type: "idle_prompt" },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    // state 遷移なし
+    const m = state.masters.get("surface:100")!;
+    expect(m.status).toBe("running");
+
+    // DB: 1 行 + 8 列が UPDATE されている
+    const rows = getHookSignals(state.traceDb!, { type: "NOTIFICATION" });
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.role).toBe("master");
+    expect(r.task_id).toBeNull();
+    expect(r.conductor_surface).toBeNull();
+    expect(r.agent_role).toBeNull();
+    expect(r.message).toBe("hello master");
+    expect(r.notification_type).toBe("idle_prompt");
+    expect(r.surface_uuid).toBe("abcdef12-3456-7890-abcd-ef0122d8f9");
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/notification_received U\[100\/22D8F9\] role=master/);
+    expect(logContent).toContain("pid=1000");
+    expect(logContent).toContain("ntype=idle_prompt");
+    expect(logContent).toContain('message="hello master"');
+  });
+
+  test("Conductor: role=conductor / task_id 付与 / C[surface] 表記", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, getHookSignals } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    const conductor: ConductorState = {
+      surface: "surface:192",
+      startedAt: "2026-04-19T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 2000,
+      taskId: "265",
+      taskRunId: "task-265-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:192",
+      surfaceUuid: "abcdef12-3456-7890-abcd-ef0122d8f9",
+      pid: 2000,
+      role: "conductor",
+      payload: { message: "conductor idle", notification_type: "idle_prompt" },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    // state 遷移なし
+    expect(state.conductors.get("surface:192")!.status).toBe("running");
+
+    const rows = getHookSignals(state.traceDb!, { type: "NOTIFICATION" });
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.role).toBe("conductor");
+    expect(r.task_id).toBe("265");
+    expect(r.conductor_surface).toBe("surface:192");
+    expect(r.agent_role).toBeNull();
+    expect(r.notification_type).toBe("idle_prompt");
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/notification_received C\[192\/22D8F9\] role=conductor task_id=265/);
+  });
+
+  test("Agent: role=agent / 親 Conductor の task_id / agent_role 付与", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, getHookSignals } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    const conductor: ConductorState = {
+      surface: "surface:665",
+      startedAt: "2026-04-19T11:00:00.000Z",
+      agents: [
+        {
+          surface: "surface:719",
+          role: "implementer",
+          spawnedAt: "2026-04-19T11:05:00.000Z",
+          status: "running",
+          pid: 3001,
+        },
+      ],
+      status: "running",
+      pid: 3000,
+      taskId: "300",
+      taskRunId: "task-300-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:719",
+      surfaceUuid: "xxxxxx00-0000-0000-0000-00000000ABcdef",
+      pid: 3001,
+      role: "agent",
+      payload: { message: "agent asks confirmation", notification_type: "permission_request" },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    const rows = getHookSignals(state.traceDb!, { type: "NOTIFICATION" });
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.role).toBe("agent");
+    expect(r.task_id).toBe("300");
+    expect(r.conductor_surface).toBe("surface:665");
+    expect(r.agent_role).toBe("implementer");
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/notification_received A\[719\/ABCDEF\] role=agent task_id=300 agent_role=implementer/);
+  });
+
+  test("unknown: role なし surface も未登録 → role=unknown / S[surface]", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, getHookSignals } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:9999",
+      pid: 4000,
+      payload: { message: "mystery" },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    const rows = getHookSignals(state.traceDb!, { type: "NOTIFICATION" });
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.role).toBe("unknown");
+    expect(r.task_id).toBeNull();
+    expect(r.conductor_surface).toBeNull();
+    expect(r.agent_role).toBeNull();
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/notification_received S\[9999\] role=unknown/);
+  });
+
+  test("escape: message 内の \" / 改行 / = が JSON.stringify で安全に記録される", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB } = await import("./trace-store");
+    const state = await createDaemon(testDir);
+    state.traceDb = initDB(testDir);
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:9999",
+      pid: 4000,
+      payload: { message: 'he said "hi"\nkey=val' },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    // JSON.stringify で quote/newline/bs がエスケープされて 1 行に収まる
+    expect(logContent).toMatch(/message="he said \\"hi\\"\\nkey=val"/);
+  });
+
+  test("traceDb 不在 → notification_skipped reason=no_db", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    // DB を close して null にして、insertHookSignal 経路・UPDATE 経路の両方をスキップさせる
+    try { state.traceDb?.close(); } catch {}
+    state.traceDb = null;
+
+    await handleMessage(state, {
+      type: "NOTIFICATION",
+      surface: "surface:9999",
+      pid: 4000,
+      payload: { message: "no db" },
+      timestamp: "2026-04-19T12:00:00.000Z",
+    } as any);
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/notification_skipped reason=no_db S\[9999\]/);
+    expect(logContent).not.toContain("notification_received");
+  });
+});
+

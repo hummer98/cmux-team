@@ -129,6 +129,22 @@ export const ShutdownMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T266: Claude Code Notification hook からの通知。
+// hook 側で分岐せず丸ごと daemon に渡し、payload は任意 JSON で受ける。
+// - surfaceUuid / workspaceUuid は cmux 側の env 実在性が環境依存のため UUID 形式制約はかけない（空文字→undefined 正規化は呼出し側で行う）
+// - role は hook 側で埋めた canonical 値。daemon が逆引きに失敗した場合の fallback 情報
+// - payload は Claude Code の stdin JSON（schema 非公開）を丸ごと保存
+export const NotificationMessage = z.object({
+  type: z.literal("NOTIFICATION"),
+  surface: z.string(),
+  surfaceUuid: z.string().optional(),
+  workspaceUuid: z.string().optional(),
+  pid: z.number(),
+  role: z.enum(["master", "conductor", "agent"]).optional(),
+  payload: z.record(z.string(), z.any()).optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   TaskUpdatedMessage,
@@ -144,6 +160,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionAskMessage,
   SessionStopMessage,
   SessionClearMessage,
+  NotificationMessage,
   ShutdownMessage,
 ]);
 
@@ -158,6 +175,7 @@ export type SessionAskMessage = z.infer<typeof SessionAskMessage>;
 export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
 export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
+export type NotificationMessage = z.infer<typeof NotificationMessage>;
 
 // --- Agent 状態 ---
 

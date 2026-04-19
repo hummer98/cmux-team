@@ -9,6 +9,7 @@ import {
   getHookSignals,
   insertTaskSession,
   getTaskSessions,
+  updateNotificationEnrichment,
 } from "./trace-store";
 import type { QueueMessage } from "./schema";
 
@@ -343,5 +344,272 @@ describe("trace-store: task_sessions base columns (T243)", () => {
     } finally {
       await rm(oldDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("trace-store: hook_signals NOTIFICATION columns (T266)", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-hook-signals-t266-"));
+    db = initDB(tmpDir);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test("新規 DB: hook_signals に新 8 列が存在する", () => {
+    const cols = db
+      .prepare("PRAGMA table_info(hook_signals)")
+      .all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    for (const col of [
+      "surface_uuid",
+      "workspace_uuid",
+      "role",
+      "task_id",
+      "conductor_surface",
+      "agent_role",
+      "message",
+      "notification_type",
+    ]) {
+      expect(names.has(col)).toBe(true);
+    }
+  });
+
+  test("既存 SESSION_* 系 insertHookSignal は新 8 列が NULL のまま green", () => {
+    const id = insertHookSignal(db, {
+      type: "SESSION_STARTED",
+      surface: "surface:100",
+      pid: 1234,
+      source: "startup",
+      timestamp: "2026-04-19T10:00:00.000Z",
+    } as unknown as QueueMessage);
+
+    const row = db
+      .prepare(
+        "SELECT surface_uuid, workspace_uuid, role, task_id, conductor_surface, agent_role, message, notification_type FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+
+    for (const col of [
+      "surface_uuid",
+      "workspace_uuid",
+      "role",
+      "task_id",
+      "conductor_surface",
+      "agent_role",
+      "message",
+      "notification_type",
+    ]) {
+      expect(row[col]).toBeNull();
+    }
+  });
+
+  test("updateNotificationEnrichment: 指定行の 8 列が書き換わる", () => {
+    const id = insertHookSignal(db, {
+      type: "NOTIFICATION",
+      surface: "surface:192",
+      pid: 80850,
+      timestamp: "2026-04-19T10:00:00.000Z",
+    } as unknown as QueueMessage);
+
+    updateNotificationEnrichment(db, id, {
+      surfaceUuid: "22d8f9ab-1234",
+      workspaceUuid: "ws-uuid",
+      role: "conductor",
+      taskId: "265",
+      conductorSurface: "surface:192",
+      agentRole: null,
+      message: "Claude is waiting for your input",
+      notificationType: "idle_prompt",
+    });
+
+    const row = db
+      .prepare(
+        "SELECT surface_uuid, workspace_uuid, role, task_id, conductor_surface, agent_role, message, notification_type FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+
+    expect(row.surface_uuid).toBe("22d8f9ab-1234");
+    expect(row.workspace_uuid).toBe("ws-uuid");
+    expect(row.role).toBe("conductor");
+    expect(row.task_id).toBe("265");
+    expect(row.conductor_surface).toBe("surface:192");
+    expect(row.agent_role).toBeNull();
+    expect(row.message).toBe("Claude is waiting for your input");
+    expect(row.notification_type).toBe("idle_prompt");
+  });
+
+  test("updateNotificationEnrichment: 未指定フィールドは NULL のまま", () => {
+    const id = insertHookSignal(db, {
+      type: "NOTIFICATION",
+      surface: "surface:100",
+      pid: 1,
+      timestamp: "2026-04-19T10:00:00.000Z",
+    } as unknown as QueueMessage);
+
+    updateNotificationEnrichment(db, id, {
+      role: "master",
+    });
+
+    const row = db
+      .prepare(
+        "SELECT surface_uuid, role, task_id, message FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+
+    expect(row.role).toBe("master");
+    expect(row.surface_uuid).toBeNull();
+    expect(row.task_id).toBeNull();
+    expect(row.message).toBeNull();
+  });
+
+  test("updateNotificationEnrichment: 存在しない id は no-op", () => {
+    expect(() => {
+      updateNotificationEnrichment(db, 99999, { role: "master" });
+    }).not.toThrow();
+
+    const count = db
+      .prepare("SELECT COUNT(*) as c FROM hook_signals")
+      .get() as { c: number };
+    expect(count.c).toBe(0);
+  });
+
+  test("旧スキーマ DB → initDB 再呼び出しで hook_signals 新 8 列が ADD される", async () => {
+    const oldDir = await mkdtemp(join(tmpdir(), "cmux-team-old-hook-signals-"));
+    try {
+      await mkdir(join(oldDir, ".team/traces"), { recursive: true });
+      const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
+      oldDb.exec(`
+        CREATE TABLE hook_signals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp TEXT NOT NULL,
+          type TEXT NOT NULL,
+          surface TEXT,
+          pid INTEGER,
+          reason TEXT,
+          source TEXT,
+          question TEXT,
+          task_run_id TEXT,
+          payload_json TEXT NOT NULL
+        );
+      `);
+      oldDb
+        .prepare(
+          `INSERT INTO hook_signals
+            (timestamp, type, surface, pid, payload_json)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "2026-01-01T00:00:00.000Z",
+          "SESSION_STARTED",
+          "surface:100",
+          1234,
+          "{}",
+        );
+      oldDb.close();
+
+      const migratedDb = initDB(oldDir);
+      try {
+        const cols = migratedDb
+          .prepare("PRAGMA table_info(hook_signals)")
+          .all() as Array<{ name: string }>;
+        const names = new Set(cols.map((c) => c.name));
+        for (const col of [
+          "surface_uuid",
+          "workspace_uuid",
+          "role",
+          "task_id",
+          "conductor_surface",
+          "agent_role",
+          "message",
+          "notification_type",
+        ]) {
+          expect(names.has(col)).toBe(true);
+        }
+
+        const old = migratedDb
+          .prepare(
+            "SELECT type, surface, role, task_id, message FROM hook_signals WHERE type = ?",
+          )
+          .get("SESSION_STARTED") as Record<string, string | null>;
+        expect(old.type).toBe("SESSION_STARTED");
+        expect(old.surface).toBe("surface:100");
+        expect(old.role).toBeNull();
+        expect(old.task_id).toBeNull();
+        expect(old.message).toBeNull();
+
+        // 2 回目の initDB 呼び出しでも throw しない
+        migratedDb.close();
+        const reopen = initDB(oldDir);
+        reopen.close();
+      } finally {
+        try { migratedDb.close(); } catch {}
+      }
+    } finally {
+      await rm(oldDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("trace-store: getHookSignals role/taskId filter (T266)", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-hook-signals-filter-"));
+    db = initDB(tmpDir);
+
+    const id1 = insertHookSignal(db, {
+      type: "NOTIFICATION",
+      surface: "surface:100",
+      pid: 1,
+      timestamp: "2026-04-19T10:00:00.000Z",
+    } as unknown as QueueMessage);
+    updateNotificationEnrichment(db, id1, { role: "master", taskId: null });
+
+    const id2 = insertHookSignal(db, {
+      type: "NOTIFICATION",
+      surface: "surface:192",
+      pid: 2,
+      timestamp: "2026-04-19T10:01:00.000Z",
+    } as unknown as QueueMessage);
+    updateNotificationEnrichment(db, id2, { role: "conductor", taskId: "265" });
+
+    const id3 = insertHookSignal(db, {
+      type: "NOTIFICATION",
+      surface: "surface:234",
+      pid: 3,
+      timestamp: "2026-04-19T10:02:00.000Z",
+    } as unknown as QueueMessage);
+    updateNotificationEnrichment(db, id3, { role: "agent", taskId: "265" });
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test("role フィルタ: conductor のみ取得", () => {
+    const rows = getHookSignals(db, { role: "conductor" });
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.role).toBe("conductor");
+    expect(rows[0]!.surface).toBe("surface:192");
+  });
+
+  test("taskId フィルタ: 265 のみ取得", () => {
+    const rows = getHookSignals(db, { taskId: "265" });
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.task_id === "265")).toBe(true);
+  });
+
+  test("role + taskId + type の AND フィルタ", () => {
+    const rows = getHookSignals(db, { role: "agent", taskId: "265", type: "NOTIFICATION" });
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.role).toBe("agent");
   });
 });

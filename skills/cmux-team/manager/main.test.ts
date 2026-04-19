@@ -817,6 +817,69 @@ describe("buildMessageFromHookInput (T203)", () => {
       expect(msg.reason).toBeUndefined();
     }
   });
+
+  // T266: NOTIFICATION branch
+  test("T266: NOTIFICATION — payload 全体を畳み込み、surfaceUuid/workspaceUuid/role を opts から取り込む", () => {
+    const raw = JSON.stringify({
+      message: "hello",
+      notification_type: "idle_prompt",
+      hook_event_name: "Notification",
+      transcript_path: "/tmp/foo.jsonl",
+    });
+    const msg = buildMessageFromHookInput("NOTIFICATION", raw, {
+      ...opts,
+      surfaceUuid: "abcdef12-3456-7890-abcd-ef0122d8f9",
+      workspaceUuid: "11111111-2222-3333-4444-555555555555",
+      role: "conductor",
+    });
+    expect(msg.type).toBe("NOTIFICATION");
+    if (msg.type === "NOTIFICATION") {
+      expect(msg.surface).toBe("surface:100");
+      expect(msg.pid).toBe(12345);
+      expect(msg.surfaceUuid).toBe("abcdef12-3456-7890-abcd-ef0122d8f9");
+      expect(msg.workspaceUuid).toBe("11111111-2222-3333-4444-555555555555");
+      expect(msg.role).toBe("conductor");
+      expect(msg.payload).toEqual({
+        message: "hello",
+        notification_type: "idle_prompt",
+        hook_event_name: "Notification",
+        transcript_path: "/tmp/foo.jsonl",
+      });
+    }
+  });
+
+  test("T266: NOTIFICATION — 空文字 surfaceUuid/workspaceUuid/role は undefined に正規化される (D9 Case B)", () => {
+    const raw = JSON.stringify({ message: "x" });
+    const msg = buildMessageFromHookInput("NOTIFICATION", raw, {
+      ...opts,
+      surfaceUuid: "",
+      workspaceUuid: "",
+      role: "",
+    });
+    if (msg.type === "NOTIFICATION") {
+      expect(msg.surfaceUuid).toBeUndefined();
+      expect(msg.workspaceUuid).toBeUndefined();
+      expect(msg.role).toBeUndefined();
+    }
+  });
+
+  test("T266: NOTIFICATION — opts に surfaceUuid/workspaceUuid/role なしでも OK", () => {
+    const raw = JSON.stringify({ message: "x" });
+    const msg = buildMessageFromHookInput("NOTIFICATION", raw, opts);
+    if (msg.type === "NOTIFICATION") {
+      expect(msg.surfaceUuid).toBeUndefined();
+      expect(msg.workspaceUuid).toBeUndefined();
+      expect(msg.role).toBeUndefined();
+      expect(msg.payload?.message).toBe("x");
+    }
+  });
+
+  test("T266: NOTIFICATION — role 不正値は schema の enum で throw", () => {
+    const raw = JSON.stringify({ message: "x" });
+    expect(() =>
+      buildMessageFromHookInput("NOTIFICATION", raw, { ...opts, role: "hacker" }),
+    ).toThrow();
+  });
 });
 
 // --- T203: cmdSend --from-stdin discriminator 回帰 (C2) ---
@@ -1023,6 +1086,50 @@ describe("SessionStart hook generation (T203)", () => {
     expect(cmd).not.toContain("--reason");
     expect(cmd).not.toContain('"session_end"');
   });
+
+  // T266: Notification hook の generator テスト
+  test("T266: Conductor settings に Notification hook があり role=conductor で送信する", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.Notification)).toBe(true);
+    expect(settings.hooks.Notification.length).toBe(1);
+    expect(settings.hooks.Notification[0].matcher).toBe("");
+    const cmd: string = settings.hooks.Notification[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send NOTIFICATION");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--surface-uuid");
+    expect(cmd).toContain("${CMUX_SURFACE_UUID:-}");
+    expect(cmd).toContain("--workspace-uuid");
+    expect(cmd).toContain("${CMUX_WORKSPACE_UUID:-}");
+    expect(cmd).toContain("--role conductor");
+    expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(5000);
+  });
+
+  test("T266: Agent settings に Notification hook があり role=agent で送信する", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateAgentSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.Notification)).toBe(true);
+    expect(settings.hooks.Notification.length).toBe(1);
+    expect(settings.hooks.Notification[0].matcher).toBe("");
+    const cmd: string = settings.hooks.Notification[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send NOTIFICATION");
+    expect(cmd).toContain("--from-stdin");
+    // Agent は ${surface} リテラル置換のため展開後の値を確認
+    expect(cmd).toContain('--surface "surface:100"');
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--surface-uuid");
+    expect(cmd).toContain("${CMUX_SURFACE_UUID:-}");
+    expect(cmd).toContain("--workspace-uuid");
+    expect(cmd).toContain("${CMUX_WORKSPACE_UUID:-}");
+    expect(cmd).toContain("--role agent");
+    expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(5000);
+  });
 });
 
 // --- T211: generateMasterSettings ---
@@ -1135,6 +1242,27 @@ describe("generateMasterSettings (T211)", () => {
     expect(settings.hooks.Stop.length).toBe(1);
     const stopCmd: string = settings.hooks.Stop[0].hooks[0].command;
     expect(stopCmd).toContain("master-hook-stop.py");
+  });
+
+  // T266: Notification hook を daemon に集約・DB 記録する
+  test("T266: settings.hooks.Notification が cmux-team send NOTIFICATION --from-stdin を呼ぶ (role=master)", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.Notification)).toBe(true);
+    expect(settings.hooks.Notification.length).toBe(1);
+    expect(settings.hooks.Notification[0].matcher).toBe("");
+    const cmd: string = settings.hooks.Notification[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send NOTIFICATION");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--surface-uuid");
+    expect(cmd).toContain("${CMUX_SURFACE_UUID:-}");
+    expect(cmd).toContain("--workspace-uuid");
+    expect(cmd).toContain("${CMUX_WORKSPACE_UUID:-}");
+    expect(cmd).toContain("--role master");
+    expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(5000);
   });
 });
 

@@ -21,7 +21,7 @@
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
  *   ./main.ts delete-task --task-id <id> [--journal <text>]
- *   ./main.ts trace-hooks [--type <T>] [--surface <s>] [--task-run <id>] [--limit <N>] [--json]
+ *   ./main.ts trace-hooks [--type <T>] [--surface <s>] [--task-run <id>] [--role <r>] [--task-id <id>] [--limit <N>] [--json]
  */
 
 import { join, dirname, basename } from "path";
@@ -46,8 +46,8 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import { loadConfig, resolveLayout, resolveAutoUpdateMode } from "./config";
 import { persistRateLimit, loadRateLimit, isStale } from "./rate-limit-persistence";
@@ -990,6 +990,10 @@ async function cmdSend(): Promise<void> {
           surface: requireArg("surface"),
           pid: Number(requireArg("pid")),
           now,
+          // T266: NOTIFICATION 用の optional flag（他 type では ignore される）。
+          surfaceUuid: getArg("surface-uuid"),
+          workspaceUuid: getArg("workspace-uuid"),
+          role: getArg("role"),
         });
       } catch (e: any) {
         console.error(`Error: ${e.message}`);
@@ -1456,7 +1460,16 @@ const DETECT_ASK_SCRIPT = [
 export function buildMessageFromHookInput(
   type: string,
   rawJson: string,
-  opts: { surface: string; pid: number; now: string }
+  opts: {
+    surface: string;
+    pid: number;
+    now: string;
+    // T266: NOTIFICATION 用に hook 側から追加で渡される flag。
+    //       undefined / empty string は schema.optional に変換する。
+    surfaceUuid?: string;
+    workspaceUuid?: string;
+    role?: string;
+  }
 ): QueueMessage {
   let parsed: unknown;
   try {
@@ -1495,6 +1508,29 @@ export function buildMessageFromHookInput(
       timestamp: opts.now,
     };
     return SessionEndedMessageSchema.parse(message);
+  }
+
+  if (type === "NOTIFICATION") {
+    // T266: Claude Code Notification hook payload をそのまま payload: に畳む。
+    //       hook 側は `--surface-uuid`, `--workspace-uuid`, `--role` を flag 経由で渡す契約
+    //       （empty 文字列は undefined に正規化して zod optional へ — D9 Case B）。
+    const emptyToUndef = (s: string | undefined): string | undefined =>
+      s === undefined || s === "" ? undefined : s;
+    const surfaceUuid = emptyToUndef(opts.surfaceUuid);
+    const workspaceUuid = emptyToUndef(opts.workspaceUuid);
+    const role = emptyToUndef(opts.role);
+
+    const message: NotificationMessage = {
+      type: "NOTIFICATION",
+      surface: opts.surface,
+      surfaceUuid,
+      workspaceUuid,
+      pid: opts.pid,
+      role: role as NotificationMessage["role"],
+      payload: obj as Record<string, any>,
+      timestamp: opts.now,
+    };
+    return NotificationMessageSchema.parse(message);
   }
 
   throw new Error(`unsupported hook message type: ${type}`);
@@ -1668,6 +1704,19 @@ export function generateMasterSettings(projectRoot: string): string {
           }],
         },
       ],
+      // T266: Notification hook を daemon に集約・DB 記録する。
+      // Claude Code native の通知（permission / idle 等）を全て Manager に転送し、
+      // hook_signals テーブルに enrichment 付きで INSERT する。
+      Notification: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send NOTIFICATION --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --surface-uuid \"${CMUX_SURFACE_UUID:-}\" --workspace-uuid \"${CMUX_WORKSPACE_UUID:-}\" --role master 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
       Stop: [
         {
           matcher: "",
@@ -1724,6 +1773,17 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
             type: "command",
             // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
             command: `bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface "${surface}" --pid "$PPID" 2>/dev/null || true'`,
+            timeout: 5000,
+          }],
+        },
+      ],
+      // T266: Notification hook を daemon に集約・DB 記録する。
+      Notification: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send NOTIFICATION --from-stdin --surface "${surface}" --pid "$PPID" --surface-uuid "\${CMUX_SURFACE_UUID:-}" --workspace-uuid "\${CMUX_WORKSPACE_UUID:-}" --role agent 2>/dev/null || true'`,
             timeout: 5000,
           }],
         },
@@ -1785,6 +1845,17 @@ export function generateConductorSettings(projectRoot: string): string {
             type: "command",
             // T203: hook stdin の JSON（session_id, source, ...）をそのまま cmux-team に渡す。
             command: "bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
+      // T266: Notification hook を daemon に集約・DB 記録する。
+      Notification: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send NOTIFICATION --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --surface-uuid \"${CMUX_SURFACE_UUID:-}\" --workspace-uuid \"${CMUX_WORKSPACE_UUID:-}\" --role conductor 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -3733,6 +3804,18 @@ function formatSurfaceForHooks(surface: string | null): string {
 
 function buildHookDetail(r: HookSignalRecord): string {
   const parts: string[] = [];
+  // T266: NOTIFICATION は enrichment 列 (role/task_id/agent_role/notification_type/message) を優先表示
+  if (r.type === "NOTIFICATION") {
+    if (r.role) parts.push(`role=${r.role}`);
+    if (r.task_id) parts.push(`task_id=${r.task_id}`);
+    if (r.agent_role) parts.push(`agent_role=${r.agent_role}`);
+    if (r.notification_type) parts.push(`ntype=${r.notification_type}`);
+    if (r.message) {
+      const m = r.message.length > 60 ? r.message.slice(0, 57) + "..." : r.message;
+      parts.push(`message=${JSON.stringify(m)}`);
+    }
+    return parts.join(" ") || "-";
+  }
   if (r.source) parts.push(`source=${r.source}`);
   if (r.reason) parts.push(`reason=${r.reason}`);
   if (r.task_run_id) parts.push(`task_run=${r.task_run_id}`);
@@ -3751,6 +3834,9 @@ async function cmdTraceHooks(): Promise<void> {
   const surfaceRaw = getArg("surface");
   const limitRaw = getArg("limit");
   const asJson = hasFlag("json");
+  // T266: NOTIFICATION enrichment 列でのフィルタ
+  const roleFilter = getArg("role");
+  const taskIdFilter = getArg("task-id");
 
   let limit = 50;
   if (limitRaw !== undefined) {
@@ -3772,6 +3858,8 @@ async function cmdTraceHooks(): Promise<void> {
     type: typeFilter,
     surface: surfaceFilter,
     taskRunId: taskRunFilter,
+    role: roleFilter,
+    taskId: taskIdFilter,
     limit,
   });
   db.close();

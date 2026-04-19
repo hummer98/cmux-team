@@ -73,6 +73,20 @@ describe("formatSurface", () => {
     // 設計上の主要経路は生 ID を渡すので厳密なガードは不要だが、挙動を固定
     expect(formatSurface("C[665]", "C")).toBe("C[665]");
   });
+
+  // T266: optional uuid 引数で末尾 6 文字・大文字化を末尾に付与する
+  test("uuid 未指定なら従来通り", () => {
+    expect(formatSurface("surface:192", "C", undefined)).toBe("C[192]");
+  });
+  test("uuid を渡すと末尾 6 文字を大文字で付与", () => {
+    expect(formatSurface("surface:192", "C", "abcdef12-3456-7890-abcd-ef0122d8f9")).toBe("C[192/22D8F9]");
+  });
+  test("uuid 短い場合（6文字未満）は全体を大文字で付与", () => {
+    expect(formatSurface("surface:10", "A", "a1b2c")).toBe("A[10/A1B2C]");
+  });
+  test("uuid 空文字は付与しない", () => {
+    expect(formatSurface("surface:10", "A", "")).toBe("A[10]");
+  });
 });
 
 describe("formatPair", () => {

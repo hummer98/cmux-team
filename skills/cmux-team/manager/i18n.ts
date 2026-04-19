@@ -480,9 +480,11 @@ Usage:
 Options:
   --type <TYPE>          filter by hook type (e.g. SESSION_STARTED, SESSION_ENDED,
                          SESSION_IDLE, SESSION_CLEAR, AGENT_SPAWNED, SESSION_ASK,
-                         CONDUCTOR_DONE)
+                         CONDUCTOR_DONE, NOTIFICATION)
   --surface <surface>    filter by surface (accepts "surface:665", "665", "C[665]")
   --task-run <id>        filter by task_run_id (e.g. "task-217-1776294106")
+  --role <ROLE>          filter by NOTIFICATION role column (master/conductor/agent/unknown)
+  --task-id <id>         filter by NOTIFICATION task_id column (e.g. "265")
   --limit <N>            max rows to display (default: 50, newest first)
   --json                 emit JSON array instead of tabular output
 
@@ -491,12 +493,15 @@ Examples:
   cmux-team trace-hooks --type SESSION_ENDED --limit 20
   cmux-team trace-hooks --surface C[665]
   cmux-team trace-hooks --task-run task-217-1776294106 --json
+  cmux-team trace-hooks --type NOTIFICATION --role agent
+  cmux-team trace-hooks --type NOTIFICATION --task-id 265
 
 Notes:
   - Reads from .team/traces/traces.db (hook_signals table)
   - Rows are ordered by id DESC (newest first)
   - DETAIL column shows non-null source/reason/task_run_id/question
-  - question is truncated to 60 chars; use --json to see full payload
+  - For NOTIFICATION rows, DETAIL shows role/task_id/agent_role/ntype/message
+  - question/message is truncated to 60 chars; use --json to see full payload
 `,
 
   help_conductor: `
@@ -1144,9 +1149,11 @@ Usage:
 Options:
   --type <TYPE>          hook type で絞り込み（SESSION_STARTED / SESSION_ENDED /
                          SESSION_IDLE / SESSION_CLEAR / AGENT_SPAWNED / SESSION_ASK /
-                         CONDUCTOR_DONE など）
+                         CONDUCTOR_DONE / NOTIFICATION など）
   --surface <surface>    surface で絞り込み（"surface:665" / "665" / "C[665]" 受理）
   --task-run <id>        task_run_id で絞り込み（例: "task-217-1776294106"）
+  --role <ROLE>          NOTIFICATION の role 列で絞り込み（master/conductor/agent/unknown）
+  --task-id <id>         NOTIFICATION の task_id 列で絞り込み（例: "265"）
   --limit <N>            最大表示件数（デフォルト: 50、新しい順）
   --json                 tabular の代わりに JSON 配列を出力
 
@@ -1155,12 +1162,15 @@ Examples:
   cmux-team trace-hooks --type SESSION_ENDED --limit 20
   cmux-team trace-hooks --surface C[665]
   cmux-team trace-hooks --task-run task-217-1776294106 --json
+  cmux-team trace-hooks --type NOTIFICATION --role agent
+  cmux-team trace-hooks --type NOTIFICATION --task-id 265
 
 Notes:
   - .team/traces/traces.db の hook_signals テーブルから読み込みます
   - id DESC（新しい順）で並びます
   - DETAIL カラムには source/reason/task_run_id/question のうち値があるものだけ表示
-  - question は 60 文字で truncate されます。完全なデータは --json を使用
+  - NOTIFICATION 行では role/task_id/agent_role/ntype/message が DETAIL に出ます
+  - question/message は 60 文字で truncate されます。完全なデータは --json を使用
 `,
 
   help_conductor: `
