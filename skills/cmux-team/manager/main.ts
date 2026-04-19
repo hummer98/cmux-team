@@ -39,7 +39,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, type TaskState, type TaskMeta } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, type TaskState, type TaskMeta } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
@@ -2853,9 +2853,13 @@ async function cmdCreateTask(): Promise<void> {
     phase: "create",
   });
 
-  const dependsOn = dependsOnRaw
-    ? dependsOnRaw.split(",").map(s => s.trim()).filter(Boolean)
-    : [];
+  let dependsOn: string[];
+  try {
+    dependsOn = normalizeTaskIdList(dependsOnRaw);
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 
   let result: { id: string; filePath: string; relPath: string };
   try {
@@ -2944,9 +2948,13 @@ async function cmdUpdateTask(): Promise<void> {
 
   // --depends-on: frontmatter 内の depends_on 行を更新（なければ追加）
   if (dependsOn !== undefined) {
-    const depsArray = dependsOn
-      ? dependsOn.split(",").map(s => s.trim()).filter(Boolean)
-      : [];
+    let depsArray: string[];
+    try {
+      depsArray = normalizeTaskIdList(dependsOn);
+    } catch (e: any) {
+      console.error(`Error: ${e.message}`);
+      process.exit(1);
+    }
     const depsValue = depsArray.length > 0 ? `[${depsArray.join(", ")}]` : "[]";
     let content = await readFile(taskFile, "utf-8");
     if (content.match(/^depends_on:\s*.+$/m)) {

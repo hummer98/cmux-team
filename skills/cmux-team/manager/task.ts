@@ -202,6 +202,49 @@ export function buildResumeAbortJournal(
 }
 
 /**
+ * T267: タスク ID を 3 桁ゼロパディングへ正規化する。
+ *
+ * 新規 ID は `createTaskProgrammatic` が `String(n).padStart(3, "0")` で発行するため、
+ * CLI 経由の `--depends-on` も同一形式へ揃えないと frontmatter の `depends_on` が
+ * `closedIds.has(...)` 比較で取りこぼされる（issue #25）。
+ *
+ * - 10 進整数文字列のみ受け付ける（`0x10` / `1.5` / `-1` / `+1` / `1e2` は reject）
+ * - `1` 以上を要求（`0` / `000` は reject — 新規 ID は 1 始まり）
+ * - 4 桁以上はそのまま（`padStart` の minLength 仕様と一致）
+ */
+export function normalizeTaskId(raw: string): string {
+  const s = raw.trim();
+  if (!/^\d+$/.test(s)) {
+    throw new Error(
+      `--depends-on must be positive integer task IDs. Got: "${raw}"`,
+    );
+  }
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new Error(
+      `--depends-on must be positive integer task IDs. Got: "${raw}"`,
+    );
+  }
+  return String(n).padStart(3, "0");
+}
+
+/**
+ * T267: カンマ区切りのタスク ID 文字列を正規化済み配列へ変換する。
+ *
+ * - 空文字・カンマのみ・末尾カンマは `[]` を返す（update-task の「依存クリア」経路を維持）
+ * - 順序・重複はそのまま保持（dedup しない）
+ * - いずれか 1 要素でも invalid なら最初の invalid で throw
+ */
+export function normalizeTaskIdList(raw: string): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(normalizeTaskId);
+}
+
+/**
  * YAML frontmatter からメタデータを抽出
  */
 export function parseTaskMeta(content: string, fileName: string, filePath: string): TaskMeta | null {

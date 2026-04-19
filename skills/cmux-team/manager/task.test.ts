@@ -13,6 +13,8 @@ import {
   parseAbortJournal,
   saveTaskState,
   loadTaskState,
+  normalizeTaskId,
+  normalizeTaskIdList,
 } from "./task";
 import type { TaskMeta, TaskState, TaskStateMap } from "./task";
 
@@ -110,6 +112,154 @@ status: ready
 `;
     const meta = parseTaskMeta(content, "042-no-id.md", "/path/042-no-id.md");
     expect(meta!.id).toBe("042");
+  });
+});
+
+describe("normalizeTaskId (T267)", () => {
+  // 正常系
+  test("1 桁をゼロパディング: '1' → '001'", () => {
+    expect(normalizeTaskId("1")).toBe("001");
+  });
+
+  test("2 桁をゼロパディング: '28' → '028'", () => {
+    expect(normalizeTaskId("28")).toBe("028");
+  });
+
+  test("3 桁はそのまま: '028' → '028'", () => {
+    expect(normalizeTaskId("028")).toBe("028");
+  });
+
+  test("3 桁ゼロパディングなし: '100' → '100'", () => {
+    expect(normalizeTaskId("100")).toBe("100");
+  });
+
+  test("4 桁以上はそのまま: '1000' → '1000'", () => {
+    expect(normalizeTaskId("1000")).toBe("1000");
+  });
+
+  test("前後空白を trim: ' 28 ' → '028'", () => {
+    expect(normalizeTaskId(" 28 ")).toBe("028");
+  });
+
+  // 異常系
+  test("英字は throw: 'abc'", () => {
+    expect(() => normalizeTaskId("abc")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "abc"',
+    );
+  });
+
+  test("英数混在は throw: '28a'", () => {
+    expect(() => normalizeTaskId("28a")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "28a"',
+    );
+  });
+
+  test("小数は throw: '1.5'", () => {
+    expect(() => normalizeTaskId("1.5")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "1.5"',
+    );
+  });
+
+  test("負数は throw: '-1'", () => {
+    expect(() => normalizeTaskId("-1")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "-1"',
+    );
+  });
+
+  test("+ 符号は throw: '+1'", () => {
+    expect(() => normalizeTaskId("+1")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "+1"',
+    );
+  });
+
+  test("16 進は throw: '0x10'", () => {
+    expect(() => normalizeTaskId("0x10")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "0x10"',
+    );
+  });
+
+  test("指数表記は throw: '1e2'", () => {
+    expect(() => normalizeTaskId("1e2")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "1e2"',
+    );
+  });
+
+  test("ゼロは throw: '0'（task ID は 1 始まり規約）", () => {
+    expect(() => normalizeTaskId("0")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "0"',
+    );
+  });
+
+  test("ゼロパディングゼロは throw: '000'", () => {
+    expect(() => normalizeTaskId("000")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "000"',
+    );
+  });
+
+  test("空文字は throw: ''", () => {
+    expect(() => normalizeTaskId("")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: ""',
+    );
+  });
+
+  test("空白のみは throw: '   '", () => {
+    expect(() => normalizeTaskId("   ")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "   "',
+    );
+  });
+});
+
+describe("normalizeTaskIdList (T267)", () => {
+  // 正常系
+  test("空文字は空配列: '' → []", () => {
+    expect(normalizeTaskIdList("")).toEqual([]);
+  });
+
+  test("単一: '28' → ['028']", () => {
+    expect(normalizeTaskIdList("28")).toEqual(["028"]);
+  });
+
+  test("複数混在: '001,28,100' → ['001', '028', '100']", () => {
+    expect(normalizeTaskIdList("001,28,100")).toEqual(["001", "028", "100"]);
+  });
+
+  test("前後空白: ' 28 , 100 ' → ['028', '100']", () => {
+    expect(normalizeTaskIdList(" 28 , 100 ")).toEqual(["028", "100"]);
+  });
+
+  test("空要素 skip: '001,,028' → ['001', '028']", () => {
+    expect(normalizeTaskIdList("001,,028")).toEqual(["001", "028"]);
+  });
+
+  test("末尾カンマ: '28,' → ['028']", () => {
+    expect(normalizeTaskIdList("28,")).toEqual(["028"]);
+  });
+
+  test("カンマのみ: ',,' → []", () => {
+    expect(normalizeTaskIdList(",,")).toEqual([]);
+  });
+
+  test("重複は保持する（dedup しない）: '28,028' → ['028', '028']", () => {
+    expect(normalizeTaskIdList("28,028")).toEqual(["028", "028"]);
+  });
+
+  // 異常系
+  test("いずれかが invalid は throw: '001,abc' → Got: 'abc'", () => {
+    expect(() => normalizeTaskIdList("001,abc")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "abc"',
+    );
+  });
+
+  test("最初が invalid は最初の invalid を報告: 'abc,001' → Got: 'abc'", () => {
+    expect(() => normalizeTaskIdList("abc,001")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "abc"',
+    );
+  });
+
+  test("ゼロ混在は throw: '001,0' → Got: '0'", () => {
+    expect(() => normalizeTaskIdList("001,0")).toThrow(
+      '--depends-on must be positive integer task IDs. Got: "0"',
+    );
   });
 });
 
