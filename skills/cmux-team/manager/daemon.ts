@@ -1411,6 +1411,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             `persistMasterFile failed (session_started): ${e?.message ?? e}`
           );
         }
+        // using-cmux plugin の SessionStart hook が "[N] Claude Code" に rename
+        // するため、Master では hook 発火後に "[N] Master" で上書きする（A016）。
+        try {
+          const num = message.surface.replace("surface:", "");
+          await cmux.renameTab(message.surface, `[${num}] Master`);
+        } catch (e: any) {
+          await log(
+            "error",
+            `renameTab failed (master session_started): ${e?.message ?? e}`
+          );
+        }
         await log("master_session_started", `${formatSurface(message.surface, "U")} pid=${message.pid}`);
         break;
       }
