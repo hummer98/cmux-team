@@ -1,13 +1,28 @@
 # Changelog
 
-## [Unreleased]
+## [4.0.0] - 2026-04-19
 
 ### Added
 - **daemon 多重起動を pidfile ロックで防止（T259）**。`cmdStart` 冒頭（preflight 成功後・direnv / resolveMainBranch / `createDaemon` の前）で `.team/daemon.pid` を `writeFile(..., { flag: "wx" })` により atomic に取得する。既に生きている cmux-team daemon があれば `PidFileLockedError` → `console.error` + exit 1。stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に `main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗時は保守的に locked 扱い。pidfile は shutdown / onFullQuit / restartRequested / onReload(execFileSync 直前) / cmdStop(保険) の全経路で release され、正常系では必ず削除される。auto-restart ループ（exit 42）では親が release → 子が acquire の順で所有権が移り、親が execFileSync でブロックしていても子が "alive cmux-team" を誤検知せず連続再起動できる。pidfile は daemon main.ts プロセスのみを指し proxy は別ライフサイクル
+- **Notification hook を daemon に集約し trace DB に記録（T266）**。Claude Code native の通知（permission 要求 / idle 通知等）を Master / Conductor / Agent の全 settings.json に hook 登録し、daemon が `hook_signals` テーブルに enrichment 付き（surface_uuid / workspace_uuid / role / task_id / conductor_surface / agent_role / message / notification_type）で記録する。観測のみで state 遷移しないため誤検知で pane を close することはなく、`cmux-team trace-hooks --type NOTIFICATION` で事後追跡できる
+- **user_clear 判定の decision スナップショットと assigning window ログを追加（T261）**。手動 /clear を受けた際の decision を `assigningSetAt` / `assignedAt` 等を含む構造化スナップショットとしてログ出力し、T232 の assigning 期間中のレース調査を事後解析可能にした
+- **Conductor disconnect / broken ログを強化（T260）**。`task_aborted` ログに reason を機械可読キーで出力、`conductor_broken` に pid/alive を併記して `broken_conductor_still_alive` ログを追加、`formatConductorSnapshot` を新設し disconnect snapshot をログ化、`ConductorState.lastHookAt` と `AgentSpawnedMessage` に caller 情報 / `abort_signal_sent` を追加。disconnect 判定の根拠を事後追跡できるようにした
+- **Task の二重起動を防ぐ unique 制約を不変条件として検査（T254）**。`taskRunId` と `(status=assigned, conductorSurface)` の 2 つの unique 制約を state 更新時に都度検査し、違反時は assertion で即座に落とす。assign / restart / resume 経路での race による重複起動を構造的に排除
+- **initializeLayout の復帰ロジックをマトリクス方式に刷新（T255）**。既存 surface の role 検出と復帰判定を「状態マトリクス × アクション表」で宣言的に記述し直し、従来の if-ladder で隠れていた復帰漏れケースを解消
+- **起動時 resume 不可検出で ready に戻さず aborted に倒す（T264）**。`cmdStart` 起動時、`status=assigned` のタスクが `sessionId` / `taskRunId` / `worktreePath` を満たさない場合に旧 `resume_fallback_to_ready` で ready に戻していた挙動を撤廃し、`resume_marked_aborted` で aborted に倒すよう変更。成果物を人間が確認する前に自動再実行される事故を防ぐ。journal に runs ディレクトリの相対パスを埋め、`cmux-team restart-task` で明示的に再走できる
 
-### Changed
+### Changed (Breaking)
 
 - **`mainBranch` 解決失敗時を fail-stop に変更（T253、破壊的変更）**。従来 `resolveMainBranch` は `git symbolic-ref refs/remotes/origin/HEAD` と `git symbolic-ref --short HEAD` の両方が失敗した場合にサイレントで `{ branch: "main", source: "fallback" }` を返していたため、存在しない `main` ブランチに対して commit/merge を行い破綻するリスクがあった。本変更で検出失敗時は `MainBranchResolutionError` を throw し、`cmux-team start` は `console.error` に 3 つの解決手段（`--main-branch <name>` / env `CMUX_TEAM_MAIN_BRANCH=<name>` / `.team/config.json` の `mainBranch`）を案内して `process.exit(1)` する。派生する下流フォールバック（`cmdConductor` / `cmdSpawnConductor` の `|| "main"`、`DaemonState.mainBranch` 初期値、`launchConductor` / `initializeConductorSlots` / `assignTask` / `generateConductorTaskPrompt` / `generateConductorRolePrompt` の `"main"` リテラル）も全て撤去し、空文字受領で throw する防御ガードに統一。`MainBranchSource` enum から `"fallback"` を削除。**影響:** 既に `.team/config.json` に `mainBranch` が永続化済みのプロジェクトは影響なし（T213 以降で起動した大多数）。新規 repo（push 前）・shallow clone・detached HEAD・`origin/HEAD` 未設定のプロジェクトでは env か config での明示指定が必要
+
+### Fixed
+- **`persistMainBranch` で `.team/` 未作成時の ENOENT を修正（T270）**。`.team/config.json` への書き込み時に親ディレクトリが無い環境で ENOENT になる経路を塞ぎ、初回起動の `resolveMainBranch` 永続化を確実に成功させる
+- **`CONDUCTOR_DONE --success=false` で assigned タスクを aborted に倒す（T269）**。Conductor が `--success=false` で終了した際、task-state が `assigned` のままでは daemon 再起動時の `applyResumeTransitions` が resume 可能と誤分類する事故を起こしていた。state を `aborted reason=judgment_pending` に倒しつつ worktree / branch は preserve する経路に変更し、`cmux-team restart-task` で明示的に再投入できるようにする。journal に `conductor_done_unresolved: <reason> (worktree=<path>) taskRunId=<id>` を記録
+- **`CONDUCTOR_DONE --success=false` で worktree / branch を preserve（T263）**。従来は worktree を削除してしまい人間判断に委ねる経路が消えていた。Conductor が自力完遂できず人間判断待ちになるケースでは worktree と branch を温存する挙動に修正（T269 と併せて完全化）
+- **`formatUserClearDecision` の `assigning_set_at` フィールドを `assigningSetAt` 由来に修正（T265、T261 follow-up）**。旧実装が `assignedAt` を誤参照していたため assigning window の表示が歪んでいた
+- **Master タブ名を SESSION_STARTED 受信で `[N] Master` に再 rename**。F1 fallback 経路で仮登録された Master タブ名が `[N] Fallback` のまま残る問題を修正
+- **Full Quit 時に `state.conductors` / `state.masters` を clear してから `team.json` を永続化**。残留エントリが次回起動時に幽霊 Conductor / Master として誤検出される経路を解消
+- **`resetConductor` で surface 実在確認を追加し幽霊 Conductor を防ぐ**。close 済み surface に対する reset で state のみが残る経路を塞いだ
 
 ## [3.54.1] - 2026-04-18
 
