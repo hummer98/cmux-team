@@ -562,7 +562,14 @@ export async function resetConductor(
   conductor: ConductorState,
   projectRoot: string,
   workspace?: string,
-  opts?: { targetStatus?: "idle" | "broken"; reason?: string },
+  opts?: {
+    targetStatus?: "idle" | "broken";
+    reason?: string;
+    // T263: success=false && task-state=assigned 経路で worktree/branch を温存する。
+    //       in-memory の ConductorState (taskRunId 等) は preserveWorktree と
+    //       無関係に必ずリセットされる（Decision D7）— さもないと次タスク割当が破綻する。
+    preserveWorktree?: boolean;
+  },
 ): Promise<void> {
   try {
     // 0. surface 実在確認（T251: 幽霊 Conductor 防止）
@@ -601,21 +608,26 @@ export async function resetConductor(
     }
 
     // 2. worktree 削除（冪等: 既に削除済みでもエラーにしない）
-    if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
-      try {
-        await execFile("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
-          cwd: projectRoot,
-        });
-      } catch (e: any) {
-        await log("cleanup_failed", `resetConductor worktree remove: path=${conductor.worktreePath} ${formatExecError(e)}`);
-      }
-      // ブランチ削除（冪等: 既に削除済みでもエラーにしない）
-      if (conductor.taskRunId) {
-        const branch = `${conductor.taskRunId}/task`;
+    //    T263: preserveWorktree=true の場合は worktree/branch を温存する。
+    //    rebase 衝突など「人間判断待ち」状態で Conductor が `cd <worktree>` して
+    //    手動 rebase/diff できるようにするため。
+    if (!opts?.preserveWorktree) {
+      if (conductor.worktreePath && existsSync(conductor.worktreePath)) {
         try {
-          await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
+          await execFile("git", ["worktree", "remove", conductor.worktreePath, "--force"], {
+            cwd: projectRoot,
+          });
         } catch (e: any) {
-          await log("cleanup_failed", `resetConductor branch delete: branch=${branch} ${formatExecError(e)}`);
+          await log("cleanup_failed", `resetConductor worktree remove: path=${conductor.worktreePath} ${formatExecError(e)}`);
+        }
+        // ブランチ削除（冪等: 既に削除済みでもエラーにしない）
+        if (conductor.taskRunId) {
+          const branch = `${conductor.taskRunId}/task`;
+          try {
+            await execFile("git", ["branch", "-d", branch], { cwd: projectRoot });
+          } catch (e: any) {
+            await log("cleanup_failed", `resetConductor branch delete: branch=${branch} ${formatExecError(e)}`);
+          }
         }
       }
     }
@@ -647,6 +659,9 @@ export async function resetConductor(
     notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
     const reasonSuffix = effectiveReason ? ` reason=${effectiveReason}` : "";
+    // T263: preserveWorktree=true の場合は grep 可能な suffix を付与し、
+    //       `grep 'worktree_preserved=true' manager.log` で温存された worktree を列挙可能にする。
+    const preservedSuffix = opts?.preserveWorktree ? ` worktree_preserved=true` : "";
     // broken 時は「本当に死んでいるか」を snapshot 側と対称に示す（pid/alive を明示）。
     // idle 経路では pane 生存確認済みで自明なので出さない。
     const aliveSuffix =
@@ -655,7 +670,7 @@ export async function resetConductor(
         : "";
     await log(
       targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
-      `${formatSurface(conductor.surface, "C")}${reasonSuffix}${aliveSuffix}`,
+      `${formatSurface(conductor.surface, "C")}${reasonSuffix}${preservedSuffix}${aliveSuffix}`,
     );
   } catch (e: any) {
     await log("error", `resetConductor failed: ${e.message}`);

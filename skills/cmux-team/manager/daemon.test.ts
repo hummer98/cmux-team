@@ -4102,3 +4102,220 @@ describe("updateTeamJson / restoreConductors: T261 フィールド永続化", ()
   });
 });
 
+// --- T263: handleConductorDone success/task-state 分岐 ---
+//
+// `CONDUCTOR_DONE --success=false` で rebase 衝突等の「人間判断待ち」を表現する。
+// 挙動テーブル（plan.md §2.4）の代表 4 ケースを検証:
+//   #1  success=true  && task-state=closed   → task_completed、worktree 削除
+//   #6  success=false && task-state=closed   → task_completed、worktree 削除
+//   #9  success=false && task-state=assigned → conductor_done_unresolved、worktree 温存 ★本命
+//   #10 success=false && task-state=missing  → conductor_done_unresolved、worktree 温存
+describe("handleConductorDone success/task-state 分岐 (T263)", () => {
+  async function setupRealGitWithWorktree(taskRunId: string): Promise<string> {
+    const { execFile: ef } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(ef);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["config", "user.email", "test@test.local"], { cwd: testDir });
+    await execFile("git", ["config", "user.name", "Test"], { cwd: testDir });
+    await writeFile(join(testDir, "README.md"), "test");
+    await execFile("git", ["add", "."], { cwd: testDir });
+    await execFile("git", ["commit", "-q", "-m", "init"], { cwd: testDir });
+    const worktreePath = join(testDir, ".worktrees", taskRunId);
+    await execFile("git", ["worktree", "add", worktreePath, "-b", `${taskRunId}/task`], { cwd: testDir });
+    return worktreePath;
+  }
+
+  async function stubPaneForSurface() {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    return spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+  }
+
+  test("Case #9: success=false && assigned → conductor_done_unresolved + worktree 温存", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-263c9-1700009000";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("263", "rebase-conflict");
+      // task-state を assigned に書き換え（createTask は ready のため）
+      const { loadTaskState, saveTaskState } = await import("./task");
+      const ts = await loadTaskState(testDir);
+      ts["263"] = { status: "assigned", assignedAt: new Date().toISOString() };
+      await saveTaskState(testDir, ts);
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t263-c9",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "263",
+        taskTitle: "rebase-conflict",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t263-c9",
+        success: false,
+        reason: "rebase_conflict",
+        timestamp: new Date().toISOString(),
+      });
+
+      // worktree / branch 温存
+      expect(existsSync(worktreePath)).toBe(true);
+      // in-memory ConductorState はリセット（idle 状態）
+      expect(conductor.status).toBe("idle");
+      expect(conductor.taskRunId).toBeUndefined();
+      expect(conductor.taskId).toBeUndefined();
+      expect(conductor.worktreePath).toBeUndefined();
+      // ログに conductor_done_unresolved が記録される
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      const unresolvedLine = log.split("\n").find((l) => l.includes("conductor_done_unresolved"));
+      expect(unresolvedLine).toBeDefined();
+      expect(unresolvedLine).toContain("task_id=263");
+      expect(unresolvedLine).toContain("task_state=assigned");
+      expect(unresolvedLine).toContain("reason=rebase_conflict");
+      expect(unresolvedLine).toContain(`worktreePath=${worktreePath}`);
+      // task_completed は出ていない
+      expect(log).not.toMatch(/\btask_completed\b.*task_id=263/);
+      // conductor_reset ログに worktree_preserved=true が含まれる
+      const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+      expect(resetLine).toBeDefined();
+      expect(resetLine).toContain("worktree_preserved=true");
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("Case #1: success=true && closed → task_completed + worktree 削除", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-263c1-1700001000";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("264", "normal-success");
+      await closeTask("264");
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t263-c1",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "264",
+        taskTitle: "normal-success",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t263-c1",
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
+
+      // worktree 削除
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(conductor.status).toBe("idle");
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/task_completed .*task_id=264/);
+      expect(log).not.toMatch(/conductor_done_unresolved/);
+      // conductor_reset に worktree_preserved=true は含まれない
+      const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+      expect(resetLine).toBeDefined();
+      expect(resetLine).not.toContain("worktree_preserved=true");
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("Case #6: success=false && closed → task_completed + worktree 削除（既に完結済み）", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-263c6-1700006000";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("265", "closed-then-false");
+      await closeTask("265");
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t263-c6",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "265",
+        taskTitle: "closed-then-false",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t263-c6",
+        success: false,
+        reason: "late_false",
+        timestamp: new Date().toISOString(),
+      });
+
+      // 既に closed なので worktree 削除で OK
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(conductor.status).toBe("idle");
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(log).toMatch(/task_completed .*task_id=265/);
+      expect(log).not.toMatch(/conductor_done_unresolved.*task_id=265/);
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("Case #10: success=false && task-state entry なし → conductor_done_unresolved + worktree 温存", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-263c10-1700010000";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      // task-state にエントリを入れない（race ケース）
+
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t263-c10",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "266",
+        taskTitle: "missing-entry",
+        worktreePath,
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t263-c10",
+        success: false,
+        reason: "missing_state",
+        timestamp: new Date().toISOString(),
+      });
+
+      // 保守側倒しで worktree 温存
+      expect(existsSync(worktreePath)).toBe(true);
+      expect(conductor.status).toBe("idle");
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      const unresolvedLine = log.split("\n").find((l) => l.includes("conductor_done_unresolved"));
+      expect(unresolvedLine).toBeDefined();
+      expect(unresolvedLine).toContain("task_state=missing");
+      expect(unresolvedLine).toContain("reason=missing_state");
+      // conductor_reset に worktree_preserved=true
+      const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+      expect(resetLine).toContain("worktree_preserved=true");
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+});
+

@@ -725,3 +725,193 @@ describe("assignTask snapshot フィールド記録 (T261)", () => {
     );
   }, 30000);
 });
+
+// --- T263: resetConductor preserveWorktree オプション ---
+//
+// CONDUCTOR_DONE --success=false 経路で rebase 衝突など「人間判断待ち」状態を
+// 表現するため、worktree/branch を温存しつつ ConductorState はリセットする。
+//
+// 検証戦略: 実 git repo + worktree を作って fs 上で残存/削除を観察する。
+// `execFile` の spy は promisify 済みで技術的に困難なため、observable な
+// fs 副作用（worktree dir / branch 存在）で検証する（Design Review Finding 5 の
+// 意図「既存 listSiblingsSpy / closeSurfaceSpy パターンと整合的」に沿う範囲で）。
+describe("resetConductor preserveWorktree オプション (T263)", () => {
+  let listSiblingsSpy: ReturnType<typeof spyOn>;
+  let closeSurfaceSpy: ReturnType<typeof spyOn>;
+  let getPaneForSurfaceSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    listSiblingsSpy = spyOn(cmux, "listSiblingSurfaces").mockResolvedValue([]);
+    closeSurfaceSpy = spyOn(cmux, "closeSurface").mockResolvedValue(undefined as any);
+    getPaneForSurfaceSpy = spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+  });
+
+  afterEach(() => {
+    listSiblingsSpy.mockRestore();
+    closeSurfaceSpy.mockRestore();
+    getPaneForSurfaceSpy.mockRestore();
+  });
+
+  // 実 git repo をセットアップし worktree を作る共通ヘルパー
+  async function setupGitWithWorktree(taskRunId: string): Promise<{ worktreePath: string; branch: string }> {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["config", "user.email", "test@test.local"], { cwd: testDir });
+    await execFile("git", ["config", "user.name", "Test"], { cwd: testDir });
+    await writeFile(join(testDir, "README.md"), "test");
+    await execFile("git", ["add", "."], { cwd: testDir });
+    await execFile("git", ["commit", "-q", "-m", "init"], { cwd: testDir });
+    const worktreePath = join(testDir, ".worktrees", taskRunId);
+    const branch = `${taskRunId}/task`;
+    await execFile("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: testDir });
+    return { worktreePath, branch };
+  }
+
+  async function branchExists(branch: string): Promise<boolean> {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    try {
+      await execFile("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: testDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  test("Case A: preserveWorktree=true → worktree/branch が残り ConductorState はリセットされる", async () => {
+    const taskRunId = "task-263a-1700000000";
+    const { worktreePath, branch } = await setupGitWithWorktree(taskRunId);
+
+    const conductor: ConductorState = {
+      surface: "surface:t263-a",
+      startedAt: new Date().toISOString(),
+      taskRunId,
+      taskId: "263",
+      taskTitle: "preserve test A",
+      worktreePath,
+      agents: [],
+      status: "running",
+    };
+
+    await resetConductor(conductor, testDir, undefined, { preserveWorktree: true });
+
+    // worktree dir は残っている
+    const { existsSync } = await import("fs");
+    expect(existsSync(worktreePath)).toBe(true);
+    // branch も残っている
+    expect(await branchExists(branch)).toBe(true);
+    // ConductorState は完全リセット
+    expect(conductor.status).toBe("idle");
+    expect(conductor.taskRunId).toBeUndefined();
+    expect(conductor.taskId).toBeUndefined();
+    expect(conductor.taskTitle).toBeUndefined();
+    expect(conductor.worktreePath).toBeUndefined();
+    expect(conductor.agents).toEqual([]);
+    // ログに worktree_preserved=true suffix
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+    expect(resetLine).toBeDefined();
+    expect(resetLine).toContain("worktree_preserved=true");
+  }, 30000);
+
+  test("Case B: preserveWorktree=false 明示 → worktree/branch が削除される", async () => {
+    const taskRunId = "task-263b-1700000001";
+    const { worktreePath, branch } = await setupGitWithWorktree(taskRunId);
+
+    const conductor: ConductorState = {
+      surface: "surface:t263-b",
+      startedAt: new Date().toISOString(),
+      taskRunId,
+      taskId: "263",
+      worktreePath,
+      agents: [],
+      status: "running",
+    };
+
+    await resetConductor(conductor, testDir, undefined, { preserveWorktree: false });
+
+    const { existsSync } = await import("fs");
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(await branchExists(branch)).toBe(false);
+    expect(conductor.status).toBe("idle");
+    expect(conductor.taskRunId).toBeUndefined();
+    // ログに worktree_preserved=true は含まれない
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+    expect(resetLine).toBeDefined();
+    expect(resetLine).not.toContain("worktree_preserved=true");
+  }, 30000);
+
+  test("Case C: preserveWorktree 未指定 → 従来通り worktree/branch 削除（後方互換）", async () => {
+    const taskRunId = "task-263c-1700000002";
+    const { worktreePath, branch } = await setupGitWithWorktree(taskRunId);
+
+    const conductor: ConductorState = {
+      surface: "surface:t263-c",
+      startedAt: new Date().toISOString(),
+      taskRunId,
+      taskId: "263",
+      worktreePath,
+      agents: [],
+      status: "running",
+    };
+
+    // opts なしで呼ぶ（後方互換経路）
+    await resetConductor(conductor, testDir);
+
+    const { existsSync } = await import("fs");
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(await branchExists(branch)).toBe(false);
+    expect(conductor.status).toBe("idle");
+    // ログに worktree_preserved=true は含まれない
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const resetLine = log.split("\n").find((l) => l.includes("conductor_reset"));
+    expect(resetLine).toBeDefined();
+    expect(resetLine).not.toContain("worktree_preserved=true");
+  }, 30000);
+
+  test("Case D: preserveWorktree=true && targetStatus='broken' → worktree 残り broken 状態", async () => {
+    const taskRunId = "task-263d-1700000003";
+    const { worktreePath, branch } = await setupGitWithWorktree(taskRunId);
+
+    const conductor: ConductorState = {
+      surface: "surface:t263-d",
+      startedAt: new Date().toISOString(),
+      disconnectedAt: "2026-04-18T10:00:00.000Z",
+      taskRunId,
+      taskId: "263",
+      worktreePath,
+      agents: [],
+      status: "disconnected",
+      pid: 99999,
+    };
+
+    await resetConductor(conductor, testDir, undefined, {
+      preserveWorktree: true,
+      targetStatus: "broken",
+      reason: "manual_preserve",
+    });
+
+    // worktree/branch は残る
+    const { existsSync } = await import("fs");
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(await branchExists(branch)).toBe(true);
+    // state は broken（disconnectedAt 保持）
+    expect(conductor.status).toBe("broken");
+    expect(conductor.disconnectedAt).toBe("2026-04-18T10:00:00.000Z");
+    expect(conductor.taskRunId).toBeUndefined();
+    // ログは conductor_broken かつ worktree_preserved=true を含む
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const brokenLine = log.split("\n").find((l) => l.includes("conductor_broken"));
+    expect(brokenLine).toBeDefined();
+    expect(brokenLine).toContain("worktree_preserved=true");
+    expect(brokenLine).toContain("reason=manual_preserve");
+  }, 30000);
+});

@@ -1307,7 +1307,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         isSuccess ? "conductor_done_signal" : "conductor_error",
         `${formatSurface(message.surface, "C")}${!isSuccess && message.reason ? ` reason=${message.reason}` : ""}${message.exitCode != null ? ` exit_code=${message.exitCode}` : ""}`
       );
-      await handleConductorDone(state, conductor);
+      // T263: success/reason を handleConductorDone に素渡しする。判定ロジックは
+      //       handleConductorDone に集約（Decision D10）。ここでは isSuccess を
+      //       ログ用に再利用するのみで、分岐判断は引き継がない。
+      await handleConductorDone(state, conductor, {
+        success: message.success,
+        reason: message.reason,
+      });
       break;
     }
 
@@ -2714,26 +2720,57 @@ async function forceCloseDisconnectedConductor(
 
 async function handleConductorDone(
   state: DaemonState,
-  conductor: ConductorState
+  conductor: ConductorState,
+  opts?: { success?: boolean; reason?: string },
 ): Promise<void> {
   const { journalSummary } = await collectResults(conductor, state.projectRoot);
+  const taskId = conductor.taskId;
 
-  if (!conductor.taskId || conductor.taskId === "undefined") {
+  // T263: success=false && task-state=assigned の「人間判断待ち」経路を判定する。
+  //       ログは conductor_done_unresolved、worktree/branch は温存（preserveWorktree=true）。
+  //       closed/aborted/deleted は既に完結しているので worktree は消して良い（Decision D2）。
+  //       task-state entry なし (missing) は race 対策で保守側に倒し温存（Decision D4）。
+  //       Design Review Finding 2: collectResults も task-state.json を読むが double-read の
+  //       性能影響は無視できるため統合せず。可読性優先。
+  const taskState = await loadTaskState(state.projectRoot);
+  const currentStatus = taskId ? taskState[taskId]?.status : undefined;
+  const success = opts?.success !== false;
+  const unresolved =
+    !success &&
+    currentStatus !== "closed" &&
+    currentStatus !== "aborted" &&
+    currentStatus !== "deleted";
+
+  if (!taskId || taskId === "undefined") {
     await log(
       "error",
       `handleConductorDone: conductor.taskId is undefined ${formatSurface(conductor.surface, "C")}`
     );
+  } else if (unresolved) {
+    // 「判断必要レポート」未完結ケース。worktree は温存され人間判断待ち。
+    // grep 用に worktreePath を出力し `cd <path>` で直接調査できるようにする。
+    await log(
+      "conductor_done_unresolved",
+      `task_id=${taskId} ${formatSurface(conductor.surface, "C")}` +
+        ` task_state=${currentStatus ?? "missing"}` +
+        ` reason=${opts?.reason ?? "-"}` +
+        ` worktreePath=${conductor.worktreePath ?? "-"}` +
+        (conductor.taskTitle ? ` title=${conductor.taskTitle}` : "") +
+        (journalSummary ? ` journal_summary=${journalSummary}` : "")
+    );
   } else {
     await log(
       "task_completed",
-      `task_id=${conductor.taskId} ${formatSurface(conductor.surface, "C")}${
+      `task_id=${taskId} ${formatSurface(conductor.surface, "C")}${
         conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
       }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
     );
   }
 
-  // Conductor をリセットして idle に戻す
-  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined);
+  // Conductor をリセットして idle に戻す（unresolved 時は worktree/branch を温存）
+  await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
+    preserveWorktree: unresolved,
+  });
 }
 
 export async function updateTeamJson(state: DaemonState): Promise<void> {
