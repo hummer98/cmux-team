@@ -78,6 +78,13 @@ import {
   RateLimitExhaustedError,
   SyncHttpError,
 } from "./gh-cache-sync";
+import {
+  cmdIssueList,
+  cmdIssueShow,
+  cmdIssueSearch,
+  cmdPrList,
+  type CliDeps as CliDepsImport,
+} from "./gh-cache-cli";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -4353,6 +4360,57 @@ async function cmdGhStatus(): Promise<void> {
   process.exit(0);
 }
 
+// --- issue / pr サブコマンド (T272 Phase 2) ---
+/**
+ * `cmux-team issue list|show|search [...]`
+ */
+async function cmdIssue(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("gh_help"));
+  const sub = args[1];
+  const ctx = await resolveGhContext();
+  const deps: CliDepsImport = { ...ctx, args };
+  switch (sub) {
+    case "list":
+      await cmdIssueList(deps);
+      process.exit(0);
+      break;
+    case "show":
+      await cmdIssueShow(deps, "issue");
+      process.exit(0);
+      break;
+    case "search":
+      await cmdIssueSearch(deps);
+      process.exit(0);
+      break;
+    default:
+      console.error(t("gh_unknown_subcommand", { sub: sub ?? "" }));
+      process.exit(1);
+  }
+}
+
+/**
+ * `cmux-team pr list|show [...]`
+ */
+async function cmdPr(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("gh_help"));
+  const sub = args[1];
+  const ctx = await resolveGhContext();
+  const deps: CliDepsImport = { ...ctx, args };
+  switch (sub) {
+    case "list":
+      await cmdPrList(deps);
+      process.exit(0);
+      break;
+    case "show":
+      await cmdIssueShow(deps, "pr");
+      process.exit(0);
+      break;
+    default:
+      console.error(t("gh_unknown_subcommand", { sub: sub ?? "" }));
+      process.exit(1);
+  }
+}
+
 // --- artifacts サブコマンド ---
 async function cmdArtifacts(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_artifacts"));
@@ -4627,6 +4685,12 @@ switch (command) {
     break;
   case "gh":
     await cmdGh();
+    break;
+  case "issue":
+    await cmdIssue();
+    break;
+  case "pr":
+    await cmdPr();
     break;
   default:
     if (!command || hasHelpFlag()) {
