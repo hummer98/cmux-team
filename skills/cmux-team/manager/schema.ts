@@ -219,6 +219,21 @@ export const ConductorState = z.object({
   // team.json に永続化するため、daemon 再起動後は古い値で復元される
   // （次の SESSION_* 受信で上書きされるので許容）。
   lastHookAt: z.string().datetime().optional(),
+  // T261: user_clear 誤判定調査のための判定根拠スナップショット用フィールド群。
+  // daemon.ts の formatUserClearDecision / SESSION_IDLE の source_guess で読み出す。
+  //
+  // 永続化対象（team.json に残す）:
+  //   - clearSentAt: daemon 再起動後も「clear からの経過 ms」を user_clear_decision_snapshot
+  //     で計算できるよう残す。再起動後は古い値が残り得るが、判定分岐には影響せずログ表示のみ。
+  clearSentAt: z.string().datetime().optional(),
+  // ランタイム限定（永続化しない — restoreConductors で undefined に戻る）:
+  //   - promptSentAt / promptBytes: assignTask でプロンプト送信完了時刻とサイズ
+  //   - sessionStartedClearAt: SESSION_STARTED(source=clear) で assigning → running 遷移した時刻
+  //   - sessionIdleAtInAssigning: SESSION_IDLE R1 保険経路で assigning → running に遷移した時刻
+  promptSentAt: z.string().datetime().optional(),
+  promptBytes: z.number().optional(),
+  sessionStartedClearAt: z.string().datetime().optional(),
+  sessionIdleAtInAssigning: z.string().datetime().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {

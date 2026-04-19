@@ -205,6 +205,76 @@ export function formatConductorSnapshot(conductor: ConductorState): string {
 }
 
 /**
+ * T261: user_clear 判定瞬間のスナップショットフォーマッタ。
+ *
+ * SESSION_CLEAR handler の 2 ブランチ（session_clear_expected / running → user_clear）
+ * で発行する `user_clear_decision_snapshot` の detail を組み立てる。
+ *
+ * 契約 (Finding 1):
+ *   - 判定に必要な state はすべて conductor から取り出す（純関数）。
+ *   - message 引数は判定時刻を計算するための timestamp 取得用（elapsed_since_clear_sent を
+ *     「SESSION_CLEAR 受信時刻 - clearSentAt」で算出する）。I/O は行わない。
+ *
+ * 出力フォーマット: key=value のスペース区切り 1 行（既存 formatConductorSnapshot と同スタイル）。
+ * null 値は文字列リテラル `null` を出す（Decision D10 同様、「値なし」を明示）。
+ */
+export function formatUserClearDecision(
+  conductor: ConductorState,
+  message: { timestamp: string },
+  decisionReason: string,
+): string {
+  const clearSentAt = conductor.clearSentAt ?? null;
+  const elapsed = clearSentAt
+    ? new Date(message.timestamp).getTime() - new Date(clearSentAt).getTime()
+    : null;
+  const fields = [
+    `prev_status=${conductor.status}`,
+    `clear_sent_at=${clearSentAt ?? "null"}`,
+    `assigning_set_at=${conductor.startedAt ?? "null"}`,
+    `session_started_clear_at=${conductor.sessionStartedClearAt ?? "null"}`,
+    `session_idle_at=${conductor.sessionIdleAtInAssigning ?? "null"}`,
+    `elapsed_since_clear_sent=${elapsed ?? "null"}`,
+    `prompt_sent_at=${conductor.promptSentAt ?? "null"}`,
+    `prompt_bytes=${conductor.promptBytes ?? "null"}`,
+    `decision_reason=${decisionReason}`,
+  ];
+  return fields.join(" ");
+}
+
+/**
+ * T261: SESSION_IDLE の出所推定（decision log Finding 2 / 4.5）。
+ *
+ * prev_status と既存の ConductorState フィールドだけで決定論的に 1 値に倒す。
+ * 判定不能は "unknown" を返す（Decision D10: サイレント omit せず明示する）。
+ *
+ * 5000ms 閾値の根拠（Decision D11, Finding 2）:
+ *   T253 事例で /clear 送信 → SESSION_IDLE 到達までが約 2 秒だった。
+ *   2.5x のマージンを取り 5000ms を保守的な閾値とする。これより長い遅延は
+ *   通常 clear_transient ではなく prompt_pending や user 起因と見るのが自然。
+ */
+function guessSessionIdleSource(
+  prevStatus: ConductorState["status"],
+  conductor: ConductorState,
+  message: { timestamp: string },
+): string {
+  if (prevStatus === "assigning" && conductor.clearSentAt) {
+    const elapsedMs =
+      new Date(message.timestamp).getTime() - new Date(conductor.clearSentAt).getTime();
+    if (elapsedMs < 5000) return "clear_transient";
+  }
+  if (prevStatus === "assigning" && !conductor.promptSentAt) {
+    return "prompt_pending";
+  }
+  if (prevStatus === "running" && conductor.taskRunId) {
+    return "assigned";
+  }
+  if (prevStatus === "disconnected") {
+    return "recovered";
+  }
+  return "unknown";
+}
+
+/**
  * T260: broken 状態で SESSION_* を受信したときのログ。
  * 既存の `session_event_ignored_broken` は互換のため残しつつ、
  * broken にしたのに hook が届いている＝プロセスが生きている疑いを
@@ -846,6 +916,12 @@ function restoreConductorState(c: any): ConductorState {
     sessionId: c.sessionId,
     pid: c.pid,
     agents: restoredAgents,
+    // T260: lastHookAt は永続化対象。team.json に残っていれば復元する。
+    lastHookAt: c.lastHookAt,
+    // T261: clearSentAt のみ永続化対象。それ以外（promptSentAt / promptBytes /
+    //       sessionStartedClearAt / sessionIdleAtInAssigning）はランタイム限定で、
+    //       team.json に書き出していないため復元時も undefined に戻る（意図通り）。
+    clearSentAt: c.clearSentAt,
     // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
     status:
       c.status === "running" ? "running"
@@ -1357,6 +1433,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } else if (conductor.status === "assigning") {
           // T232: assignTask 実行中の /clear 完了 → SESSION_STARTED(source=clear) で running へ遷移
           conductor.status = "running";
+          // T261: assigning → running 遷移のタイムスタンプを記録し、
+          //       assigning_window_close を via=SESSION_STARTED_clear で発行する。
+          //       elapsed は clear 送信 → SESSION_STARTED(source=clear) 受信までの経過 ms。
+          conductor.sessionStartedClearAt = message.timestamp;
+          const elapsedStartedMs = conductor.clearSentAt
+            ? new Date(message.timestamp).getTime() - new Date(conductor.clearSentAt).getTime()
+            : null;
+          await log(
+            "assigning_window_close",
+            `${formatSurface(message.surface, "C")} via=SESSION_STARTED_clear elapsed=${elapsedStartedMs ?? "-"}`
+          );
           await log(
             "conductor_running",
             `${formatSurface(message.surface, "C")} via=SESSION_STARTED source=${message.source ?? "-"}`
@@ -1790,6 +1877,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           await logBrokenIgnore(conductor, "SESSION_IDLE");
           break;
         }
+        // T261: prev_status は分岐で conductor.status を書き換える前にスナップショットする。
+        //       以降のガード / ログで使い回すため、分岐内で参照しない。
+        const prevStatus = conductor.status;
+        const sourceGuess = guessSessionIdleSource(prevStatus, conductor, message);
         conductor.disconnectedAt = undefined;  // alive の証拠 (Stop hook からのシグナル)
         // T260: 最後に生存確認できた時刻を記録
         conductor.lastHookAt = message.timestamp;
@@ -1825,15 +1916,28 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           // T232 R1: SESSION_STARTED が配送順逆転で後着する race の保険。
           //          taskRunId が埋まっていれば assigning → running に遷移させる。
           conductor.status = "running";
+          // T261: R1 経路で assigning → running に倒した瞬間を記録し、
+          //       assigning_window_close を via=SESSION_IDLE で発行する。
+          conductor.sessionIdleAtInAssigning = message.timestamp;
+          const elapsedR1Ms = conductor.clearSentAt
+            ? new Date(message.timestamp).getTime() - new Date(conductor.clearSentAt).getTime()
+            : null;
+          await log(
+            "assigning_window_close",
+            `${formatSurface(message.surface, "C")} via=SESSION_IDLE elapsed=${elapsedR1Ms ?? "-"}`
+          );
+          // T261: R1 経路の conductor_running にも source_guess を併記する（Finding 5: 4.5 要件）。
           await log(
             "conductor_running",
-            `${formatSurface(message.surface, "C")} via=SESSION_IDLE taskRunId=${conductor.taskRunId}`
+            `${formatSurface(message.surface, "C")} via=SESSION_IDLE taskRunId=${conductor.taskRunId} session_idle_source_guess=${sourceGuess}`
           );
         }
         notifyStateChanged("daemon.ts:handleMessage:session-idle-conductor");
+        // T261: SESSION_IDLE の出所推定 (guessSessionIdleSource) を 1 key として併記。
+        //       Agent surface 側（下の agent_done 分岐）には付けない（user_clear 調査対象外）。
         await log(
           "session_idle",
-          `${formatSurface(message.surface, "C")}`
+          `${formatSurface(message.surface, "C")} session_idle_source_guess=${sourceGuess}`
         );
         break;
       }
@@ -1951,6 +2055,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       //       これを `disconnected/starting → idle` 分岐より **前** に置くことで、
       //       不意のフォールスルーを防ぐ。
       if (conductor && conductor.status === "assigning") {
+        // T261: 「daemon が送った clear を受けた」判定であっても、なぜそう判定したかの
+        //       state を 1 行で残す。decision_reason=daemon_assign_clear。
+        //       snapshot ログは session_clear_expected より前に出す（時系列で原因→結果）。
+        await log(
+          "user_clear_decision_snapshot",
+          `${formatSurface(message.surface, "C")} case=session_clear_expected ${formatUserClearDecision(conductor, message, "daemon_assign_clear")}`
+        );
         await log(
           "session_clear_expected",
           `${formatSurface(message.surface, "C")} reason=daemon_assign_clear taskRunId=${conductor.taskRunId ?? "-"}`
@@ -1984,6 +2095,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       if (conductor && conductor.status === "running") {
+        // T261: user_clear 判定に入る前に snapshot を 1 行出す。
+        //       「なぜ user_clear と判定したか」を後から grep で辿れるようにするため、
+        //       task_aborted より **前** に出す（時系列で原因→結果）。
+        await log(
+          "user_clear_decision_snapshot",
+          `${formatSurface(message.surface, "C")} case=user_clear ${formatUserClearDecision(conductor, message, "running_with_taskid")}`
+        );
         // ユーザー手動 /clear → タスク abort + idle リセット
         // forceCloseDisconnectedConductor と同パターン
         const taskId = conductor.taskId;
@@ -2469,6 +2587,15 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
     if (conductor.status === "assigning") {
       const elapsed = (Date.now() - new Date(conductor.startedAt).getTime()) / 1000;
       if (elapsed > ASSIGNING_TIMEOUT_SEC) {
+        // T261: timeout で assigning 窓を閉じる際も close ログを発行。
+        //       elapsed は clearSentAt 基準（ms 単位）。clearSentAt 不在なら "-"。
+        const elapsedTimeoutMs = conductor.clearSentAt
+          ? Date.now() - new Date(conductor.clearSentAt).getTime()
+          : null;
+        await log(
+          "assigning_window_close",
+          `${formatSurface(surface, "C")} via=timeout elapsed=${elapsedTimeoutMs ?? "-"}`
+        );
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
         notifyStateChanged("daemon.ts:monitorConductors:assigning-timeout");
@@ -2630,6 +2757,10 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       disconnectedAt: c.disconnectedAt,
       // T260: 再起動後も「最後に生存確認できた時刻」を復元できるよう永続化する（次の SESSION_* で上書きされる）。
       lastHookAt: c.lastHookAt,
+      // T261: daemon 再起動後も user_clear_decision_snapshot で「clear からの経過 ms」を
+      //       算出できるよう永続化する。promptSentAt 等の他 T261 フィールドは永続化しない
+      //       （restoreConductors 時に undefined に戻るのが仕様）。
+      clearSentAt: c.clearSentAt,
       sessionId: c.sessionId,
       pid: c.pid,
       agents: c.agents.map((a) => ({

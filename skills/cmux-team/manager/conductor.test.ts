@@ -616,3 +616,78 @@ describe("T260: conductor_broken ログに pid/alive を併記する", () => {
     expect(resetLine).not.toMatch(/alive=/);
   });
 });
+
+// --- T261: assignTask が clear/prompt 送信時刻と bytes を記録 ---
+
+describe("assignTask snapshot フィールド記録 (T261)", () => {
+  let sendSpy: ReturnType<typeof spyOn>;
+  let sendKeySpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+    sendKeySpy.mockRestore();
+  });
+
+  async function gitInitWithMain(): Promise<void> {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile(
+      "git",
+      ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"],
+      { cwd: testDir },
+    );
+  }
+
+  test("assignTask 成功 → clear_sent + assigning_window_open + assign_prompt_sent が順序通りログされる", async () => {
+    await gitInitWithMain();
+    await writeTaskFile("261", "snap-order");
+
+    const conductor = fakeConductor();
+    await assignTask(conductor, "261", testDir, "main");
+
+    const { readFile } = await import("fs/promises");
+    const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    const lines = log.split("\n");
+    const clearSentIdx = lines.findIndex((l) => l.includes("clear_sent ") && l.includes("source=daemon_assign"));
+    const openIdx = lines.findIndex((l) => l.includes("assigning_window_open "));
+    const promptSentIdx = lines.findIndex((l) => l.includes("assign_prompt_sent "));
+
+    expect(clearSentIdx).toBeGreaterThanOrEqual(0);
+    expect(openIdx).toBeGreaterThanOrEqual(0);
+    expect(promptSentIdx).toBeGreaterThanOrEqual(0);
+
+    // 順序: clear_sent → assigning_window_open → assign_prompt_sent
+    expect(clearSentIdx).toBeLessThan(openIdx);
+    expect(openIdx).toBeLessThan(promptSentIdx);
+
+    expect(lines[clearSentIdx]).toMatch(/taskRunId=task-261-\d+/);
+    expect(lines[promptSentIdx]).toMatch(/task_id=261/);
+    expect(lines[promptSentIdx]).toMatch(/bytes=\d+/);
+    expect(lines[promptSentIdx]).toMatch(/prompt_file=/);
+  }, 30000);
+
+  test("assignTask 成功 → conductor.clearSentAt / promptSentAt / promptBytes が set される", async () => {
+    await gitInitWithMain();
+    await writeTaskFile("262", "snap-fields");
+
+    const conductor = fakeConductor();
+    await assignTask(conductor, "262", testDir, "main");
+
+    expect(conductor.clearSentAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(conductor.promptSentAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(typeof conductor.promptBytes).toBe("number");
+    expect(conductor.promptBytes ?? 0).toBeGreaterThan(0);
+
+    // clearSentAt <= promptSentAt (順序性)
+    expect(new Date(conductor.clearSentAt!).getTime()).toBeLessThanOrEqual(
+      new Date(conductor.promptSentAt!).getTime(),
+    );
+  }, 30000);
+});

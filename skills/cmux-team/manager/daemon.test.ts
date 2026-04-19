@@ -3752,3 +3752,321 @@ describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {
   });
 });
 
+// --- T261: user_clear 誤判定観測用ログ / スナップショット ---
+
+describe("handleMessage: user_clear_decision_snapshot (T261)", () => {
+  test("assigning + SESSION_CLEAR は case=session_clear_expected の snapshot を task_aborted 無しで出す", async () => {
+    const state = await createDaemon(testDir);
+    const startedAt = "2026-04-19T10:00:00.000Z";
+    const clearSentAt = "2026-04-19T10:00:00.100Z";
+    const receivedAt = "2026-04-19T10:00:02.100Z";
+    const conductor: ConductorState = {
+      surface: "surface:261a",
+      startedAt,
+      agents: [],
+      status: "assigning",
+      pid: 11111,
+      taskRunId: "task-261-a",
+      taskId: "261a",
+      clearSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: conductor.surface,
+      timestamp: receivedAt,
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /user_clear_decision_snapshot C\[261a\] case=session_clear_expected prev_status=assigning clear_sent_at=2026-04-19T10:00:00.100Z .*decision_reason=daemon_assign_clear/
+    );
+    // elapsed は 2000ms（固定入力から計算）
+    expect(logContent).toMatch(/elapsed_since_clear_sent=2000/);
+    // session_clear_expected も続けて出ている
+    expect(logContent).toMatch(/session_clear_expected C\[261a\]/);
+    // task_aborted は出ていない
+    expect(logContent).not.toMatch(/task_aborted.*task_id=261a/);
+  });
+
+  test("running + SESSION_CLEAR は case=user_clear snapshot → task_aborted の順で出る", async () => {
+    const state = await createDaemon(testDir);
+    const startedAt = "2026-04-19T10:10:00.000Z";
+    const clearSentAt = "2026-04-19T10:10:00.200Z";
+    const receivedAt = "2026-04-19T10:20:00.200Z";
+    const conductor: ConductorState = {
+      surface: "surface:261b",
+      startedAt,
+      agents: [],
+      status: "running",
+      pid: 22222,
+      taskRunId: "task-261-b",
+      taskId: "261b",
+      clearSentAt,
+      promptSentAt: "2026-04-19T10:10:00.500Z",
+      promptBytes: 42,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    // task-state を assigned にしておく（user_clear → aborted 書き換えを発火させる）
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const before = await loadTaskState(testDir);
+    before["261b"] = { status: "assigned", assignedAt: startedAt, taskRunId: "task-261-b" };
+    await saveTaskState(testDir, before);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: conductor.surface,
+      timestamp: receivedAt,
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /user_clear_decision_snapshot C\[261b\] case=user_clear prev_status=running clear_sent_at=2026-04-19T10:10:00.200Z .*prompt_bytes=42 decision_reason=running_with_taskid/
+    );
+    expect(logContent).toMatch(/task_aborted task_id=261b reason=user_clear/);
+
+    // 順序: snapshot が先、task_aborted が後
+    const snapshotIdx = logContent.indexOf("user_clear_decision_snapshot C[261b]");
+    const abortedIdx = logContent.indexOf("task_aborted task_id=261b");
+    expect(snapshotIdx).toBeGreaterThanOrEqual(0);
+    expect(abortedIdx).toBeGreaterThan(snapshotIdx);
+  });
+});
+
+describe("handleMessage: assigning_window_close (T261)", () => {
+  test("SESSION_STARTED(source=clear) で assigning_window_close via=SESSION_STARTED_clear elapsed=<ms> が出る", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt = "2026-04-19T10:30:00.000Z";
+    const receivedAt = "2026-04-19T10:30:01.500Z";
+    const conductor: ConductorState = {
+      surface: "surface:261c",
+      startedAt: "2026-04-19T10:29:59.000Z",
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-261-c",
+      taskId: "261c",
+      clearSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 33333,
+      source: "clear",
+      timestamp: receivedAt,
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.sessionStartedClearAt).toBe(receivedAt);
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /assigning_window_close C\[261c\] via=SESSION_STARTED_clear elapsed=1500/
+    );
+
+    // PID watcher 停止
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("SESSION_IDLE(R1: assigning+taskRunId) で assigning_window_close via=SESSION_IDLE が出る", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt = "2026-04-19T10:40:00.000Z";
+    const receivedAt = "2026-04-19T10:40:02.000Z";
+    const conductor: ConductorState = {
+      surface: "surface:261d",
+      startedAt: "2026-04-19T10:39:59.000Z",
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-261-d",
+      taskId: "261d",
+      clearSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      pid: 44444,
+      timestamp: receivedAt,
+    });
+
+    expect(conductor.status).toBe("running");
+    expect(conductor.sessionIdleAtInAssigning).toBe(receivedAt);
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /assigning_window_close C\[261d\] via=SESSION_IDLE elapsed=2000/
+    );
+  });
+
+  test("assigning timeout で assigning_window_close via=timeout が出る", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt = new Date(Date.now() - 61_000).toISOString();
+    const conductor: ConductorState = {
+      surface: "surface:261e",
+      startedAt: new Date(Date.now() - 61_000).toISOString(),
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-261-e",
+      taskId: "261e",
+      clearSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await monitorConductors(state);
+
+    expect(conductor.status).toBe("disconnected");
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /assigning_window_close C\[261e\] via=timeout elapsed=\d+/
+    );
+  });
+});
+
+describe("handleMessage: session_idle_source_guess (T261)", () => {
+  test("prev=assigning + clearSentAt 差分 <5000ms → clear_transient", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt = "2026-04-19T10:50:00.000Z";
+    const receivedAt = "2026-04-19T10:50:01.500Z";
+    const conductor: ConductorState = {
+      surface: "surface:261f",
+      startedAt: "2026-04-19T10:49:59.000Z",
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-261-f",
+      taskId: "261f",
+      clearSentAt,
+      promptSentAt: "2026-04-19T10:50:00.300Z",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      pid: 55555,
+      timestamp: receivedAt,
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /session_idle C\[261f\] session_idle_source_guess=clear_transient/
+    );
+  });
+
+  test("prev=running + taskRunId → assigned", async () => {
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:261g",
+      startedAt: "2026-04-19T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 66666,
+      taskRunId: "task-261-g",
+      taskId: "261g",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      pid: 66666,
+      timestamp: "2026-04-19T11:00:05.000Z",
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /session_idle C\[261g\] session_idle_source_guess=assigned/
+    );
+  });
+
+  test("prev=assigning + promptSentAt 未設定 → prompt_pending", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt = "2026-04-19T11:10:00.000Z";
+    // clear からの経過が 5000ms 以上 → clear_transient 判定から外れる
+    const receivedAt = "2026-04-19T11:10:10.000Z";
+    const conductor: ConductorState = {
+      surface: "surface:261h",
+      startedAt: "2026-04-19T11:09:59.000Z",
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-261-h",
+      taskId: "261h",
+      clearSentAt,
+      // promptSentAt は意図的に未設定
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      pid: 77777,
+      timestamp: receivedAt,
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(
+      /session_idle C\[261h\] session_idle_source_guess=prompt_pending/
+    );
+  });
+});
+
+describe("updateTeamJson / restoreConductors: T261 フィールド永続化", () => {
+  test("clearSentAt は team.json に書き出され restore 後も保持される / 他 4 フィールドは undefined に戻る", async () => {
+    const { updateTeamJson, createDaemon } = await import("./daemon");
+
+    const state = await createDaemon(testDir);
+    const clearSentAt = "2026-04-19T12:00:00.000Z";
+    const conductor: ConductorState = {
+      surface: "surface:261i",
+      startedAt: "2026-04-19T11:59:59.000Z",
+      agents: [],
+      status: "running",
+      pid: 88888,
+      taskRunId: "task-261-i",
+      taskId: "261i",
+      clearSentAt,
+      // 以下 4 つはランタイム限定（team.json に書き出されない）
+      promptSentAt: "2026-04-19T12:00:00.300Z",
+      promptBytes: 123,
+      sessionStartedClearAt: "2026-04-19T12:00:00.400Z",
+      sessionIdleAtInAssigning: "2026-04-19T12:00:01.000Z",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await updateTeamJson(state);
+
+    const teamJson = JSON.parse(
+      await readFile(join(testDir, ".team/team.json"), "utf-8"),
+    );
+    const serialized = teamJson.conductors.find((c: any) => c.surface === "surface:261i");
+    expect(serialized).toBeDefined();
+    expect(serialized.clearSentAt).toBe(clearSentAt);
+    // 以下 4 つは永続化されない
+    expect(serialized.promptSentAt).toBeUndefined();
+    expect(serialized.promptBytes).toBeUndefined();
+    expect(serialized.sessionStartedClearAt).toBeUndefined();
+    expect(serialized.sessionIdleAtInAssigning).toBeUndefined();
+
+    // 復元経路: ConductorState スキーマの parse 相当（restoreConductorState は非公開のため、
+    //          team.json の生データを schema.ts の parse で検証することで回帰を押さえる）
+    const { ConductorState: ConductorStateSchema } = await import("./schema");
+    const parsed = ConductorStateSchema.parse({
+      ...serialized,
+      // restore で必要な最小フィールドを補う
+      agents: serialized.agents ?? [],
+    });
+    expect(parsed.clearSentAt).toBe(clearSentAt);
+    expect(parsed.promptSentAt).toBeUndefined();
+    expect(parsed.promptBytes).toBeUndefined();
+    expect(parsed.sessionStartedClearAt).toBeUndefined();
+    expect(parsed.sessionIdleAtInAssigning).toBeUndefined();
+  });
+});
+

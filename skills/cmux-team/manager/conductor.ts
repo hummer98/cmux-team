@@ -445,14 +445,31 @@ export async function assignTask(
     notifyStateChanged("conductor.ts:assignTask:assigning-set");
     try {
       await cmux.send(conductor.surface, "/clear");
+      // T261: user_clear 判定のための snapshot フィールドを埋める。
+      //       cmux.send 成功直後に set することで、送信失敗時に stale 値を残さない。
+      conductor.clearSentAt = new Date().toISOString();
+      await log(
+        "clear_sent",
+        `${formatSurface(conductor.surface, "C")} source=daemon_assign taskRunId=${taskRunId}`
+      );
+      await log(
+        "assigning_window_open",
+        `${formatSurface(conductor.surface, "C")} task_id=${taskId} clear_sent_at=${conductor.clearSentAt}`
+      );
       await sleep(500);
       await cmux.sendKey(conductor.surface, "return");
       await sleep(2000);
 
       // 新しいプロンプトを送信
-      await cmux.send(
-        conductor.surface,
-        `${promptFile} を読んで指示に従って作業してください。`
+      const promptText = `${promptFile} を読んで指示に従って作業してください。`;
+      await cmux.send(conductor.surface, promptText);
+      // T261: 送信したプロンプトの時刻と byte 長を記録
+      //       byte 長は UTF-8 換算（D9: API レート制限の byte 感覚と揃える）。
+      conductor.promptSentAt = new Date().toISOString();
+      conductor.promptBytes = Buffer.byteLength(promptText, "utf8");
+      await log(
+        "assign_prompt_sent",
+        `${formatSurface(conductor.surface, "C")} task_id=${taskId} bytes=${conductor.promptBytes} prompt_file=${promptFile}`
       );
       await sleep(500);
       await cmux.sendKey(conductor.surface, "return");
@@ -609,6 +626,13 @@ export async function resetConductor(
     conductor.worktreePath = undefined;
     conductor.outputDir = undefined;
     conductor.agents = [];
+    // T261: user_clear 判定用の snapshot フィールドも必ずクリアする。
+    //       stale 値で次の割当サイクルの判定を汚染しないため（Decision 記載の安全策）。
+    conductor.clearSentAt = undefined;
+    conductor.promptSentAt = undefined;
+    conductor.promptBytes = undefined;
+    conductor.sessionStartedClearAt = undefined;
+    conductor.sessionIdleAtInAssigning = undefined;
     // idle に戻す経路では古い disconnectedAt をクリアする (Minor 3)。
     // broken 経路では UI の「経過時間」表示のため保持する（将来 clear-conductor で
     // idle に戻す際は、上の条件に従って undefined に落ちる）。
