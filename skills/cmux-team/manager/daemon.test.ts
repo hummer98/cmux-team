@@ -3833,6 +3833,38 @@ describe("handleMessage: user_clear_decision_snapshot (T261)", () => {
     expect(snapshotIdx).toBeGreaterThanOrEqual(0);
     expect(abortedIdx).toBeGreaterThan(snapshotIdx);
   });
+
+  // T265: assigning_set_at は conductor.assigningSetAt 由来（startedAt は参照しない）
+  // キー名は互換のため維持し、値の解決元だけ startedAt → assigningSetAt に差し替えた。
+  test("formatUserClearDecision の assigning_set_at は conductor.assigningSetAt 由来（startedAt 非参照）", async () => {
+    const state = await createDaemon(testDir);
+    const startedAt = "2026-04-19T10:00:00.000Z";
+    const assigningSetAt = "2026-04-19T11:00:00.000Z";
+    const clearSentAt = "2026-04-19T11:00:00.100Z";
+    const receivedAt = "2026-04-19T11:00:02.100Z";
+    const conductor: ConductorState = {
+      surface: "surface:265f",
+      startedAt,
+      assigningSetAt,
+      agents: [],
+      status: "assigning",
+      pid: 12345,
+      taskRunId: "task-265-f",
+      taskId: "265f",
+      clearSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: conductor.surface,
+      timestamp: receivedAt,
+    });
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/assigning_set_at=2026-04-19T11:00:00\.000Z/);
+    expect(logContent).not.toMatch(/assigning_set_at=2026-04-19T10:00:00\.000Z/);
+  });
 });
 
 describe("handleMessage: assigning_window_close (T261)", () => {

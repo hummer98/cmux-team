@@ -451,6 +451,24 @@ describe("resetConductor targetStatus オプション (T250)", () => {
     expect(conductor.disconnectedAt).toBeUndefined();
     expect(conductor.taskRunId).toBeUndefined();
   });
+
+  // T265: assigningSetAt も T261 系 runtime-only snapshot フィールドと同様に
+  // resetConductor で必ず undefined に戻す。stale 値で次の割当サイクルの判定を汚染しない。
+  test("resetConductor → conductor.assigningSetAt が undefined にクリアされる", async () => {
+    const conductor: ConductorState = {
+      surface: "surface:265r",
+      startedAt: "2026-04-19T09:00:00.000Z",
+      agents: [],
+      status: "running",
+      taskRunId: "task-265-r",
+      taskId: "265r",
+      assigningSetAt: "2026-04-19T10:00:00.000Z",
+    };
+
+    await resetConductor(conductor, testDir, undefined, { targetStatus: "idle" });
+
+    expect(conductor.assigningSetAt).toBeUndefined();
+  });
 });
 
 // --- T251: resetConductor surface 実在確認 ---
@@ -688,6 +706,22 @@ describe("assignTask snapshot フィールド記録 (T261)", () => {
     // clearSentAt <= promptSentAt (順序性)
     expect(new Date(conductor.clearSentAt!).getTime()).toBeLessThanOrEqual(
       new Date(conductor.promptSentAt!).getTime(),
+    );
+  }, 30000);
+
+  // T265: assigningSetAt は assignTask が status="assigning" にセットした時刻を記録する。
+  // formatUserClearDecision の assigning_set_at が参照する値で、startedAt（プロセス起動時刻）
+  // とは別物。
+  test("assignTask 成功 → conductor.assigningSetAt が set され clearSentAt より前", async () => {
+    await gitInitWithMain();
+    await writeTaskFile("265", "assigning-set-at");
+
+    const conductor = fakeConductor();
+    await assignTask(conductor, "265", testDir, "main");
+
+    expect(conductor.assigningSetAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(new Date(conductor.assigningSetAt!).getTime()).toBeLessThanOrEqual(
+      new Date(conductor.clearSentAt!).getTime(),
     );
   }, 30000);
 });

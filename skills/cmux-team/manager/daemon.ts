@@ -230,7 +230,7 @@ export function formatUserClearDecision(
   const fields = [
     `prev_status=${conductor.status}`,
     `clear_sent_at=${clearSentAt ?? "null"}`,
-    `assigning_set_at=${conductor.startedAt ?? "null"}`,
+    `assigning_set_at=${conductor.assigningSetAt ?? "null"}`,
     `session_started_clear_at=${conductor.sessionStartedClearAt ?? "null"}`,
     `session_idle_at=${conductor.sessionIdleAtInAssigning ?? "null"}`,
     `elapsed_since_clear_sent=${elapsed ?? "null"}`,

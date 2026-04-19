@@ -441,7 +441,10 @@ export async function assignTask(
     // T232: /clear 送信直前に "assigning" を立てる。daemon 自身の /clear が
     //       遅延して SESSION_CLEAR hook を発火しても、この状態窓で早期 return して
     //       ユーザー手動 /clear と誤認しない（race condition の根治）。
+    // T265: assigning にセットした正確な時刻を記録する（formatUserClearDecision
+    //       の assigning_set_at が参照する）。conductor.status と同じトランザクションで set。
     conductor.status = "assigning";
+    conductor.assigningSetAt = new Date().toISOString();
     notifyStateChanged("conductor.ts:assignTask:assigning-set");
     try {
       await cmux.send(conductor.surface, "/clear");
@@ -626,13 +629,14 @@ export async function resetConductor(
     conductor.worktreePath = undefined;
     conductor.outputDir = undefined;
     conductor.agents = [];
-    // T261: user_clear 判定用の snapshot フィールドも必ずクリアする。
+    // T261/T265: user_clear 判定用の snapshot フィールドも必ずクリアする。
     //       stale 値で次の割当サイクルの判定を汚染しないため（Decision 記載の安全策）。
     conductor.clearSentAt = undefined;
     conductor.promptSentAt = undefined;
     conductor.promptBytes = undefined;
     conductor.sessionStartedClearAt = undefined;
     conductor.sessionIdleAtInAssigning = undefined;
+    conductor.assigningSetAt = undefined;
     // idle に戻す経路では古い disconnectedAt をクリアする (Minor 3)。
     // broken 経路では UI の「経過時間」表示のため保持する（将来 clear-conductor で
     // idle に戻す際は、上の条件に従って undefined に落ちる）。

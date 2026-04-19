@@ -230,10 +230,12 @@ export const ConductorState = z.object({
   //   - promptSentAt / promptBytes: assignTask でプロンプト送信完了時刻とサイズ
   //   - sessionStartedClearAt: SESSION_STARTED(source=clear) で assigning → running 遷移した時刻
   //   - sessionIdleAtInAssigning: SESSION_IDLE R1 保険経路で assigning → running に遷移した時刻
+  //   - assigningSetAt: assignTask が status="assigning" にセットした時刻（T265）
   promptSentAt: z.string().datetime().optional(),
   promptBytes: z.number().optional(),
   sessionStartedClearAt: z.string().datetime().optional(),
   sessionIdleAtInAssigning: z.string().datetime().optional(),
+  assigningSetAt: z.string().datetime().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {
