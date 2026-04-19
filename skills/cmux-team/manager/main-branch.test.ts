@@ -177,6 +177,15 @@ describe("resolveMainBranch", () => {
 });
 
 describe("persistMainBranch", () => {
+  test(".team ディレクトリが無くても ENOENT にならず作成する (T270)", async () => {
+    // testDir 直下にまだ .team/ が無い状態で呼び出す
+    await persistMainBranch(testDir, "main");
+    const parsed = JSON.parse(
+      await readFile(join(testDir, ".team/config.json"), "utf-8"),
+    );
+    expect(parsed).toEqual({ mainBranch: "main" });
+  });
+
   test("既存 config がない場合は新規作成する", async () => {
     await mkdir(join(testDir, ".team"), { recursive: true });
     await persistMainBranch(testDir, "main");

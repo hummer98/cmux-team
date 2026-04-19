@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { log } from "./logger";
 import type { MainBranchResolution } from "./schema";
@@ -105,7 +105,9 @@ export async function persistMainBranch(
   projectRoot: string,
   branch: string,
 ): Promise<void> {
-  const configPath = join(projectRoot, ".team/config.json");
+  const teamDir = join(projectRoot, ".team");
+  await mkdir(teamDir, { recursive: true });
+  const configPath = join(teamDir, "config.json");
   let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
