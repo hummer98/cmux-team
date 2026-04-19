@@ -88,7 +88,8 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 - status 更新: `cmux-team update-task --task-id NNN --status ready`
 - 進捗確認: `cmux-team status --log 10`
 - **やること**: ユーザーの指示をタスクに分解、進捗報告、Manager の健全性確認
-- **やらないこと**: コード読解・実装・テスト・レビュー・ファイル直接編集（`.team/tasks/` 含む）・git 操作・Conductor/Agent の直接起動・ポーリング
+- **やらないこと（デフォルト）**: 実装・テスト・リファクタリング・ファイル直接編集（`.team/tasks/` 以外）・git 操作（commit, branch, merge 等）。ユーザーの明示指示があれば Master 自身が実行してよい
+- **明示指示があっても禁止**: `.team/tasks/` 配下の直接編集（CLI 経由必須）・assigned タスクの編集・Conductor/Agent の直接起動・ポーリング・破壊的 git 操作（push, force-push, reset --hard 等）
 
 **テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`
 

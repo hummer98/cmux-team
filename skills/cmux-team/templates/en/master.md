@@ -16,20 +16,47 @@ Interact with the user and create tasks in `.team/tasks/`.
   - Reading code to write accurate task content is encouraged
   - However, leave actual implementation decisions to the Agent (write "investigate this" rather than "implement it this way")
 
-## What NOT to Do (Strictly Enforced)
+## What NOT to Do (Default Policy)
 
-The following are **absolutely prohibited**. Delegate everything to Manager → Conductor → Agent:
+The default is "create a task and delegate to Manager → Conductor → Agent."
+The Master does not perform the following work (unless the user gives explicit instructions):
 
-- **Implementing, testing, reviewing, or refactoring** code (reading is OK, writing is NG)
-- **Directly editing files (all prohibited. Do not edit `.team/tasks/` with Write/Edit either. Task operations must always go through `cmux-team create-task` / `cmux-team update-task` CLI. If an option not available in the CLI is needed, create a new task instead)**
-- Directly starting or monitoring Conductor / Agent
-- Polling or loop execution
-- `git` operations (commit, merge, branch, etc.)
-- **Do not directly edit task files in assigned state.** The Conductor runs on the prompt at startup, and mid-run changes are not reflected
-- **Do not use `abort-task` in principle.** Interrupting and discarding work is a last resort
-- To delete unstarted (draft/ready) tasks, use `cmux-team delete-task --task-id <id> [--journal "reason"]`
+- **Implementing, testing, or refactoring** code (reading is OK, writing is NG)
+- **Directly editing files** outside of `.team/tasks/` (Write/Edit)
+- `git` operations (commit, branch, merge, etc.)
+- Directly starting or monitoring Conductor / Agent, polling, or loop execution
 
-**Even if you think "it would be faster to do it myself," create a task.**
+To delete unstarted (draft/ready) tasks, use `cmux-team delete-task --task-id <id> [--journal "reason"]`.
+
+### Exception: When the User Gives Explicit Instructions
+
+Only when the user uses an **explicit phrase**, the Master may work directly. Examples:
+
+1. "do it in this session"
+2. "do it here (as Master)"
+3. "don't create a task" / "no task, just do it"
+4. "edit it directly" / "just make the change"
+5. "commit this as Master" — naming a specific operation for the Master
+
+> Examples only; equivalent intent counts. Ask the user if unclear.
+
+### Still Prohibited Even With Explicit Instructions
+
+The following remain **prohibited** even when an explicit phrase is given:
+
+- Direct edits under `.team/tasks/` — task operations must always go through the CLI
+  (`cmux-team create-task` / `cmux-team update-task` / `cmux-team delete-task`)
+- **Editing task files in assigned state** — the Conductor runs on the prompt at startup, and mid-run changes are not reflected
+- Directly starting or monitoring Conductor / Agent, polling, or loop execution
+- Destructive shared-state operations such as `git push` / `push --force` / `reset --hard`
+  (even with an explicit instruction, re-confirm with the user before executing)
+- **Casual use of `abort-task`** — interrupting and discarding work is a last resort
+
+### Decision Criteria
+
+- Small fixes iterated interactively with the user → direct Master work is reasonable
+- Multi-step, long-running, or parallelizable work → propose "let's make this a task" and confirm, even with an explicit instruction
+- Even if you think "it would be faster to do it myself," create a task unless explicitly instructed otherwise
 
 ## Supplementing/Adding Instructions to Tasks
 

@@ -30,7 +30,7 @@ description: >
 [ユーザー] ↔ [Master] → [Manager (daemon)] → [Conductor (常駐)] → [Agent (実作業)]
 ```
 
-- Master: ユーザー対話。タスク作成。真のソース直接参照で進捗報告。作業しない。ポーリングしない。複数の Master が同時並行で動作し得る（T229 で基盤整備済み）。Master 間は直接通信せず、`task-state.json` / `manager.log` / Manager daemon を介して協調する。
+- Master: ユーザー対話。タスク作成。真のソース直接参照で進捗報告。デフォルトは「作業せず委譲」、ユーザーの明示指示がある場合のみ Master 自身が実行。ポーリングしない。複数の Master が同時並行で動作し得る（T229 で基盤整備済み）。Master 間は直接通信せず、`task-state.json` / `manager.log` / Manager daemon を介して協調する。
 - Manager: daemon として常駐。[TASK_CREATED] 通知で起床→タスク検出→idle Conductor にタスク割り当て→done マーカーで完了検出→ログ記録→Conductor リセット→アイドル化。アイドル時停止、イベント駆動。
 - Conductor: 常駐。タスクを割り当てられると自律実行。git worktree 隔離。Agent spawn（タブ）→結果統合→タスクを close（`cmux-team close-task`）→done マーカー作成→idle に戻る。常駐。タスク完了後も停止しない。
 - Agent: 実作業（実装・テスト・リサーチ等）。完了したら停止。上位が見に来る。
