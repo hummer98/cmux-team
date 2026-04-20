@@ -362,6 +362,7 @@ export interface MainBranchResolution {
 
 export const WorktreeBaseSource = z.enum([
   "explicit",
+  "config-local-ahead",
   "config-origin",
   "config-local",
   "head-fallback",

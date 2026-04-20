@@ -71,7 +71,12 @@ describe("resolveWorktreeBase", () => {
       source: "config-origin",
       baseLabel: "origin/dev",
     });
-    expect(calls.length).toBe(1);
+    expect(
+      calls.some((c) =>
+        c.includes("refs/remotes/origin/dev^{commit}"),
+      ),
+    ).toBe(true);
+    expect(calls.find((c) => c[0] === "merge-base")).toBeUndefined();
   });
 
   test("origin/<mainBranch> が無ければ config-local にフォールバック", async () => {
@@ -211,5 +216,159 @@ describe("resolveWorktreeBase", () => {
       },
     });
     expect(calls.find((c) => c[0] === "fetch")).toBeUndefined();
+  });
+
+  test("local が origin より strict ahead なら config-local-ahead を採用する (T275)", async () => {
+    const result = await resolveWorktreeBase(testDir, {
+      mainBranch: "main",
+      git: async (args) => {
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/remotes/origin/main^{commit}")
+        ) {
+          return "origin_exists";
+        }
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/heads/main^{commit}")
+        ) {
+          return "local_exists";
+        }
+        if (
+          args[0] === "merge-base" &&
+          args[1] === "--is-ancestor" &&
+          args[2] === "origin/main" &&
+          args[3] === "main"
+        ) {
+          return "";
+        }
+        if (args[0] === "rev-parse" && args[1] === "origin/main") {
+          return "aaa";
+        }
+        if (args[0] === "rev-parse" && args[1] === "main") {
+          return "bbb";
+        }
+        throw new Error("unexpected: " + args.join(" "));
+      },
+    });
+    expect(result).toEqual({
+      startPoint: "main",
+      source: "config-local-ahead",
+      baseLabel: "main",
+    });
+  });
+
+  test("local と origin が完全同一 SHA なら config-origin を採用 (T275)", async () => {
+    const result = await resolveWorktreeBase(testDir, {
+      mainBranch: "main",
+      git: async (args) => {
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/remotes/origin/main^{commit}")
+        ) {
+          return "origin_exists";
+        }
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/heads/main^{commit}")
+        ) {
+          return "local_exists";
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          return "";
+        }
+        if (args[0] === "rev-parse" && args[1] === "origin/main") {
+          return "sameabc";
+        }
+        if (args[0] === "rev-parse" && args[1] === "main") {
+          return "sameabc";
+        }
+        throw new Error("unexpected: " + args.join(" "));
+      },
+    });
+    expect(result.source).toBe("config-origin");
+    expect(result.startPoint).toBe("origin/main");
+  });
+
+  test("local が origin の strict ancestor なら config-origin に倒れる (T275)", async () => {
+    const result = await resolveWorktreeBase(testDir, {
+      mainBranch: "main",
+      git: async (args) => {
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/remotes/origin/main^{commit}")
+        ) {
+          return "origin_exists";
+        }
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/heads/main^{commit}")
+        ) {
+          return "local_exists";
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          const e: any = new Error("not ancestor");
+          e.code = 1;
+          throw e;
+        }
+        throw new Error("unexpected: " + args.join(" "));
+      },
+    });
+    expect(result.source).toBe("config-origin");
+    expect(result.startPoint).toBe("origin/main");
+  });
+
+  test("local が存在しない（origin のみ）なら ahead 判定をスキップして config-origin (T275)", async () => {
+    const calls: string[][] = [];
+    const result = await resolveWorktreeBase(testDir, {
+      mainBranch: "main",
+      git: async (args) => {
+        calls.push([...args]);
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/remotes/origin/main^{commit}")
+        ) {
+          return "origin_exists";
+        }
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/heads/main^{commit}")
+        ) {
+          const e: any = new Error("unknown revision");
+          e.stderr = "fatal: unknown revision\n";
+          throw e;
+        }
+        throw new Error("unexpected: " + args.join(" "));
+      },
+    });
+    expect(result.source).toBe("config-origin");
+    expect(result.startPoint).toBe("origin/main");
+    expect(calls.find((c) => c[0] === "merge-base")).toBeUndefined();
+  });
+
+  test("is-ancestor が未知例外を投げたら config-origin にフォールバック (T275)", async () => {
+    const result = await resolveWorktreeBase(testDir, {
+      mainBranch: "main",
+      git: async (args) => {
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/remotes/origin/main^{commit}")
+        ) {
+          return "origin_exists";
+        }
+        if (
+          args[0] === "rev-parse" &&
+          args.includes("refs/heads/main^{commit}")
+        ) {
+          return "local_exists";
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          throw new Error("unexpected git crash");
+        }
+        throw new Error("unexpected: " + args.join(" "));
+      },
+    });
+    expect(result.source).toBe("config-origin");
+    expect(result.startPoint).toBe("origin/main");
   });
 });

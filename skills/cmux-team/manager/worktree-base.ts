@@ -26,10 +26,11 @@ export interface ResolveWorktreeBaseOptions {
  * git worktree add の start-point を以下の優先順位で解決する:
  *
  * 1. `baseBranch`（trim 後に非空）→ explicit
- * 2. `mainBranch`（trim 後に非空）かつ `origin/<mainBranch>` 存在 → config-origin
+ * 2. `mainBranch` 指定あり & origin/local 両方存在 & local が origin より strict ahead → config-local-ahead
+ * 3. `mainBranch` 指定あり & `origin/<mainBranch>` 存在 → config-origin
  *    （`doFetch=true` なら事前に `git fetch --quiet origin <mainBranch>` を打つ）
- * 3. `mainBranch` 存在 かつ local `<mainBranch>` 存在 → config-local
- * 4. それ以外 → head-fallback（startPoint=null、`git worktree add -b <new>` のみ発行）
+ * 4. `mainBranch` 指定あり & local `<mainBranch>` 存在 → config-local
+ * 5. それ以外 → head-fallback（startPoint=null、`git worktree add -b <new>` のみ発行）
  */
 export async function resolveWorktreeBase(
   projectRoot: string,
@@ -70,6 +71,7 @@ export async function resolveWorktreeBase(
     }
   }
 
+  let originExists = false;
   try {
     await git([
       "rev-parse",
@@ -77,15 +79,12 @@ export async function resolveWorktreeBase(
       "--quiet",
       `refs/remotes/origin/${main}^{commit}`,
     ]);
-    return {
-      startPoint: `origin/${main}`,
-      source: "config-origin",
-      baseLabel: `origin/${main}`,
-    };
+    originExists = true;
   } catch {
-    // origin に存在しない → local へ
+    // origin に存在しない
   }
 
+  let localExists = false;
   try {
     await git([
       "rev-parse",
@@ -93,13 +92,58 @@ export async function resolveWorktreeBase(
       "--quiet",
       `refs/heads/${main}^{commit}`,
     ]);
+    localExists = true;
+  } catch {
+    // local にも存在しない
+  }
+
+  if (originExists && localExists) {
+    let ancestorOk = false;
+    try {
+      await git(["merge-base", "--is-ancestor", `origin/${main}`, main]);
+      ancestorOk = true;
+    } catch (e: any) {
+      if (e?.code !== 1) {
+        await log(
+          "worktree_base_local_ahead_check_failed",
+          `main=${main} stage=ancestor stderr=${(e?.stderr ?? "").toString().trim()}`,
+        );
+      }
+    }
+    if (ancestorOk) {
+      try {
+        const originSha = await git(["rev-parse", `origin/${main}`]);
+        const localSha = await git(["rev-parse", main]);
+        if (originSha && localSha && originSha !== localSha) {
+          return {
+            startPoint: main,
+            source: "config-local-ahead",
+            baseLabel: main,
+          };
+        }
+      } catch (e: any) {
+        await log(
+          "worktree_base_local_ahead_check_failed",
+          `main=${main} stage=rev-parse stderr=${(e?.stderr ?? "").toString().trim()}`,
+        );
+      }
+    }
+  }
+
+  if (originExists) {
+    return {
+      startPoint: `origin/${main}`,
+      source: "config-origin",
+      baseLabel: `origin/${main}`,
+    };
+  }
+
+  if (localExists) {
     return {
       startPoint: main,
       source: "config-local",
       baseLabel: main,
     };
-  } catch {
-    // local にも存在しない → HEAD fallback
   }
 
   await log(

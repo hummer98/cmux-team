@@ -706,18 +706,19 @@ source=`detected` の場合のみ結果を `.team/config.json` に書き戻し�
 
 **T253 破壊的変更:** 従来あった「検出失敗時に `"main"` へサイレントフォールバック」する経路を撤去。main ブランチが存在しない / 検出できないプロジェクト（新規 repo で push 前 / shallow clone / detached HEAD / `origin/HEAD` 未設定）では `cmux-team start` が exit 1 する。env `CMUX_TEAM_MAIN_BRANCH=<name>` か `.team/config.json` の `mainBranch` を事前設定することで回避できる。
 
-### worktree 作成時の start-point 解決（T242）
+### worktree 作成時の start-point 解決（T242 / T275）
 
 Conductor が worktree を作成する際、start-point は以下の優先順位で決定される（`worktree-base.ts:resolveWorktreeBase`）:
 
-1. **`explicit`** — task.md frontmatter の `base_branch:` が明示されている場合
-2. **`config-origin`** — `origin/<mainBranch>` が存在すれば採用（他タスクの PR マージ後の最新状態を起点にする）
-3. **`config-local`** — `origin/<mainBranch>` が無く、local `<mainBranch>` が存在する場合
-4. **`head-fallback`** — 上記いずれも解決できない場合（`git worktree add -b <new>` のみ発行、現在の HEAD から分岐）
+1. **`explicit`** — task.md frontmatter の `base_branch:` が明示されている場合 (T242)
+2. **`config-local-ahead`** — local `<mainBranch>` が `origin/<mainBranch>` より strict ahead（同一 SHA でない・origin が local の ancestor）の場合、local を優先 (T275)
+3. **`config-origin`** — `origin/<mainBranch>` が存在すれば採用（他タスクの PR マージ後の最新状態を起点にする） (T242)
+4. **`config-local`** — `origin/<mainBranch>` が無く、local `<mainBranch>` が存在する場合 (T242)
+5. **`head-fallback`** — 上記いずれも解決できない場合（`git worktree add -b <new>` のみ発行、現在の HEAD から分岐） (T242)
 
-ログは `worktree_created branch=<new> base=<ref> source=<explicit|config-origin|config-local|head-fallback> path=<worktreePath>` 形式。
+ログは `worktree_created branch=<new> base=<ref> source=<explicit|config-local-ahead|config-origin|config-local|head-fallback> path=<worktreePath>` 形式。
 
-**注意:** `config-origin` を確実に使うには origin が最新化されている必要がある。ローカル未 push の commit を起点にしたい場合は、task.md の `base_branch: HEAD` を明示すれば従来通り現在の HEAD から分岐する（`explicit` 経路）。
+**注意:** local `<mainBranch>` が `origin/<mainBranch>` より strict ahead のときは `config-local-ahead` が自動選択される（push しない運用向け。T275）。`origin/<mainBranch>` を必ず使いたい場合は事前に `git fetch` で origin を最新化し、かつ local が ahead でない状態にすること。現在の HEAD を起点にしたい場合は従来通り task.md の `base_branch: HEAD` で `explicit` に倒す。
 
 **環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1`** を設定すると、worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行する（タイムアウト 30 秒、失敗はログのみで継続）。デフォルトは OFF — offline 環境・rate limit 対策・並列負荷回避のため。
 
