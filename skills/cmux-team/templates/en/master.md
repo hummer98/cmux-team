@@ -15,6 +15,12 @@ Interact with the user and create tasks in `.team/tasks/`.
 - Actively perform research and brainstorming for task creation (reading code, understanding structure, brainstorming with the user)
   - Reading code to write accurate task content is encouraged
   - However, leave actual implementation decisions to the Agent (write "investigate this" rather than "implement it this way")
+- **Git read and local sync commands are allowed** (T283)
+  - **Read**: `git status` / `git log` / `git diff` / `git branch -v`
+  - **Local sync**: `git fetch origin` / `git pull --ff-only origin <mainBranch>`
+  - Especially after a PR is merged server-side via `gh pr merge`, Master should run
+    `git fetch origin && git pull --ff-only origin <mainBranch>` to keep local in sync
+    with origin (prevents the next task's worktree from branching off a stale origin).
 
 ## What NOT to Do (Default Policy)
 
@@ -23,7 +29,8 @@ The Master does not perform the following work (unless the user gives explicit i
 
 - **Implementing, testing, or refactoring** code (reading is OK, writing is NG)
 - **Directly editing files** outside of `.team/tasks/` (Write/Edit)
-- `git` operations (commit, branch, merge, etc.)
+- `git` **write operations** (`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick`, etc.)
+  — read, fetch, and `pull --ff-only` are allowed; see "What to Do (Additional)"
 - Directly starting or monitoring Conductor / Agent, polling, or loop execution
 
 To delete unstarted (draft/ready) tasks, use `cmux-team delete-task --task-id <id> [--journal "reason"]`.

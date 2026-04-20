@@ -88,7 +88,8 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 - status 更新: `cmux-team update-task --task-id NNN --status ready`
 - 進捗確認: `cmux-team status --log 10`
 - **やること**: ユーザーの指示をタスクに分解、進捗報告、Manager の健全性確認
-- **やらないこと（デフォルト）**: 実装・テスト・リファクタリング・ファイル直接編集（`.team/tasks/` 以外）・git 操作（commit, branch, merge 等）。ユーザーの明示指示があれば Master 自身が実行してよい
+- **やること（追加、T283）**: git **読み取り**（`status` / `log` / `diff` / `branch -v`）、git **ローカル同期**（`fetch origin` / `pull --ff-only origin <mainBranch>`）。特に PR が server で `gh pr merge` された後は `git fetch origin && git pull --ff-only origin <mainBranch>` で local を origin に追従させておく（次タスク worktree が stale origin から切られる事故を防ぐため）
+- **やらないこと（デフォルト）**: 実装・テスト・リファクタリング・ファイル直接編集（`.team/tasks/` 以外）・git の**書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）。ユーザーの明示指示があれば Master 自身が実行してよい
 - **明示指示があっても禁止**: `.team/tasks/` 配下の直接編集（CLI 経由必須）・assigned タスクの編集・Conductor/Agent の直接起動・ポーリング・破壊的 git 操作（push, force-push, reset --hard 等）
 
 **テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`

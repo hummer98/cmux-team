@@ -342,6 +342,7 @@ Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルー
 2. **外部コマンド失敗時**: cmux コマンド（`send`, `sendKey`, `tree` 等）の失敗は `log("error", ...)` で記録する。**error オブジェクトに `stderr` / `stdout` が付いている場合は必ず detail に含める**（`e.message` のみでは "Command failed: <cmd>" で終わり原因追跡が不能になる）。例: `log("error", \`tree failed: ${e.message} stderr=${e.stderr ?? ""}\`)`。
 3. **判断分岐**: 複数パスがある場合、どのパスに入ったか記録する（例: done マーカー検出方法、フォールバック発動）
 4. **状態遷移**: Conductor/Agent のステータス変化は必ず記録する（既存で実施済み）
+5. **Ready 昇格判定（T283）**: `ready_rejected` / `ready_warning` / `ready_force_bypass` / `ready_sync_skipped` を必ずログする。詳細は「Ready 昇格時の sync state ガード（T283）」参照
 
 ### 禁止事項
 
@@ -625,6 +626,55 @@ Notification は記録 only。Agent の idle 判定や Conductor の assignment 
 
 単一行は末尾 `\n` で送信可能。複数行プロンプトは `cmux send` の後に `sleep 0.5` + `cmux send-key return` で送信確定。
 
+## Ready 昇格時の sync state ガード（T283）
+
+タスクを `ready` に昇格させる経路（`cmux-team create-task --status ready` /
+`cmux-team update-task --task-id N --status ready`）では、**昇格前に local リポジトリと
+`origin/<mainBranch>` の sync state を判定**し、状態に応じて昇格を拒否・警告する。
+
+stale origin や未コミット変更を起点に worktree が切られる事故を防ぐのが目的。判定は
+`skills/cmux-team/manager/git-sync.ts` の `checkSyncState` で行い、`collectSyncFacts`
+が必要な git 情報（`origin/<mainBranch>` / local `<mainBranch>` の有無、HEAD 情報、
+SHA 比較、ancestor 関係）を収集する。
+
+### 7 状態 × 3 分類
+
+| state | 意味 | 分類 | 挙動 |
+|---|---|---|---|
+| `clean` | local と origin が一致 | **allow** | 昇格 |
+| `ahead` | local が origin の先を指している（未 push コミットあり） | **allow** | 昇格 |
+| `behind-ff` | origin が local より進んでいる（FF で追従可能） | warn | 警告のみ、昇格は続行 |
+| `no-remote` | `origin/<mainBranch>` が無い（fresh clone / 未 push） | warn | 警告のみ、昇格は続行 |
+| `diverged` | 双方に未共有コミット | **reject** | exit 1、`ready_rejected` |
+| `uncommitted` | 作業ツリーに未コミット変更 | **reject** | exit 1、`ready_rejected` |
+| `detached` | HEAD が detached（branch を checkout していない） | **reject** | exit 1、`ready_rejected` |
+
+判定順序: `detached` → `uncommitted` → remote/local 不在（`no-remote` / feature 側は
+`no-local` 扱い） → SHA 比較（`clean` / `behind-ff` / `ahead` / `diverged`）。
+
+### bypass 手段
+
+| 手段 | 用途 | ログ |
+|---|---|---|
+| `--force` CLI フラグ | 一回限りの強制昇格 | `ready_force_bypass` |
+| `CMUX_TEAM_SKIP_SYNC_CHECK=1` env | Conductor / Agent shell（自分で `cmux-team create-task --status ready` を叩く場合の再帰チェック回避） | `ready_sync_skipped` |
+| `--skip-fetch` CLI フラグ | sync check 時の `git fetch` を抑止（offline / rate limit 回避） | （fetch のみ抑止、判定は実施） |
+
+**Conductor shell / Agent shell への env 注入**:
+- Conductor spawn 時の shell 環境: `CMUX_TEAM_SKIP_SYNC_CHECK=1` を export（`conductor.ts`）
+- `cmdSpawnAgent` の `exportVars`: 同じ env を Agent surface にも注入（`main.ts`）
+- 目的: Conductor / Agent が `cmux-team create-task --status ready` を発行した瞬間に
+  自分自身の worktree の sync state をチェックするのを回避する（意味をなさないため）
+
+### ログイベント
+
+| event | 契機 | detail |
+|---|---|---|
+| `ready_rejected` | reject state で exit 1 | `phase=<create\|update>` `state=<state>` `task_id=<NNN>` |
+| `ready_warning` | warn state で継続 | `phase=<create\|update>` `state=<state>` `task_id=<NNN>` |
+| `ready_force_bypass` | `--force` で bypass | `phase=<create\|update>` `task_id=<NNN>` |
+| `ready_sync_skipped` | env / config で skip | `phase=<create\|update>` `reason=<env\|no_main_branch>` `task_id=<NNN>` |
+
 ## チーム状態管理
 
 ### team.json
@@ -722,7 +772,11 @@ Conductor が worktree を作成する際、start-point は以下の優先順位
 
 **注意:** local `<mainBranch>` が `origin/<mainBranch>` より strict ahead のときは `config-local-ahead` が自動選択される（push しない運用向け。T275）。`origin/<mainBranch>` を必ず使いたい場合は事前に `git fetch` で origin を最新化し、かつ local が ahead でない状態にすること。現在の HEAD を起点にしたい場合は従来通り task.md の `base_branch: HEAD` で `explicit` に倒す。
 
-**環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE=1`** を設定すると、worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行する（タイムアウト 30 秒、失敗はログのみで継続）。デフォルトは OFF — offline 環境・rate limit 対策・並列負荷回避のため。
+**環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE`（T283 でデフォルト ON に反転）**:
+worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行するかどうかを制御する（タイムアウト 30 秒、失敗はログのみで継続）。**デフォルトは ON** — stale origin を起点に worktree が切られる事故を防ぐため。offline 環境・rate limit 対策・並列負荷回避で OFF にしたい場合は `CMUX_TEAM_FETCH_BEFORE_WORKTREE=0` を設定する。
+
+起動時に `cmdStart` が `fetch_before_worktree enabled=<on|off> source=<env|default>` を
+`manager.log` に 1 回 emit する（解決結果のトレース用）。
 
 ## git worktree（概要）
 

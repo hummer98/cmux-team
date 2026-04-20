@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+- **`CMUX_TEAM_FETCH_BEFORE_WORKTREE` のデフォルトを OFF → ON に反転（T283、破壊的変更）**。worktree 作成前の `git fetch --quiet origin <mainBranch>`（タイムアウト 30 秒、失敗はログのみで継続）がデフォルトで実行されるようになった。stale origin を起点に worktree が切られる事故を防ぐのが目的。offline 環境・rate limit 対策で従来挙動に戻したい場合は `CMUX_TEAM_FETCH_BEFORE_WORKTREE=0` を設定する。起動時ログに `fetch_before_worktree enabled=<on|off> source=<env|default>` を 1 回 emit。解決ロジックは `skills/cmux-team/manager/config.ts:resolveFetchBeforeWorktree` で env > default の優先順位
+- **Ready 昇格時に sync state ガードを追加（T283、破壊的変更）**。`cmux-team create-task --status ready` / `cmux-team update-task --task-id N --status ready` の両経路で、昇格前に local リポジトリと `origin/<mainBranch>` の sync state を判定し、`diverged` / `uncommitted` / `detached` では **exit 1** で昇格を拒否する（`ready_rejected` ログ）。`behind-ff` / `no-remote` は警告のみで継続（`ready_warning`）、`clean` / `ahead` は allow。bypass 手段: `--force` CLI フラグ（`ready_force_bypass` ログ）、`CMUX_TEAM_SKIP_SYNC_CHECK=1` env（`ready_sync_skipped` ログ）、`--skip-fetch` CLI フラグ（fetch のみ抑止で判定は実施）。Conductor / Agent shell には `CMUX_TEAM_SKIP_SYNC_CHECK=1` を export し、下位層からの `create-task --status ready` では自分の worktree の sync チェックが回避される。ロジック本体は `skills/cmux-team/manager/git-sync.ts`（7 状態 × 3 分類の pure function + async collector）に切り出し、34 テスト pass
+
+### Added
+
+- **Master に git 読み取り / ローカル同期を許可（T283）**。`templates/{ja,en}/master.md` の「やらないこと（基本方針）」から git 読み取り・`fetch origin` / `pull --ff-only origin <mainBranch>` を除外し、「やること（追加）」に明示した。特に PR が server で `gh pr merge` された後は Master が `git fetch origin && git pull --ff-only origin <mainBranch>` で local を origin に追従させておくフローを推奨。git の **書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）は引き続き禁止。`docs/spec/04-templates.md` の Master ワンライナーも同方針に更新
+
 ## [4.1.0] - 2026-04-21
 
 ### Changed (Breaking)

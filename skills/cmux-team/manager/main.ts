@@ -49,7 +49,12 @@ import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-chec
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema } from "./schema";
 import type { TeamConfig } from "./config";
-import { loadConfig, resolveLayout, resolveAutoUpdateMode } from "./config";
+import {
+  loadConfig,
+  resolveLayout,
+  resolveAutoUpdateMode,
+  resolveFetchBeforeWorktree,
+} from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
 import {
@@ -502,6 +507,13 @@ async function cmdStart(): Promise<void> {
   await log(
     "auto_update_config",
     `mode=${autoUpdate.mode} source=${autoUpdate.source}`
+  );
+  // T283: worktree 作成前の git fetch をデフォルト ON に反転した。起動時に
+  //   現在の policy を 1 行ログとして残し、offline 環境の運用者が気付けるようにする。
+  const fetchPolicy = resolveFetchBeforeWorktree();
+  await log(
+    "fetch_before_worktree",
+    `enabled=${fetchPolicy.enabled ? "on" : "off"} source=${fetchPolicy.source}`,
   );
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
@@ -2320,12 +2332,17 @@ async function cmdSpawnAgent(): Promise<void> {
   const agentSettingsFlag = `--settings '${agentSettingsPath}'`;
 
   // 環境変数をシェルに焼き付け
+  // T283: Agent は worktree 配下で作業し、main project の sync 責務を負わない。
+  // `cmdSpawnAgent` は独立 cmux surface を作るため、Conductor shell に env を
+  // 足しても伝わらない。そのため Agent 経路では無条件に
+  // `CMUX_TEAM_SKIP_SYNC_CHECK=1` を exportVars に追記する（ST8b）。
   const exportVars = [
     `ROLE=${role}`,
     `PROJECT_ROOT=${PROJECT_ROOT}`,
     `CMUX_SURFACE=${surface}`,
     `CMUX_NO_RENAME_TAB=1`,
     `CMUX_CLAUDE_HOOKS_DISABLED=1`,
+    `CMUX_TEAM_SKIP_SYNC_CHECK=1`,
   ];
   if (taskId) {
     exportVars.push(`CMUX_TASK_ID=${taskId}`);
@@ -2700,6 +2717,72 @@ async function cmdSendAgent(): Promise<void> {
   console.log(`OK sent to ${targetSurface}`);
 }
 
+/**
+ * T283: ready 昇格時に local `<mainBranch>` と `origin/<mainBranch>` の整合性を
+ * 検証する共通ヘルパ。cmdCreateTask / cmdUpdateTask の両方から呼び出す。
+ *
+ * - status が "ready" でない / `--force` / `CMUX_TEAM_SKIP_SYNC_CHECK=1` の
+ *   いずれかで skip する
+ * - loadConfig().mainBranch が未設定ならログのみ出して skip（cmdStart 前に
+ *   タスクを切る UX を殺さないため。Decision Log D11）
+ * - reject なら console.error + exit 1、warn なら console.warn + 続行
+ */
+async function runSyncCheckOrExit(opts: {
+  status: string | undefined;
+  forceFlag: boolean;
+  skipFetch: boolean;
+  phase: "create" | "update";
+  taskId?: string;
+}): Promise<void> {
+  if (opts.status !== "ready") return;
+  if (opts.forceFlag) {
+    await log(
+      "ready_force_bypass",
+      `phase=${opts.phase}${opts.taskId ? ` task_id=${opts.taskId}` : ""}`,
+    );
+    return;
+  }
+  if (process.env.CMUX_TEAM_SKIP_SYNC_CHECK === "1") {
+    await log(
+      "ready_sync_skipped",
+      `phase=${opts.phase} reason=env${opts.taskId ? ` task_id=${opts.taskId}` : ""}`,
+    );
+    return;
+  }
+
+  const config = await loadConfig(PROJECT_ROOT);
+  const mainBranch = config.mainBranch?.trim();
+  if (!mainBranch) {
+    await log(
+      "ready_sync_skipped",
+      `phase=${opts.phase} reason=no_main_branch${opts.taskId ? ` task_id=${opts.taskId}` : ""}`,
+    );
+    return;
+  }
+
+  const { checkSyncState } = await import("./git-sync");
+  const result = await checkSyncState(PROJECT_ROOT, {
+    mainBranch,
+    doFetch: !opts.skipFetch,
+  });
+  const taskIdField = opts.taskId ? ` task_id=${opts.taskId}` : "";
+  if (result.verdict.kind === "reject") {
+    await log(
+      "ready_rejected",
+      `phase=${opts.phase} state=${result.state}${taskIdField}`,
+    );
+    console.error(result.verdict.message);
+    process.exit(1);
+  }
+  if (result.verdict.kind === "warn") {
+    await log(
+      "ready_warning",
+      `phase=${opts.phase} state=${result.state}${taskIdField}`,
+    );
+    console.warn(result.verdict.message);
+  }
+}
+
 async function cmdCreateTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_create_task"));
   const title = requireArg("title");
@@ -2721,6 +2804,14 @@ async function cmdCreateTask(): Promise<void> {
       `title=${title} note=--exclusive implies --run-after-all`,
     );
   }
+
+  // T283: ready で作成するなら sync state をチェック。reject なら exit 1
+  await runSyncCheckOrExit({
+    status,
+    forceFlag: hasFlag("force"),
+    skipFetch: hasFlag("skip-fetch"),
+    phase: "create",
+  });
 
   const dependsOn = dependsOnRaw
     ? dependsOnRaw.split(",").map(s => s.trim()).filter(Boolean)
@@ -2831,6 +2922,15 @@ async function cmdUpdateTask(): Promise<void> {
   // --status: task-state.json を更新
   let notifiedTaskCreated = false;
   if (newStatus !== undefined) {
+    // T283: ready への遷移なら sync state をチェック。reject なら exit 1
+    await runSyncCheckOrExit({
+      status: newStatus,
+      forceFlag: hasFlag("force"),
+      skipFetch: hasFlag("skip-fetch"),
+      phase: "update",
+      taskId,
+    });
+
     taskState[taskId] = { ...taskState[taskId], status: newStatus };
     await saveTaskState(PROJECT_ROOT, taskState);
 

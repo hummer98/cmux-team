@@ -307,6 +307,8 @@ Options:
   --run-after-all         run after all regular tasks complete (optional)
   --exclusive             run exclusively: after drain, block all other assignments
                           until this task is closed (implies --run-after-all)
+  --force                 bypass the ready sync-state check (use with caution)
+  --skip-fetch            skip 'git fetch' before the ready sync-state check
 
 Examples:
   cmux-team create-task --title "Fix bug" --status ready --body "Login screen error"
@@ -327,6 +329,9 @@ Notes:
   - Multiple --exclusive tasks may coexist; they run sequentially in ID order.
     A non-exclusive --run-after-all cannot coexist with any unclosed --exclusive
     task (create-task errors with RUN_AFTER_ALL_CONFLICT in either direction)
+  - When status is ready, cmux-team verifies local <mainBranch> vs origin/<mainBranch>
+    and rejects create on diverged / uncommitted / detached states. Bypass with
+    --force or CMUX_TEAM_SKIP_SYNC_CHECK=1
 `,
 
   help_update_task: `
@@ -341,6 +346,8 @@ Options:
   --title <title>         new title (optional)
   --body <text>           new body (optional)
   --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
+  --force                 bypass the ready sync-state check (use with caution)
+  --skip-fetch            skip 'git fetch' before the ready sync-state check
 
   * At least one of --status, --title, --body, or --depends-on is required
 
@@ -353,6 +360,9 @@ Notes:
   - Tasks in assigned (running) state cannot be updated
   - Closed tasks cannot be updated (create a new task instead)
   - Changing status to ready automatically sends a TASK_CREATED message
+  - When transitioning to ready, cmux-team verifies local <mainBranch> vs
+    origin/<mainBranch> and rejects on diverged / uncommitted / detached. Bypass
+    with --force or CMUX_TEAM_SKIP_SYNC_CHECK=1
 `,
 
   help_close_task: `
@@ -975,6 +985,8 @@ Options:
   --run-after-all         全通常タスク完了後に実行（任意）
   --exclusive             排他実行: drain 後、自身が closed になるまで他の全 assignment を停止
                           （--run-after-all を暗黙に含む。リリースや移行作業向け）
+  --force                 ready 昇格時の sync state チェックをバイパス（注意して使用）
+  --skip-fetch            sync state チェック前の 'git fetch' を省略
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
@@ -996,6 +1008,9 @@ Notes:
   - --exclusive タスク同士は共存可能で、ID 昇順に順次排他実行されます。
     非排他 --run-after-all と --exclusive は共存できません（どちら側から起票しても
     create-task が RUN_AFTER_ALL_CONFLICT でエラーになります）
+  - status=ready で作成するとき、local <mainBranch> と origin/<mainBranch> の整合性を
+    検査し、diverged / uncommitted / detached は reject されます。
+    バイパスは --force または CMUX_TEAM_SKIP_SYNC_CHECK=1
 `,
 
   help_update_task: `
@@ -1010,6 +1025,8 @@ Options:
   --title <title>         新しいタイトル（任意）
   --body <text>           新しい本文（任意）
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
+  --force                 ready 昇格時の sync state チェックをバイパス（注意して使用）
+  --skip-fetch            sync state チェック前の 'git fetch' を省略
 
   ※ --status, --title, --body, --depends-on のうち少なくとも1つが必要
 
@@ -1022,6 +1039,9 @@ Notes:
   - assigned（実行中）のタスクは更新できません
   - closed のタスクは更新できません（新しいタスクを作成してください）
   - status を ready に変更すると TASK_CREATED メッセージが自動送信されます
+  - ready への遷移時に local <mainBranch> と origin/<mainBranch> の整合性を検査し、
+    diverged / uncommitted / detached は reject されます。バイパスは --force
+    または CMUX_TEAM_SKIP_SYNC_CHECK=1
 `,
 
   help_close_task: `

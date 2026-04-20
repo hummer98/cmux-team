@@ -94,3 +94,34 @@ export function resolveAutoUpdateMode(
   }
   return { mode: "off", source: "default" };
 }
+
+/**
+ * worktree 作成前の `git fetch` を行うかどうかを解決する（T283）。
+ *
+ * 優先順位: env CMUX_TEAM_FETCH_BEFORE_WORKTREE > default (true)
+ *
+ * env 値の解釈:
+ * - 未定義 / 空文字 → { enabled: true, source: "default" }
+ * - "1" / "true" / "on" → { enabled: true, source: "env" }
+ * - "0" / "false" / "off" → { enabled: false, source: "env" }
+ * - それ以外 → throw
+ *
+ * T283 で従来の「デフォルト OFF」を「デフォルト ON」に反転した。offline 環境・
+ * rate limit 対策で OFF にしたい場合は `CMUX_TEAM_FETCH_BEFORE_WORKTREE=0` を
+ * 設定する。起動ログに `fetch_before_worktree enabled=<on|off> source=<env|default>`
+ * を 1 回 emit する（cmdStart）。
+ */
+export function resolveFetchBeforeWorktree(
+  env: NodeJS.ProcessEnv = process.env,
+): { enabled: boolean; source: "env" | "default" } {
+  const raw = env.CMUX_TEAM_FETCH_BEFORE_WORKTREE;
+  if (raw === undefined || raw === "") {
+    return { enabled: true, source: "default" };
+  }
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true" || v === "on") return { enabled: true, source: "env" };
+  if (v === "0" || v === "false" || v === "off") return { enabled: false, source: "env" };
+  throw new Error(
+    `unknown CMUX_TEAM_FETCH_BEFORE_WORKTREE=${JSON.stringify(raw)} (expected 0|1|true|false|on|off)`,
+  );
+}

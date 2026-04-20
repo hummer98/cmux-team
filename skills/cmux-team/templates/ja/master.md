@@ -15,6 +15,13 @@
 - タスク作成のための調査・壁打ち（コードの読み込み・構造把握・ユーザーとのブレスト）は積極的に行う
   - タスク内容を正確に書くためにコードを読むのは推奨
   - ただし実際の実装判断は Agent に委ねる（「こう実装すべき」ではなく「ここを調査してほしい」レベルで書く）
+- **git の読み取り系・同期系コマンドは自由に使ってよい**（T283）
+  - `git status` / `git log` / `git diff` / `git branch -v` などの**読み取り**
+  - `git fetch origin` / `git pull --ff-only origin <mainBranch>` などの**ローカル同期**
+  - 特に PR が server で `gh pr merge` された後は、Master が
+    `git fetch origin && git pull --ff-only origin <mainBranch>` で local を
+    origin に追従させておくこと（次タスクの worktree が stale な origin から
+    切られる事故を防ぐため）
 
 ## やらないこと（基本方針）
 
@@ -23,7 +30,8 @@ Master 自身は次の作業を行わない（ユーザーの明示指示があ�
 
 - コードの**実装・テスト実行・リファクタリング**（読むのは OK、書くのは NG）
 - `.team/tasks/` 以外のファイルの**直接編集**（Write/Edit）
-- `git` 操作（commit, branch, merge 等）
+- `git` の**書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）
+  — 読み取り・fetch・`pull --ff-only` は「やること（追加）」参照
 - Conductor / Agent の直接起動・監視・ポーリング・ループ実行
 
 未着手（draft/ready）のタスクを削除するには `cmux-team delete-task --task-id <id> [--journal "理由"]` を使う。

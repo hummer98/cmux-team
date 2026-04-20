@@ -14,6 +14,7 @@ import { notifyStateChanged } from "./eventBus";
 import { formatExecError } from "./exec-error";
 import { initDB, insertTaskSession } from "./trace-store";
 import { resolveWorktreeBase } from "./worktree-base";
+import { resolveFetchBeforeWorktree } from "./config";
 import type { ConductorState, LayoutMode } from "./schema";
 
 const execFile = promisify(execFileCb);
@@ -100,9 +101,12 @@ export async function launchConductor(
     );
   }
   const mainBranchEnv = opts.mainBranch.trim();
+  // T283: Conductor 自身が直接 shell で `cmux-team create-task --status ready`
+  // を叩く経路で、worktree 配下の HEAD 状態に起因する false reject を防ぐために
+  // `CMUX_TEAM_SKIP_SYNC_CHECK=1` を明示的に焼き付ける（Master shell には注入しない）。
   await cmux.send(
     surface,
-    `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1 CMUX_TEAM_MAIN_BRANCH=${mainBranchEnv}\n`,
+    `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1 CMUX_TEAM_MAIN_BRANCH=${mainBranchEnv} CMUX_TEAM_SKIP_SYNC_CHECK=1\n`,
   );
   await sleep(500);
 
@@ -347,7 +351,7 @@ export async function assignTask(
     const baseResolution = await resolveWorktreeBase(projectRoot, {
       baseBranch,
       mainBranch,
-      doFetch: process.env.CMUX_TEAM_FETCH_BEFORE_WORKTREE === "1",
+      doFetch: resolveFetchBeforeWorktree().enabled,
     });
     try {
       const worktreeArgs = ["worktree", "add", worktreePath, "-b", branch];
