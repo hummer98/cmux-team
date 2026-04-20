@@ -114,7 +114,7 @@ Conductor のフルワークフロー定義。タスク分解 → Agent spawn �
 
 ### conductor-task.md（シンプル版）
 
-daemon がタスク割り当て時に使用する簡易テンプレート。タスク内容 + 作業ディレクトリ + 出力先 + 完了マーカーのみ。
+daemon がタスク割り当て時に使用する簡易テンプレート。タスク内容 + 作業ディレクトリ + 出力先 + 完了マーカーのみ。完了通知は `conductor-role.md` Step 11 の `close-task` に集約されており、task 側からは `cmux-team send CONDUCTOR_DONE --success true` を呼ばない（T274、破壊的変更）。
 
 **テンプレート変数:** `{{TASK_CONTENT}}`, `{{WORKTREE_PATH}}`, `{{CONDUCTOR_ID}}`, `{{OUTPUT_DIR}}`, `{{TASK_STATUS_FILE}}`, `{{BASE_BRANCH}}`, `{{MAIN_BRANCH}}`
 

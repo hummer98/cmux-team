@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (Breaking)
+
+- **Conductor の完了通知を `close-task` に一本化（T274、破壊的変更）**。`skills/cmux-team/templates/{ja,en}/conductor-task.md` の「完了通知」セクションから `cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true` 指示を削除し、`conductor-role.md` Step 11 の `close-task` に集約した。close-task が内部で CONDUCTOR_DONE を daemon に送信するため、Conductor 側から重ねて送る必要は無い（~/git/Dear T204 で TUI `[assigned]` + manager.log `task_completed` の不整合を引き起こしていた）。`skills/cmux-team/templates/{ja,en}/manager.md` の「主要な完了検出」文も close-task 経由に修正。**Rollout 時の注意:** 旧プロンプトを抱えた Conductor が Claude Code のセッション resume で復帰すると古い指示を実行し得るため、リリース後は `cmux-team restart` または各 Conductor ペインで `/clear` を実行して新プロンプトを読み込ませること
+
+### Added
+
+- **`handleConductorDone` に success=true 経路の整合性ガード（T274）**。Conductor が `--success true` を送ったのに task-state が `assigned` のまま残っていた場合、`task_completed_state_mismatch` を warn ログに出した上で daemon が自動で `closed` に倒す（journal: `auto_closed_by_daemon: CONDUCTOR_DONE without close-task (taskRunId=<id>)`、trace DB に `event="closed"` 行も insert）。`task-state` entry 自体が無い場合は `task_completed_state_missing` warn ログのみ残し state 書き込みは skip。T263/T269 の `success=false + assigned → aborted` パスと対称な保険として機能し、旧プロンプトを抱えた Conductor が resume した際の再発リスクを吸収する
+
 ## [4.0.0] - 2026-04-19
 
 ### Added

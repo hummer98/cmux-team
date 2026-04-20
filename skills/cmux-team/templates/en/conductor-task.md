@@ -36,10 +36,8 @@ Follow the delivery method (local merge or PR) as specified in conductor-role.md
 
 ## Completion Notification
 
-When all processing is complete:
+Follow the completion procedures in `conductor-role.md` ("Completion Procedures" Steps 1-12). In particular:
+- Step 11: `cmux-team close-task --task-id <TASK_ID> --journal "..."` closes the task and internally sends CONDUCTOR_DONE to daemon.
+- Step 12: Display the completion report on the session.
 
-1. Display a completion report on the session (refer to conductor-role.md "Completion Procedures" Step 12. Concisely output design decisions, trial-and-error, independent judgments, concerns, and key outcomes)
-2. Send the completion notification:
-   ```bash
-   cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-   ```
+**Do not call `cmux-team send CONDUCTOR_DONE --success true` yourself** — close-task does that on your behalf. Use the `--success false` path in `conductor-role.md` Step 8 only when you need to abort without calling close-task (e.g. rebase conflict).

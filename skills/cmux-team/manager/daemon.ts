@@ -25,7 +25,7 @@ import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
 import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
-import { initDB, insertHookSignal, updateNotificationEnrichment } from "./trace-store";
+import { initDB, insertHookSignal, insertTaskSession, updateNotificationEnrichment } from "./trace-store";
 import type { NotificationEnrichment } from "./trace-store";
 import { isStale } from "./rate-limit-persistence";
 import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths";
@@ -2914,6 +2914,19 @@ async function handleConductorDone(
     currentStatus !== "closed" &&
     currentStatus !== "aborted" &&
     currentStatus !== "deleted";
+  // T274: success=true でも task-state が assigned のまま残っていれば close-task が
+  //       skip されたと判定し daemon が代替で closed に倒す（auto-close）。
+  //       missing = entry 自体が無い場合は state 書き込みを skip し warn ログのみ残す。
+  const stateMismatchOnSuccess =
+    success &&
+    Boolean(taskId) &&
+    taskId !== "undefined" &&
+    currentStatus === "assigned";
+  const stateMissingOnSuccess =
+    success &&
+    Boolean(taskId) &&
+    taskId !== "undefined" &&
+    currentStatus === undefined;
 
   if (!taskId || taskId === "undefined") {
     await log(
@@ -2964,6 +2977,60 @@ async function handleConductorDone(
     } catch (e: any) {
       await log("error", `handleConductorDone judgment_pending update failed: task_id=${taskId} ${e.message}`);
     }
+  } else if (stateMismatchOnSuccess) {
+    // T274: Conductor が close-task を skip したまま --success true を送った経路。
+    //       state だけ取り残されるのを防ぐため daemon が代替で close に倒す。
+    //       pattern は T263/T269 の unresolved inline 書き換えブロック（daemon.ts:2940-2966）と対称。
+    await log(
+      "task_completed_state_mismatch",
+      `task_id=${taskId} ${formatSurface(conductor.surface, "C")}` +
+        ` prev_status=assigned reason=missing_close_task` +
+        ` worktreePath=${conductor.worktreePath ?? "-"}` +
+        (conductor.taskTitle ? ` title=${conductor.taskTitle}` : "") +
+        (journalSummary ? ` journal_summary=${journalSummary}` : "")
+    );
+    try {
+      const journal = `auto_closed_by_daemon: CONDUCTOR_DONE without close-task (taskRunId=${conductor.taskRunId ?? "-"})`;
+      taskState[taskId] = {
+        ...taskState[taskId],
+        status: "closed",
+        closedAt: new Date().toISOString(),
+        journal,
+      };
+      await saveTaskState(state.projectRoot, taskState);
+      await log(
+        "task_completed",
+        `task_id=${taskId} ${formatSurface(conductor.surface, "C")}${
+          conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
+        } auto_closed=true`
+      );
+      if (state.traceDb) {
+        try {
+          insertTaskSession(state.traceDb, {
+            timestamp: new Date().toISOString(),
+            task_id: taskId,
+            task_run_id: conductor.taskRunId,
+            session_id: conductor.sessionId ?? "",
+            role: "conductor",
+            surface: conductor.surface,
+            event: "closed",
+          });
+        } catch (e: any) {
+          await log("error", `T274 trace DB closed insert failed: ${e?.message ?? e}`);
+        }
+      }
+    } catch (e: any) {
+      await log("error", `handleConductorDone auto-close failed: task_id=${taskId} ${e.message}`);
+    }
+  } else if (stateMissingOnSuccess) {
+    // T274: task-state にエントリが無いのに --success true。race or 手動削除後の goodbye。
+    //       source of truth が無いため state 書き込みは skip し warn ログのみ残す。worktree は削除。
+    await log(
+      "task_completed_state_missing",
+      `task_id=${taskId} ${formatSurface(conductor.surface, "C")}` +
+        ` reason=missing_state_entry` +
+        (conductor.taskTitle ? ` title=${conductor.taskTitle}` : "")
+    );
   } else {
     await log(
       "task_completed",

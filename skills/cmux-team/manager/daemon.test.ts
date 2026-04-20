@@ -4339,6 +4339,161 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
   }, 30000);
 });
 
+// --- T274: handleConductorDone success=true + 整合性ガード ---
+//
+// Conductor が close-task を呼ばずに CONDUCTOR_DONE --success=true だけを送った場合、
+// task-state が assigned のまま残り TUI / resume が壊れる（~/git/Dear T204 事案）。
+// daemon が保険として整合性ガードで state を closed に倒す or warn のみ残す。
+describe("T274: handleConductorDone success=true + 整合性ガード", () => {
+  async function setupRealGitWithWorktree(taskRunId: string): Promise<string> {
+    const { execFile: ef } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(ef);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["config", "user.email", "test@test.local"], { cwd: testDir });
+    await execFile("git", ["config", "user.name", "Test"], { cwd: testDir });
+    await writeFile(join(testDir, "README.md"), "test");
+    await execFile("git", ["add", "."], { cwd: testDir });
+    await execFile("git", ["commit", "-q", "-m", "init"], { cwd: testDir });
+    const worktreePath = join(testDir, ".worktrees", taskRunId);
+    await execFile("git", ["worktree", "add", worktreePath, "-b", `${taskRunId}/task`], { cwd: testDir });
+    return worktreePath;
+  }
+
+  async function stubPaneForSurface() {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    return spyOn(cmux, "getPaneForSurface").mockResolvedValue("pane:1");
+  }
+
+  test("Case #1: success=true && assigned → auto-close + task_completed + worktree 削除", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-274c1-1700274001";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      await createTask("274", "missing-close-task");
+      // task-state を assigned に書き換え（createTask は ready のため）
+      const { loadTaskState, saveTaskState } = await import("./task");
+      const ts = await loadTaskState(testDir);
+      ts["274"] = { status: "assigned", assignedAt: new Date().toISOString() };
+      await saveTaskState(testDir, ts);
+
+      const { initDB, getTaskSessions } = await import("./trace-store");
+      const state = await createDaemon(testDir);
+      state.traceDb = initDB(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t274-c1",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "274",
+        taskTitle: "missing-close-task",
+        worktreePath,
+        sessionId: "sess-274-c1",
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t274-c1",
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
+
+      // worktree 削除
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(conductor.status).toBe("idle");
+
+      // task-state が closed に倒されている + journal に固定プレフィクス
+      const { loadTaskState: loadTaskStateC1 } = await import("./task");
+      const tsAfter = await loadTaskStateC1(testDir);
+      expect(tsAfter["274"]?.status).toBe("closed");
+      expect(tsAfter["274"]?.closedAt).toBeDefined();
+      expect(tsAfter["274"]?.journal).toContain(
+        "auto_closed_by_daemon: CONDUCTOR_DONE without close-task"
+      );
+      expect(tsAfter["274"]?.journal).toContain(`taskRunId=${taskRunId}`);
+
+      // manager.log に task_completed_state_mismatch が出る
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      const mismatchLine = log.split("\n").find((l) => l.includes("task_completed_state_mismatch"));
+      expect(mismatchLine).toBeDefined();
+      expect(mismatchLine).toContain("task_id=274");
+      expect(mismatchLine).toContain("prev_status=assigned");
+      expect(mismatchLine).toContain("reason=missing_close_task");
+
+      // task_completed auto_closed=true も出る
+      expect(log).toMatch(/task_completed .*task_id=274.*auto_closed=true/);
+
+      // trace DB: event="closed" 行が入っている
+      const sessions = getTaskSessions(state.traceDb!, { taskId: "274", event: "closed" });
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+      expect(sessions[0]!.task_run_id).toBe(taskRunId);
+
+      // T263/T269 regression: unresolved / judgment_pending は出ていない
+      expect(log).not.toMatch(/conductor_done_unresolved.*task_id=274/);
+      expect(log).not.toMatch(/task_aborted task_id=274/);
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("Case #2: success=true && task-state entry なし → warn+skip + worktree 削除", async () => {
+    const paneSpy = await stubPaneForSurface();
+    try {
+      const taskRunId = "task-274c2-1700274002";
+      const worktreePath = await setupRealGitWithWorktree(taskRunId);
+      // task-state にエントリを入れない（race or 手動削除後の goodbye）
+
+      const { initDB } = await import("./trace-store");
+      const state = await createDaemon(testDir);
+      state.traceDb = initDB(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:t274-c2",
+        startedAt: new Date().toISOString(),
+        taskRunId,
+        taskId: "275",
+        taskTitle: "missing-state-entry",
+        worktreePath,
+        sessionId: "sess-274-c2",
+        agents: [],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      await handleMessage(state, {
+        type: "CONDUCTOR_DONE",
+        surface: "surface:t274-c2",
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
+
+      // worktree 削除
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(conductor.status).toBe("idle");
+
+      // task-state に新規 entry を作らない
+      const { loadTaskState: loadTaskStateC2 } = await import("./task");
+      const tsAfter = await loadTaskStateC2(testDir);
+      expect(tsAfter["275"]).toBeUndefined();
+
+      // manager.log に task_completed_state_missing が出る
+      const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      const missingLine = log.split("\n").find((l) => l.includes("task_completed_state_missing"));
+      expect(missingLine).toBeDefined();
+      expect(missingLine).toContain("task_id=275");
+      expect(missingLine).toContain("reason=missing_state_entry");
+
+      // T263/T269 regression: unresolved / judgment_pending は出ていない
+      expect(log).not.toMatch(/conductor_done_unresolved.*task_id=275/);
+      expect(log).not.toMatch(/task_aborted task_id=275/);
+    } finally {
+      paneSpy.mockRestore();
+    }
+  }, 30000);
+});
+
 // --- T269: preserveWorktree 経路で aborted 化されたタスクが resume 対象外になる ---
 //
 // handleConductorDone で unresolved 分岐を通ると task-state は `aborted` になり、

@@ -36,10 +36,8 @@ worktree は tracked files のみ含む。作業開始前に以下を確認す�
 
 ## 完了通知
 
-全ての処理が完了したら:
+完了処理は `conductor-role.md` の「完了時の処理」（Step 1〜12）に従う。特に:
+- Step 11: `cmux-team close-task --task-id <TASK_ID> --journal "..."` がタスクを close し、内部で daemon に CONDUCTOR_DONE を送信する
+- Step 12: 完了レポートをセッション上に表示する
 
-1. セッション上に完了レポートを表示する（conductor-role.md「完了時の処理」Step 12 参照。設計判断・試行錯誤・自己判断・懸念・成果の勘所を簡潔に出力）
-2. 完了通知を送信する:
-   ```bash
-   cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
-   ```
+**`cmux-team send CONDUCTOR_DONE --success true` を自分で呼び出さない** — close-task がその役割を果たす。rebase 衝突等で close-task を呼ばず abort したい場合のみ `conductor-role.md` Step 8 の `--success false` 経路を使う。

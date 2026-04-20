@@ -70,7 +70,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_assigned task=$TASK_ID" >> .team/log
 
 Conductor の完了は daemon が HTTP API 経由で CONDUCTOR_DONE メッセージを受信することで検出する:
 
-- **主要な完了検出**: Conductor が `cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true` を実行 → daemon の HTTP API `/api/messages` にメッセージが送信される
+- **主要な完了検出**: Conductor が `cmux-team close-task --task-id <TASK_ID> --journal "..."` を実行 → close-task が内部で daemon の HTTP API `/api/messages` に CONDUCTOR_DONE を送信する
 - **フォールバック**: surface 消失で crashed を検出
 
 daemon が自動的に完了処理を行うため、Manager が直接監視する必要はない。
