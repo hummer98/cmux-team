@@ -30,6 +30,7 @@ import { AGENT_ROLES } from "./schema";
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
 const JOURNAL_VISIBLE_LINES = 30;
+const ARTIFACT_VISIBLE_LINES = 12;
 const SETTINGS_PREVIEW_LINES = 20;
 
 // --- GitHub リポジトリ URL 解決 ---
@@ -814,9 +815,24 @@ function buildArtifactRows(state: AppState): any[] {
     rows.push(ui.text(`  ${indicators.join("  ")}`, { dim: true }));
   }
 
-  for (let i = 0; i < filtered.length; i++) {
-    const a = filtered[i]!;
-    const isSelected = i === state.artifactCursor;
+  // カーソル追従スクロール（Tasks タブ L1094-1100 と同じ式）
+  let artifactStartIdx = 0;
+  if (filtered.length > ARTIFACT_VISIBLE_LINES) {
+    artifactStartIdx = Math.max(
+      0,
+      Math.min(
+        state.artifactCursor - ARTIFACT_VISIBLE_LINES + 1,
+        filtered.length - ARTIFACT_VISIBLE_LINES,
+      ),
+    );
+    if (state.artifactCursor < artifactStartIdx) artifactStartIdx = state.artifactCursor;
+  }
+  const visibleArtifacts = filtered.slice(artifactStartIdx, artifactStartIdx + ARTIFACT_VISIBLE_LINES);
+
+  for (let i = 0; i < visibleArtifacts.length; i++) {
+    const a = visibleArtifacts[i]!;
+    const globalIdx = artifactStartIdx + i;
+    const isSelected = globalIdx === state.artifactCursor;
     const typeColor = artifactTypeColors[a.type] ?? GRAY;
     const date = a.created ? utcToLocal(a.created).slice(0, 5) : "";
 
