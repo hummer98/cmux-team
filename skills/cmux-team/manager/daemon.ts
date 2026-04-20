@@ -27,7 +27,7 @@ import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal, insertTaskSession, updateNotificationEnrichment } from "./trace-store";
 import type { NotificationEnrichment } from "./trace-store";
-import { isStale } from "./rate-limit-persistence";
+import { isStale5h } from "./rate-limit-persistence";
 import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths";
 // T279: FSM shadow observer (observe only, no state mutation).
 import { shadowObserveConductor } from "./state-machine/shadow";
@@ -2512,7 +2512,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
   // === スロットリングガード ===
   // stale（リセット時刻を過ぎた復元値）はガードしない。次の API 応答を待つ。
   const throttled5h =
-    !isStale(state.rateLimit) &&
+    !isStale5h(state.rateLimit) &&
     (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
   if (throttled5h && allExecutable.length > 0) {
     const util = state.rateLimit!.unified5hUtilization!;
@@ -3328,9 +3328,9 @@ function computeSidebarStatus(
   }
 
   // 2. スロットリング
-  // stale な復元値では throttle 判定を行わない（§2-4）
+  // stale な復元値では throttle 判定を行わない（§2-4）。5h 軸のみを参照する（T281）。
   const throttled =
-    !isStale(state.rateLimit) &&
+    !isStale5h(state.rateLimit) &&
     ((state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
       || state.rateLimit?.unifiedStatus === "rate_limited");
   if (throttled) {

@@ -5,7 +5,7 @@
  * 呼び出し側（dashboard.tsx）で RGB にマップする。
  */
 import type { RateLimitInfo } from "./schema";
-import { isStale } from "./rate-limit-persistence";
+import { isStale5h, isStale7d } from "./rate-limit-persistence";
 
 export type RateLimitColor = "green" | "yellow" | "red" | "gray";
 
@@ -24,8 +24,11 @@ export interface RateLimitDisplay {
  * `.team/rate-limit.json` の内容（または daemon state の rateLimit）を
  * dashboard ヘッダー右端の表示に変換する。
  *
- * - stale なデータでは全パーツを GRAY 化し末尾に `(stale)` を付与する。
- * - `unifiedStatus === "rate_limited"` は non-stale のときだけ赤扱いにする。
+ * - 軸ごとに独立に stale 判定する（T281）。stale 軸のバーのみ GRAY 化する。
+ * - `(stale)` サフィックスは両軸 stale のときのみ付与する
+ *   （片軸 stale では対象バーが GRAY で識別できるため重複回避）。
+ * - `unifiedStatus === "rate_limited"` は主に 5h 由来のため、5h non-stale の
+ *   ときだけ forceRed を発動する。7d が stale でも 5h が生きていれば赤を出す。
  *
  * @param rl daemon state の rateLimit（null 時は `Rate: --`）
  * @param now Unix ミリ秒（テストから注入可能、既定は `Date.now()`）
@@ -38,19 +41,22 @@ export function buildRateLimitDisplay(
     return { parts: [{ text: "Rate: --", color: "gray" }] };
   }
 
-  const stale = isStale(rl, now);
+  const stale5h = isStale5h(rl, now);
+  const stale7d = isStale7d(rl, now);
+  const allStale = stale5h && stale7d;
 
   // unified データあり
   if (rl.unified5hUtilization != null || rl.unified7dUtilization != null) {
     const parts: RateLimitPart[] = [];
-    const forceRed = rl.unifiedStatus === "rate_limited" && !stale;
+    // rate_limited は主に 5h 由来。5h non-stale のときだけ赤にする（T281）。
+    const forceRed = rl.unifiedStatus === "rate_limited" && !stale5h;
 
     if (rl.unified5hUtilization != null) {
       const h5 = buildUtilizationBar("5h", rl.unified5hUtilization, rl.unified5hReset, now);
       parts.push(
         ...h5.parts.map((p) => ({
           ...p,
-          color: stale ? "gray" : forceRed && p.color !== "gray" ? "red" : p.color,
+          color: stale5h ? "gray" : forceRed && p.color !== "gray" ? "red" : p.color,
         } as RateLimitPart)),
       );
     }
@@ -59,12 +65,12 @@ export function buildRateLimitDisplay(
       parts.push(
         ...d7.parts.map((p) => ({
           ...p,
-          color: stale ? "gray" : forceRed && p.color !== "gray" ? "red" : p.color,
+          color: stale7d ? "gray" : forceRed && p.color !== "gray" ? "red" : p.color,
         } as RateLimitPart)),
       );
     }
 
-    if (stale && parts.length > 0) {
+    if (allStale && parts.length > 0) {
       parts.push({ text: "(stale)", color: "gray" });
     }
 

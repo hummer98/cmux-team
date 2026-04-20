@@ -89,6 +89,68 @@ describe("buildRateLimitDisplay", () => {
     }
   });
 
+  // T281: 軸別 stale 判定のリグレッションテスト群
+  test("T281: 5h 過去 / 7d 未来 → 5h バーのみ GRAY、7d バーは元色", () => {
+    const rl = makeInfo({
+      unified5hReset: PAST_5H,
+      unified7dReset: FUTURE_7D,
+      unified5hUtilization: 0.95,
+      unified7dUtilization: 0.17,
+    });
+    const { parts } = buildRateLimitDisplay(rl, NOW);
+    const bar5h = parts.find((p) => p.text.includes("5h:"));
+    const bar7d = parts.find((p) => p.text.includes("7d:"));
+    expect(bar5h?.color).toBe("gray");
+    expect(bar7d?.color).toBe("green");
+    // 片軸 stale では (stale) サフィックスを付けない
+    expect(parts.some((p) => p.text.includes("(stale)"))).toBe(false);
+  });
+
+  test("T281: 5h 未来 / 7d 過去 → 7d バーのみ GRAY、5h バーは元色", () => {
+    const rl = makeInfo({
+      unified5hReset: FUTURE_5H,
+      unified7dReset: PAST_7D,
+      unified5hUtilization: 0.42,
+      unified7dUtilization: 0.95,
+    });
+    const { parts } = buildRateLimitDisplay(rl, NOW);
+    const bar5h = parts.find((p) => p.text.includes("5h:"));
+    const bar7d = parts.find((p) => p.text.includes("7d:"));
+    expect(bar5h?.color).toBe("green");
+    expect(bar7d?.color).toBe("gray");
+    expect(parts.some((p) => p.text.includes("(stale)"))).toBe(false);
+  });
+
+  test("T281: 5h 過去 / 7d 未来 + unifiedStatus=rate_limited → 7d も赤にしない（5h stale なので forceRed 発動せず）", () => {
+    const rl = makeInfo({
+      unified5hReset: PAST_5H,
+      unified7dReset: FUTURE_7D,
+      unifiedStatus: "rate_limited",
+      unified5hUtilization: 0.95,
+      unified7dUtilization: 0.17,
+    });
+    const { parts } = buildRateLimitDisplay(rl, NOW);
+    const bar5h = parts.find((p) => p.text.includes("5h:"));
+    const bar7d = parts.find((p) => p.text.includes("7d:"));
+    expect(bar5h?.color).toBe("gray");
+    expect(bar7d?.color).not.toBe("red");
+  });
+
+  test("T281: 5h 未来 / 7d 過去 + unifiedStatus=rate_limited → 5h は赤（forceRed 発動）、7d は GRAY", () => {
+    const rl = makeInfo({
+      unified5hReset: FUTURE_5H,
+      unified7dReset: PAST_7D,
+      unifiedStatus: "rate_limited",
+      unified5hUtilization: 0.1,
+      unified7dUtilization: 0.1,
+    });
+    const { parts } = buildRateLimitDisplay(rl, NOW);
+    const bar5h = parts.find((p) => p.text.includes("5h:"));
+    const bar7d = parts.find((p) => p.text.includes("7d:"));
+    expect(bar5h?.color).toBe("red");
+    expect(bar7d?.color).toBe("gray");
+  });
+
   test("unified データなし + tokensLimit=0 → Rate: -- を返す", () => {
     const rl = makeInfo({
       unified5hUtilization: null,

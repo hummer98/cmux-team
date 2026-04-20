@@ -69,24 +69,48 @@ export async function loadRateLimit(
 }
 
 /**
- * 観測値が stale かどうかを判定する。
+ * 5h 軸の stale 判定（軸独立 / T281）。
  *
- * - `unified5hReset` / `unified7dReset` のいずれかが未来にある間は non-stale。
- * - 両方 null、両方過去、片方過去 + 片方 null は stale。
- * - stale 判定は `unifiedStatus` に依存しない。
+ * - `rl` が null / undefined → true
+ * - `unified5hReset` が null / 過去 / 解釈不能 → true
+ * - `unified5hReset` が未来 → false
+ *
+ * 7d 側の状態（`unified7dReset`）には一切影響されない。
+ * daemon の throttle ガード・dashboard の throttle 表示・proxy の `/rate-limit`
+ * エンドポイントなど「5h reset だけを見たい」箇所で使う。
+ *
+ * 注: 7d 軸については {@link isStale7d} を使う。**assignment ガードは 5h のみ**で、
+ * `unified7dUtilization` が高値でも throttle は発動しない（観測のみ）。
  *
  * @param rl 観測値（null は stale 扱い）
  * @param now Unix ミリ秒（テストから注入可能、デフォルトは `Date.now()`）
  */
-export function isStale(
+export function isStale5h(
   rl: RateLimitInfo | null | undefined,
   now: number = Date.now(),
 ): boolean {
   if (!rl) return true;
   const nowSec = Math.floor(now / 1000);
-  const has5hFuture = isFuture(rl.unified5hReset, nowSec);
-  const has7dFuture = isFuture(rl.unified7dReset, nowSec);
-  return !(has5hFuture || has7dFuture);
+  return !isFuture(rl.unified5hReset, nowSec);
+}
+
+/**
+ * 7d 軸の stale 判定（軸独立 / T281）。
+ *
+ * - `rl` が null / undefined → true
+ * - `unified7dReset` が null / 過去 / 解釈不能 → true
+ * - `unified7dReset` が未来 → false
+ *
+ * 5h 側の状態には影響されない。現状は dashboard の 7d バー表示にのみ使う
+ * （7d throttle ガードは未実装）。
+ */
+export function isStale7d(
+  rl: RateLimitInfo | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!rl) return true;
+  const nowSec = Math.floor(now / 1000);
+  return !isFuture(rl.unified7dReset, nowSec);
 }
 
 /**

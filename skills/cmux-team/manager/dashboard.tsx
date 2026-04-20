@@ -18,7 +18,7 @@ import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
 import { onStateChanged } from "./eventBus";
 import { buildRateLimitDisplay, type RateLimitColor } from "./rate-limit-display";
-import { isStale } from "./rate-limit-persistence";
+import { isStale5h } from "./rate-limit-persistence";
 import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
@@ -1087,9 +1087,9 @@ export async function startDashboard(
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
-    // スロットリング判定（stale な観測値はガードで除外する）
+    // スロットリング判定（stale な観測値はガードで除外する）。5h 軸のみを参照する（T281）。
     const isThrottled =
-      !isStale(daemon.rateLimit) &&
+      !isStale5h(daemon.rateLimit) &&
       (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
 
     const headerParts = [

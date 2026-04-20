@@ -12,7 +12,7 @@ import { notifyStateChanged } from "./eventBus";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
-import { persistRateLimit, isStale } from "./rate-limit-persistence";
+import { persistRateLimit, isStale5h } from "./rate-limit-persistence";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
@@ -188,9 +188,9 @@ export async function start(
           const state = opts.getState();
           const rl = state.rateLimit;
           // dashboard.tsx 準拠: utilization >= threshold && running && bootPhase === "ready"
-          // stale な復元値ではスロットル判定を無効化する（§2-4）
+          // stale な復元値ではスロットル判定を無効化する（§2-4）。5h 軸のみを参照する（T281）。
           const throttled =
-            !isStale(rl)
+            !isStale5h(rl)
             && (rl?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
             && !!state.running
             && state.bootPhase === "ready";

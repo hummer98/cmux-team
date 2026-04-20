@@ -50,7 +50,7 @@ import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, S
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import { loadConfig, resolveLayout, resolveAutoUpdateMode } from "./config";
-import { persistRateLimit, loadRateLimit, isStale } from "./rate-limit-persistence";
+import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
 import {
   readProjectInstructions,
@@ -483,7 +483,7 @@ async function cmdStart(): Promise<void> {
     state.rateLimit = restoredRateLimit;
     await log(
       "rate_limit_restored",
-      `unified5h=${restoredRateLimit.unified5hUtilization} unified7d=${restoredRateLimit.unified7dUtilization} stale=${isStale(restoredRateLimit)}`
+      `unified5h=${restoredRateLimit.unified5hUtilization} unified7d=${restoredRateLimit.unified7dUtilization} stale5h=${isStale5h(restoredRateLimit)} stale7d=${isStale7d(restoredRateLimit)}`
     );
   } else {
     await log("rate_limit_restored", "empty");

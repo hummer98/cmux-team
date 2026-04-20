@@ -4,7 +4,12 @@ import { existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { RateLimitInfo } from "./schema";
-import { persistRateLimit, loadRateLimit, isStale } from "./rate-limit-persistence";
+import {
+  persistRateLimit,
+  loadRateLimit,
+  isStale5h,
+  isStale7d,
+} from "./rate-limit-persistence";
 
 let testDir: string;
 let savedProjectRoot: string | undefined;
@@ -95,62 +100,86 @@ describe("persistRateLimit / loadRateLimit", () => {
   });
 });
 
-describe("isStale", () => {
+describe("isStale5h", () => {
   const now = 1_700_000_000_000; // 固定時刻（ms）
   const nowSec = Math.floor(now / 1000);
   const future = String(nowSec + 3600);
   const past = String(nowSec - 3600);
 
-  test("両方 null → stale", () => {
-    const rl = makeInfo({ unified5hReset: null, unified7dReset: null });
-    expect(isStale(rl, now)).toBe(true);
+  test("rl=null → stale", () => {
+    expect(isStale5h(null, now)).toBe(true);
   });
 
-  test("5h reset 未来 / 7d null → non-stale（OR 判定）", () => {
-    const rl = makeInfo({ unified5hReset: future, unified7dReset: null });
-    expect(isStale(rl, now)).toBe(false);
+  test("rl=undefined → stale", () => {
+    expect(isStale5h(undefined, now)).toBe(true);
   });
 
-  test("7d reset 未来 / 5h null → non-stale（OR 判定）", () => {
+  test("unified5hReset=null → stale（7d が未来でも影響しない）", () => {
     const rl = makeInfo({ unified5hReset: null, unified7dReset: future });
-    expect(isStale(rl, now)).toBe(false);
+    expect(isStale5h(rl, now)).toBe(true);
   });
 
-  test("5h reset 過去 / 7d null → stale（片方過去 + 片方 null）", () => {
-    const rl = makeInfo({ unified5hReset: past, unified7dReset: null });
-    expect(isStale(rl, now)).toBe(true);
-  });
-
-  test("5h null / 7d reset 過去 → stale（片方過去 + 片方 null）", () => {
-    const rl = makeInfo({ unified5hReset: null, unified7dReset: past });
-    expect(isStale(rl, now)).toBe(true);
-  });
-
-  test("両方過去 → stale", () => {
-    const rl = makeInfo({ unified5hReset: past, unified7dReset: past });
-    expect(isStale(rl, now)).toBe(true);
-  });
-
-  test("両方未来 → non-stale", () => {
-    const rl = makeInfo({ unified5hReset: future, unified7dReset: future });
-    expect(isStale(rl, now)).toBe(false);
-  });
-
-  test("片方過去・片方未来 → non-stale（OR 判定で少なくとも1つ有効）", () => {
+  test("unified5hReset 過去 → stale", () => {
     const rl = makeInfo({ unified5hReset: past, unified7dReset: future });
-    expect(isStale(rl, now)).toBe(false);
+    expect(isStale5h(rl, now)).toBe(true);
   });
 
-  test("null 引数 → stale", () => {
-    expect(isStale(null, now)).toBe(true);
+  test("unified5hReset 未来 → non-stale（7d が過去でも影響しない）", () => {
+    const rl = makeInfo({ unified5hReset: future, unified7dReset: past });
+    expect(isStale5h(rl, now)).toBe(false);
   });
 
-  test("unifiedStatus は isStale の直接判定に影響しない", () => {
+  test("T281 リグレッション: 5h 過去 / 7d 未来 → 5h は stale", () => {
+    const rl = makeInfo({ unified5hReset: past, unified7dReset: future });
+    expect(isStale5h(rl, now)).toBe(true);
+  });
+
+  test("解釈不能な reset 文字列 → stale", () => {
+    const rl = makeInfo({ unified5hReset: "not-a-date" });
+    expect(isStale5h(rl, now)).toBe(true);
+  });
+
+  test("unifiedStatus は isStale5h の直接判定に影響しない", () => {
     const rl = makeInfo({
       unified5hReset: future,
       unified7dReset: future,
       unifiedStatus: "rate_limited",
     });
-    expect(isStale(rl, now)).toBe(false);
+    expect(isStale5h(rl, now)).toBe(false);
+  });
+});
+
+describe("isStale7d", () => {
+  const now = 1_700_000_000_000;
+  const nowSec = Math.floor(now / 1000);
+  const future = String(nowSec + 86400);
+  const past = String(nowSec - 86400);
+
+  test("rl=null → stale", () => {
+    expect(isStale7d(null, now)).toBe(true);
+  });
+
+  test("rl=undefined → stale", () => {
+    expect(isStale7d(undefined, now)).toBe(true);
+  });
+
+  test("unified7dReset=null → stale（5h が未来でも影響しない）", () => {
+    const rl = makeInfo({ unified5hReset: future, unified7dReset: null });
+    expect(isStale7d(rl, now)).toBe(true);
+  });
+
+  test("unified7dReset 過去 → stale", () => {
+    const rl = makeInfo({ unified5hReset: future, unified7dReset: past });
+    expect(isStale7d(rl, now)).toBe(true);
+  });
+
+  test("unified7dReset 未来 → non-stale（5h が過去でも影響しない）", () => {
+    const rl = makeInfo({ unified5hReset: past, unified7dReset: future });
+    expect(isStale7d(rl, now)).toBe(false);
+  });
+
+  test("解釈不能な reset 文字列 → stale", () => {
+    const rl = makeInfo({ unified7dReset: "bogus" });
+    expect(isStale7d(rl, now)).toBe(true);
   });
 });
