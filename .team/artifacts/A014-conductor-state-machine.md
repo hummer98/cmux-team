@@ -25,7 +25,7 @@ status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected
 | `starting` | Conductor pane 内で `cmux-team conductor`（または `resume`）が起動中。Claude プロセスが立ち上がり SESSION_STARTED hook が届くまでの過渡期。`CONDUCTOR_REGISTERED` 受信時にセットされる（daemon.ts:1231）。 | 数秒〜 60 秒（`STARTING_TIMEOUT_SEC`=60 秒, daemon.ts:2056）。超過すると `disconnected` へ強制遷移。 | resume 経路（`initializeConductorSlots`）では Conductor state は `running` で pre-populated されるため、starting は通らない（conductor.ts:237）。 |
 | `assigning` | `assignTask` が `/clear` を送信する直前にセットされる状態（conductor.ts:376）。daemon 自身が送った `/clear` 発火で届く `SESSION_CLEAR` を `user_clear` と誤認しないためのガード窓。 | 数秒〜 60 秒（`ASSIGNING_TIMEOUT_SEC`=60, daemon.ts:2064）。超過で `disconnected`。 | 実測では `/clear` 送信から `SESSION_STARTED(source=clear)` 到達まで ~10 秒（daemon.ts:2060 のコメント）。 |
 | `idle` | タスク未割当の待機状態。`scanTasks` は `c.status === "idle"` の Conductor のみ `assignTask` 対象にする（daemon.ts:1802）。 | 任意。task が来るまで。 | `resetConductor` がこの状態に戻す終端状態（conductor.ts:502）。 |
-| `running` | タスク実行中。`assigning` 状態で送信した `/clear` が完了し、`SESSION_STARTED(source=clear)` / `SESSION_IDLE` / `SESSION_ACTIVE` のいずれかを受けて遷移する（daemon.ts:1071-1077, 1411-1418, 1512-1519）。 | タスク完了まで（無制限）。PID 生存確認は `spawnPidWatcher` が 1 秒間隔で担う（daemon.ts:1918）。 | `CONDUCTOR_DONE` 受信で `handleConductorDone → resetConductor` により `idle` に戻る。 |
+| `running` | タスク実行中。`assigning` 状態で送信した `/clear` が完了し、`SESSION_STARTED(source=clear)` を受けて遷移する（daemon.ts:1071-1077）。保険経路として `SESSION_ACTIVE` でも遷移するが現行 hook では発火しない（CLI 経由のみ。T277 で `SESSION_IDLE` 保険経路は撤去）。 | タスク完了まで（無制限）。PID 生存確認は `spawnPidWatcher` が 1 秒間隔で担う（daemon.ts:1918）。 | `CONDUCTOR_DONE` 受信で `handleConductorDone → resetConductor` により `idle` に戻る。 |
 | `asking` | `SESSION_ASK`（AskUserQuestion 検出）受信時の一時状態。`conductor.askQuestion` に質問本文を保持（daemon.ts:1572-1574）。 | ユーザー応答が返って次の `SESSION_IDLE` が来るまで。 | 解除時は `taskRunId` の有無で `running` / `idle` に分岐（daemon.ts:1488）。 |
 | `disconnected` | Claude セッションが死亡 / 切断された、またはタイムアウトで倒された状態。`conductor.disconnectedAt` に遷移時刻を保持。`spawnPidWatcher` の PID 不在検出（daemon.ts:1896-1898）、`SESSION_ENDED`（`reason !== "other"`, daemon.ts:1343）、timeout 各種、`assignTask` 失敗（kind=conductor, daemon.ts:1845）から入る。 | 最大 `DISCONNECT_TIMEOUT_SEC`=300 秒（daemon.ts:2066）。超過で `forceCloseDisconnectedConductor` → タスク abort + reset。 | 復帰パス: `SESSION_STARTED`（→ `idle`, daemon.ts:1064-1066）, `SESSION_ACTIVE`（→ `running`, daemon.ts:1405-1407）, `SESSION_IDLE`（`taskRunId` 有無で `running`/`idle`, daemon.ts:1493-1508）, `SESSION_CLEAR`（→ `idle`, daemon.ts:1640-1646）。 |
 
@@ -57,8 +57,8 @@ Agent は `disconnected` を持たず、PID 消失 / `SESSION_ENDED` で `writeA
 | 3 | `starting` | `disconnected` | timeout（`elapsed > 60s`） | 経過時間（`Date.now() - startedAt`）> 60 秒 | `disconnectedAt=now`、log `conductor_start_timeout` | daemon.ts:2079-2088 |
 | 4 | `idle` | `assigning` | `scanTasks → assignTask`（`/clear` 送信直前） | idle Conductor が存在し executable タスクがある | log `conductor_started`、`notifyStateChanged` | conductor.ts:376-377, 428-431 |
 | 5 | `assigning` | `running` | `SESSION_STARTED`（source=clear 他） | 通常ケース | `pid`/`sessionId` 更新、log `conductor_running via=SESSION_STARTED source=...` | daemon.ts:1071-1077 |
-| 6 | `assigning` | `running` | `SESSION_ACTIVE` | `conductor.taskRunId` が truthy | log `conductor_running via=SESSION_ACTIVE` | daemon.ts:1411-1418 |
-| 7 | `assigning` | `running` | `SESSION_IDLE` | `conductor.taskRunId` が truthy | log `conductor_running via=SESSION_IDLE` | daemon.ts:1512-1519 |
+| 6 | `assigning` | `running` | `SESSION_ACTIVE` | `conductor.taskRunId` が truthy | log `conductor_running via=SESSION_ACTIVE`。現行 hook では発火せず CLI 経由のみ（T277 参照） | daemon.ts:1411-1418 |
+| 7 | ~~`assigning`~~ | ~~`running`~~ | ~~`SESSION_IDLE`~~ | **T277 で撤去**: 旧 R1 分岐（SESSION_IDLE 保険経路）。daemon 自身が送った `/clear` 由来の SESSION_IDLE が SESSION_CLEAR より先着すると user_clear 誤判定する race があったため削除。SESSION_IDLE は assigning 中は no-op（session_idle ログのみ）。 | ― |
 | 8 | `assigning` | (no-op / ignored) | `SESSION_CLEAR` | status が `assigning` | **destructive 処理をスキップ**（`user_clear` 誤認防止）、log `session_clear_expected reason=daemon_assign_clear` | daemon.ts:1633-1638 |
 | 9 | `assigning` | `disconnected` | timeout（`elapsed > 60s`） | 経過時間（`startedAt`）> 60 秒 | `disconnectedAt=now`、log `conductor_assign_timeout taskRunId=<id>` | daemon.ts:2094-2104 |
 | 10 | `assigning` | `disconnected` | `assignTask` 失敗（kind=conductor） | `cmux send` 失敗等 | `disconnectedAt=now`、log `conductor_disconnected reason=assign_failed kind=conductor` | daemon.ts:1845-1851 |
@@ -263,7 +263,7 @@ stateDiagram-v2
 
     idle --> assigning : scanTasks → assignTask (/clear 送信直前)
 
-    assigning --> running : SESSION_STARTED(source=clear) / ACTIVE / IDLE (taskRunId 有)
+    assigning --> running : SESSION_STARTED(source=clear) / ACTIVE (taskRunId 有)
     assigning --> disconnected : timeout 60s
     assigning --> disconnected : assignTask failure (kind=conductor)
     assigning --> assigning : SESSION_CLEAR (expected, 無視)

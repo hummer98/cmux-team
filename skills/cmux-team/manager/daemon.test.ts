@@ -2333,28 +2333,98 @@ describe("handleMessage: assigning → running 遷移 (T232)", () => {
     }
   });
 
-  // R1: SESSION_IDLE / SESSION_ACTIVE でも assigning → running の保険遷移
-  test("R1: assigning + SESSION_IDLE(taskRunId あり) で running に遷移する", async () => {
+  // T277: SESSION_IDLE R1 分岐撤去（SESSION_ACTIVE R1 は現状維持）
+  test("SESSION_IDLE(assigning+taskRunId) で R1 は発火しない — status は assigning のまま (T277)", async () => {
     const state = await createDaemon(testDir);
     const conductor: ConductorState = {
-      surface: "surface:232d",
+      surface: "surface:277a",
       startedAt: new Date().toISOString(),
       agents: [],
       status: "assigning",
-      taskRunId: "task-235-a",
-      taskId: "235",
+      taskRunId: "task-277-a",
+      taskId: "277a",
     };
     state.conductors.set(conductor.surface, conductor);
 
     await handleMessage(state, {
       type: "SESSION_IDLE",
-      surface: "surface:232d",
-      pid: 77777,
+      surface: conductor.surface,
+      pid: 77701,
       timestamp: new Date().toISOString(),
     });
 
+    // status は assigning のまま（R1 発火しない）
+    expect(conductor.status).toBe("assigning");
+    // session_idle ログは出る（観測用）
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/session_idle C\[277a\]/);
+    // assigning_window_close via=SESSION_IDLE は出ない
+    expect(logContent).not.toMatch(/assigning_window_close C\[277a\] via=SESSION_IDLE/);
+    // conductor_running via=SESSION_IDLE も出ない
+    expect(logContent).not.toMatch(/conductor_running C\[277a\] via=SESSION_IDLE/);
+  });
+
+  // T277 regression: T276 race 事例の忠実再現
+  test("daemon /clear 由来 SESSION_IDLE が SESSION_CLEAR より先着しても task が abort されない (T277 regression)", async () => {
+    const state = await createDaemon(testDir);
+    const clearSentAt  = "2026-04-20T17:18:58.000Z";
+    const promptSentAt = "2026-04-20T17:18:58.200Z"; // clearSentAt + 200ms（T276 事例を忠実再現）
+    const idleAt       = "2026-04-20T17:19:00.000Z"; // clearSentAt + 2s → source_guess=clear_transient
+    const clearAt      = "2026-04-20T17:19:01.000Z";
+    const startedAt    = "2026-04-20T17:19:03.000Z";
+
+    const conductor: ConductorState = {
+      surface: "surface:277b",
+      startedAt: "2026-04-20T17:18:57.000Z",
+      agents: [],
+      status: "assigning",
+      taskRunId: "task-277-b",
+      taskId: "277b",
+      clearSentAt,
+      promptSentAt,
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    // ① SESSION_IDLE 先着（R1 が発火しない → assigning 維持）
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: conductor.surface,
+      pid: 77702,
+      timestamp: idleAt,
+    });
+    expect(conductor.status).toBe("assigning");
+
+    // ② SESSION_CLEAR 後着（status=assigning なので daemon_assign_clear で早期 break）
+    await handleMessage(state, {
+      type: "SESSION_CLEAR",
+      surface: conductor.surface,
+      pid: 77702,
+      timestamp: clearAt,
+    });
+    expect(conductor.status).toBe("assigning"); // まだ assigning のまま
+
+    // ③ SESSION_STARTED(source=clear) で正規経路 → running
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: conductor.surface,
+      pid: 77702,
+      source: "clear",
+      timestamp: startedAt,
+    });
     expect(conductor.status).toBe("running");
-    expect(conductor.pid).toBe(77777);
+
+    // task_aborted reason=user_clear が出ていないこと
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).not.toMatch(/task_aborted.*reason=user_clear/);
+    expect(logContent).toMatch(/session_clear_expected .*reason=daemon_assign_clear/);
+    // source_guess=clear_transient が記録される（T276 事例の忠実再現を assertion で担保）
+    expect(logContent).toMatch(/session_idle_source_guess=clear_transient/);
+
+    // PID watcher 停止
+    if (conductor.pidWatcherInterval) {
+      clearInterval(conductor.pidWatcherInterval);
+      conductor.pidWatcherInterval = undefined;
+    }
   });
 
   test("R1: assigning + SESSION_ACTIVE(taskRunId あり) で running に遷移する", async () => {
@@ -3906,37 +3976,6 @@ describe("handleMessage: assigning_window_close (T261)", () => {
     }
   });
 
-  test("SESSION_IDLE(R1: assigning+taskRunId) で assigning_window_close via=SESSION_IDLE が出る", async () => {
-    const state = await createDaemon(testDir);
-    const clearSentAt = "2026-04-19T10:40:00.000Z";
-    const receivedAt = "2026-04-19T10:40:02.000Z";
-    const conductor: ConductorState = {
-      surface: "surface:261d",
-      startedAt: "2026-04-19T10:39:59.000Z",
-      agents: [],
-      status: "assigning",
-      taskRunId: "task-261-d",
-      taskId: "261d",
-      clearSentAt,
-    };
-    state.conductors.set(conductor.surface, conductor);
-
-    await handleMessage(state, {
-      type: "SESSION_IDLE",
-      surface: conductor.surface,
-      pid: 44444,
-      timestamp: receivedAt,
-    });
-
-    expect(conductor.status).toBe("running");
-    expect(conductor.sessionIdleAtInAssigning).toBe(receivedAt);
-
-    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
-    expect(logContent).toMatch(
-      /assigning_window_close C\[261d\] via=SESSION_IDLE elapsed=2000/
-    );
-  });
-
   test("assigning timeout で assigning_window_close via=timeout が出る", async () => {
     const state = await createDaemon(testDir);
     const clearSentAt = new Date(Date.now() - 61_000).toISOString();
@@ -4050,7 +4089,7 @@ describe("handleMessage: session_idle_source_guess (T261)", () => {
 });
 
 describe("updateTeamJson / restoreConductors: T261 フィールド永続化", () => {
-  test("clearSentAt は team.json に書き出され restore 後も保持される / 他 4 フィールドは undefined に戻る", async () => {
+  test("clearSentAt は team.json に書き出され restore 後も保持される / 他 3 フィールドは undefined に戻る", async () => {
     const { updateTeamJson, createDaemon } = await import("./daemon");
 
     const state = await createDaemon(testDir);
@@ -4064,11 +4103,10 @@ describe("updateTeamJson / restoreConductors: T261 フィールド永続化", ()
       taskRunId: "task-261-i",
       taskId: "261i",
       clearSentAt,
-      // 以下 4 つはランタイム限定（team.json に書き出されない）
+      // 以下 3 つはランタイム限定（team.json に書き出されない）
       promptSentAt: "2026-04-19T12:00:00.300Z",
       promptBytes: 123,
       sessionStartedClearAt: "2026-04-19T12:00:00.400Z",
-      sessionIdleAtInAssigning: "2026-04-19T12:00:01.000Z",
     };
     state.conductors.set(conductor.surface, conductor);
 
@@ -4080,11 +4118,10 @@ describe("updateTeamJson / restoreConductors: T261 フィールド永続化", ()
     const serialized = teamJson.conductors.find((c: any) => c.surface === "surface:261i");
     expect(serialized).toBeDefined();
     expect(serialized.clearSentAt).toBe(clearSentAt);
-    // 以下 4 つは永続化されない
+    // 以下 3 つは永続化されない
     expect(serialized.promptSentAt).toBeUndefined();
     expect(serialized.promptBytes).toBeUndefined();
     expect(serialized.sessionStartedClearAt).toBeUndefined();
-    expect(serialized.sessionIdleAtInAssigning).toBeUndefined();
 
     // 復元経路: ConductorState スキーマの parse 相当（restoreConductorState は非公開のため、
     //          team.json の生データを schema.ts の parse で検証することで回帰を押さえる）
@@ -4098,7 +4135,6 @@ describe("updateTeamJson / restoreConductors: T261 フィールド永続化", ()
     expect(parsed.promptSentAt).toBeUndefined();
     expect(parsed.promptBytes).toBeUndefined();
     expect(parsed.sessionStartedClearAt).toBeUndefined();
-    expect(parsed.sessionIdleAtInAssigning).toBeUndefined();
   });
 });
 

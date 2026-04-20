@@ -233,7 +233,6 @@ export function formatUserClearDecision(
     `clear_sent_at=${clearSentAt ?? "null"}`,
     `assigning_set_at=${conductor.assigningSetAt ?? "null"}`,
     `session_started_clear_at=${conductor.sessionStartedClearAt ?? "null"}`,
-    `session_idle_at=${conductor.sessionIdleAtInAssigning ?? "null"}`,
     `elapsed_since_clear_sent=${elapsed ?? "null"}`,
     `prompt_sent_at=${conductor.promptSentAt ?? "null"}`,
     `prompt_bytes=${conductor.promptBytes ?? "null"}`,
@@ -920,7 +919,7 @@ function restoreConductorState(c: any): ConductorState {
     // T260: lastHookAt は永続化対象。team.json に残っていれば復元する。
     lastHookAt: c.lastHookAt,
     // T261: clearSentAt のみ永続化対象。それ以外（promptSentAt / promptBytes /
-    //       sessionStartedClearAt / sessionIdleAtInAssigning）はランタイム限定で、
+    //       sessionStartedClearAt）はランタイム限定で、
     //       team.json に書き出していないため復元時も undefined に戻る（意図通り）。
     clearSentAt: c.clearSentAt,
     // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
@@ -1934,26 +1933,11 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
           await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_IDLE`);
-        } else if (conductor.status === "assigning" && conductor.taskRunId) {
-          // T232 R1: SESSION_STARTED が配送順逆転で後着する race の保険。
-          //          taskRunId が埋まっていれば assigning → running に遷移させる。
-          conductor.status = "running";
-          // T261: R1 経路で assigning → running に倒した瞬間を記録し、
-          //       assigning_window_close を via=SESSION_IDLE で発行する。
-          conductor.sessionIdleAtInAssigning = message.timestamp;
-          const elapsedR1Ms = conductor.clearSentAt
-            ? new Date(message.timestamp).getTime() - new Date(conductor.clearSentAt).getTime()
-            : null;
-          await log(
-            "assigning_window_close",
-            `${formatSurface(message.surface, "C")} via=SESSION_IDLE elapsed=${elapsedR1Ms ?? "-"}`
-          );
-          // T261: R1 経路の conductor_running にも source_guess を併記する（Finding 5: 4.5 要件）。
-          await log(
-            "conductor_running",
-            `${formatSurface(message.surface, "C")} via=SESSION_IDLE taskRunId=${conductor.taskRunId} session_idle_source_guess=${sourceGuess}`
-          );
         }
+        // T277: assigning 中の SESSION_IDLE では何もしない（status 変更なし）。
+        //       旧 R1 分岐（assigning → running に倒す保険）は撤去した。
+        //       正規経路は SESSION_STARTED(source=clear)、fallback は ASSIGNING_TIMEOUT。
+        //       観測用の session_idle ログは下で出る。
         notifyStateChanged("daemon.ts:handleMessage:session-idle-conductor");
         // T261: SESSION_IDLE の出所推定 (guessSessionIdleSource) を 1 key として併記。
         //       Agent surface 側（下の agent_done 分岐）には付けない（user_clear 調査対象外）。

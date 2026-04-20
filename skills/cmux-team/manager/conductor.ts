@@ -504,8 +504,9 @@ export async function assignTask(
     // --- 6. ConductorState 更新 ---
     // T232: status は "assigning" のまま維持する（/clear 送信直前にセット済み）。
     //       running への遷移は SESSION_STARTED(source=clear) hook 到達時に行う。
-    //       保険経路として SESSION_IDLE / SESSION_ACTIVE でも assigning→running へ遷移させる
-    //       （daemon.ts 側）。60 秒経過で disconnected に倒す timeout もある。
+    //       保険経路として SESSION_ACTIVE でも assigning→running へ遷移させる（daemon.ts 側、
+    //       現行 hook では発火せず CLI 経由のみ）。60 秒経過で disconnected に倒す timeout もある。
+    //       （T277: SESSION_IDLE R1 は撤去済み）
     conductor.taskRunId = taskRunId;
     conductor.taskId = taskId;
     conductor.taskTitle = taskTitle;
@@ -647,7 +648,6 @@ export async function resetConductor(
     conductor.promptSentAt = undefined;
     conductor.promptBytes = undefined;
     conductor.sessionStartedClearAt = undefined;
-    conductor.sessionIdleAtInAssigning = undefined;
     conductor.assigningSetAt = undefined;
     // idle に戻す経路では古い disconnectedAt をクリアする (Minor 3)。
     // broken 経路では UI の「経過時間」表示のため保持する（将来 clear-conductor で
