@@ -2,13 +2,24 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-04-21
+
 ### Changed (Breaking)
 
 - **Conductor の完了通知を `close-task` に一本化（T274、破壊的変更）**。`skills/cmux-team/templates/{ja,en}/conductor-task.md` の「完了通知」セクションから `cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true` 指示を削除し、`conductor-role.md` Step 11 の `close-task` に集約した。close-task が内部で CONDUCTOR_DONE を daemon に送信するため、Conductor 側から重ねて送る必要は無い（~/git/Dear T204 で TUI `[assigned]` + manager.log `task_completed` の不整合を引き起こしていた）。`skills/cmux-team/templates/{ja,en}/manager.md` の「主要な完了検出」文も close-task 経由に修正。**Rollout 時の注意:** 旧プロンプトを抱えた Conductor が Claude Code のセッション resume で復帰すると古い指示を実行し得るため、リリース後は `cmux-team restart` または各 Conductor ペインで `/clear` を実行して新プロンプトを読み込ませること
 
 ### Added
 
+- **Master の直接作業制約を緩和し、明示指示があるときに限り例外許可（T273）**。`templates/{ja,en}/master.md` の「やらないこと」を 4 小節構造（基本方針 / 例外: 明示指示 / 明示指示があっても禁止 / 判断基準）に再編し、「直接やって」「Master で commit して」等の明示フレーズを使った場合に限り Master が直接作業してよいことを明文化した。`.team/tasks/` 配下の直接編集、assigned タスク編集、Conductor/Agent 直接起動、破壊的 git 操作（push/force-push/reset --hard 等）は明示指示があっても引き続き禁止。`docs/spec/04-templates.md` の Master ワンライナー要約と `docs/spec/01-skill-cmux-team.md` の Master 行要約も同方針に更新
+- **worktree start-point に `config-local-ahead` を追加（T275）**。`resolveWorktreeBase` で local `<mainBranch>` が `origin/<mainBranch>` より strict ahead（同一 SHA でない・origin が local の ancestor）のときは local を優先する。`git fetch` せず push しない運用や origin が stale なケースで、stale な base から worktree が切られる問題（ai-web-builder T006 で発生）を解消する。優先順位は `explicit` → `config-local-ahead` → `config-origin` → `config-local` → `head-fallback`
+- **conductor-role.md の Step 8/9 を ahead-side rebase と ff-only 失敗レポートに対応（T276）**。Step 8 の rebase 対象を `config-local-ahead` が選ばれたときは local main を優先するロジックに置き換え、Step 9 に ff-only merge 失敗時の判断必要レポート節を追加した。Step 8/9 両方で `CONDUCTOR_DONE --success false` 送信時の `--reason` を必須化し、空 reason で `manager.log` の `conductor_done_unresolved` が `reason=-` になり追跡不能になる事故（ai-web-builder T006）を予防する
+- **状態機械 P1 shadow reducer + state machine spec を追加（T279）**。Conductor / Task の reducer を pure function として `skills/cmux-team/manager/state-machine/` に新設し、daemon.ts の各 handler 末尾に shadow observer を try/catch 付きで挿入。副作用は一切実行せず、期待 state と実 state の diff を `fsm_shadow_diff` ログで観測する（`events.ts` / `conductor-fsm.ts` / `task-fsm.ts` / `invariants.ts` / `shadow.ts` / `fsm.test.ts` 136 pass）。`docs/spec/07-state-machine.md` に Conductor / Task FSM リファレンス（Mermaid 図 2 本）を追加し、`CLAUDE.md` / `docs/spec/00-project-overview.md` からリンク。`.team/artifacts/A017-state-machine.md` §5 に shadow 配線の既知差分メモを追加。24h 実稼働観測と daemon 置換は後続タスク送り
 - **`handleConductorDone` に success=true 経路の整合性ガード（T274）**。Conductor が `--success true` を送ったのに task-state が `assigned` のまま残っていた場合、`task_completed_state_mismatch` を warn ログに出した上で daemon が自動で `closed` に倒す（journal: `auto_closed_by_daemon: CONDUCTOR_DONE without close-task (taskRunId=<id>)`、trace DB に `event="closed"` 行も insert）。`task-state` entry 自体が無い場合は `task_completed_state_missing` warn ログのみ残し state 書き込みは skip。T263/T269 の `success=false + assigned → aborted` パスと対称な保険として機能し、旧プロンプトを抱えた Conductor が resume した際の再発リスクを吸収する
+
+### Fixed
+
+- **assigning 中の SESSION_IDLE R1 保険を撤去（T277）**。T276 run #1 で、daemon 自身の `/clear` 後の SESSION_IDLE が SESSION_CLEAR より先着することで R1 分岐（daemon.ts:1937-1955）が `assigning → running` に誤って倒し、直後の SESSION_CLEAR が running の user_clear handler に落ちて task が `reason=user_clear` で誤 abort される事故が発生した。R1 分岐を完全削除し、assigning window close を 3 経路（SESSION_STARTED source=clear 正規経路 / SESSION_CLEAR daemon_assign_clear 早期 break / timeout ASSIGNING_TIMEOUT_SEC=60s）に一本化する。併せて R1 でのみ書き込まれていた `sessionIdleAtInAssigning` フィールドと `formatUserClearDecision` の `session_idle_at=` 列を撤去（schema/conductor/daemon）。regression test 2 本を追加、A014-conductor-state-machine.md の row 7 と Mermaid 図 L266 から SESSION_IDLE 経路を除外
+- **Artifacts タブのスクロールをカーソル追従にする（T278）**。Tasks タブ（L1112-1117）と同形の `startIdx` 計算を `buildArtifactRows` に導入し、`artifactCursor` の移動に応じて `filtered` を slice する（`ARTIFACT_VISIBLE_LINES = 12`）。`filtered.length > ARTIFACT_VISIBLE_LINES` のとき startIdx を算出して slice、for ループを `visibleArtifacts.length` で回し、`isSelected` 判定を `globalIdx (= startIdx + i) === state.artifactCursor` に変更。プレビュー描画・Up/Down キーハンドラは未変更
 
 ## [4.0.0] - 2026-04-19
 
