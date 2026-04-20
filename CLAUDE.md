@@ -128,7 +128,8 @@ cmux-team/
 │   │   ├── 03-commands.md
 │   │   ├── 04-templates.md
 │   │   ├── 05-install-and-infrastructure.md
-│   │   └── 06-implementation-tasks.md
+│   │   ├── 06-implementation-tasks.md
+│   │   └── 07-state-machine.md
 │   ├── research/                     # リサーチドキュメント
 │   └── slides/                       # プレゼン資料
 ├── CHANGELOG.md                      # 変更ログ
@@ -159,6 +160,7 @@ cmux-team/
 | 04-templates.md | エージェントプロンプトテンプレート仕様 |
 | 05-install-and-infrastructure.md | インストール・インフラ構成 |
 | 06-implementation-tasks.md | 実装タスク定義 |
+| 07-state-machine.md | Conductor / Task FSM 仕様（T279。pure reducer + shadow observability） |
 
 ## スキル・コマンドの追加・修正方法
 

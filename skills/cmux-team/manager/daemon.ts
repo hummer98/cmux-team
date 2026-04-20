@@ -29,6 +29,9 @@ import { initDB, insertHookSignal, insertTaskSession, updateNotificationEnrichme
 import type { NotificationEnrichment } from "./trace-store";
 import { isStale } from "./rate-limit-persistence";
 import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths";
+// T279: FSM shadow observer (observe only, no state mutation).
+import { shadowObserveConductor } from "./state-machine/shadow";
+import type { FsmEvent, ConductorCtx, ConductorStatus } from "./state-machine/events";
 
 export interface TaskSummary {
   id: string;
@@ -1437,6 +1440,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T279: shadow observer 用の prev capture (mutation 前)。
+        const shadowPrevStarted: ConductorStatus = conductor.status;
         // T250: broken は明示的クリア (clear-conductor) 以外で解除しない。
         //       自動復帰経路を塞ぎ、観測のため ignore ログを残す。
         if (conductor.status === "broken") {
@@ -1526,6 +1531,22 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "session_started",
           `${formatSurface(message.surface, "C")} pid=${message.pid} session_id=${message.sessionId ?? "-"} source=${message.source ?? "-"}`
         );
+        // T279: shadow observe (observe only, no mutation).
+        try {
+          const ev: FsmEvent = {
+            type: "SESSION_STARTED",
+            source: (message.source as FsmEvent & { type: "SESSION_STARTED" })["source"],
+            isMasterSurface: false,
+          };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            isMasterSurface: false,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, shadowPrevStarted, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_STARTED ${e?.message ?? e}`);
+        }
         break;
       }
 
@@ -1633,6 +1654,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
       await log("conductor_registered", formatSurface(message.surface, "C"));
+      // T279 shadow: REGISTERED 新規登録は reducer 上 no-op (shadow 側も pre-existing state 扱い)。
+      try {
+        const ev: FsmEvent = { type: "REGISTERED" };
+        const cctx: ConductorCtx = { hasTaskRunId: false, now: Date.now() };
+        await shadowObserveConductor(message.surface, "starting", ev, cctx, "starting");
+      } catch (e: any) {
+        await log("error", `shadow_observe_failed REGISTERED ${e?.message ?? e}`);
+      }
       break;
     }
 
@@ -1731,6 +1760,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T279: shadow observer 用の prev capture (mutation 前)。
+        const shadowPrevEnded: ConductorStatus = conductor.status;
         // surface が一致しない場合は旧セッションからの stale イベント → 無視
         if (message.surface !== conductor.surface) {
           await log(
@@ -1754,6 +1785,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "conductor_disconnected",
           `${formatSurface(message.surface, "C")} reason=session_ended${message.reason ? `:${message.reason}` : ""} ${snapshot}`
         );
+        // T279: shadow observe (observe only).
+        try {
+          const ev: FsmEvent = { type: "SESSION_ENDED", reason: message.reason };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, shadowPrevEnded, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_ENDED ${e?.message ?? e}`);
+        }
       } else {
         // Agent surface かチェック (T181: done マーカーを書き出す)
         for (const c of state.conductors.values()) {
@@ -1806,6 +1848,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T279: shadow observer 用の prev capture。
+        const shadowPrevActive: ConductorStatus = conductor.status;
         // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
         if (conductor.status === "broken") {
           await logBrokenIgnore(conductor, "SESSION_ACTIVE");
@@ -1831,6 +1875,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           );
         }
         notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
+        // T279: shadow observe.
+        try {
+          const ev: FsmEvent = { type: "SESSION_ACTIVE" };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, shadowPrevActive, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_ACTIVE ${e?.message ?? e}`);
+        }
       }
       break;
     }
@@ -1945,6 +2000,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "session_idle",
           `${formatSurface(message.surface, "C")} session_idle_source_guess=${sourceGuess}`
         );
+        // T279: shadow observe.
+        try {
+          const ev: FsmEvent = { type: "SESSION_IDLE" };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, prevStatus, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_IDLE ${e?.message ?? e}`);
+        }
         break;
       }
 
@@ -1991,6 +2057,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       // 2) Conductor surface か判定
       const conductor = findConductor(state, message.surface);
       if (conductor) {
+        // T279: shadow observer 用の prev capture。
+        const shadowPrevAsk: ConductorStatus = conductor.status;
         conductor.askQuestion = message.question;
         conductor.status = "asking";
         if (message.pid) conductor.pid = message.pid;
@@ -2002,6 +2070,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "conductor_asking",
           `${formatSurface(message.surface, "C")} question=${truncate(message.question, 120)}`
         );
+        // T279: shadow observe.
+        try {
+          const ev: FsmEvent = { type: "SESSION_ASK" };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, shadowPrevAsk, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_ASK ${e?.message ?? e}`);
+        }
         break;
       }
 
@@ -2050,6 +2129,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       const conductor = findConductor(state, message.surface);
+      // T279: shadow observer 用の prev capture (mutation 前)。
+      const shadowPrevClear: ConductorStatus | undefined = conductor?.status;
       // T250: broken は自動復帰経路を塞ぐ（明示 clear-conductor でのみ解除）。
       //       assigning ガードよりも前に置き、下流の destructive 処理に落ちないようにする。
       if (conductor && conductor.status === "broken") {
@@ -2160,6 +2241,24 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             `${formatPair(c.surface, agent.surface, "C", "A")} new_status=running`
           );
           break;
+        }
+      }
+      // T279: shadow observe (conductor マッチ時のみ).
+      if (conductor && shadowPrevClear !== undefined) {
+        try {
+          // manualUserInitiated: running + taskRunId 一致のケースを user 発 /clear と判定する
+          // (daemon.ts:2174-2218 のガード通過経路)。それ以外は false で daemon 側 /clear と扱う。
+          const manual =
+            shadowPrevClear === "running" &&
+            (!message.taskRunId || !conductor.taskRunId || message.taskRunId === conductor.taskRunId);
+          const ev: FsmEvent = { type: "SESSION_CLEAR", manualUserInitiated: manual };
+          const cctx: ConductorCtx = {
+            hasTaskRunId: conductor.taskRunId != null,
+            now: Date.now(),
+          };
+          await shadowObserveConductor(message.surface, shadowPrevClear, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed SESSION_CLEAR ${e?.message ?? e}`);
         }
       }
       break;
@@ -2451,6 +2550,8 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     // spawn 前にロック（次の tick での二重起動を防止）
     assignedIds.add(task.id);
 
+    // T279 shadow: assignTask 前の Conductor status を撮る (idle 前提だが safety)。
+    const shadowPrevAssign: ConductorStatus = idleConductor.status;
     let updated: ConductorState;
     try {
       updated = await assignTask(idleConductor, task.id, state.projectRoot, state.mainBranch);
@@ -2494,6 +2595,13 @@ export async function scanTasks(state: DaemonState): Promise<void> {
             );
           }
           // 次のタスクへ。idle Conductor はそのまま維持
+          try {
+            const ev: FsmEvent = { type: "ASSIGN", ok: false, errorKind: "task" };
+            const cctx: ConductorCtx = { hasTaskRunId: idleConductor.taskRunId != null, now: Date.now() };
+            await shadowObserveConductor(idleConductor.surface, shadowPrevAssign, ev, cctx, idleConductor.status);
+          } catch (se: any) {
+            await log("error", `shadow_observe_failed ASSIGN(task-fail) ${se?.message ?? se}`);
+          }
           continue;
         }
         // e.kind === "conductor" → 従来通り disconnected
@@ -2504,6 +2612,13 @@ export async function scanTasks(state: DaemonState): Promise<void> {
           "conductor_disconnected",
           `${formatSurface(idleConductor.surface, "C")} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason} ${formatConductorSnapshot(idleConductor)}`
         );
+        try {
+          const ev: FsmEvent = { type: "ASSIGN", ok: false, errorKind: "conductor" };
+          const cctx: ConductorCtx = { hasTaskRunId: idleConductor.taskRunId != null, now: Date.now() };
+          await shadowObserveConductor(idleConductor.surface, shadowPrevAssign, ev, cctx, idleConductor.status);
+        } catch (se: any) {
+          await log("error", `shadow_observe_failed ASSIGN(conductor-fail) ${se?.message ?? se}`);
+        }
         continue;
       }
       // AssignTaskError 以外の想定外例外（defensive: conductor.ts の catch-all が
@@ -2514,11 +2629,26 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       idleConductor.status = "disconnected";
       idleConductor.disconnectedAt = new Date().toISOString();
       notifyStateChanged("daemon.ts:scanTasks:conductor-disconnected");
+      try {
+        const ev: FsmEvent = { type: "ASSIGN", ok: false, errorKind: "conductor" };
+        const cctx: ConductorCtx = { hasTaskRunId: idleConductor.taskRunId != null, now: Date.now() };
+        await shadowObserveConductor(idleConductor.surface, shadowPrevAssign, ev, cctx, idleConductor.status);
+      } catch (se: any) {
+        await log("error", `shadow_observe_failed ASSIGN(unexpected) ${se?.message ?? se}`);
+      }
       continue;
     }
 
     state.conductors.set(updated.surface, updated);
     notifyStateChanged("daemon.ts:scanTasks:conductor-updated");
+    // T279 shadow: ASSIGN 成功 — idle → assigning。
+    try {
+      const ev: FsmEvent = { type: "ASSIGN", ok: true };
+      const cctx: ConductorCtx = { hasTaskRunId: updated.taskRunId != null, now: Date.now() };
+      await shadowObserveConductor(updated.surface, shadowPrevAssign, ev, cctx, updated.status);
+    } catch (se: any) {
+      await log("error", `shadow_observe_failed ASSIGN(ok) ${se?.message ?? se}`);
+    }
     // task-state.json に assigned + assignedAt + resume 情報を記録
     const ts = await loadTaskState(state.projectRoot);
     ts[task.id] = {
@@ -2548,6 +2678,8 @@ export async function __testSpawnPidWatcherTick(
   if (!state.running) return "stopped";
   if (cmux.isAlive(pid)) return "alive";
   if (conductor.pid !== pid) return "stale";
+  // T279 shadow: PID_DIED の prev 状態を disconnected 代入前に撮る。
+  const shadowPrevPidDied: ConductorStatus = conductor.status;
   conductor.status = "disconnected";
   conductor.disconnectedAt = new Date().toISOString();
   // T260: disconnect ログのため snapshot を pid クリア前に撮る
@@ -2566,6 +2698,13 @@ export async function __testSpawnPidWatcherTick(
     "conductor_disconnected",
     `${formatSurface(conductor.surface, "C")} reason=pid_dead ${snapshot}`
   );
+  try {
+    const ev: FsmEvent = { type: "PID_DIED" };
+    const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
+    await shadowObserveConductor(conductor.surface, shadowPrevPidDied, ev, cctx, conductor.status);
+  } catch (e: any) {
+    await log("error", `shadow_observe_failed PID_DIED ${e?.message ?? e}`);
+  }
   return "dead";
 }
 
@@ -2747,6 +2886,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
     if (conductor.status === "starting") {
       const elapsed = (Date.now() - new Date(conductor.startedAt).getTime()) / 1000;
       if (elapsed > STARTING_TIMEOUT_SEC) {
+        const shadowPrevStartingTO: ConductorStatus = conductor.status;
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
         notifyStateChanged("daemon.ts:monitorConductors:starting-timeout");
@@ -2754,6 +2894,13 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           "conductor_start_timeout",
           `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s`
         );
+        try {
+          const ev: FsmEvent = { type: "TIMEOUT", kind: "starting" };
+          const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
+          await shadowObserveConductor(surface, shadowPrevStartingTO, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed TIMEOUT(starting) ${e?.message ?? e}`);
+        }
       }
       continue;
     }
@@ -2771,6 +2918,7 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           "assigning_window_close",
           `${formatSurface(surface, "C")} via=timeout elapsed=${elapsedTimeoutMs ?? "-"}`
         );
+        const shadowPrevAssigningTO: ConductorStatus = conductor.status;
         conductor.status = "disconnected";
         conductor.disconnectedAt = new Date().toISOString();
         notifyStateChanged("daemon.ts:monitorConductors:assigning-timeout");
@@ -2778,6 +2926,13 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           "conductor_assign_timeout",
           `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
         );
+        try {
+          const ev: FsmEvent = { type: "TIMEOUT", kind: "assigning" };
+          const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
+          await shadowObserveConductor(surface, shadowPrevAssigningTO, ev, cctx, conductor.status);
+        } catch (e: any) {
+          await log("error", `shadow_observe_failed TIMEOUT(assigning) ${e?.message ?? e}`);
+        }
       }
       continue;
     }
@@ -2792,7 +2947,15 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
             "conductor_disconnect_timeout",
             `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s ${formatConductorSnapshot(conductor)}`
           );
+          const shadowPrevDisconnectedTO: ConductorStatus = conductor.status;
           await forceCloseDisconnectedConductor(state, conductor);
+          try {
+            const ev: FsmEvent = { type: "TIMEOUT", kind: "disconnected" };
+            const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
+            await shadowObserveConductor(surface, shadowPrevDisconnectedTO, ev, cctx, conductor.status);
+          } catch (e: any) {
+            await log("error", `shadow_observe_failed TIMEOUT(disconnected) ${e?.message ?? e}`);
+          }
         }
       }
       continue;
@@ -2881,6 +3044,8 @@ async function handleConductorDone(
   conductor: ConductorState,
   opts?: { success?: boolean; reason?: string },
 ): Promise<void> {
+  // T279 shadow: prev は resetConductor が呼ばれる前の status。
+  const shadowPrevDone: ConductorStatus = conductor.status;
   const { journalSummary } = await collectResults(conductor, state.projectRoot);
   const taskId = conductor.taskId;
 
@@ -3028,6 +3193,32 @@ async function handleConductorDone(
   await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
     preserveWorktree: unresolved,
   });
+
+  // T279 shadow: handleConductorDone 完了後に reducer と比較する。
+  //   reducer 側は {success, unresolved, currentTaskStatus} から分岐を決める。
+  //   late_cleanup 分岐 (state !== running/asking) は reducer では no-op → 実 state も
+  //   resetConductor により idle になるため diff が載る可能性がある（設計上の既知差分）。
+  try {
+    const ev: FsmEvent = {
+      type: "DONE",
+      success,
+      unresolved,
+      currentTaskStatus: currentStatus as any,
+    };
+    const cctx: ConductorCtx = {
+      hasTaskRunId: conductor.taskRunId != null,
+      now: Date.now(),
+    };
+    await shadowObserveConductor(
+      conductor.surface,
+      shadowPrevDone,
+      ev,
+      cctx,
+      conductor.status,
+    );
+  } catch (e: any) {
+    await log("error", `shadow_observe_failed DONE ${e?.message ?? e}`);
+  }
 }
 
 export async function updateTeamJson(state: DaemonState): Promise<void> {

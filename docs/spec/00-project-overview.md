@@ -117,3 +117,16 @@ npm install -g @hummer98/cmux-team
 ```
 
 タスク実行に伴うプロンプト・成果物（旧 `.team/prompts/`、`.team/output/` 相当）は `tasks/TNNN-slug/runs/<taskRunId>/` 配下に集約される。Conductor／Agent の `OUTPUT_DIR` はこのディレクトリを指す。
+
+## 仕様ドキュメント索引
+
+| No. | ファイル | 内容 |
+|----|---------|------|
+| 00 | 00-project-overview.md | 本ドキュメント（プロジェクト概要・4 層アーキテクチャ・設計原則） |
+| 01 | 01-skill-cmux-team.md | `cmux-team` スキル（SKILL.md）の仕様 |
+| 02 | 02-skill-cmux-agent-role.md | `cmux-agent-role` スキル（SKILL.md）の仕様 |
+| 03 | 03-commands.md | スラッシュコマンド定義 |
+| 04 | 04-templates.md | エージェントプロンプトテンプレート仕様 |
+| 05 | 05-install-and-infrastructure.md | インストール・インフラ構成 |
+| 06 | 06-implementation-tasks.md | 実装タスク定義 |
+| 07 | 07-state-machine.md | Conductor / Task FSM 仕様（T279、shadow observability 配線） |
