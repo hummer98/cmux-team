@@ -1160,23 +1160,24 @@ export async function startDashboard(
             ]),
           ]);
         })(),
-        // Update 通知バナー（T187）
-        (() => {
-          const ua = daemon.updateAvailable;
-          if (!ua) return ui.text("", { dim: true });
-          let suffix: string;
-          if (ua.createdTaskId) {
-            suffix = `(task created: T${ua.createdTaskId})`;
-          } else if (daemon.updateMode === "task") {
-            suffix = `(task skipped — check logs)`;
-          } else {
-            suffix = `(run: cmux-team self-update)`;
-          }
-          return ui.text(
-            `⬆ update available: v${ua.current} → v${ua.latest}  ${suffix}`,
-            { style: { fg: YELLOW, bold: true } },
-          );
-        })(),
+        // Update 通知バナー（T187）— updateAvailable が非 null のときのみ挿入
+        ...(daemon.updateAvailable
+          ? [(() => {
+              const ua = daemon.updateAvailable!;
+              let suffix: string;
+              if (ua.createdTaskId) {
+                suffix = `(task created: T${ua.createdTaskId})`;
+              } else if (daemon.updateMode === "task") {
+                suffix = `(task skipped — check logs)`;
+              } else {
+                suffix = `(run: cmux-team self-update)`;
+              }
+              return ui.text(
+                `⬆ update available: v${ua.current} → v${ua.latest}  ${suffix}`,
+                { style: { fg: YELLOW, bold: true } },
+              );
+            })()]
+          : []),
         // Master セクション
         sectionTitle("Master"),
         buildMasterSection(daemon),
