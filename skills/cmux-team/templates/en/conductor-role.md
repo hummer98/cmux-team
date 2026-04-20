@@ -395,19 +395,29 @@ Extract `Axxx` from the stdout of `cmux-team artifacts add` and include it in th
 git diff --cached --quiet || git commit -m "feat: <task summary>"
 ```
 
-### Step 8: Rebase onto origin/{{MAIN_BRANCH}}
+### Step 8: Rebase onto {{MAIN_BRANCH}}
 
-After committing, fetch the latest origin inside the worktree and rebase your commits on top of it.
+After committing, fetch the latest main inside the worktree and rebase your commits on top of it.
 This prevents conflicts from surfacing on the main side and keeps the delivery path always fast-forwardable.
 
 **This step assumes the task has no `base_branch:` frontmatter. If the task specifies `base_branch:`
 and you want to rebase onto something other than `{{MAIN_BRANCH}}`, skip this step and rebase manually,
 or handle `{{BASE_BRANCH}}` support in a separate task.**
 
+The rebase target is chosen to prefer the "ahead side" of main: if local `{{MAIN_BRANCH}}` is strictly ahead of `origin/{{MAIN_BRANCH}}` (origin is an ancestor of local and the SHAs differ), the local branch is used as the rebase target; otherwise origin is used. This is required for push-less workflows (where local main runs ahead of origin) so that the ff-only merge in Step 9 can succeed.
+
 ```bash
 # You are already cd'd into <WORKTREE_PATH> from Step 7
-git fetch --quiet origin {{MAIN_BRANCH}}
-git rebase origin/{{MAIN_BRANCH}}
+git fetch --quiet origin {{MAIN_BRANCH}} || true
+
+if git merge-base --is-ancestor origin/{{MAIN_BRANCH}} {{MAIN_BRANCH}} 2>/dev/null \
+  && [ "$(git rev-parse origin/{{MAIN_BRANCH}})" != "$(git rev-parse {{MAIN_BRANCH}})" ]; then
+  REBASE_TARGET={{MAIN_BRANCH}}
+else
+  REBASE_TARGET=origin/{{MAIN_BRANCH}}
+fi
+
+git rebase "$REBASE_TARGET"
 ```
 
 If rebase succeeds → proceed to Step 9 (delivery).
@@ -420,14 +430,17 @@ git rebase --abort
 
 The completion report must be marked [Judgment Required] and must include:
 - List of conflicting files (output of `git status`)
+- The rebase target value (`$REBASE_TARGET`)
 - HEAD commit SHA before rebase
 - The worktree is kept (not removed) so a human can rebase manually or re-queue the task
 - Task state: transitions to `aborted` (worktree / branch preserved). To re-run, execute `cmux-team restart-task --task-id <TASK_ID>`. To cancel, leave it aborted or run `cmux-team delete-task --task-id <TASK_ID>`.
 
-Send the completion notification with `--success false`:
+Send the completion notification with `--success false --reason "<short English summary>"` (**reason is required**; an empty reason ends up as `reason=-` in `conductor_done_unresolved` in `manager.log` and makes debugging impossible):
 
 ```bash
-cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
+  --success false \
+  --reason "Step 8 rebase conflict: <short summary of conflicting files>"
 ```
 
 **In this case, do NOT call `close-task`.** The daemon sets task-state to `aborted` and records `conductor_done_unresolved` in the journal (reason=judgment_pending). A human then decides whether to re-run via `restart-task`.
@@ -446,6 +459,43 @@ cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
   gh pr create --title "<task summary>" --body "<change description>"
   ```
 Criteria: follow the task file instructions if specified. Default to local merge otherwise.
+
+#### When the local ff-only merge fails
+
+`git merge --ff-only` fails when the worktree branch HEAD is no longer a descendant of local `{{MAIN_BRANCH}}` (for example, Step 8's `REBASE_TARGET` was the wrong side, or a parallel task merged first). When this happens, return a judgment-required report using the same format as the Step 8 conflict section:
+
+```bash
+cd {{PROJECT_ROOT}}
+BRANCH="<branch name assigned to this task>"
+WORKTREE_HEAD=$(git -C <WORKTREE_PATH> rev-parse HEAD)
+MAIN_HEAD=$(git rev-parse {{MAIN_BRANCH}})
+
+if ! git merge --ff-only "$BRANCH"; then
+  echo "── ff-only failed ──"
+  echo "branch=$BRANCH"
+  echo "worktree HEAD=$WORKTREE_HEAD"
+  echo "{{MAIN_BRANCH}} HEAD=$MAIN_HEAD"
+  git status
+fi
+```
+
+The completion report must be marked [Judgment Required] and must include:
+- The branch name
+- The worktree branch HEAD SHA
+- The local `{{MAIN_BRANCH}}` HEAD SHA
+- Output of `git status` (dirty files / ahead-behind)
+- The worktree is kept (not removed) so a human can ff-only / re-queue manually
+- Task state: transitions to `aborted` (worktree / branch preserved). To re-run, execute `cmux-team restart-task --task-id <TASK_ID>`. To cancel, leave it aborted or run `cmux-team delete-task --task-id <TASK_ID>`.
+
+Send the completion notification with `--success false --reason "<short summary>"` (**reason is required**; an empty reason ends up as `reason=-` in `conductor_done_unresolved` in `manager.log` and makes debugging impossible):
+
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
+  --success false \
+  --reason "Step 9 ff-only merge failed: <branch name and cause summary>"
+```
+
+**In this case, do NOT call `close-task`.** Skip Step 10 (worktree removal) and Step 11 (close-task) to preserve the worktree / branch. The daemon sets task-state to `aborted` and records `conductor_done_unresolved` in the journal (reason=judgment_pending).
 
 ### Step 10: Remove the worktree (Conductor's responsibility)
 

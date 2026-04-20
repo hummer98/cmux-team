@@ -442,19 +442,29 @@ git add .team/artifacts/
 git diff --cached --quiet || git commit -m "feat: <タスク概要>"
 ```
 
-### Step 8: origin/{{MAIN_BRANCH}} に rebase する
+### Step 8: {{MAIN_BRANCH}} に rebase する
 
-commit 後、worktree 内で最新の origin を取り込み、その上に自分の commit を rebase する。
+commit 後、worktree 内で最新の main を取り込み、その上に自分の commit を rebase する。
 これにより main 側で conflict が surface することを防ぎ、納品時に常に fast-forward できる状態にする。
 
 **このステップは `base_branch:` frontmatter 未指定タスクを前提とする。`base_branch:` を明示したタスクで
 rebase 先を `{{MAIN_BRANCH}}` 以外にしたい場合は、本ステップを skip して手動で rebase するか、
 別タスクで `{{BASE_BRANCH}}` 対応を行う。**
 
+rebase 対象は「ahead 側の main」を優先する。具体的には、local `{{MAIN_BRANCH}}` が `origin/{{MAIN_BRANCH}}` より strict ahead（origin が local の ancestor かつ SHA が不一致）なら local 側を rebase target にする。それ以外は origin 側を使う。これは push しない運用（local main が origin よりも先行している）で Step 9 の ff-only merge を成立させるために必要。
+
 ```bash
 # Step 7 の時点で cd <WORKTREE_PATH> 済み
-git fetch --quiet origin {{MAIN_BRANCH}}
-git rebase origin/{{MAIN_BRANCH}}
+git fetch --quiet origin {{MAIN_BRANCH}} || true
+
+if git merge-base --is-ancestor origin/{{MAIN_BRANCH}} {{MAIN_BRANCH}} 2>/dev/null \
+  && [ "$(git rev-parse origin/{{MAIN_BRANCH}})" != "$(git rev-parse {{MAIN_BRANCH}})" ]; then
+  REBASE_TARGET={{MAIN_BRANCH}}
+else
+  REBASE_TARGET=origin/{{MAIN_BRANCH}}
+fi
+
+git rebase "$REBASE_TARGET"
 ```
 
 rebase が成功した場合 → Step 9（納品）へ進む。
@@ -467,14 +477,17 @@ git rebase --abort
 
 完了レポートは【判断必要】を明記し、以下を伝える:
 - 衝突したファイル一覧（`git status` の出力）
+- rebase target（`$REBASE_TARGET`）の値
 - rebase 前の HEAD commit SHA
 - worktree は削除せず残す（人間が手動で rebase / 再投入できるよう）
 - タスク状態: `aborted` に遷移します（worktree / branch は温存）。再投入するには `cmux-team restart-task --task-id <TASK_ID>` を実行してください。中止したい場合はそのまま放置するか `cmux-team delete-task --task-id <TASK_ID>` で削除します。
 
-完了通知は `--success false` で送信する:
+完了通知は `--success false --reason "<短い日本語>"` で送信する（**reason は必須**。空だと manager.log の `conductor_done_unresolved` に `reason=-` で残りデバッグ不能になる）:
 
 ```bash
-cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
+  --success false \
+  --reason "Step 8 rebase conflict: <衝突ファイル要約>"
 ```
 
 **この場合 `close-task` は呼ばない。** daemon 側で task-state を `aborted` に倒し、journal に `conductor_done_unresolved` を記録します（reason=judgment_pending）。人間は `restart-task` で再投入するか判断します。
@@ -493,6 +506,43 @@ cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success false
   gh pr create --title "<タスク概要>" --body "<変更内容>"
   ```
 判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
+
+#### ローカルマージの ff-only 失敗時
+
+`git merge --ff-only` は worktree branch の HEAD が local `{{MAIN_BRANCH}}` の祖先関係から外れていると失敗する（Step 8 で `REBASE_TARGET` が想定外になっていた、並行タスクが先にマージされた、等）。失敗した場合は Step 8 の conflict 節と同じフォーマットで判断必要レポートを返す:
+
+```bash
+cd {{PROJECT_ROOT}}
+BRANCH="<タスク割り当てで指定されたブランチ名>"
+WORKTREE_HEAD=$(git -C <WORKTREE_PATH> rev-parse HEAD)
+MAIN_HEAD=$(git rev-parse {{MAIN_BRANCH}})
+
+if ! git merge --ff-only "$BRANCH"; then
+  echo "── ff-only failed ──"
+  echo "branch=$BRANCH"
+  echo "worktree HEAD=$WORKTREE_HEAD"
+  echo "{{MAIN_BRANCH}} HEAD=$MAIN_HEAD"
+  git status
+fi
+```
+
+完了レポートは【判断必要】を明記し、以下を伝える:
+- ブランチ名
+- worktree branch の HEAD SHA
+- local `{{MAIN_BRANCH}}` の HEAD SHA
+- `git status` の出力（dirty files / ahead-behind）
+- worktree は削除せず残す（人間が手動で ff-only / 再投入できるよう）
+- タスク状態: `aborted` に遷移します（worktree / branch は温存）。再投入するには `cmux-team restart-task --task-id <TASK_ID>` を実行してください。中止したい場合はそのまま放置するか `cmux-team delete-task --task-id <TASK_ID>` で削除します。
+
+完了通知は `--success false --reason "<短い日本語>"` で送信する（**reason は必須**。空だと manager.log の `conductor_done_unresolved` に `reason=-` で残りデバッグ不能になる）:
+
+```bash
+cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
+  --success false \
+  --reason "Step 9 ff-only merge failed: <ブランチ名と原因要約>"
+```
+
+**この場合 `close-task` は呼ばない。** Step 10（worktree 削除）と Step 11（close-task）を skip し、worktree / branch を温存する。daemon 側で task-state を `aborted` に倒し、journal に `conductor_done_unresolved` を記録します（reason=judgment_pending）。
 
 ### Step 10: worktree を削除する（Conductor の責務）
 
