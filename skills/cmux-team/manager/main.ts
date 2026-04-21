@@ -39,7 +39,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, type TaskState, type TaskMeta } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, type TaskState, type TaskMeta } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
@@ -3449,15 +3449,12 @@ async function cmdAbortTask(): Promise<void> {
   const journal = journalArg ?? t("abort_journal_default", { id: taskId, title }).replace(/\s+$/, "");
 
   // 1. タスク状態を確認
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  const currentStatus = taskState[taskId]?.status;
+  const taskStateForCheck = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskStateForCheck[taskId]?.status;
   if (currentStatus !== "assigned") {
     console.error(`Error: task ${taskId} is not assigned (current status: ${currentStatus ?? "unknown"}). Only assigned tasks can be aborted.`);
     process.exit(1);
   }
-
-  // T241: cascade 用にタスクメタを 1 回だけロード（両分岐で共有）
-  const { tasks: allTasks } = await loadTasks(PROJECT_ROOT);
 
   // 2. team.json から該当 Conductor を特定
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
@@ -3471,23 +3468,9 @@ async function cmdAbortTask(): Promise<void> {
   const conductor = teamJson.conductors?.find((c: any) => c.taskId === taskId);
   if (!conductor) {
     console.error(`Error: no conductor found for task ${taskId}`);
-    // タスク状態だけ aborted にする
-    taskState[taskId] = {
-      ...taskState[taskId],
-      status: "aborted",
-      abortedAt: new Date().toISOString(),
-      journal,
-    };
-    // T241: depends_on 親 abort → ready 子を draft に戻す
-    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-    await saveTaskState(PROJECT_ROOT, taskState);
-    await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
-    for (const childId of revertedChildren) {
-      await log(
-        "child_reverted_to_draft",
-        `parent=${taskId} child=${childId} reason=parent_aborted`
-      );
-    }
+    // T290: taskState 書き換え・cascade・task_aborted log・child_reverted_to_draft log を
+    //       markTaskAborted に集約。journal は detail として渡す（reason=abort_task; prefix が付く）
+    await markTaskAborted(PROJECT_ROOT, taskId, "abort_task", journal, { taskTitle: title });
     // conductor 不在のため CONDUCTOR_DONE は送れない。TUI 即時反映のため TASK_UPDATED を送る
     const taskFilePath = await findTaskFile(taskId);
     await postMessage({
@@ -3511,24 +3494,9 @@ async function cmdAbortTask(): Promise<void> {
     );
   }
 
-  // 6. タスク状態を aborted に変更
-  taskState[taskId] = {
-    ...taskState[taskId],
-    status: "aborted",
-    abortedAt: new Date().toISOString(),
-    journal,
-  };
-  // T241: depends_on 親 abort → ready 子を draft に戻す
-  const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-  await saveTaskState(PROJECT_ROOT, taskState);
-
-  await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
-  for (const childId of revertedChildren) {
-    await log(
-      "child_reverted_to_draft",
-      `parent=${taskId} child=${childId} reason=parent_aborted`
-    );
-  }
+  // 6. T290: taskState 書き換え・cascade・task_aborted log・child_reverted_to_draft log を
+  //          markTaskAborted に集約。journal は detail として渡す。
+  await markTaskAborted(PROJECT_ROOT, taskId, "abort_task", journal, { taskTitle: title });
 
   // タスク-セッション索引に記録
   try {
