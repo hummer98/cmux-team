@@ -3035,40 +3035,18 @@ async function forceCloseDisconnectedConductor(
   const taskRunId = conductor.taskRunId;
 
   // 1. task-state.json に aborted を記録
+  // T290: markTaskAborted に集約（load/冪等ガード/journal/cascade/emit を内部化）
   if (taskId) {
     try {
-      const ts = await loadTaskState(state.projectRoot);
-      const current = ts[taskId];
-      // 既に closed/aborted/deleted 済みならスキップ（冪等）
-      if (
-        current?.status !== "closed" &&
-        current?.status !== "aborted" &&
-        current?.status !== "deleted"
-      ) {
-        const journal = `disconnect_timeout: ${formatSurface(conductor.surface, "C")} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
-        ts[taskId] = {
-          ...current,
-          status: "aborted",
-          abortedAt: new Date().toISOString(),
-          journal,
-        };
-        // T241: depends_on 親 abort → ready 子を draft に戻す
-        const { tasks } = await loadTasks(state.projectRoot);
-        const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
-        await saveTaskState(state.projectRoot, ts);
-        await log(
-          "task_aborted",
-          `task_id=${taskId} reason=disconnect_timeout journal_summary=${journal}`
-        );
-        for (const childId of revertedChildren) {
-          await log(
-            "child_reverted_to_draft",
-            `parent=${taskId} child=${childId} reason=parent_aborted`
-          );
-        }
-        if (revertedChildren.length > 0) {
-          notifyStateChanged("daemon.ts:forceCloseDisconnectedConductor:cascade");
-        }
+      const detail = `${formatSurface(conductor.surface, "C")} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
+      const { revertedChildren } = await markTaskAborted(
+        state.projectRoot,
+        taskId,
+        "disconnect_timeout",
+        detail,
+      );
+      if (revertedChildren.length > 0) {
+        notifyStateChanged("daemon.ts:forceCloseDisconnectedConductor:cascade");
       }
     } catch (e: any) {
       await log(
