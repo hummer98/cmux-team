@@ -273,6 +273,33 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * T291: ユーザー入力の task-id（数値 id / slug 先頭マッチ / ディレクトリ名全体）を
+ * frontmatter `id:` 値（canonical id）に正規化する。
+ *
+ * - `findTaskFile(inputId)` で該当タスクファイルを特定
+ * - frontmatter 先頭の `id: <value>` 行を読み出して canonical id を返す
+ * - ファイル不在 / id 行欠落 / 読み出し失敗時は undefined
+ *
+ * 呼び出し側はこの返り値で `taskState[id]` / `conductor.taskId === id` /
+ * `postMessage({ taskId: id })` を統一し、task-state.json に slug 入りの
+ * 孤児エントリが作られる事故を防ぐ（T291）。
+ */
+export async function resolveCanonicalTaskId(
+  inputId: string,
+): Promise<string | undefined> {
+  const taskFile = await findTaskFile(inputId);
+  if (!taskFile) return undefined;
+  try {
+    const content = await readFile(taskFile, "utf-8");
+    const idMatch = content.match(/^id:\s*(.+)$/m);
+    const canonical = idMatch?.[1]?.trim();
+    return canonical || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ---- T290: aborted task の表示用 helper -----------------------------------
 
 /**
@@ -2863,7 +2890,16 @@ async function cmdCreateTask(): Promise<void> {
 
 async function cmdUpdateTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_update_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug / ディレクトリ名を渡された場合でも frontmatter id: を
+  //       canonical key として扱う。以降の taskState[taskId] / postMessage({ taskId })
+  //       は canonical id で統一される。エラー表示は元の入力値を使う。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const newStatus = getArg("status");
   const body = getArg("body");
   const title = getArg("title");
@@ -2974,7 +3010,16 @@ async function cmdUpdateTask(): Promise<void> {
 
 async function cmdCloseTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_close_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug / ディレクトリ名を渡された場合でも frontmatter id: を
+  //       canonical key として扱う。以降の team.json.conductors[].taskId マッチも
+  //       canonical id で比較されるため CONDUCTOR_DONE が確実に発射される。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journal = getArg("journal");
   const force = args.includes("--force");
 
@@ -3454,7 +3499,14 @@ async function cmdClearConductor(): Promise<void> {
 
 async function cmdAbortTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_abort_task"));
-  const taskId = requireArg("task-id");
+  // T291: canonical 不明で exit 1（孤児 taskState を生まないための安全側）
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   // タスクタイトル取得（journal デフォルト生成用）
@@ -3620,7 +3672,14 @@ async function restartFromAborted(
 
 async function cmdRestartTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_restart_task"));
-  const taskId = requireArg("task-id");
+  // T291: canonical 不明で exit 1（孤児 taskState を生まないための安全側）
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   // タスクタイトル取得（journal デフォルト生成用）
@@ -3728,7 +3787,15 @@ async function cmdRestartTask(): Promise<void> {
 
 async function cmdDeleteTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_delete_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug を渡されても canonical id で taskState を更新する。
+  //       cascadeAbortToChildren も canonical id で走る。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   const taskFile = await findTaskFile(taskId);

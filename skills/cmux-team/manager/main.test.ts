@@ -14,6 +14,7 @@ import {
   waitForAgentRegistered,
   ensureAskDetectorScript,
   applyResumeTransitions,
+  resolveCanonicalTaskId,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
 import { resolveLayout, resolveAutoUpdateMode } from "./config";
@@ -597,6 +598,187 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     const r = await runCli(["update-task", "--task-id", "506", "--title", "renamed"]);
     // CLI は成功扱い（postMessage は fetch 失敗/4xx を握りつぶす）
     expect(r.code).toBe(0);
+  });
+
+  // --- T291: slug 渡し canonical 化テスト ---
+  //
+  // update-task / close-task / delete-task / abort-task / restart-task が --task-id に
+  // slug やディレクトリ名全体を渡されたときも frontmatter `id:` を canonical key として
+  // taskState を更新し、孤児 entry を作らないことを検証する。
+
+  test("update-task (T291): slug 渡しで canonical key の taskState が更新される", async () => {
+    // setupTeamDir は .team/tasks/550-example/task.md を frontmatter id:550 で作る
+    await setupTeamDir("550", "orig", "draft");
+    const r = await runCli(["update-task", "--task-id", "550-example", "--title", "renamed"]);
+    expect(r.code).toBe(0);
+    // 孤児エントリが作られないこと（"550-example" キーは存在しない）
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["550"]).toBeDefined();
+    expect(state["550-example"]).toBeUndefined();
+    // TASK_UPDATED が送られ taskId は canonical id
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+    expect(receivedMessages[0].taskId).toBe("550");
+  });
+
+  test("close-task (T291): slug 渡しで canonical key の taskState が closed に遷移", async () => {
+    await setupTeamDir("551", "t", "draft");
+    const r = await runCli(["close-task", "--task-id", "551-example"]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["551"].status).toBe("closed");
+    expect(state["551-example"]).toBeUndefined();
+  });
+
+  test("close-task (T291): slug 渡しで team.json.conductors[].taskId マッチが成功し CONDUCTOR_DONE が送られる", async () => {
+    await setupTeamDir("552", "t", "assigned");
+    const { writeFile: wf } = await import("fs/promises");
+    // team.json の conductor は canonical taskId "552" で登録されている前提
+    await wf(
+      join(testDir, ".team/team.json"),
+      JSON.stringify({
+        conductors: [
+          { surface: "surface:100", taskId: "552", taskRunId: "task-552-1111" },
+        ],
+      }),
+    );
+    // CLI 側は slug 渡し
+    const r = await runCli(["close-task", "--task-id", "552-example", "--force"]);
+    expect(r.code).toBe(0);
+    // CONDUCTOR_DONE が送られていること
+    const types = receivedMessages.map((m) => m.type);
+    expect(types).toContain("CONDUCTOR_DONE");
+    const done = receivedMessages.find((m) => m.type === "CONDUCTOR_DONE");
+    expect(done.surface).toBe("surface:100");
+    expect(done.taskRunId).toBe("task-552-1111");
+    expect(done.success).toBe(true);
+  });
+
+  test("delete-task (T291): slug 渡しで canonical key が deleted に遷移", async () => {
+    await setupTeamDir("553", "t", "draft");
+    const r = await runCli(["delete-task", "--task-id", "553-example"]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["553"].status).toBe("deleted");
+    expect(state["553-example"]).toBeUndefined();
+  });
+
+  test("abort-task (T291): slug 渡しで no-conductor 早期 return 経路でも canonical key が aborted に遷移", async () => {
+    await setupTeamDir("554", "t", "assigned");
+    const { writeFile: wf } = await import("fs/promises");
+    await wf(join(testDir, ".team/team.json"), JSON.stringify({ conductors: [] }));
+    const r = await runCli(["abort-task", "--task-id", "554-example"]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["554"].status).toBe("aborted");
+    expect(state["554-example"]).toBeUndefined();
+  });
+
+  test("close-task (T291): 存在しない task-id で元の入力値がエラーメッセージに表示される", async () => {
+    // .team/tasks は空にしておく（存在しないケースの再現）
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks"), { recursive: true });
+    await wf(join(testDir, ".team/task-state.json"), "{}");
+    await wf(join(testDir, ".team/proxy-port"), String(port));
+
+    const r = await runCli(["close-task", "--task-id", "999-bogus"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("task 999-bogus not found");
+  });
+
+  test("update-task (T291): 存在しない task-id で元の入力値がエラーメッセージに表示される", async () => {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks"), { recursive: true });
+    await wf(join(testDir, ".team/task-state.json"), "{}");
+    await wf(join(testDir, ".team/proxy-port"), String(port));
+
+    const r = await runCli(["update-task", "--task-id", "999-bogus", "--title", "x"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("task 999-bogus not found");
+  });
+});
+
+// --- T291: resolveCanonicalTaskId ユニットテスト ---
+//
+// PROJECT_ROOT は main.ts モジュール読み込み時に固定されるため、
+// bun subprocess でテスト毎に env PROJECT_ROOT=testDir を差し替えて呼び出す。
+
+describe("resolveCanonicalTaskId (T291)", () => {
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  // import 経路の compile-time 型検査のため参照（ランタイムでは subprocess 経由で呼ぶ）
+  expect(typeof resolveCanonicalTaskId).toBe("function");
+
+  async function writeTask(dirName: string, frontmatter: string): Promise<void> {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks", dirName), { recursive: true });
+    await wf(
+      join(testDir, ".team/tasks", dirName, "task.md"),
+      `---\n${frontmatter}\n---\n\nbody\n`,
+    );
+  }
+
+  async function callResolve(inputId: string): Promise<string | null> {
+    const script =
+      `import(${JSON.stringify(MAIN_TS)}).then(async (m) => {` +
+      `  const r = await m.resolveCanonicalTaskId(${JSON.stringify(inputId)});` +
+      `  process.stdout.write(JSON.stringify({ result: r === undefined ? null : r }));` +
+      `}).catch((e) => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });`;
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["-e", script], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout?.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr?.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          resolve(null);
+          return;
+        }
+        try {
+          const { result } = JSON.parse(stdout);
+          resolve(result);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  test("数値 id 完全一致（frontmatter id と一致）→ canonical id を返す", async () => {
+    await writeTask("291-close-task-foo", "id: 291\ntitle: t");
+    expect(await callResolve("291")).toBe("291");
+  });
+
+  test("slug 先頭マッチ（dir 名の途中まで）→ canonical id を返す", async () => {
+    await writeTask("291-close-task-foo", "id: 291\ntitle: t");
+    expect(await callResolve("291-close-task")).toBe("291");
+  });
+
+  test("ディレクトリ名全体渡し → canonical id を返す", async () => {
+    await writeTask("291-close-task-foo", "id: 291\ntitle: t");
+    expect(await callResolve("291-close-task-foo")).toBe("291");
+  });
+
+  test("該当タスク不在 → undefined", async () => {
+    const { mkdir: mk } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks"), { recursive: true });
+    expect(await callResolve("999")).toBeNull();
+  });
+
+  test("frontmatter に id 行なし → undefined", async () => {
+    await writeTask("400-no-id", "title: no-id-task");
+    expect(await callResolve("400")).toBeNull();
   });
 });
 
