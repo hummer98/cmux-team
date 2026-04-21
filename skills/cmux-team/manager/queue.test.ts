@@ -1,19 +1,22 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readdir, readFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readdir, readFile } from "fs/promises";
 import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 // テスト用に PROJECT_ROOT を一時ディレクトリに設定
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-team-test-"));
-  process.env.PROJECT_ROOT = testDir;
+  project = await createDummyProject({
+    prefix: "cmux-team-test-",
+    subdirs: ["logs", "queue"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  delete process.env.PROJECT_ROOT;
+  await project.dispose();
 });
 
 // 動的 import で PROJECT_ROOT を反映させる
