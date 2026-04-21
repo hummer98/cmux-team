@@ -1,18 +1,23 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile, mkdir } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { start } from "./proxy";
 import { onStateChanged, __resetBusForTest, __listenerCountForTest } from "./eventBus";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-proxy-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-proxy-test-",
+    subdirs: ["logs"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 describe("proxy", () => {
