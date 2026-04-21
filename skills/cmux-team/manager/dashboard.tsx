@@ -45,6 +45,7 @@ const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
 const JOURNAL_VISIBLE_LINES = 30;
 const ARTIFACT_VISIBLE_LINES = 12;
+const ISSUE_VISIBLE_LINES = 20;
 const SETTINGS_PREVIEW_LINES = 20;
 
 // --- GitHub リポジトリ URL 解決 ---
@@ -922,9 +923,27 @@ export function buildIssueRows(state: AppState): any[] {
   if (state.issueItems.length === 0) {
     rows.push(ui.text(t("gh_issue_empty"), { dim: true }));
   } else {
-    for (let i = 0; i < state.issueItems.length; i++) {
-      const item = state.issueItems[i]!;
-      const isSelected = i === state.issueCursor;
+    // カーソル追従スクロール（buildArtifactRows L845-857 と同じ式）
+    let issueStartIdx = 0;
+    if (state.issueItems.length > ISSUE_VISIBLE_LINES) {
+      issueStartIdx = Math.max(
+        0,
+        Math.min(
+          state.issueCursor - ISSUE_VISIBLE_LINES + 1,
+          state.issueItems.length - ISSUE_VISIBLE_LINES,
+        ),
+      );
+      if (state.issueCursor < issueStartIdx) issueStartIdx = state.issueCursor;
+    }
+    const visibleIssues = state.issueItems.slice(
+      issueStartIdx,
+      issueStartIdx + ISSUE_VISIBLE_LINES,
+    );
+
+    for (let i = 0; i < visibleIssues.length; i++) {
+      const item = visibleIssues[i]!;
+      const globalIdx = issueStartIdx + i;
+      const isSelected = globalIdx === state.issueCursor;
       const stateStr = displayState(item.issue).padEnd(7);
       const typePrefix = item.issue.type === "pr" ? "PR" : "  ";
       const parts = [

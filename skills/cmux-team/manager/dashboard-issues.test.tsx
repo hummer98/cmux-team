@@ -173,4 +173,53 @@ describe("buildIssueRows", () => {
     const s = stringifyRows(rows);
     expect(s).toContain("rate limit");
   });
+
+  test("issueItems.length > VISIBLE + カーソル末尾 → 選択行が含まれる", () => {
+    const VISIBLE = 20;
+    const total = VISIBLE + 10; // 30
+    const items: IssueListItem[] = Array.from({ length: total }, (_, i) => ({
+      issue: makeIssue({ number: i + 1, title: `issue-${i + 1}` }),
+      labels: [],
+      assignees: [],
+    }));
+    const rows = buildIssueRows(
+      makeState({ issueItems: items, issueCursor: total - 1 }),
+    );
+    const s = stringifyRows(rows);
+    expect(s).toContain(`#${total}`); // 選択行 #30 が含まれる
+    expect(s).not.toContain(`"#1"`); // 先頭 #1 は window 外（#10 などとの誤マッチ回避のため "#1" 完全一致で判定）
+    expect(rows.length).toBeLessThanOrEqual(VISIBLE);
+  });
+
+  test("カーソル 0 → 先頭アイテムが描画される", () => {
+    const VISIBLE = 20;
+    const total = VISIBLE + 10;
+    const items: IssueListItem[] = Array.from({ length: total }, (_, i) => ({
+      issue: makeIssue({ number: i + 1, title: `issue-${i + 1}` }),
+      labels: [],
+      assignees: [],
+    }));
+    const rows = buildIssueRows(
+      makeState({ issueItems: items, issueCursor: 0 }),
+    );
+    const s = stringifyRows(rows);
+    expect(s).toContain(`"#1"`);
+    expect(s).toContain(`#${VISIBLE}`); // 先頭 20 件
+    expect(s).not.toContain(`#${total}`); // 末尾は window 外
+  });
+
+  test("issueItems.length <= VISIBLE → 全件描画", () => {
+    const items: IssueListItem[] = Array.from({ length: 3 }, (_, i) => ({
+      issue: makeIssue({ number: i + 1, title: `issue-${i + 1}` }),
+      labels: [],
+      assignees: [],
+    }));
+    const rows = buildIssueRows(
+      makeState({ issueItems: items, issueCursor: 2 }),
+    );
+    expect(rows.length).toBe(3); // last sync / error なし
+    const s = stringifyRows(rows);
+    expect(s).toContain(`"#1"`);
+    expect(s).toContain(`"#3"`);
+  });
 });
