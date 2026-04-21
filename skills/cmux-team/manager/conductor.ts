@@ -366,6 +366,38 @@ export async function assignTask(
       throw new AssignTaskError("task", `git worktree add failed: ${formatExecError(e)}`, e);
     }
 
+    // T284: rerere (reuse recorded resolution) を worktree scope で有効化
+    //   Step 8 semantic resolution で同一 conflict が再出現した際の時短用。
+    //   第1試行: --worktree（extensions.worktreeConfig=true 必要）
+    //   第2試行: --local（main repo の .git/config に書く。worktree 群で共有）
+    //   いずれも best-effort。失敗しても worktree 作成自体は成功扱い。
+    {
+      let rerereScope: "worktree" | "local" | null = null;
+      try {
+        await execFile("git", ["config", "--worktree", "rerere.enabled", "true"], {
+          cwd: worktreePath,
+          timeout: 10000,
+        });
+        rerereScope = "worktree";
+      } catch {
+        try {
+          await execFile("git", ["config", "--local", "rerere.enabled", "true"], {
+            cwd: worktreePath,
+            timeout: 10000,
+          });
+          rerereScope = "local";
+        } catch (e: any) {
+          await log(
+            "rerere_enable_failed",
+            `worktree=${worktreePath} ${formatExecError(e)}`,
+          );
+        }
+      }
+      if (rerereScope) {
+        await log("rerere_enabled", `worktree=${worktreePath} scope=${rerereScope}`);
+      }
+    }
+
     // T243: worktree 作成直後に rev-parse HEAD で base SHA を取得する
     //   `git worktree add -b <new> <start-point>` は HEAD を start-point に揃えるので
     //   worktree の cwd で rev-parse HEAD を打てば「実際に出発した commit」が手に入る。

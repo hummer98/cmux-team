@@ -137,7 +137,53 @@ conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報�
 
 **調査系タスクの summary artifact 化:** コード改変を伴わない調査・リサーチ系タスクでは、完了直前に `runs/<taskRunId>/summary.md` を artifact として登録する（`cmux-team artifacts add` 経由）。後続セッションが内容を参照できるようにするための必須ステップ。
 
+**Step 8 semantic resolution（T284）:** rebase conflict 発生時、Conductor は即 abort せず semantic 自解決を試みる。衝突元 commit から task ID（`(TXXX)`）を抽出して両側の仕様を読み、conflict marker のあるファイルのみを Edit / Write で統合する（Conductor が直接編集できる唯一の例外）。検証（scope_violation / `bun test` / `bunx tsc --noEmit`）がすべて pass すれば `runs/<taskRunId>/conflict-resolution.md` を書き出して Step 9 へ。いずれか失敗した場合は `failure_mode`（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）を含む【判断必要】レポートを返し、`rebase-merge` / `rebase-apply` ディレクトリ有無で分岐した rollback（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）を行う。worktree / branch は温存する。
+
 **テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`（パス情報はタスク割り当て時に付与）
+
+### conflict-resolution.md フォーマット（runs/<taskRunId>/ 配下、T284）
+
+Conductor は Step 8-5 で semantic resolution が成功したときに、以下のフォーマットで `<OUTPUT_DIR>/conflict-resolution.md` を書き出す。監査証跡として worktree 削除後も `runs/<taskRunId>/` に残り、task-state.json の journal から辿れる。
+
+```markdown
+# Conflict Resolution Report
+
+- **taskRunId**: <taskRunId>
+- **branch**: <worktree branch name>
+- **rebase target**: <REBASE_TARGET 値、例: origin/main>
+- **pre-rebase HEAD**: <rebase 前の worktree HEAD 短 SHA>
+- **resolved at**: <ISO 8601 ローカル>
+
+## Conflicting Commits
+
+| Commit SHA | Source Task | Title |
+|------------|-------------|-------|
+| <short-sha> | T<NNN>（抽出不能なら `-`） | <commit subject> |
+
+## Conflicting Files
+
+- <path/to/file>: <採用方針と根拠 1-2 行>
+
+## Resolution Strategy
+
+<両側の意図をどう統合したか。2-5 行>
+
+## Verification
+
+- `bun test`: <N passed / 0 failed>
+- `bunx tsc --noEmit`: <新規エラー 0 件>
+
+## Iterations
+
+<rebase --continue ループの回数と各ループで解いたファイル>
+```
+
+**記述ルール:**
+- Conductor shell が heredoc で埋められる程度に単純化する（複雑な markdown 拡張は使わない）
+- `Source Task` 列は commit message 末尾の `(TXXX)` から抽出。抽出不能な場合は `-`
+- `Verification` 節は 8-4 の test / tsc 結果を 1 行ずつ
+- `Iterations` 節は 8-3 の `git rebase --continue` ループ回数と、各ループで Edit した conflict marker ファイルを列挙
+- artifact としては登録しない（artifact は「知見の記録」、本ファイルは taskRun 固有の audit trail）
 
 ---
 

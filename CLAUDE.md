@@ -343,6 +343,7 @@ Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルー
 3. **判断分岐**: 複数パスがある場合、どのパスに入ったか記録する（例: done マーカー検出方法、フォールバック発動）
 4. **状態遷移**: Conductor/Agent のステータス変化は必ず記録する（既存で実施済み）
 5. **Ready 昇格判定（T283）**: `ready_rejected` / `ready_warning` / `ready_force_bypass` / `ready_sync_skipped` を必ずログする。詳細は「Ready 昇格時の sync state ガード（T283）」参照
+6. **rerere 設定の結果（T284）**: worktree scope で `rerere.enabled=true` を設定した結果を `rerere_enabled scope=<worktree|local>` でログする。失敗時は `rerere_enable_failed stderr=<stderr>`（いずれも best-effort、失敗しても worktree 作成は成功扱い）
 
 ### 禁止事項
 
@@ -799,6 +800,19 @@ worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行するか
 
 **異常検出**: PID ベース生存確認（`spawnPidWatcher` が `process.kill(pid, 0)` を 1 秒間隔で呼ぶ）と hook push（`SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED`）で行う。`cmux read-screen` は Trust 確認検出にのみ使う。
 
+### Step 8 rebase conflict の semantic 自解決（T284）
+
+Conductor Step 8（`{{MAIN_BRANCH}}` への rebase）で conflict が発生した際、従来は即 `git rebase --abort` → `judgment_pending` escalation だったが、T284 以降は以下フローに変更:
+
+1. **conflict 情報収集**（`PRE_REBASE=$(git rev-parse HEAD)` を rebase 試行前に保持、`ALL_CONFLICT_FILES` を iteration で積み上げ）
+2. **衝突元 task ID 抽出**（commit message 末尾の `(TXXX)` → `.team/tasks/` / `.team/archive/` から task.md / plan.md / summary.md を読む）
+3. **semantic resolution 試行**（Conductor 自身が conflict marker 出現ファイルのみを Edit / Write、`git rebase --continue`、iteration 上限 5 回）
+4. **検証**（scope_violation 構造的検知 + `bun test` + `bunx tsc --noEmit` 新規エラー 0 件）
+5. **成功時** → `runs/<taskRunId>/conflict-resolution.md` を書き出し Step 9 へ
+6. **失敗時** → `failure_mode`（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）で escalate、`rebase-merge` / `rebase-apply` 有無で rollback 分岐（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）、worktree / branch は温存
+
+新しく加わる安全装置として worktree 作成直後に `git config rerere.enabled true`（worktree scope 優先、失敗時 main repo `.git/config` にフォールバック、best-effort）を適用するため、同一 conflict の再出現を高速化できる。詳細は `skills/cmux-team/templates/{ja,en}/conductor-role.md` Step 8 と `docs/spec/04-templates.md` の「conflict-resolution.md フォーマット」節を参照。
+
 ### 起動時 resume 不可検出（T264）
 
 `cmdStart` 起動時、`task-state.json` で `status=assigned` のタスクが
@@ -835,6 +849,8 @@ task-state は `aborted` に倒すが worktree / branch は温存するため、
 `cmux-team restart-task --task-id <X>` で再投入できる（T269 で
 `assigned` のまま残す旧挙動から変更。旧挙動は daemon 再起動時の
 applyResumeTransitions が resume 可能と誤分類する事故を招いていた）。
+
+**脚注（T284）**: 3 番目（`false` + `assigned` → `judgment_pending`）経路には Step 8 semantic resolution 失敗も含まれる。T284 は T269 の escalation 経路を**継承**し、その上流に LLM による semantic 自解決の試行を挟む変更で、daemon 側の state 遷移自体は変えていない。reason 値は `Step 8 semantic resolution unresolvable: <failure_mode>` 形式（`failure_mode` は `spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）。詳細は上記「Step 8 rebase conflict の semantic 自解決（T284）」節参照。
 
 journal には `conductor_done_unresolved: <reason> (worktree=<path>) taskRunId=<id>`
 形式で因果が記録され、`cmux-team show-task <X>` または task-state.json の

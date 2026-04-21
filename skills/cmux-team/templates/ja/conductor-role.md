@@ -442,7 +442,7 @@ git add .team/artifacts/
 git diff --cached --quiet || git commit -m "feat: <タスク概要>"
 ```
 
-### Step 8: {{MAIN_BRANCH}} に rebase する
+### Step 8: {{MAIN_BRANCH}} に rebase する（conflict は semantic に自解決する）
 
 commit 後、worktree 内で最新の main を取り込み、その上に自分の commit を rebase する。
 これにより main 側で conflict が surface することを防ぎ、納品時に常に fast-forward できる状態にする。
@@ -450,6 +450,8 @@ commit 後、worktree 内で最新の main を取り込み、その上に自分�
 **このステップは `base_branch:` frontmatter 未指定タスクを前提とする。`base_branch:` を明示したタスクで
 rebase 先を `{{MAIN_BRANCH}}` 以外にしたい場合は、本ステップを skip して手動で rebase するか、
 別タスクで `{{BASE_BRANCH}}` 対応を行う。**
+
+> **Conductor 原則との関係（例外扱い）**: Conductor は通常コードを書かない。ただし本ステップの 8-3（semantic resolution）は**唯一の例外**で、conflict marker が出たファイルに限り Conductor 自身が Edit / Write を使って統合してよい。詳細は 8-3 参照。
 
 rebase 対象は「ahead 側の main」を優先する。具体的には、local `{{MAIN_BRANCH}}` が `origin/{{MAIN_BRANCH}}` より strict ahead（origin が local の ancestor かつ SHA が不一致）なら local 側を rebase target にする。それ以外は origin 側を使う。これは push しない運用（local main が origin よりも先行している）で Step 9 の ff-only merge を成立させるために必要。
 
@@ -464,31 +466,173 @@ else
   REBASE_TARGET=origin/{{MAIN_BRANCH}}
 fi
 
+# 8-6 rollback 用に rebase 試行**前**の HEAD を保持する（必須）
+PRE_REBASE=$(git rev-parse HEAD)
+
+# 8-1 の ALL_CONFLICT_FILES スナップショット用（iteration loop で積み上げる）
+ALL_CONFLICT_FILES=""
+
 git rebase "$REBASE_TARGET"
 ```
 
 rebase が成功した場合 → Step 9（納品）へ進む。
 
-rebase がコンフリクトで失敗した場合 → 自動解決を試みず、即座に abort して判断必要レポートを返す:
+rebase が conflict で失敗した場合 → **即 abort せず、以下 8-1〜8-6 のフローで semantic resolution を試みる**。
+
+#### 8-1. conflict 情報収集
+
+まず現在の iteration で conflict marker が出たファイル群を `ALL_CONFLICT_FILES` に積み上げる。`--diff-filter=U` はその瞬間 unmerged のファイルのみを返すので、8-3 で解消されると落ちる。あとで 8-4 の scope_violation 検知で許可集合として使うため、iteration ごとにスナップショットを取って shell 変数で保持する。
 
 ```bash
-git rebase --abort
+CUR_CONFLICTS=$(git diff --name-only --diff-filter=U | sort -u)
+ALL_CONFLICT_FILES=$(printf '%s\n%s\n' "$ALL_CONFLICT_FILES" "$CUR_CONFLICTS" | sort -u | sed '/^$/d')
+
+git status
+git log --oneline HEAD..ORIG_HEAD
+for f in $CUR_CONFLICTS; do
+  echo "=== $f ==="
+  git diff "$f"  # conflict marker 周辺を表示
+done
+# 直近の cherry-pick 元 commit の内容も確認
+for sha in $(git log --format=%H HEAD..ORIG_HEAD); do
+  git show --stat "$sha"
+done
 ```
 
-完了レポートは【判断必要】を明記し、以下を伝える:
-- 衝突したファイル一覧（`git status` の出力）
-- rebase target（`$REBASE_TARGET`）の値
-- rebase 前の HEAD commit SHA
-- worktree は削除せず残す（人間が手動で rebase / 再投入できるよう）
-- タスク状態: `aborted` に遷移します（worktree / branch は温存）。再投入するには `cmux-team restart-task --task-id <TASK_ID>` を実行してください。中止したい場合はそのまま放置するか `cmux-team delete-task --task-id <TASK_ID>` で削除します。
+#### 8-2. 衝突元タスクの特定と仕様読み込み
+
+conflict を起こしている「相手側 commit」の commit message から task ID を抽出し、関連仕様書を読む。
+
+1. **優先**: commit message 末尾の `(TXXX)` regex 抽出
+   ```bash
+   CONFLICT_TASK_ID=$(git log --format=%s HEAD..ORIG_HEAD | grep -oE '\(T[0-9]+\)' | head -1 | tr -d '()T')
+   ```
+2. **fallback**: 抽出失敗時は `.team/tasks/<num>-*/task.md` に対する grep（SHA や PR 番号での逆引き）
+3. 最終的に task ID が特定できなければ `failure_mode=missing_context` として 8-6 へ escalate
+4. 特定できた場合は以下を読む（archived タスクは `.team/archive/<id>-*/` も対象に含める）:
+   - `.team/tasks/<id>-*/task.md`
+   - `.team/tasks/<id>-*/plan.md`（存在すれば）
+   - `.team/tasks/<id>-*/summary.md`（存在すれば）
+   - 自タスクの `<OUTPUT_DIR>/plan.md` / `<OUTPUT_DIR>/summary.md`
+   - 必要に応じて CLAUDE.md の関連セクション
+
+#### 8-3. semantic resolution 試行（**例外的に Conductor が Edit / Write を使ってよい唯一の箇所**）
+
+**重要制約**: このフェーズでの編集スコープは conflict marker が出たファイルに限定する。
+
+> ⚠️ **iteration 内で conflict marker が出ていないファイルを編集してはいけない。**
+>
+> `git diff --name-only --diff-filter=U` の現在の結果に含まれないファイルへの Edit / Write は、たとえ「ついでに直しておきたい」誘惑に駆られても禁止。これは `failure_mode=scope_violation` として 8-4 で検知・escalation される。新規ファイルの作成、既存機能のリファクタリング、generated file の再生成はいずれも本ステップのスコープ外。
+
+両側の意図を統合した resolution を Edit / Write で書き、続行する:
+
+```bash
+# conflict marker を除去したら
+git add <resolved-files>
+git rebase --continue
+```
+
+次の commit で新たな conflict が出たら 8-1 に戻る（再帰）。**iteration 上限は 5 回**:
+
+```bash
+ITERATION_LIMIT=5
+# 疑似コード: iteration 回数を shell 変数 ITER でカウントし、
+# ITER >= ITERATION_LIMIT で failure_mode=iteration_limit として 8-6 へ
+```
+
+収束しない conflict は人間判断相当と見なす。
+
+#### 8-4. 検証（必須・省略不可）
+
+rebase 完走後、以下を順に実行する。いずれか失敗 → 対応する `failure_mode` で 8-6 へ。
+
+**(1) scope_violation の構造的検知（先行チェック）**
+
+「conflict marker が出たファイル集合」と「cherry-pick 元 commit で変更されたファイル集合」の**和集合**を許可集合とし、実際の変更集合がそれを超えていないか判定する:
+
+```bash
+# 許可集合 = ALL_CONFLICT_FILES ∪ (PRE_REBASE..ORIG_HEAD の差分)
+CHERRY_PICK_CHANGES=$(git diff --name-only "$PRE_REBASE"..ORIG_HEAD | sort -u)
+ALLOWED=$(printf '%s\n%s\n' "$ALL_CONFLICT_FILES" "$CHERRY_PICK_CHANGES" | sort -u | sed '/^$/d')
+
+# 実際の変更集合
+CHANGED=$(git diff --name-only "$PRE_REBASE"..HEAD | sort -u)
+
+# 差分判定
+EXTRA=$(comm -23 <(printf '%s\n' "$CHANGED") <(printf '%s\n' "$ALLOWED"))
+if [ -n "$EXTRA" ]; then
+  # CHANGED が ALLOWED を超えた → scope_violation
+  failure_mode=scope_violation
+  # → 8-6 へ
+fi
+```
+
+（比較対象が「conflict 対象ファイル `U` そのもの」ではなく「`U` + cherry-pick 元 commit で変更されたファイル集合」なのは、rebase 中に cherry-pick される commit が触ったファイルは当然 `CHANGED` に入るため。和集合を取らないと誤検知が出る。）
+
+**(2) テスト実行**
+
+```bash
+cd <WORKTREE_PATH>
+bun test --timeout 600000  # 10 分上限
+```
+
+失敗 → `failure_mode=test_failed` で 8-6 へ。
+
+**(3) TypeScript 型検査**
+
+```bash
+bunx tsc --noEmit
+```
+
+rebase 前後で比較し、**新規エラーが 0 件**なら pass。新規エラーが増えていれば `failure_mode=tsc_failed` で 8-6 へ。
+
+→ 3 つすべて pass（scope_violation 不検出 + test 0 fail + tsc 新規エラー 0 件）なら 8-5 へ。
+
+#### 8-5. 成功 — conflict-resolution.md を書き出して Step 9 へ
+
+`<OUTPUT_DIR>/conflict-resolution.md`（= `runs/<taskRunId>/conflict-resolution.md`）に監査証跡を書き出す。フォーマットは `docs/spec/04-templates.md` の「conflict-resolution.md フォーマット」節を参照（taskRunId / branch / rebase target / pre-rebase HEAD / 衝突 commit 表 / 衝突ファイル別採用方針 / Resolution Strategy / Verification / Iterations）。
+
+書き出し後、Step 9（納品）へ進む。
+
+#### 8-6. escalation（LLM で解けなかった場合）
+
+以下いずれかに該当したら escalation する:
+- `failure_mode=spec_divergence`（両側の仕様が互いに背反で統合不能）
+- `failure_mode=test_failed`（検証 (2) 失敗）
+- `failure_mode=tsc_failed`（検証 (3) 失敗）
+- `failure_mode=missing_context`（8-2 で task ID 特定不能 or 仕様不足）
+- `failure_mode=scope_violation`（検証 (1) 失敗）
+- `failure_mode=iteration_limit`（8-3 iteration 上限 5 回超過）
+
+**rollback（必須、rebase 進行中かどうかで分岐）**:
+
+```bash
+GIT_DIR=$(git rev-parse --git-dir)
+if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+  # rebase 進行中（8-3 iteration_limit や iteration 途中の conflict 再発時）
+  git rebase --abort
+else
+  # rebase 完了済み（8-4 test/tsc/scope_violation 失敗時）
+  # PRE_REBASE は 8-1 直前で保持済み
+  git reset --hard "$PRE_REBASE"
+fi
+```
 
 完了通知は `--success false --reason "<短い日本語>"` で送信する（**reason は必須**。空だと manager.log の `conductor_done_unresolved` に `reason=-` で残りデバッグ不能になる）:
 
 ```bash
 cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
   --success false \
-  --reason "Step 8 rebase conflict: <衝突ファイル要約>"
+  --reason "Step 8 semantic resolution unresolvable: <failure_mode 短文>"
 ```
+
+完了レポートは【判断必要】を明記し、**構造化**して以下を伝える:
+- `conflict_summary`: 衝突ファイル一覧 + rebase target + 衝突元 commit の要約
+- `resolution_attempted`: 試みた統合方針（失敗に至った経緯）
+- `failure_mode`: `spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit` のいずれか
+- `required_input`: 人間に必要な判断（採用方針の指示など）
+- worktree は削除せず残す（人間が手動で rebase / 再投入できるよう）
+- タスク状態: `aborted` に遷移します（worktree / branch は温存）。再投入するには `cmux-team restart-task --task-id <TASK_ID>` を実行してください。中止したい場合はそのまま放置するか `cmux-team delete-task --task-id <TASK_ID>` で削除します。
 
 **この場合 `close-task` は呼ばない。** daemon 側で task-state を `aborted` に倒し、journal に `conductor_done_unresolved` を記録します（reason=judgment_pending）。人間は `restart-task` で再投入するか判断します。
 
