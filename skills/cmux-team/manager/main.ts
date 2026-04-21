@@ -273,6 +273,24 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   return undefined;
 }
 
+// ---- T290: aborted task の表示用 helper -----------------------------------
+
+/**
+ * T290: aborted タスクの journal を表示用に整形する。
+ *
+ * parseAbortJournal を使って新 format（`reason=<reason>; <detail>`）と旧 format
+ * の両方を best-effort でパースし、`Task ${id} aborted [${reason}]: ${detail}`
+ * 形式で返す。reason が parse できない場合は `[unknown]` を使う。
+ *
+ * 呼び出し側: await-task stderr (cmdAwaitTask 内 2 箇所)、printSummaries (aborted 分岐)。
+ */
+export function formatAbortedTaskLine(id: string, journal: string | undefined): string {
+  const parsed = parseAbortJournal(journal);
+  const reason = parsed.reason ?? "unknown";
+  const detail = parsed.detail ?? (journal ?? "(no reason)");
+  return `Task ${id} aborted [${reason}]: ${detail}`;
+}
+
 // ---- T264: cmdStart 起動時 resume 判定 wrapper -----------------------------
 
 export interface ApplyResumeTransitionsDeps {
@@ -3058,7 +3076,7 @@ async function cmdAwaitTask(): Promise<void> {
       remaining.delete(id);
     }
     if (st.status === "aborted") {
-      console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+      console.error(formatAbortedTaskLine(id, st.journal));
       process.exit(1);
     }
   }
@@ -3092,7 +3110,7 @@ async function cmdAwaitTask(): Promise<void> {
           if (st?.status === "aborted") {
             clearTimeout(timer);
             watcher.close();
-            console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+            console.error(formatAbortedTaskLine(id, st.journal));
             process.exit(1);
           }
         }
@@ -3301,13 +3319,19 @@ async function printSummaries(taskIds: string[]): Promise<void> {
     }
 
     // summary が見つからない場合は journal を出力
+    // T290: aborted は reason prefix を parseAbortJournal で復元して表示
     const state = await loadTaskState(PROJECT_ROOT);
-    const journal = state[id]?.journal;
-    if (journal) {
+    const st = state[id];
+    if (st?.status === "aborted") {
       if (taskIds.length > 1) {
         console.log(`\n--- Task ${id} ---`);
       }
-      console.log(journal);
+      console.log(formatAbortedTaskLine(id, st.journal));
+    } else if (st?.journal) {
+      if (taskIds.length > 1) {
+        console.log(`\n--- Task ${id} ---`);
+      }
+      console.log(st.journal);
     } else {
       console.log(`Task ${id}: closed (no summary available)`);
     }
