@@ -1,7 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile, readFile } from "fs/promises";
+import { mkdir, writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import {
   persistMasterFile,
@@ -10,20 +9,22 @@ import {
   normalizeSurfaceForPath,
 } from "./master";
 import type { MasterState } from "./schema";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 // テスト用の一時ディレクトリ
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-master-test-"));
-  process.env.PROJECT_ROOT = testDir;
-  // master ファイルのログ出力用に .team/logs を用意（log ヘルパー要求）
-  await mkdir(join(testDir, ".team/logs"), { recursive: true });
+  project = await createDummyProject({
+    prefix: "cmux-master-test-",
+    subdirs: ["logs"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  delete process.env.PROJECT_ROOT;
+  await project.dispose();
 });
 
 function buildMaster(surface: string, overrides: Partial<MasterState> = {}): MasterState {
