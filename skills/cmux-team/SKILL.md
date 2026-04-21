@@ -78,12 +78,11 @@ description: >
 
 | コマンド | 説明 |
 |---------|------|
-| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築 |
+| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築（レイアウト消失時は自己修復。T286） |
 | `cmux-team status` | ステータス表示（team.json + ログ末尾） |
-| `cmux-team stop` | graceful shutdown（SHUTDOWN メッセージ送信） |
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send TODO` | TODO 通知（`--content` 必須） |
-| `cmux-team send SHUTDOWN` | シャットダウン通知 |
+| `cmux-team send SHUTDOWN` | シャットダウン通知（内部用。明示停止は `kill <pid>`） |
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |

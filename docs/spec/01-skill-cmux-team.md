@@ -63,9 +63,8 @@ description: >
 
 | コマンド | 説明 |
 |---------|------|
-| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築 |
+| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築（レイアウト消失時は自己修復。T286） |
 | `cmux-team status` | ステータス表示（team.json + ログ末尾） |
-| `cmux-team stop` | graceful shutdown（SHUTDOWN メッセージ送信） |
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send <TYPE>` | 内部メッセージ通知（`TASK_CREATED / TASK_UPDATED / CONDUCTOR_DONE / CONDUCTOR_REGISTERED / AGENT_SPAWNED / SESSION_STARTED / SESSION_ENDED / SESSION_ACTIVE / SESSION_IDLE / SESSION_ASK / SESSION_STOP / SESSION_CLEAR / SHUTDOWN`。ほとんどは Claude セッションの SessionStart/Stop/SessionEnd hook が送信する） |
 | `cmux-team send-agent` | Agent/Conductor surface へメッセージ送信（`--surface` 必須、`<message>` positional、`--no-return` 任意）。Conductor → 他 surface 操作はこの CLI 経由に限定され、`cmux send` の直接呼び出しは hook でブロックされる |
@@ -93,6 +92,8 @@ description: >
 | `cmux-team set-agent-instructions` | Agent ロールの overlay を書き込み（`--role` 必須。`--body <text>` / `--from-file <path>` / `--from-stdin` のいずれか必須。100 KB 超で exit 1。未知 role で exit 1）（T247） |
 | `cmux-team delete-agent-instructions` | Agent ロールの overlay を削除（`--role` 必須。存在しなくても exit 0 — 冪等）（T247） |
 | `cmux-team list-agent-instructions` | 8 Agent ロールの overlay 状況を一覧表示（exists → `✓ <n> bytes` / not set → `✗`）（T247） |
+
+> `cmux-team stop` は v4.3.0 で廃止（T286）。cmux セッション終了で daemon が自動停止するため不要。手動停止は `kill <pid>`（`.team/daemon.pid`）で行う。
 
 ### 1a. プロジェクト固有の追加指示（agent instructions overlay、T247）
 

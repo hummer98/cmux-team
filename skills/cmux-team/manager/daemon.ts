@@ -1007,24 +1007,8 @@ async function applyRestorePlan(
     }
   }
 
-  // C: cleanup-stale — pid_dead + idle の残骸 pane を close
-  for (const surface of plan.cleanup) {
-    await cmux.closeSurface(surface);
-    await log(
-      "conductor_stale_surface_closed",
-      `${formatSurface(surface, "C")} reason=pid_dead_idle`,
-    );
-  }
-
-  // E: discarded — log のみ（plan.cleanup に含まれない surface_missing_no_task ぶん）
-  for (const d of plan.discarded) {
-    if (d.reason === "surface_missing_no_task") {
-      await log(
-        "conductor_discarded",
-        `${formatSurface(d.surface, "C")} reason=${d.reason}`,
-      );
-    }
-  }
+  // C (cleanup-stale) + E (discarded) の副作用を共通ヘルパに委譲（T286 Decision D2）。
+  await applyDiscardOnly(state, plan);
 
   // B: resume-existing — sequential に launchConductor (resumeTaskId) を発火
   //    Promise.all で並列化しないこと（Claude Max レート制限回避）
@@ -1114,6 +1098,52 @@ async function applyRestorePlan(
   return assignments;
 }
 
+/**
+ * 復帰計画 (planLayoutRestore) の C (cleanup-stale) / E (discarded) ブロックのみを適用する
+ * 小さなヘルパ (T286 Decision D2 / D16)。
+ *
+ * ここでの "discard" は「conductor entry を `state.conductors` に登録しないで流す」
+ * という広義の意味で、C 経路の close-surface 副作用も含む（Minor #7）。
+ *
+ * 使用箇所:
+ *  - `applyRestorePlan`: A/B/C/D/E 全経路適用時の C/E ブロック共通化（bit-identical 性）
+ *  - `initializeLayout`: 全 discard 自己修復 fallback 前の C/E 副作用流し
+ *
+ * 契約:
+ *  - `state.conductors` を mutate しない（entry 登録なし）
+ *  - cleanup ループは **sequential 実行**（`Promise.all` 禁止 — T286 Decision D13）
+ *    → cmux 側で close-surface 中に new pane 作成リクエストが入るレースを避ける
+ *  - `plan.discarded` のうち `reason === "surface_missing_no_task"` のみログ出力
+ *    (`pid_dead_idle_cleanup` の行は C 経路の `conductor_stale_surface_closed` で
+ *     記録済みのため二重出力を防ぐ — T286 Decision D12)
+ *
+ * @param _state 将来拡張用（現在未使用だが applyRestorePlan とシグネチャを揃える）
+ * @param plan planLayoutRestore の戻り値
+ */
+async function applyDiscardOnly(
+  _state: DaemonState,
+  plan: LayoutRestorePlan,
+): Promise<void> {
+  // C: cleanup-stale — pid_dead + idle の残骸 pane を close（sequential）
+  for (const surface of plan.cleanup) {
+    await cmux.closeSurface(surface);
+    await log(
+      "conductor_stale_surface_closed",
+      `${formatSurface(surface, "C")} reason=pid_dead_idle`,
+    );
+  }
+
+  // E: discarded — log のみ（reason === "surface_missing_no_task" のみ）
+  for (const d of plan.discarded) {
+    if (d.reason === "surface_missing_no_task") {
+      await log(
+        "conductor_discarded",
+        `${formatSurface(d.surface, "C")} reason=${d.reason}`,
+      );
+    }
+  }
+}
+
 export async function initializeLayout(
   state: DaemonState,
   daemonSurface?: string,
@@ -1122,7 +1152,7 @@ export async function initializeLayout(
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   let conductorsFromJson: any[] = [];
 
-  // team.json 読み込み + layout mismatch 早期通知（plan §3.2 step 1）
+  // team.json 読み込み + layout mismatch 早期通知（純観測ログ — T286 Decision D11）
   try {
     if (existsSync(teamJsonPath)) {
       const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
@@ -1130,9 +1160,11 @@ export async function initializeLayout(
       const restoredLayout: LayoutMode =
         teamJson.layout === "16x9" ? "16x9" : "wide";
       if (restoredLayout !== state.layout) {
+        // 行動案内は削除（T286 fallback が入ると "kept" か "rebuild" かを
+        // この地点では判定できないため、事実ベースの観測ログに統一）。
         await log(
           "layout_mismatch_on_resume",
-          `restored=${restoredLayout} current=${state.layout} — existing panes will be kept; run 'cmux-team stop' then 'start --layout=${state.layout}' to rebuild`,
+          `restored=${restoredLayout} current=${state.layout}`,
         );
       }
     }
@@ -1167,6 +1199,33 @@ export async function initializeLayout(
     cmux.isAlive,
     resumePlan ?? [],
   );
+
+  // T286: 全 entry が C/E に倒れた場合（A=0, B=0, D=0）は "team.json 空相当" とみなし、
+  //   C/E 副作用を流してから initializeConductorSlots にフォールバックする。
+  //   発症条件: cmux セッションを完全終了 → 同 workspace で cmux-team start 再投入したとき、
+  //   team.json の conductor entry の surface が cmux に全て存在しないケース（KDG-SSO 再現）。
+  //   resumePlan は team.json 空経路と同一シグネチャで透過する（Decision D14）。
+  if (
+    plan.alive.length === 0 &&
+    plan.resumeExisting.length === 0 &&
+    plan.resumeNewSurface.length === 0
+  ) {
+    await log(
+      "layout_restore_empty_fallback",
+      `kept=0 discarded=${plan.discarded.length} layout=${state.layout}`,
+    );
+    // C/E 副作用を先に流してから新 slot 作成（pane 数が一時的に過剰になる瞬間を避ける）。
+    await applyDiscardOnly(state, plan);
+    return await initializeConductorSlots(
+      state.projectRoot,
+      state.conductors,
+      state.maxConductors,
+      daemonSurface,
+      resumePlan,
+      state.layout,
+      state.mainBranch,
+    );
+  }
 
   const assignments = await applyRestorePlan(state, plan);
 

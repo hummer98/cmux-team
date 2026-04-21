@@ -141,6 +141,19 @@ describe("acquirePidFile - existing alive cmux-team process", () => {
     const content = await readFile(pidFilePath, "utf-8");
     expect(content).toBe("54321");
   });
+
+  // T286 S6: `cmux-team stop` は廃止されたため、エラーメッセージの案内から削除する
+  test("PidFileLockedError のメッセージに 'cmux-team stop' 案内が含まれない", () => {
+    const err = new PidFileLockedError(54321, "/tmp/ws");
+    expect(err.message).not.toContain("cmux-team stop");
+  });
+
+  test("PidFileLockedError のメッセージに daemon が cmux 終了で自動停止する旨の案内が含まれる", () => {
+    const err = new PidFileLockedError(54321, "/tmp/ws");
+    expect(err.message).toContain("kill 54321");
+    // 「cmux セッション終了で daemon も停止する」という代替案内
+    expect(err.message.toLowerCase()).toContain("cmux");
+  });
 });
 
 // --- Step 4: 既存 pidfile (dead) → 上書き成功 ---------------------------

@@ -95,10 +95,11 @@ See `cmux-team --help` for the full list. Common commands:
 **Lifecycle**
 | Command | What it does |
 |---------|-------------|
-| `cmux-team start` | Start daemon + Master + Conductors |
+| `cmux-team start` | Start daemon + Master + Conductors (self-heals if layout got lost) |
 | `cmux-team status` | Show team status |
-| `cmux-team stop` | Graceful shutdown |
 | `cmux-team --version` | Show version |
+
+> Note: `cmux-team stop` was removed in v4.3.0. The daemon auto-stops when the cmux session exits (pidfile release). To terminate manually: `kill <pid>` (see `.team/daemon.pid`).
 
 **Task management**
 | Command | What it does |
@@ -235,7 +236,7 @@ Traces are stored in `.team/traces/traces.db` with request/response bodies in `.
 
 ### Panes too narrow
 
-Too many panes cause cmux commands to fail. Use `cmux-team stop` and set `CMUX_TEAM_MAX_CONDUCTORS=1` to limit concurrency.
+Too many panes cause cmux commands to fail. Exit the cmux session (daemon auto-stops) and restart with `CMUX_TEAM_MAX_CONDUCTORS=1` to limit concurrency.
 
 ### View Conductor session logs
 

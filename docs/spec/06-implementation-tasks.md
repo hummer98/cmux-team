@@ -53,9 +53,10 @@
 - 真のソース直接参照（status.json 廃止）
 - CLI サブコマンド `cmux-team status` として実装
 
-### Task 2.4: stop 機能 — 完了
-- グレースフルシャットダウン
-- CLI サブコマンド `cmux-team stop` として実装
+### Task 2.4: stop 機能 — 廃止（T286, v4.3.0）
+- 従来は CLI サブコマンド `cmux-team stop` として SHUTDOWN メッセージ送信を実装していた
+- cmux セッション終了で daemon が自動停止するため、明示停止コマンドは不要と判断し廃止
+- 手動停止が必要な場合は `kill <pid>`（`.team/daemon.pid` に PID 記録）で対応
 
 ---
 

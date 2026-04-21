@@ -281,8 +281,8 @@ cmux-team status
 # → daemon 状態、Conductor 一覧、タスク数、ログが表示されること
 
 # 5. クリーンアップ
-cmux-team stop
-# → daemon が graceful shutdown すること
+# cmux を終了すると daemon も自動停止する（pidfile が release される）
+# 明示的な停止コマンドは廃止（T286）。残骸 pid が気になる場合は `kill <pid>` で手動停止
 ```
 
 ### 確認ポイント
@@ -432,7 +432,7 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に
 `main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗
 （空文字）時は保守的に locked 扱いとする。pidfile は shutdown / onFullQuit /
-restartRequested / onReload / cmdStop（保険）の全経路で release され、正常系では
+restartRequested / onReload の全経路で release され、正常系では
 必ず削除される。pidfile は daemon main.ts プロセスのみを指し、proxy は別ライフ
 サイクル。
 

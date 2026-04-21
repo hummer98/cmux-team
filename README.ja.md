@@ -95,10 +95,11 @@ Claude: → cmux-team create-task --title "..." --status ready
 **ライフサイクル**
 | コマンド | やること |
 |---------|---------|
-| `cmux-team start` | daemon 起動 + Master + Conductor spawn |
+| `cmux-team start` | daemon 起動 + Master + Conductor spawn（レイアウト消失時は自己修復） |
 | `cmux-team status` | チーム状態表示 |
-| `cmux-team stop` | graceful shutdown |
 | `cmux-team --version` | バージョン表示 |
+
+> 注記: `cmux-team stop` は v4.3.0 で廃止されました。cmux セッション終了時に daemon が自動停止します（pidfile が release される）。手動停止したい場合は `kill <pid>`（PID は `.team/daemon.pid`）。
 
 **タスク管理**
 | コマンド | やること |
@@ -179,7 +180,7 @@ Manager は Claude Code セッションではなく、**TypeScript の決定論�
 cmux-team start                                          # 起動 + Master spawn + ダッシュボード
 cmux-team send TASK_CREATED --task-id 035 --task-file .team/tasks/035-xxx/task.md
 cmux-team status                                         # ステータス表示
-cmux-team stop                                           # graceful shutdown
+# daemon は cmux 終了で自動停止。手動停止は `kill <pid>` で（PID は `.team/daemon.pid`）
 ```
 
 ### タスクの依存関係
@@ -308,7 +309,7 @@ cmux-team trace-task 035
 
 ### ペインが狭くなって動作しない
 
-ペイン数が多すぎると cmux コマンドが失敗します。`cmux-team stop` で全エージェントを終了し、`CMUX_TEAM_MAX_CONDUCTORS=1` で Conductor 数を制限してください。
+ペイン数が多すぎると cmux コマンドが失敗します。cmux セッションを終了（daemon は自動停止）してから `CMUX_TEAM_MAX_CONDUCTORS=1` を設定して再起動してください。
 
 ### Conductor が自分で作業してしまう
 

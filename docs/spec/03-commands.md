@@ -4,7 +4,8 @@
 
 全7コマンド（`/master`, `/team-spec`, `/team-task`, `/team-archive`, `/artifact`, `/docs-sync`, `/trace-task`）。
 
-> **注意:** 初期設計では13コマンドを想定していたが、ワークフロー系コマンド（research, design, impl, review, test）は廃止され、起動・停止・ステータスは CLI サブコマンド（`cmux-team start`, `cmux-team status`, `cmux-team stop`）に移行した。`docs-sync` はその後 dockeeper スキル経由で再追加されている。
+> **注意:** 初期設計では13コマンドを想定していたが、ワークフロー系コマンド（research, design, impl, review, test）は廃止され、起動・ステータスは CLI サブコマンド（`cmux-team start`, `cmux-team status`）に移行した。`docs-sync` はその後 dockeeper スキル経由で再追加されている。
+> `cmux-team stop` は v4.3.0 で廃止（T286）— cmux 終了時に daemon が自動停止する設計に変更。
 
 ---
 

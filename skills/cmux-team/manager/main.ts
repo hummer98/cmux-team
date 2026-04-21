@@ -8,7 +8,6 @@
  *   ./main.ts send SHUTDOWN
  *   ./main.ts status                           # ダッシュボード表示
  *   ./main.ts status --log 20                  # ログ末尾20行
- *   ./main.ts stop                             # graceful shutdown
  *   ./main.ts spawn-conductor
  *   ./main.ts spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
  *   ./main.ts agents                           # 稼働中エージェント一覧
@@ -2174,30 +2173,6 @@ async function cmdLaunchMaster(): Promise<void> {
     });
   } catch (e: any) {
     process.exit(e.status ?? 1);
-  }
-}
-
-async function cmdStop(): Promise<void> {
-  if (hasHelpFlag()) showHelp(t("help_stop"));
-  await postMessage({
-    type: "SHUTDOWN",
-    timestamp: new Date().toISOString(),
-  });
-  console.log("SHUTDOWN sent");
-
-  // T259: 正規経路では daemon 側の shutdown が pidfile を release する。
-  // ここはあくまで保険 — pidfile が残っていて、かつ記録 PID が dead なら即削除する。
-  // sleep ループはしない（cmdStop の体感レスポンスを遅らせないため）。
-  const pidFilePath = join(PROJECT_ROOT, ".team/daemon.pid");
-  if (existsSync(pidFilePath)) {
-    try {
-      const content = (await readFile(pidFilePath, "utf-8")).trim();
-      const pid = parseInt(content, 10);
-      if (!isNaN(pid) && !cmux.isAlive(pid)) {
-        await releasePidFile(pidFilePath);
-        await log("pidfile_cleanup_after_stop", `stale_pid=${pid}`);
-      }
-    } catch { /* 読み取り失敗は無視 */ }
   }
 }
 
@@ -4601,9 +4576,6 @@ switch (command) {
     break;
   case "status":
     await cmdStatus();
-    break;
-  case "stop":
-    await cmdStop();
     break;
   case "spawn-conductor":
     await cmdSpawnConductor();

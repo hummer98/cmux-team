@@ -1475,3 +1475,39 @@ describe("T264: applyResumeTransitions (cmdStart resume)", () => {
     expect(taskState["5"]!.status).toBe("ready");
   });
 });
+
+// --- T286 S4/S5: `cmux-team stop` 廃止 ---
+
+describe("cmdStop 廃止 (T286)", () => {
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  async function runStop(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["run", MAIN_TS, ...args], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      proc.stdin.end();
+    });
+  }
+
+  test("`cmux-team stop` は Unknown command で exit 1", async () => {
+    const r = await runStop(["stop"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("Unknown command: stop");
+  }, 15000);
+
+  test("冪等性: 2 回連続で呼んでも常に Unknown command + exit 1（副作用なし）", async () => {
+    const r1 = await runStop(["stop"]);
+    const r2 = await runStop(["stop"]);
+    expect(r1.code).toBe(1);
+    expect(r2.code).toBe(1);
+    expect(r1.stderr).toContain("Unknown command: stop");
+    expect(r2.stderr).toContain("Unknown command: stop");
+  }, 20000);
+});

@@ -3564,6 +3564,242 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.renameTab.mockRestore();
     }
   }, 15000);
+
+  // T286: 全 discard 自己修復 fallback の 3 バリアント (M17a/M17b/M17c) + 任意 M17d
+  // 発症条件: team.json に conductor entry はあるが、cmux 側で全 entry が
+  //   消失 or idle 残骸しか残っていないケース（KDG-SSO 再現条件）。
+  //   従来は state.conductors が空のまま boot_completed に到達していた。
+  //   fallback 発動時は layout_restore_empty_fallback ログ + 新規 slot 作成パスに倒す。
+  test("M17a: 全 entry が E (surface_missing_no_task) のみ → fallback 発動で新 slot 作成 (KDG-SSO 再現)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => false); // 全 pid 死亡
+    __setTreeImpl(async () => ""); // 全 surface 消失
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:new${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      // team.json に 3 entry (全 idle 残骸、surface 消失相当)
+      await writeTeamJson([
+        { surface: "surface:52", pid: 52001 },
+        { surface: "surface:53", pid: 53001 },
+        { surface: "surface:54", pid: 54001 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // fallback ログが記録されていること (format 厳守)
+      expect(logContent).toContain("layout_restore_empty_fallback");
+      expect(logContent).toMatch(/layout_restore_empty_fallback .*kept=0/);
+      expect(logContent).toMatch(/discarded=3/);
+      expect(logContent).toMatch(/layout=wide/);
+      // E 経路 surface に対して conductor_discarded が出ていること (3 件)
+      const discardMatches = logContent.match(/conductor_discarded/g) ?? [];
+      expect(discardMatches.length).toBe(3);
+      // C 経路 surface は無いので conductor_stale_surface_closed は出ないこと
+      expect(logContent).not.toContain("conductor_stale_surface_closed");
+      // close-surface が呼ばれていないこと (E のみ → 副作用なし)
+      expect(stubs.closeSurface).not.toHaveBeenCalled();
+      // 新 slot 作成パスに倒れて newSplit が 3 回呼ばれていること
+      expect(newSplitSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M17b: 全 entry が C (pid_dead + surface 実在 + 全 idle) のみ → fallback で close-surface 3 + 新 slot", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => false); // 全 pid 死亡
+    // 全 surface 実在
+    __setTreeImpl(async () => "surface:52\nsurface:53\nsurface:54\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:new${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      // team.json に 3 entry (taskId 無し → 全 idle → C 経路)
+      await writeTeamJson([
+        { surface: "surface:52", pid: 52001 },
+        { surface: "surface:53", pid: 53001 },
+        { surface: "surface:54", pid: 54001 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "16x9";
+      state.maxConductors = 2; // 16x9 は 2 conductor
+
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // fallback ログ format
+      expect(logContent).toContain("layout_restore_empty_fallback");
+      expect(logContent).toMatch(/kept=0/);
+      expect(logContent).toMatch(/discarded=3/);
+      expect(logContent).toMatch(/layout=16x9/);
+      // C 経路なので conductor_stale_surface_closed が 3 件
+      const staleMatches = logContent.match(/conductor_stale_surface_closed/g) ?? [];
+      expect(staleMatches.length).toBe(3);
+      // E 経路は無いので conductor_discarded ログは出ないこと
+      // (C 経路の discarded entry は reason=pid_dead_idle_cleanup なのでフィルタ済)
+      expect(logContent).not.toContain("conductor_discarded");
+      // close-surface は sequential に 3 回呼ばれる (Promise.all 禁止 → 呼び出し順序が入力順と一致)
+      expect(stubs.closeSurface).toHaveBeenCalledTimes(3);
+      const closeCalls = stubs.closeSurface.mock.calls.map((c: any[]) => c[0]);
+      expect(closeCalls).toEqual(["surface:52", "surface:53", "surface:54"]);
+      // 新 slot 作成パスに倒れて newSplit が 2 回呼ばれていること (16x9 → 2 conductor)
+      expect(newSplitSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M17c: C + E 混在 → fallback で部分 close-surface + 部分 discard log + 新 slot", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => false); // 全 pid 死亡
+    // surface:52 実在 (C 経路) / surface:53, 54 消失 (E 経路)
+    __setTreeImpl(async () => "surface:52\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:new${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([
+        { surface: "surface:52", pid: 52001 },
+        { surface: "surface:53", pid: 53001 },
+        { surface: "surface:54", pid: 54001 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // fallback 発動
+      expect(logContent).toContain("layout_restore_empty_fallback");
+      expect(logContent).toMatch(/kept=0/);
+      expect(logContent).toMatch(/discarded=3/);
+      expect(logContent).toMatch(/layout=wide/);
+      // C 経路 surface:52 のみ conductor_stale_surface_closed (1 件)
+      const staleMatches = logContent.match(/conductor_stale_surface_closed/g) ?? [];
+      expect(staleMatches.length).toBe(1);
+      expect(logContent).toMatch(/conductor_stale_surface_closed.*\[52\]/);
+      // E 経路 surface:53, :54 のみ conductor_discarded (2 件)
+      const discardMatches = logContent.match(/conductor_discarded/g) ?? [];
+      expect(discardMatches.length).toBe(2);
+      expect(logContent).toMatch(/conductor_discarded.*\[53\].*surface_missing_no_task/);
+      expect(logContent).toMatch(/conductor_discarded.*\[54\].*surface_missing_no_task/);
+      // close-surface は C 経路 surface のみ (1 回)
+      expect(stubs.closeSurface).toHaveBeenCalledTimes(1);
+      const firstCloseCall = stubs.closeSurface.mock.calls[0];
+      expect(firstCloseCall?.[0]).toBe("surface:52");
+      // 新 slot 作成パスに倒れて newSplit が 3 回呼ばれていること (wide → 3 conductor)
+      expect(newSplitSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
+
+  test("M17d: 全 E + resumePlan 2 件 (unmatched) → fallback で新 slot に resume 分配 (resumePlan 透過)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => false);
+    __setTreeImpl(async () => ""); // 全 surface 消失
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:new${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      // team.json に 3 entry (taskId 無し → 全 E)
+      await writeTeamJson([
+        { surface: "surface:52", pid: 52001 },
+        { surface: "surface:53", pid: 53001 },
+        { surface: "surface:54", pid: 54001 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      // resumePlan は team.json と無関係な taskId を持つ → plan.unmatchedResumes に入る
+      const resumePlan = [
+        { taskId: "201", taskRunId: "tr-201", worktreePath: testDir, sessionId: "sess-201" },
+        { taskId: "202", taskRunId: "tr-202", worktreePath: testDir, sessionId: "sess-202" },
+      ];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // fallback 発動
+      expect(logContent).toContain("layout_restore_empty_fallback");
+      // resumePlan が initializeConductorSlots 経路に透過されて 2 件 assignment が返る
+      expect(assignments).toHaveLength(2);
+      expect(assignments.map(a => a.taskId).sort()).toEqual(["201", "202"]);
+      // 3 pane 作成 (先頭 2 resume, 末尾 1 非 resume)
+      expect(newSplitSpy).toHaveBeenCalledTimes(3);
+      // resume pre-population で state.conductors に 2 件登録されている
+      expect(state.conductors.size).toBe(2);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+    }
+  }, 15000);
 });
 
 describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {

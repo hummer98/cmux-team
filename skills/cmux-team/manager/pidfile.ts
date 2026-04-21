@@ -30,7 +30,7 @@ export class PidFileLockedError extends Error {
   ) {
     super(
       `Error: daemon already running (pid=${existingPid}) at workspace=${workspace}. ` +
-      `Run 'cmux-team stop' or kill ${existingPid} first.`
+      `kill ${existingPid} first, or close the cmux session (daemon auto-stops on cmux exit).`
     );
     this.name = "PidFileLockedError";
   }

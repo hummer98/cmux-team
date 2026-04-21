@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+- **`cmux-team stop` サブコマンドを廃止（T286、破壊的変更）**。`skills/cmux-team/manager/main.ts` から `cmdStop` 関数（L2160-2182）と switch ルーティングの `case "stop"` を削除し、`./main.ts stop ...` の JSDoc 行も除去した。`skills/cmux-team/manager/i18n.ts` から `help_stop`（en/ja）と `help_main` の `cmux-team stop` 行も削除。cmux セッション終了で daemon が pidfile を自動 release する設計（T259）が既に整っており、明示停止コマンドは不要と判断。`cmux-team stop` を実行すると `Unknown command: stop` で exit 1 する。手動停止は `kill <pid>`（PID は `.team/daemon.pid`）、または cmux セッション自体を終了させる。あわせて `skills/cmux-team/manager/pidfile.ts` の `PidFileLockedError` メッセージから `Run 'cmux-team stop' or` の案内を除去し、`kill <pid> first, or close the cmux session (daemon auto-stops on cmux exit).` に差し替えた。README / README.ja / CLAUDE.md / docs/spec / SKILL.md / cmux-team-guide のドキュメントも同方針に更新
+
+### Fixed
+
+- **`cmux-team start` が team.json に Conductor entry が残っているが実 surface が全て消失した状態から回復できない問題を修正（T286）**。`initializeLayout` / `applyRestorePlan` の discard-only 分岐で、従来は `planLayoutRestore` が「全 discarded」を返したケースで Conductor スロットを再構築せずに戻っており、KDG-SSO 事例のような「cmux セッションを再起動したが team.json の古い entry が残る」状況で Conductor ペインが一切作られないまま daemon だけが立ち上がる現象が起きていた。具体的には: (1) C/E の副作用処理を `applyDiscardOnly` ヘルパーに抽出し `Promise.all` 禁止・sequential 実行を JSDoc で契約化、(2) `planLayoutRestore` 結果が `plan.alive=0 + plan.resumeExisting=0 + plan.resumeNewSurface=0` の場合は `layout_restore_empty_fallback kept=0 discarded=<N> layout=<mode>` をログした上で `applyDiscardOnly` → `initializeConductorSlots` で Conductor を新規構築するフォールバックを追加、(3) `layout_mismatch_on_resume` ログから「`cmux-team stop` then `start --layout=...`」案内を削除し純観測ログ化。M17a（全 E）/ M17b（全 C idle）/ M17c（C+E 混在）/ M17d（resumePlan unmatched）の 4 バリアントと `cmdStop 廃止` テスト（Unknown command + 冪等性）を追加し、`bun test` 0 失敗・`bunx tsc --noEmit` 新規エラー 0 を確認
+
 ## [4.2.0] - 2026-04-21
 
 ### Changed (Breaking)

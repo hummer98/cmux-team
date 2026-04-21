@@ -50,8 +50,7 @@ cmux-team start
 # → daemon 起動 + Master spawn + 3 Conductor 配置
 # → 固定2x2レイアウトが構築される
 
-# 停止
-cmux-team stop
+# 停止は不要（cmux 終了で daemon も自動停止。手動停止は `kill <pid>` で）
 ```
 
 **レイアウト（固定2x2）:**
@@ -103,9 +102,8 @@ cmux-team delete-task --task-id 42 --journal "理由"
 
 | コマンド | 説明 |
 |---------|------|
-| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築 |
+| `cmux-team start` | daemon 起動 + Master spawn + レイアウト構築（レイアウト消失時は自己修復。T286） |
 | `cmux-team status` | ステータス表示 |
-| `cmux-team stop` | graceful shutdown |
 | `cmux-team create-task` | タスク作成（`--title`, `--status`, `--body`, `--priority`, `--depends-on`, `--base-branch`, `--run-after-all`） |
 | `cmux-team update-task` | タスク更新（`--task-id`, `--status`, `--title`, `--body`, `--depends-on`） |
 | `cmux-team close-task` | タスククローズ（`--task-id`, `--journal`, `--force`） |

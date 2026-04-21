@@ -180,19 +180,6 @@ Examples:
   cmux-team status --log 20
 `,
 
-  help_stop: `
-cmux-team stop -- gracefully shut down daemon
-
-Usage:
-  cmux-team stop
-
-Options:
-  (none)
-
-Notes:
-  - Sends a SHUTDOWN message to the queue; daemon receives it and stops
-`,
-
   help_spawn_conductor: `
 cmux-team spawn-conductor -- launch and register a Conductor on the current surface
 
@@ -672,7 +659,6 @@ Usage:
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
   cmux-team status                             show status
-  cmux-team stop                               graceful shutdown
   cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             list running agents
@@ -917,19 +903,6 @@ Options:
 Examples:
   cmux-team status
   cmux-team status --log 20
-`,
-
-  help_stop: `
-cmux-team stop -- daemon を graceful shutdown する
-
-Usage:
-  cmux-team stop
-
-Options:
-  なし
-
-Notes:
-  - SHUTDOWN メッセージをキューに送信し、daemon が受信して停止します
 `,
 
   help_spawn_conductor: `
@@ -1413,7 +1386,6 @@ Usage:
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
-  cmux-team stop                               graceful shutdown
   cmux-team spawn-conductor
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
   cmux-team agents                             稼働中エージェント一覧
