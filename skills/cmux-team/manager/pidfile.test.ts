@@ -5,9 +5,8 @@
  * - 実 PID（process.pid）の alive 判定は OS 依存のため、isAliveImpl / psCommandImpl を DI して決定論化する
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "fs/promises";
+import { writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import {
   acquirePidFile,
@@ -16,17 +15,25 @@ import {
   isAlive,
   looksLikeCmuxTeamProcess,
 } from "./pidfile";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 let pidFilePath: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-pidfile-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-pidfile-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+    createTeamDir: false,
+  });
+  testDir = project.root;
   pidFilePath = join(testDir, "daemon.pid");
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 // --- Step 1: isAlive / looksLikeCmuxTeamProcess 単体 -------------------

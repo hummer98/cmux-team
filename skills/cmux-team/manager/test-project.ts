@@ -42,6 +42,8 @@ export interface DummyProjectOptions {
   setProjectRootEnv?: boolean;
   /** default false: 空 team.json を配置 */
   seedTeamJson?: boolean;
+  /** default true: `.team/` 自体を事前 mkdir する。false の場合は root だけが空の tmp dir */
+  createTeamDir?: boolean;
 }
 
 export interface DummyProject {
@@ -61,18 +63,21 @@ export async function createDummyProject(
   const prefix = opts.prefix ?? "cmux-team-test-";
   const subdirs = opts.subdirs ?? DEFAULT_SUBDIRS;
   const setEnv = opts.setProjectRootEnv ?? true;
+  const createTeamDir = opts.createTeamDir ?? true;
 
   const root = await mkdtemp(join(tmpdir(), prefix));
   const teamDir = join(root, ".team");
-  await mkdir(teamDir, { recursive: true });
-  for (const sub of subdirs) {
-    await mkdir(join(teamDir, sub), { recursive: true });
-  }
-  if (opts.seedTeamJson) {
-    await writeFile(
-      join(teamDir, "team.json"),
-      '{"phase":"init","masters":[],"conductors":[]}',
-    );
+  if (createTeamDir) {
+    await mkdir(teamDir, { recursive: true });
+    for (const sub of subdirs) {
+      await mkdir(join(teamDir, sub), { recursive: true });
+    }
+    if (opts.seedTeamJson) {
+      await writeFile(
+        join(teamDir, "team.json"),
+        '{"phase":"init","masters":[],"conductors":[]}',
+      );
+    }
   }
 
   const savedEnv = process.env.PROJECT_ROOT;

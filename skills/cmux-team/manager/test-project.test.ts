@@ -131,6 +131,19 @@ describe("createDummyProject", () => {
     }
   });
 
+  test("createTeamDir: false なら `.team/` を作らず空 tmp dir だけ返す", async () => {
+    const project = await createDummyProject({
+      createTeamDir: false,
+      setProjectRootEnv: false,
+    });
+    try {
+      expect(await pathExists(project.root)).toBe(true);
+      expect(await pathExists(project.teamDir)).toBe(false);
+    } finally {
+      await project.dispose();
+    }
+  });
+
   test("ensureSubdir で追加の subdir を遅延生成できる", async () => {
     const project = await createDummyProject({ subdirs: [] });
     try {
