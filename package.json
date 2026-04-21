@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "node bin/cmux-team.js start",
     "postinstall": "node bin/postinstall.js",
-    "prepublishOnly": "cd skills/cmux-team/manager && bun test"
+    "prepublishOnly": "cd skills/cmux-team/manager && bun test",
+    "test:clean": "bash scripts/verify-test-no-pollution.sh"
   },
   "files": [
     "bin/",
