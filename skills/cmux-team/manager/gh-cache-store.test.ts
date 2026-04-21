@@ -1,7 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 import {
   openGhCacheDB,
   upsertIssue,
@@ -29,14 +27,20 @@ const REPO: RepoInfo = {
 };
 const TOKEN_HASH = "a".repeat(32);
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "gh-cache-store-test-"));
+  project = await createDummyProject({
+    prefix: "gh-cache-store-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 function makeIssue(overrides: Partial<IssueRow> = {}): IssueRow {
