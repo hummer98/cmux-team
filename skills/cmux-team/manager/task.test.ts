@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdir, writeFile, readFile } from "fs/promises";
 import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 import {
   parseTaskMeta,
   filterExecutableTasks,
@@ -468,16 +468,19 @@ describe("resume classify/journal (T264)", () => {
 });
 
 describe("markTaskAborted (T290)", () => {
+  let project: DummyProject;
   let tmpRoot: string;
 
   beforeEach(async () => {
-    tmpRoot = await mkdtemp(join(tmpdir(), "cmux-team-T290-"));
-    await mkdir(join(tmpRoot, ".team"), { recursive: true });
-    await mkdir(join(tmpRoot, ".team/tasks"), { recursive: true });
+    project = await createDummyProject({
+      prefix: "cmux-team-T290-",
+      subdirs: ["tasks", "logs"],
+    });
+    tmpRoot = project.root;
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await project.dispose();
   });
 
   const setupTask = async (id: string, body: string = "body") => {
