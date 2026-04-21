@@ -1,18 +1,20 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, readFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile } from "fs/promises";
 import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 let savedTrace: string | undefined;
-let savedProjectRoot: string | undefined;
+let project: DummyProject;
 let tmpRoot: string;
 
 beforeAll(async () => {
   savedTrace = process.env.CMUX_TEAM_TRACE_EVENTS;
-  savedProjectRoot = process.env.PROJECT_ROOT;
-  tmpRoot = await mkdtemp(join(tmpdir(), "cmux-eventbus-trace-"));
+  project = await createDummyProject({
+    prefix: "cmux-eventbus-trace-",
+    subdirs: ["logs"],
+  });
+  tmpRoot = project.root;
   process.env.CMUX_TEAM_TRACE_EVENTS = "1";
-  process.env.PROJECT_ROOT = tmpRoot;
 });
 
 afterAll(async () => {
@@ -21,12 +23,7 @@ afterAll(async () => {
   } else {
     delete process.env.CMUX_TEAM_TRACE_EVENTS;
   }
-  if (savedProjectRoot !== undefined) {
-    process.env.PROJECT_ROOT = savedProjectRoot;
-  } else {
-    delete process.env.PROJECT_ROOT;
-  }
-  await rm(tmpRoot, { recursive: true, force: true });
+  await project.dispose();
 });
 
 describe("eventBus TRACE", () => {
