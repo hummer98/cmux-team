@@ -1,21 +1,28 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { writeFile } from "fs/promises";
 import { join } from "path";
 import {
   checkDirenvAllowed,
   formatDirenvNotAllowedMessage,
   type CheckDirenvOptions,
 } from "./direnv-check";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-direnv-check-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-direnv-check-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+    createTeamDir: false,
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 const whichDirenv = (bin: string) => (bin === "direnv" ? "/opt/homebrew/bin/direnv" : null);
