@@ -168,7 +168,35 @@ cmux-team create-task --title "..." --depends-on "189,190" --status ready
 - 独立に並列実行できるタスク（そのまま ready で複数投入し、Manager に並列割り当てさせる）
 - 実行中タスクへの追加指示（§タスクへの補足・追加指示 の手順を使う）
 
-**Master は blocking で待つ必要なし** — `await-task` は不要。依存の解決は Manager の責務。
+### `await-task` の使い分け
+
+`depends-on` による自動チェーンの発火待ちは Manager の責務なので `await-task` は不要。
+一方、**Master 自身のターンを次の判断点まで持ち越したい**ときは、
+`Bash(run_in_background=true)` で `cmux-team await-task --task-id N` を起動してよい。
+完了時に task-notification が届き、次ターンが自動起動する。
+
+使ってよい場面（例示。同等の意図なら他のケースも可）:
+
+- ユーザーから「終わったら報告して」「完了を見届けて」と明示されたとき
+- 結果の summary.md を読んでから **後続タスクの設計** を決めたいとき
+- 複数タスクの **収束点** で全体状況を再評価したいとき
+- チェーンを組めない（動的に次を決める）一連の作業を見届けたいとき
+
+起動例:
+
+```bash
+# 単一タスク（Bash tool の run_in_background=true で呼ぶ）
+cmux-team await-task --task-id 108
+
+# 複数タスクの収束待ち
+cmux-team await-task --task-id 108,109 --timeout 7200
+```
+
+終了コード: 0=全 closed / 1=いずれか aborted / 2=timeout。
+stdout に summary.md の内容、stderr に abort 理由 or 残タスクが出る。
+
+**使うべきでない場面:** `depends-on` で済む自動チェーン、ユーザーが即応答を待っている対話の途中、
+排他タスク（`--exclusive`）の drain 待ち（Manager が解決する）。
 
 ## 排他タスクの提案
 

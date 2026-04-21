@@ -166,7 +166,36 @@ cmux-team create-task --title "..." --depends-on "189,190" --status ready
 - Independent tasks that can run in parallel (just submit both as ready and let Manager assign in parallel)
 - Adding instructions to an in-progress task (use the procedure in §Supplementing / Adding Instructions to a Task)
 
-**Master does not block and wait** — `await-task` is not needed. Dependency resolution is Manager's responsibility.
+### When to use `await-task`
+
+Dependency chains via `depends-on` are resolved by Manager — `await-task` is not needed there.
+However, **when Master wants to carry its own turn over to the next decision point**,
+you may launch `cmux-team await-task --task-id N` via `Bash(run_in_background=true)`.
+A task-notification fires on completion and automatically starts the next turn.
+
+Cases where this is appropriate (examples; analogous intents also qualify):
+
+- User explicitly asked "report when done" / "see it through to completion"
+- You want to read the resulting summary.md before **designing a follow-up task**
+- You want to re-evaluate the overall situation at a **convergence point** across tasks
+- You want to watch a series of dynamically-decided work that cannot be chained up front
+
+Launch examples:
+
+```bash
+# Single task (invoke via Bash tool with run_in_background=true)
+cmux-team await-task --task-id 108
+
+# Wait for multiple tasks to converge
+cmux-team await-task --task-id 108,109 --timeout 7200
+```
+
+Exit codes: 0=all closed / 1=any aborted / 2=timeout.
+stdout carries summary.md contents, stderr carries abort reasons or remaining tasks.
+
+**Do NOT use it for:** automatic chains that `depends-on` can handle, mid-dialog where
+the user is waiting for an immediate reply, drain waits for `--exclusive` tasks
+(Manager resolves those).
 
 ## Proposing Exclusive Tasks
 
