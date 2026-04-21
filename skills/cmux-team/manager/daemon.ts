@@ -2252,26 +2252,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // forceCloseDisconnectedConductor と同パターン
         const taskId = conductor.taskId;
         if (taskId) {
+          // T290: markTaskAborted に集約（load/冪等ガード/journal/cascade/emit を内部化）
           try {
-            const ts = await loadTaskState(state.projectRoot);
-            const current = ts[taskId];
-            if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
-              const journal = `user_clear: ${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
-              ts[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
-              // T241: depends_on 親 abort → ready 子を draft に戻す
-              const { tasks } = await loadTasks(state.projectRoot);
-              const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
-              await saveTaskState(state.projectRoot, ts);
-              await log("task_aborted", `task_id=${taskId} reason=user_clear`);
-              for (const childId of revertedChildren) {
-                await log(
-                  "child_reverted_to_draft",
-                  `parent=${taskId} child=${childId} reason=parent_aborted`
-                );
-              }
-              if (revertedChildren.length > 0) {
-                notifyStateChanged("daemon.ts:handleMessage:session-clear-cascade");
-              }
+            const detail = `${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
+            const { revertedChildren } = await markTaskAborted(
+              state.projectRoot,
+              taskId,
+              "user_clear",
+              detail,
+            );
+            if (revertedChildren.length > 0) {
+              notifyStateChanged("daemon.ts:handleMessage:session-clear-cascade");
             }
           } catch (e: any) {
             await log("error", `SESSION_CLEAR task-state update failed: task_id=${taskId} ${e.message}`);
