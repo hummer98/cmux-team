@@ -1,7 +1,4 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
 import {
   openGhCacheDB,
   upsertIssue,
@@ -11,6 +8,7 @@ import {
   linkIssueAssignee,
   setSyncMeta,
 } from "./gh-cache-store";
+import { createDummyProject, type DummyProject } from "./test-project";
 import {
   cmdIssueList,
   cmdIssueShow,
@@ -23,6 +21,7 @@ import type { IssueRow, RepoInfo, AuthResolution } from "./gh-cache-types";
 const REPO: RepoInfo = { host: "api.github.com", owner: "acme", repo: "widget" };
 const TOKEN_HASH = "a".repeat(32);
 
+let project: DummyProject;
 let testDir: string;
 let db: ReturnType<typeof openGhCacheDB>;
 let printed: string[];
@@ -68,14 +67,19 @@ function makeDeps(args: string[]): CliDeps {
 }
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "gh-cli-test-"));
+  project = await createDummyProject({
+    prefix: "gh-cli-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  testDir = project.root;
   db = openGhCacheDB(testDir, REPO, TOKEN_HASH);
   printed = [];
 });
 
 afterEach(async () => {
   db.close();
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 describe("cmdIssueList", () => {
