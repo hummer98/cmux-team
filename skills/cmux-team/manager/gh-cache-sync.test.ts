@@ -1,8 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
 import { openGhCacheDB, getSyncMeta, getIssue } from "./gh-cache-store";
+import { createDummyProject, type DummyProject } from "./test-project";
 import {
   ghFetch,
   parseNextLink,
@@ -26,17 +24,23 @@ const AUTH: AuthResolution = {
 };
 const TOKEN_HASH = "a".repeat(32);
 
+let project: DummyProject;
 let testDir: string;
 let db: ReturnType<typeof openGhCacheDB>;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "gh-cache-sync-test-"));
+  project = await createDummyProject({
+    prefix: "gh-cache-sync-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  testDir = project.root;
   db = openGhCacheDB(testDir, REPO, TOKEN_HASH);
 });
 
 afterEach(async () => {
   db.close();
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 function makeResponse(body: unknown, init: ResponseInit & { headers?: Record<string, string> } = {}): Response {
