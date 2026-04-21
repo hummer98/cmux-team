@@ -93,6 +93,25 @@ describe("releasePidFile", () => {
   });
 });
 
+// --- Step 2.5: parent dir 不在から作成 (T287) --------------------------
+
+describe("acquirePidFile - missing parent directory", () => {
+  test(".team/ が未作成でも pidfile を作成できる（T287）", async () => {
+    const nestedPath = join(testDir, ".team/daemon.pid");
+    expect(existsSync(join(testDir, ".team"))).toBe(false);
+    await acquirePidFile(nestedPath, testDir, { selfPid: 12345 });
+    expect(existsSync(nestedPath)).toBe(true);
+    const content = await readFile(nestedPath, "utf-8");
+    expect(content).toBe("12345");
+  });
+
+  test("parent dir がすでに存在する場合は no-op（既存 pidfile テストが regression しない）", async () => {
+    await acquirePidFile(pidFilePath, testDir, { selfPid: 12345 });
+    const content = await readFile(pidFilePath, "utf-8");
+    expect(content).toBe("12345");
+  });
+});
+
 // --- Step 3: 既存 pidfile (生存中 & cmux-team らしい) → fail-stop --------
 
 describe("acquirePidFile - existing alive cmux-team process", () => {

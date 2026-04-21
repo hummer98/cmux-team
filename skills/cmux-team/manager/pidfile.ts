@@ -13,7 +13,8 @@
  *   - ps 取得失敗（空文字）時は保守的に "alive cmux-team" 扱いとし fail-stop
  *     （誤って稼働中の daemon を潰さないため）
  */
-import { writeFile, unlink, readFile } from "fs/promises";
+import { writeFile, unlink, readFile, mkdir } from "fs/promises";
+import { dirname } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { isAlive as realIsAlive } from "./cmux";
@@ -87,6 +88,12 @@ export async function acquirePidFile(
   const selfPid = opts?.selfPid ?? process.pid;
   const psImpl = opts?.psCommandImpl ?? psCommand;
   const aliveImpl = opts?.isAliveImpl ?? realIsAlive;
+
+  // T287: pidfile の格納先（通常は <workspace>/.team/）が存在しない場合に備えて
+  // 先に recursive mkdir する。新規フォルダ（git init 直後で .team/ 未作成）で
+  // cmux-team start を実行すると、daemon.ts:initInfra より前に pidfile 取得が
+  // 走るため ENOENT になる問題（T287）への対処。recursive:true なので既存時は no-op。
+  await mkdir(dirname(path), { recursive: true });
 
   let attempt = 0;
   let lastLockedPid: number | null = null;
