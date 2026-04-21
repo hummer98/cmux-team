@@ -5,15 +5,22 @@
  * 実プロセスとして呼び出す。呼び出し回数は外部 state file (`count`) で管理する。
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, chmod, mkdir } from "fs/promises";
-import { tmpdir } from "os";
+import { writeFile, chmod, mkdir } from "fs/promises";
 import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 let origPath: string | undefined;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-validate-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-validate-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+    createTeamDir: false,
+  });
+  testDir = project.root;
   const binDir = join(testDir, "bin");
   await mkdir(binDir, { recursive: true });
   await writeFile(join(testDir, "count"), "0");
@@ -23,7 +30,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env.PATH = origPath ?? "";
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 async function writeFakeCmux(script: string): Promise<void> {
