@@ -1,36 +1,33 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir, readFile } from "fs/promises";
+import { writeFile, mkdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import { ensureEnvrcHookPrompt, appendExportLine, type Answer } from "./envrc-prompt";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 let savedNoPrompt: string | undefined;
-let savedProjectRoot: string | undefined;
 let savedHooksDisabled: string | undefined;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-envrc-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-envrc-test-",
+    subdirs: ["logs"],
+  });
+  testDir = project.root;
   savedNoPrompt = process.env.CMUX_TEAM_NO_PROMPT;
   delete process.env.CMUX_TEAM_NO_PROMPT;
-  savedProjectRoot = process.env.PROJECT_ROOT;
-  process.env.PROJECT_ROOT = testDir;
   savedHooksDisabled = process.env.CMUX_CLAUDE_HOOKS_DISABLED;
   delete process.env.CMUX_CLAUDE_HOOKS_DISABLED;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
   if (savedNoPrompt !== undefined) {
     process.env.CMUX_TEAM_NO_PROMPT = savedNoPrompt;
   } else {
     delete process.env.CMUX_TEAM_NO_PROMPT;
-  }
-  if (savedProjectRoot !== undefined) {
-    process.env.PROJECT_ROOT = savedProjectRoot;
-  } else {
-    delete process.env.PROJECT_ROOT;
   }
   if (savedHooksDisabled !== undefined) {
     process.env.CMUX_CLAUDE_HOOKS_DISABLED = savedHooksDisabled;
