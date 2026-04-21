@@ -121,9 +121,15 @@ function findLatestMainTs(): string {
   return process.argv[1] || import.meta.path;
 }
 
+// T292: `main.ts` を CLI として起動された時のみ chdir する。
+// テストコードから library として import された場合は副作用を発生させない
+// （import 時に `PROJECT_ROOT` env が別テストの tmp dir を指している瞬間に
+//   chdir してしまい、その tmp dir が削除されると以降の cwd が無効になる事故を防ぐ）。
 const PROJECT_ROOT = findProjectRoot();
 process.env.PROJECT_ROOT = PROJECT_ROOT;
-process.chdir(PROJECT_ROOT);
+if (import.meta.main) {
+  process.chdir(PROJECT_ROOT);
+}
 
 const execFileAsync = promisify(execFile);
 
