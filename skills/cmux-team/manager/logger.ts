@@ -64,7 +64,17 @@ export function formatPair(
 }
 
 export async function log(event: string, detail: string = ""): Promise<void> {
-  const projectRoot = process.env.PROJECT_ROOT || process.cwd();
+  // T292: CMUX_TEAM_LOGGER_STRICT=1 では PROJECT_ROOT 未設定を fail-fast させる。
+  // テスト実行中に helper で PROJECT_ROOT を必ず設定するための安全装置。
+  // 通常の daemon 実行では env を set しないので process.cwd() フォールバックが使われる。
+  const envRoot = process.env.PROJECT_ROOT;
+  if (!envRoot && process.env.CMUX_TEAM_LOGGER_STRICT === "1") {
+    throw new Error(
+      "logger: PROJECT_ROOT is not set but CMUX_TEAM_LOGGER_STRICT=1. " +
+        "Wrap tests with createDummyProject() from test-project.ts, or pass setProjectRootEnv: true.",
+    );
+  }
+  const projectRoot = envRoot || process.cwd();
   const logDir = join(projectRoot, ".team/logs");
   const logFile = join(logDir, "manager.log");
   await mkdir(logDir, { recursive: true });
