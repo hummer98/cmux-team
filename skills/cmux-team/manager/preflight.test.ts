@@ -1,26 +1,33 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, chmod, stat } from "fs/promises";
+import { chmod } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import { runPreflight, printPreflightIssues, checkJq } from "./preflight";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 const execFile = promisify(execFileCb);
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-preflight-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-preflight-test-",
+    subdirs: [],
+    setProjectRootEnv: false,
+    createTeamDir: false,
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  // パーミッションを戻してから rm
+  // パーミッションを戻してから dispose
   try {
     await chmod(testDir, 0o755);
   } catch {}
-  await rm(testDir, { recursive: true, force: true });
+  await project.dispose();
 });
 
 async function gitInit(dir: string): Promise<void> {
