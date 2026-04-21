@@ -475,12 +475,14 @@ export async function markTaskAborted(
   const taskState = await loadTaskState(projectRoot);
   const current = taskState[taskId];
 
+  // T290 D1: journal on-disk 形式 = `reason=<snake_case>; <detail>`（detail 空時は末尾 `;`）
+  const journal = detail ? `reason=${reason}; ${detail}` : `reason=${reason};`;
+
   if (
     current?.status === "closed" ||
     current?.status === "aborted" ||
     current?.status === "deleted"
   ) {
-    const journal = detail ? `reason=${reason}; ${detail}` : `reason=${reason};`;
     return {
       revertedChildren: [],
       journal,
@@ -488,8 +490,6 @@ export async function markTaskAborted(
       existingStatus: current.status,
     };
   }
-
-  const journal = detail ? `reason=${reason}; ${detail}` : `reason=${reason};`;
 
   taskState[taskId] = {
     ...current,
