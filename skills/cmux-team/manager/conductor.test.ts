@@ -6,26 +6,26 @@
  * conductor kind のケースはコードレビューで確認する方針。
  */
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { writeFile } from "fs/promises";
 import { join } from "path";
 import { assignTask, AssignTaskError, createConductorPanes, resetConductor } from "./conductor";
 import type { ConductorState } from "./schema";
 import * as cmux from "./cmux";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-conductor-test-"));
-  // .team/tasks は assignTask が readdir するので作っておく
-  await mkdir(join(testDir, ".team/tasks"), { recursive: true });
-  await mkdir(join(testDir, ".team/logs"), { recursive: true });
-  process.env.PROJECT_ROOT = testDir;
+  project = await createDummyProject({
+    prefix: "cmux-conductor-test-",
+    subdirs: ["logs", "tasks"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  delete process.env.PROJECT_ROOT;
+  await project.dispose();
 });
 
 function fakeConductor(): ConductorState {
