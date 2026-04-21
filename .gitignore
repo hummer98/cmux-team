@@ -12,9 +12,10 @@
 .team/logs/
 .team/queue/
 .team/e2e-results/
+.team/daemon.pid
 .team/gh-cache.db
-.team/gh-cache.db-wal
 .team/gh-cache.db-shm
+.team/gh-cache.db-wal
 .worktrees/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
