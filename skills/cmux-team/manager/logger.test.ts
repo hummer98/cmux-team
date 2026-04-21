@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, readFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile } from "fs/promises";
 import { join } from "path";
 import { log, formatSurface, formatPair } from "./logger";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 const SENTINEL = `regression_sentinel_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 const cwdLogFile = join(process.cwd(), ".team/logs/manager.log");
@@ -28,14 +28,29 @@ afterAll(async () => {
   expect(after).toBe(baselineSentinelCount);
 });
 
+// 遅延評価テストは test 本体で process.env.PROJECT_ROOT を都度切り替える必要があるため、
+// helper には setProjectRootEnv: false を指定し env mutation を委譲しない。
+// 代わりに savedProjectRoot を手動で save/restore する（テスト本体の挙動は従来通り）。
+let projectA: DummyProject;
+let projectB: DummyProject;
 let tmpdirA: string;
 let tmpdirB: string;
 let savedProjectRoot: string | undefined;
 
 beforeEach(async () => {
   savedProjectRoot = process.env.PROJECT_ROOT;
-  tmpdirA = await mkdtemp(join(tmpdir(), "cmux-logger-test-a-"));
-  tmpdirB = await mkdtemp(join(tmpdir(), "cmux-logger-test-b-"));
+  projectA = await createDummyProject({
+    prefix: "cmux-logger-test-a-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  projectB = await createDummyProject({
+    prefix: "cmux-logger-test-b-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  tmpdirA = projectA.root;
+  tmpdirB = projectB.root;
 });
 
 afterEach(async () => {
@@ -44,8 +59,8 @@ afterEach(async () => {
   } else {
     delete process.env.PROJECT_ROOT;
   }
-  await rm(tmpdirA, { recursive: true, force: true });
-  await rm(tmpdirB, { recursive: true, force: true });
+  await projectA.dispose();
+  await projectB.dispose();
 });
 
 describe("formatSurface", () => {
