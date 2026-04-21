@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { spawn } from "child_process";
 import {
@@ -20,15 +19,21 @@ import type { TaskMeta, TaskState } from "./task";
 import { resolveLayout, resolveAutoUpdateMode } from "./config";
 import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-main-test-"));
+  project = await createDummyProject({
+    prefix: "cmux-main-test-",
+    subdirs: [],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  try { await rm(testDir, { recursive: true, force: true }); } catch {}
+  await project.dispose();
 });
 
 // --- §4.1 generateConductorSettings の PreToolUse hook 構成テスト ---
