@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-04-22
+
 ### Changed (Breaking)
 
 - **`cmux-team stop` サブコマンドを廃止（T286、破壊的変更）**。`skills/cmux-team/manager/main.ts` から `cmdStop` 関数（L2160-2182）と switch ルーティングの `case "stop"` を削除し、`./main.ts stop ...` の JSDoc 行も除去した。`skills/cmux-team/manager/i18n.ts` から `help_stop`（en/ja）と `help_main` の `cmux-team stop` 行も削除。cmux セッション終了で daemon が pidfile を自動 release する設計（T259）が既に整っており、明示停止コマンドは不要と判断。`cmux-team stop` を実行すると `Unknown command: stop` で exit 1 する。手動停止は `kill <pid>`（PID は `.team/daemon.pid`）、または cmux セッション自体を終了させる。あわせて `skills/cmux-team/manager/pidfile.ts` の `PidFileLockedError` メッセージから `Run 'cmux-team stop' or` の案内を除去し、`kill <pid> first, or close the cmux session (daemon auto-stops on cmux exit).` に差し替えた。README / README.ja / CLAUDE.md / docs/spec / SKILL.md / cmux-team-guide のドキュメントも同方針に更新
