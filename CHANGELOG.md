@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-04-21
+
 ### Changed (Breaking)
 
 - **Conductor Step 8 が rebase conflict を semantic に自動解決するようになった（T284、破壊的変更）**。`skills/cmux-team/templates/{ja,en}/conductor-role.md` Step 8 を「conflict → 即 abort」から「conflict → conflict 情報収集 → 衝突元タスク仕様読み込み → LLM resolution → `bun test` + `bunx tsc --noEmit` 検証 → conflict-resolution.md 書き出し → Step 9 へ進む」のフローに置き換える。編集スコープは conflict marker 出現ファイルに限定（Conductor が直接 Edit / Write を使える唯一の例外）、iteration 上限 5 回、検証には scope_violation の構造的検知（`PRE_REBASE..HEAD` の CHANGED が `ALL_CONFLICT_FILES ∪ PRE_REBASE..ORIG_HEAD` の ALLOWED を超えないか）も含む。LLM が解けない齟齬（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）時は従来通り `CONDUCTOR_DONE --success false --reason "Step 8 semantic resolution unresolvable: <failure_mode>"` で escalation し、`rebase-merge` / `rebase-apply` ディレクトリの有無で分岐した rollback（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）を行って worktree / branch を温存する。あわせて `skills/cmux-team/manager/conductor.ts` で worktree 作成直後に `git config rerere.enabled true`（`--worktree` 優先・失敗時 `--local` にフォールバック、いずれも best-effort、`rerere_enabled` / `rerere_enable_failed` ログ）を実行し、過去の resolution の再利用を可能にする。監査証跡 `conflict-resolution.md` は `runs/<taskRunId>/` 配下に生成される（フォーマットは `docs/spec/04-templates.md` 参照）。**Rollout 時の注意:** 旧プロンプトを抱えた Conductor が Claude Code のセッション resume で復帰すると古い指示を実行し得るため、リリース後は `cmux-team restart` または各 Conductor ペインで `/clear` を実行して新プロンプトを読み込ませること
@@ -11,6 +13,12 @@
 ### Added
 
 - **Master に git 読み取り / ローカル同期を許可（T283）**。`templates/{ja,en}/master.md` の「やらないこと（基本方針）」から git 読み取り・`fetch origin` / `pull --ff-only origin <mainBranch>` を除外し、「やること（追加）」に明示した。特に PR が server で `gh pr merge` された後は Master が `git fetch origin && git pull --ff-only origin <mainBranch>` で local を origin に追従させておくフローを推奨。git の **書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）は引き続き禁止。`docs/spec/04-templates.md` の Master ワンライナーも同方針に更新
+- **Master が意思的に `await-task` を使うパターンを許可**。旧プロンプトの「await-task は不要」という一律禁止を撤回し、Master が自分の判断でターンを次の判断点まで持ち越したい場合（summary を読んで後続タスクを設計する / 複数タスクの収束点で再評価する等）は `Bash(run_in_background=true)` で await-task を起動してよいと `templates/{ja,en}/master.md` に明記した。depends-on の自動チェーンは引き続き Manager の責務
+
+### Fixed
+
+- **rate-limit の `isStale` を 5h/7d 軸別に分離し throttle 凍結を解消（T281）**。従来の `isStale()` は 5h と 7d を OR 判定していたため、5h reset が過去に達しても 7d reset が未来であれば `isStale=false` となり、`daemon.ts` の `throttled5h` ガードが凍結して API コールが一切発生しないまま `state.rateLimit` が古い値で固定される無限ループに陥っていた。`rate-limit-persistence.ts` の `isStale()` を `isStale5h()` / `isStale7d()` に分離し、呼び出し元 6 箇所（`daemon.ts` x2, `proxy.ts`, `dashboard.tsx`, `rate-limit-display.ts`, `main.ts`）を軸別に置換。5h スロットル判定は `isStale5h` のみを参照する。バーごとの表示も軸別 stale 判定に切り替え、`rate_limit_restored` ログに `stale5h=<bool> stale7d=<bool>` を併記。isStale5h 8 ケース / isStale7d 6 ケース / display 4 ケースの計 18 件の regression テストを追加
+- **TUI ダッシュボードの Update 通知バナーが null のとき空行を残さない（T282）**。ヘッダー直下に常時 1 行の空白行が残る問題を修正。Update 通知バナーを組み立てる IIFE が null 経路でも `ui.text("", { dim: true })` を返していたため `ui.column({ gap: 0 }, [...])` 内で 1 行分のスペースが占有されていた。配列 spread（`...(cond ? [IIFE] : [])`）に書き換え、non-null 時のみ要素を挿入する形にした
 
 ## [4.1.0] - 2026-04-21
 
