@@ -1,7 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import type { RateLimitInfo } from "./schema";
 import {
@@ -10,9 +9,10 @@ import {
   isStale5h,
   isStale7d,
 } from "./rate-limit-persistence";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
-let savedProjectRoot: string | undefined;
 
 function makeInfo(overrides: Partial<RateLimitInfo> = {}): RateLimitInfo {
   return {
@@ -32,19 +32,15 @@ function makeInfo(overrides: Partial<RateLimitInfo> = {}): RateLimitInfo {
 }
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-rate-limit-persistence-test-"));
-  savedProjectRoot = process.env.PROJECT_ROOT;
-  process.env.PROJECT_ROOT = testDir;
-  await mkdir(join(testDir, ".team"), { recursive: true });
+  project = await createDummyProject({
+    prefix: "cmux-rate-limit-persistence-test-",
+    subdirs: ["logs"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  if (savedProjectRoot !== undefined) {
-    process.env.PROJECT_ROOT = savedProjectRoot;
-  } else {
-    delete process.env.PROJECT_ROOT;
-  }
+  await project.dispose();
 });
 
 describe("persistRateLimit / loadRateLimit", () => {
