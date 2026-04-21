@@ -1,0 +1,122 @@
+# タスク割り当て
+
+## タスク内容
+
+---
+id: 273
+title: Master の直接作業制約を緩和（明示フレーズで例外許可）
+priority: medium
+created_by: surface:287
+created_at: 2026-04-19T14:18:09.054Z
+---
+
+## 背景
+
+Master テンプレートの「やらないこと（厳守）」が厳しすぎるため、ユーザーからの明示的な指示があった場合に限り、Master 自身がファイル編集・git 操作・コード実装を行えるように緩和する。
+
+## 対象ファイル
+
+- `skills/cmux-team/templates/ja/master.md`
+- `skills/cmux-team/templates/en/master.md`（同期）
+
+（テンプレートがソース・オブ・トゥルース。`.team/prompts/master.md` は派生物なので直接編集しない。編集後は `cmux-team start` で再生成、またはテンプレートからコピーする。詳細は CLAUDE.md の「プロンプト編集ルール」参照）
+
+## 変更内容
+
+`## やらないこと（厳守）` セクションを再構成する。
+
+### 1. 基本方針（デフォルト）
+
+デフォルトは現状どおり「タスク化して委譲」。Master は直接作業しない。次の項目は**ユーザーの明示的な指示がない限り**行わない:
+
+- コードの実装・テスト実行・リファクタリング
+- `.team/tasks/` 以外のファイル直接編集（Write/Edit）
+- git 操作（commit, branch, merge など）
+
+### 2. 例外: 明示フレーズがある場合
+
+ユーザーが以下いずれかの**明示フレーズ**を使った場合、Master は直接作業してよい:
+
+- 「このセッションで実施」
+- 「ここで（Master で）やって」
+- 「タスクにせず」「タスク化しないで」
+- 「直接やって」「直接編集して」
+- 「Master で commit して」など、操作を名指しして Master に指示するもの
+
+上記は例示。同等の意図が明確に読み取れる表現も対象とする。曖昧な場合はユーザーに確認する。
+
+### 3. 緩和しても維持するルール（厳守継続）
+
+明示フレーズがあっても、以下は引き続き禁止:
+
+- **`.team/tasks/` 配下の直接編集** — タスク操作は必ず `cmux-team create-task` / `update-task` / `delete-task` CLI 経由（hook でブロックされる）
+- **assigned 状態のタスクファイルの編集** — Conductor の起動時プロンプトに反映されず無意味
+- **Conductor / Agent の直接起動・監視**
+- **ポーリング・ループ実行**
+- **git push / force-push / reset --hard 等、共有状態や破壊的な git 操作** — 明示フレーズがあっても追加の確認を取る
+
+### 4. 判断基準の明記
+
+- ユーザーが対話でやり取りしながら小さな修正を重ねているとき → Master 直接作業が合理的
+- 複数工程・長時間・並列化したい作業 → 明示フレーズがあっても「タスク化したほうが良い」と提案して確認
+
+## docs/spec/ の同期
+
+`docs/spec/01-skill-cmux-team.md` に Master の「やらないこと」に相当する記述があれば同じ方針で同期する（grep で確認）。
+
+## 納品方法
+
+**PR は作らず、worktree から main へ直接ローカルマージで OK**（ユーザー承認済み）。push も不要。
+
+## テスト
+
+- テンプレートを `.team/prompts/master.md` にコピーまたは `cmux-team start` で再生成できることを確認
+- ja/en 両テンプレートで同じ構造・同じフレーズ例になっていること
+- CLAUDE.md 内の Master 関連記述と矛盾しないこと
+
+## 調査して判断してほしい点
+
+- 明示フレーズ一覧の最終形（実装者が日本語として自然に列挙する）
+- en 版での対応フレーズ（英訳は実装者の判断でよい）
+- docs/spec/ 側に同様の記述があるかどうか、あれば何をどう同期するか
+
+
+## 作業ディレクトリ
+
+すべての作業は git worktree `/Users/yamamoto/git/cmux-team/.worktrees/task-273-1776609317` 内で行う。
+```bash
+cd /Users/yamamoto/git/cmux-team/.worktrees/task-273-1776609317
+```
+main ブランチに直接変更を加えてはならない。
+
+ブランチ名: `task-273-1776609317/task`
+
+## 作業開始前の確認（ブートストラップ）
+
+worktree は tracked files のみ含む。作業開始前に以下を確認すること:
+- `package.json` があれば `npm install` を実行
+- `.gitignore` に記載されたランタイムディレクトリ（`node_modules/`, `dist/`, `workspace/` 等）の有無を確認し、必要なら再構築
+- `.envrc` や環境変数の設定
+
+## 出力ディレクトリ
+
+```
+/Users/yamamoto/git/cmux-team/.team/tasks/273-master/runs/task-273-1776609317
+```
+
+結果サマリーは `/Users/yamamoto/git/cmux-team/.team/tasks/273-master/runs/task-273-1776609317/summary.md` に書き出す。
+
+## マージ先ブランチ
+
+このタスクの成果は `main` にマージすること。
+納品方法（ローカルマージ or PR）は conductor-role.md の完了時の処理に従う。
+
+## 完了通知
+
+全ての処理が完了したら:
+
+1. セッション上に完了レポートを表示する（conductor-role.md「完了時の処理」Step 12 参照。設計判断・試行錯誤・自己判断・懸念・成果の勘所を簡潔に出力）
+2. 完了通知を送信する:
+   ```bash
+   cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE --success true
+   ```
