@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, mkdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdir } from "fs/promises";
 import { join } from "path";
 import { Database } from "bun:sqlite";
 import {
@@ -12,19 +11,25 @@ import {
   updateNotificationEnrichment,
 } from "./trace-store";
 import type { QueueMessage } from "./schema";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 describe("trace-store: insertHookSignal (T216)", () => {
+  let project: DummyProject;
   let tmpDir: string;
   let db: Database;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-trace-store-test-"));
+    project = await createDummyProject({
+      prefix: "cmux-team-trace-store-test-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
     db = initDB(tmpDir);
   });
 
   afterEach(async () => {
     try { db.close(); } catch {}
-    await rm(tmpDir, { recursive: true, force: true });
+    await project.dispose();
   });
 
   test("SESSION_STARTED を挿入して surface/pid/source 列が入る", () => {
@@ -124,11 +129,16 @@ describe("trace-store: insertHookSignal (T216)", () => {
 });
 
 describe("trace-store: getHookSignals (T217)", () => {
+  let project: DummyProject;
   let tmpDir: string;
   let db: Database;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-getHookSignals-test-"));
+    project = await createDummyProject({
+      prefix: "cmux-team-getHookSignals-test-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
     db = initDB(tmpDir);
 
     insertHookSignal(db, {
@@ -164,7 +174,7 @@ describe("trace-store: getHookSignals (T217)", () => {
 
   afterEach(async () => {
     try { db.close(); } catch {}
-    await rm(tmpDir, { recursive: true, force: true });
+    await project.dispose();
   });
 
   test("全件取得（オプション無し） — id DESC で最新順に返る", () => {
@@ -210,17 +220,22 @@ describe("trace-store: getHookSignals (T217)", () => {
 });
 
 describe("trace-store: task_sessions base columns (T243)", () => {
+  let project: DummyProject;
   let tmpDir: string;
   let db: Database;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-task-sessions-base-"));
+    project = await createDummyProject({
+      prefix: "cmux-team-task-sessions-base-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
     db = initDB(tmpDir);
   });
 
   afterEach(async () => {
     try { db.close(); } catch {}
-    await rm(tmpDir, { recursive: true, force: true });
+    await project.dispose();
   });
 
   test("新規 DB: insertTaskSession で base_branch/base_sha/base_source が読み出せる", () => {
@@ -264,7 +279,12 @@ describe("trace-store: task_sessions base columns (T243)", () => {
 
   test("旧スキーマ DB → initDB 再呼び出しで ALTER TABLE による列追加が走る", async () => {
     // 旧 traces.db を手作業で作る（base_* 列なし）
-    const oldDir = await mkdtemp(join(tmpdir(), "cmux-team-old-schema-"));
+    const oldProject = await createDummyProject({
+      prefix: "cmux-team-old-schema-",
+      subdirs: [],
+      setProjectRootEnv: false,
+    });
+    const oldDir = oldProject.root;
     try {
       await mkdir(join(oldDir, ".team/traces"), { recursive: true });
       const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
@@ -342,23 +362,28 @@ describe("trace-store: task_sessions base columns (T243)", () => {
         try { migratedDb.close(); } catch {}
       }
     } finally {
-      await rm(oldDir, { recursive: true, force: true });
+      await oldProject.dispose();
     }
   });
 });
 
 describe("trace-store: hook_signals NOTIFICATION columns (T266)", () => {
+  let project: DummyProject;
   let tmpDir: string;
   let db: Database;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-hook-signals-t266-"));
+    project = await createDummyProject({
+      prefix: "cmux-team-hook-signals-t266-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
     db = initDB(tmpDir);
   });
 
   afterEach(async () => {
     try { db.close(); } catch {}
-    await rm(tmpDir, { recursive: true, force: true });
+    await project.dispose();
   });
 
   test("新規 DB: hook_signals に新 8 列が存在する", () => {
@@ -480,7 +505,12 @@ describe("trace-store: hook_signals NOTIFICATION columns (T266)", () => {
   });
 
   test("旧スキーマ DB → initDB 再呼び出しで hook_signals 新 8 列が ADD される", async () => {
-    const oldDir = await mkdtemp(join(tmpdir(), "cmux-team-old-hook-signals-"));
+    const oldProject = await createDummyProject({
+      prefix: "cmux-team-old-hook-signals-",
+      subdirs: [],
+      setProjectRootEnv: false,
+    });
+    const oldDir = oldProject.root;
     try {
       await mkdir(join(oldDir, ".team/traces"), { recursive: true });
       const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
@@ -551,17 +581,22 @@ describe("trace-store: hook_signals NOTIFICATION columns (T266)", () => {
         try { migratedDb.close(); } catch {}
       }
     } finally {
-      await rm(oldDir, { recursive: true, force: true });
+      await oldProject.dispose();
     }
   });
 });
 
 describe("trace-store: getHookSignals role/taskId filter (T266)", () => {
+  let project: DummyProject;
   let tmpDir: string;
   let db: Database;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "cmux-team-hook-signals-filter-"));
+    project = await createDummyProject({
+      prefix: "cmux-team-hook-signals-filter-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
     db = initDB(tmpDir);
 
     const id1 = insertHookSignal(db, {
@@ -591,7 +626,7 @@ describe("trace-store: getHookSignals role/taskId filter (T266)", () => {
 
   afterEach(async () => {
     try { db.close(); } catch {}
-    await rm(tmpDir, { recursive: true, force: true });
+    await project.dispose();
   });
 
   test("role フィルタ: conductor のみ取得", () => {
