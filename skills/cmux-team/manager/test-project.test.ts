@@ -90,7 +90,10 @@ describe("createDummyProject", () => {
   test("dispose 後、env が元の値に復元される（元 undefined）", async () => {
     delete process.env.PROJECT_ROOT;
     const project = await createDummyProject();
-    expect(process.env.PROJECT_ROOT).toBe(project.root);
+    // 直前の `delete` で TS が env の型を undefined に narrow してしまうため、
+    // expect の generic 推論が undefined 固定になって toBe(string) が通らない。
+    // 実際の runtime 値は createDummyProject 内で string に設定済み。
+    expect(process.env.PROJECT_ROOT as unknown as string).toBe(project.root);
     await project.dispose();
     expect(process.env.PROJECT_ROOT).toBeUndefined();
   });
