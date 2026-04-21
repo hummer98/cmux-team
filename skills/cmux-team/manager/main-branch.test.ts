@@ -1,29 +1,26 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import {
   resolveMainBranch,
   persistMainBranch,
   MainBranchResolutionError,
 } from "./main-branch";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let testDir: string;
-let savedProjectRoot: string | undefined;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-main-branch-test-"));
-  savedProjectRoot = process.env.PROJECT_ROOT;
-  process.env.PROJECT_ROOT = testDir;
+  project = await createDummyProject({
+    prefix: "cmux-main-branch-test-",
+    subdirs: ["logs"],
+  });
+  testDir = project.root;
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  if (savedProjectRoot !== undefined) {
-    process.env.PROJECT_ROOT = savedProjectRoot;
-  } else {
-    delete process.env.PROJECT_ROOT;
-  }
+  await project.dispose();
 });
 
 describe("resolveMainBranch", () => {
