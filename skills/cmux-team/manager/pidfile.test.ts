@@ -1,7 +1,7 @@
 /**
  * pidfile.ts のテスト — daemon 多重起動防止ロック
  *
- * - mkdtemp で独立 tmp dir を使うため並列実行で衝突しない
+ * - createDummyProject で独立 tmp dir を使うため並列実行で衝突しない
  * - 実 PID（process.pid）の alive 判定は OS 依存のため、isAliveImpl / psCommandImpl を DI して決定論化する
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
