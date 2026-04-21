@@ -3,6 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "test": "CMUX_TEAM_LOGGER_STRICT=1 bun test"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
