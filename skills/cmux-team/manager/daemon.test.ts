@@ -1,21 +1,20 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile, readdir, readFile } from "fs/promises";
+import { mkdir, rm, writeFile, readdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
+import { createDummyProject, type DummyProject } from "./test-project";
 
 // テスト用の一時ディレクトリ
+let project: DummyProject;
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "cmux-daemon-test-"));
-  process.env.PROJECT_ROOT = testDir;
-
-  // .team 構造を作成
-  await mkdir(join(testDir, ".team/tasks"), { recursive: true });
-  await mkdir(join(testDir, ".team/output"), { recursive: true });
-  await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-  await mkdir(join(testDir, ".team/logs"), { recursive: true });
+  project = await createDummyProject({
+    prefix: "cmux-daemon-test-",
+    subdirs: ["tasks", "output", "prompts", "logs"],
+  });
+  testDir = project.root;
+  // team.json は旧 shape（master:{}, manager:{}）を期待するテストがあるため独自 seed
   await writeFile(
     join(testDir, ".team/team.json"),
     JSON.stringify({ phase: "init", master: {}, manager: {}, conductors: [] })
@@ -23,8 +22,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(testDir, { recursive: true, force: true });
-  delete process.env.PROJECT_ROOT;
+  await project.dispose();
 });
 
 // ヘルパー: タスクファイルを作成
