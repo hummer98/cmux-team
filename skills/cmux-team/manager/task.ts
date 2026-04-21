@@ -404,6 +404,171 @@ export function filterRunAfterAllTasks(
   });
 }
 
+// ---- T290: aborted 経路の journal/reason 表現統一 --------------------------
+
+/**
+ * T290: markTaskAborted が受け付ける reason 列挙。
+ *
+ * 6 経路（daemon.ts 4 経路 + main.ts 2 経路）と resume 3 reason を覆う。
+ * journal 新 format `reason=<AbortReason>; <detail>` の `<AbortReason>` に入る値。
+ */
+export type AbortReason =
+  | "user_clear"
+  | "judgment_pending"
+  | "assign_failed"
+  | "disconnect_timeout"
+  | "abort_task"
+  | "resume_no_session_id"
+  | "resume_no_task_run_id"
+  | "resume_no_worktree";
+
+export interface MarkTaskAbortedOptions {
+  /** log detail `title=` 用。未指定なら出さない */
+  taskTitle?: string;
+  /** log detail に付加する追加 key=value（例: `kind=task` / `source=agent`）。
+   *  空白・`=` を含む value は呼び出し側で正規化済みである前提 */
+  extraLogFields?: Record<string, string>;
+  /** テスト注入用。デフォルト `() => new Date().toISOString()` */
+  now?: () => string;
+}
+
+export interface MarkTaskAbortedResult {
+  /** ready → draft に戻った子 ID（`child_reverted_to_draft` は内部 emit 済み） */
+  revertedChildren: string[];
+  /** 実際に書き込んだ journal（呼び出し側の TUI reflection 等用） */
+  journal: string;
+  /** 既に closed/aborted/deleted で no-op だった場合 true。saveTaskState は呼ばれない */
+  idempotentSkip?: true;
+  /** 冪等 skip の理由（既存 status）。skip 時のみ埋まる */
+  existingStatus?: string;
+}
+
+/**
+ * T290: aborted 経路の集約ヘルパー。
+ *
+ * 従来 6 経路（daemon.ts 4 + main.ts 2）で手書き複製されていた
+ *   load → 冪等ガード → journal 組立 → status 代入 → cascade → save → task_aborted emit → child_reverted emit
+ * を 1 本に集約する。journal の on-disk 形式は `reason=<reason>; <detail>`（detail 空時は
+ * `reason=<reason>;`）。log の `reason=` は同一 `reason` 引数から組み立てるため、
+ * T269 の「log reason と journal prefix の乖離」は**構造的に再発不能**になる。
+ *
+ * **呼び出し側に残す責務:**
+ * - `notifyStateChanged(source)` の発火（EventBus ポリシー「emit = mutation 元」を守るため）
+ * - `TASK_UPDATED` の postMessage（abort-task CLI）
+ * - worktree 削除 / pidWatcher 停止 / resetConductor（helper スコープ外）
+ *
+ * **journal_summary は全経路で emit（意図的）:** TUI dashboard が `journal_summary=`
+ * を正規表現抽出しているため、全経路で同じキーを出すことで TUI 可視性を向上させる。
+ *
+ * **idempotent skip 方針:** current status が closed/aborted/deleted の場合、
+ * 何も書き込まず `{ idempotentSkip: true, existingStatus }` を返す（log emit しない）。
+ * 呼び出し側が必要に応じて `conductor_done_unresolved_skip` 等の context log を出す。
+ */
+export async function markTaskAborted(
+  projectRoot: string,
+  taskId: string,
+  reason: AbortReason,
+  detail: string,
+  opts?: MarkTaskAbortedOptions,
+): Promise<MarkTaskAbortedResult> {
+  const now = opts?.now ?? (() => new Date().toISOString());
+  const taskState = await loadTaskState(projectRoot);
+  const current = taskState[taskId];
+
+  // T290 D1: journal on-disk 形式 = `reason=<snake_case>; <detail>`（detail 空時は末尾 `;`）
+  const journal = detail ? `reason=${reason}; ${detail}` : `reason=${reason};`;
+
+  if (
+    current?.status === "closed" ||
+    current?.status === "aborted" ||
+    current?.status === "deleted"
+  ) {
+    return {
+      revertedChildren: [],
+      journal,
+      idempotentSkip: true,
+      existingStatus: current.status,
+    };
+  }
+
+  taskState[taskId] = {
+    ...current,
+    status: "aborted",
+    abortedAt: now(),
+    journal,
+  };
+
+  const { tasks } = await loadTasks(projectRoot);
+  const { revertedChildren } = cascadeAbortToChildren(taskState, tasks, taskId);
+
+  await saveTaskState(projectRoot, taskState);
+
+  const parts: string[] = [`task_id=${taskId}`, `reason=${reason}`];
+  if (opts?.taskTitle) parts.push(`title=${opts.taskTitle}`);
+  parts.push(`journal_summary=${journal}`);
+  if (opts?.extraLogFields) {
+    for (const [k, v] of Object.entries(opts.extraLogFields)) {
+      parts.push(`${k}=${v}`);
+    }
+  }
+  await log("task_aborted", parts.join(" "));
+
+  for (const childId of revertedChildren) {
+    await log(
+      "child_reverted_to_draft",
+      `parent=${taskId} child=${childId} reason=parent_aborted`,
+    );
+  }
+
+  return { revertedChildren, journal };
+}
+
+export interface ParsedAbortJournal {
+  /** 新 format から抽出された reason、または旧 format から推定された reason。不明時 undefined */
+  reason?: AbortReason | string;
+  /** reason prefix を除いた人間可読部分。新/旧問わず「何が起きたか」を記述した string */
+  detail?: string;
+  /** 元 journal（そのまま） */
+  raw: string;
+}
+
+/**
+ * T290: aborted journal の best-effort parser。
+ *
+ * - 新 format `reason=<snake_case>; <detail>` を優先的にマッチ
+ * - 旧 format prefix（user_clear: / assign_failed: / disconnect_timeout: /
+ *   conductor_done_unresolved: / [resume] lost worktree / [resume] missing session id /
+ *   [resume] missing task run id）を best-effort で推定
+ * - どれにもマッチしない場合は `{ reason: undefined, detail: raw, raw }`
+ *   （`reason=unknown` を書き込むと abort-task CLI のユーザー入力を誤誘導するため
+ *    undefined のまま残す）
+ */
+export function parseAbortJournal(journal: string | undefined): ParsedAbortJournal {
+  if (!journal) return { raw: "" };
+
+  const newMatch = journal.match(/^reason=([a-z_]+);\s?(.*)$/s);
+  if (newMatch) {
+    const [, reason, detail] = newMatch;
+    return { reason, detail, raw: journal };
+  }
+
+  // 旧 format prefix 推定（order は固定 — 見やすさのため）
+  const legacyPrefixes: Array<[RegExp, AbortReason]> = [
+    [/^user_clear: /, "user_clear"],
+    [/^assign_failed: /, "assign_failed"],
+    [/^disconnect_timeout: /, "disconnect_timeout"],
+    [/^conductor_done_unresolved: /, "judgment_pending"],
+    [/^\[resume\] lost worktree/, "resume_no_worktree"],
+    [/^\[resume\] missing session id/, "resume_no_session_id"],
+    [/^\[resume\] missing task run id/, "resume_no_task_run_id"],
+  ];
+  for (const [re, reason] of legacyPrefixes) {
+    if (re.test(journal)) return { reason, detail: journal, raw: journal };
+  }
+
+  return { reason: undefined, detail: journal, raw: journal };
+}
+
 export interface CascadeAbortResult {
   /** ready → draft に戻した子タスク ID のリスト */
   revertedChildren: string[];

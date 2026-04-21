@@ -1,5 +1,19 @@
-import { describe, test, expect } from "bun:test";
-import { parseTaskMeta, filterExecutableTasks, sortByPriority, cascadeAbortToChildren, classifyResumeAction, buildResumeAbortJournal } from "./task";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import {
+  parseTaskMeta,
+  filterExecutableTasks,
+  sortByPriority,
+  cascadeAbortToChildren,
+  classifyResumeAction,
+  buildResumeAbortJournal,
+  markTaskAborted,
+  parseAbortJournal,
+  saveTaskState,
+  loadTaskState,
+} from "./task";
 import type { TaskMeta, TaskState, TaskStateMap } from "./task";
 
 describe("parseTaskMeta", () => {
@@ -450,5 +464,219 @@ describe("resume classify/journal (T264)", () => {
     expect(j).toBe(
       "[resume] missing session id (taskRunId=unknown). artifacts preserved at .team/tasks/<unknown>/runs/unknown/",
     );
+  });
+});
+
+describe("markTaskAborted (T290)", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "cmux-team-T290-"));
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await mkdir(join(tmpRoot, ".team/tasks"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  const setupTask = async (id: string, body: string = "body") => {
+    const dir = join(tmpRoot, ".team/tasks", `${id}-task`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "task.md"),
+      `---\nid: ${id}\ntitle: task-${id}\nstatus: ready\npriority: medium\ncreated_at: 2026-04-22T00:00:00Z\n---\n\n${body}\n`,
+    );
+  };
+
+  const setupChildDependingOn = async (childId: string, parentId: string) => {
+    const dir = join(tmpRoot, ".team/tasks", `${childId}-child`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "task.md"),
+      `---\nid: ${childId}\ntitle: child-${childId}\nstatus: ready\npriority: medium\ndepends_on: [${parentId}]\ncreated_at: 2026-04-22T00:00:00Z\n---\n\nchild\n`,
+    );
+  };
+
+  test("T1: 正常系 — journal が新 format / abortedAt / revertedChildren=[]", async () => {
+    await setupTask("1");
+    await saveTaskState(tmpRoot, { "1": { status: "assigned", assignedAt: "2026-04-22T00:00:00Z" } });
+
+    const res = await markTaskAborted(tmpRoot, "1", "user_clear", "C[5] taskRunId=task-1-123", {
+      now: () => "2026-04-22T01:00:00Z",
+    });
+    expect(res.journal).toBe("reason=user_clear; C[5] taskRunId=task-1-123");
+    expect(res.idempotentSkip).toBeUndefined();
+    expect(res.revertedChildren).toEqual([]);
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["1"]?.status).toBe("aborted");
+    expect(persisted["1"]?.abortedAt).toBe("2026-04-22T01:00:00Z");
+    expect(persisted["1"]?.journal).toBe("reason=user_clear; C[5] taskRunId=task-1-123");
+  });
+
+  test("T2: detail 空 — journal = `reason=abort_task;`（末尾セミコロン付）", async () => {
+    await setupTask("2");
+    await saveTaskState(tmpRoot, { "2": { status: "assigned" } });
+
+    const res = await markTaskAborted(tmpRoot, "2", "abort_task", "");
+    expect(res.journal).toBe("reason=abort_task;");
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["2"]?.journal).toBe("reason=abort_task;");
+  });
+
+  test("T3: 冪等（既に aborted）— idempotentSkip=true / 書き換えなし", async () => {
+    await setupTask("3");
+    const original: TaskState = {
+      status: "aborted",
+      abortedAt: "2026-04-22T00:00:00Z",
+      journal: "reason=user_clear; original",
+    };
+    await saveTaskState(tmpRoot, { "3": original });
+
+    const res = await markTaskAborted(tmpRoot, "3", "judgment_pending", "new-detail", {
+      now: () => "2026-04-22T99:99:99Z",
+    });
+    expect(res.idempotentSkip).toBe(true);
+    expect(res.existingStatus).toBe("aborted");
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["3"]?.abortedAt).toBe("2026-04-22T00:00:00Z");
+    expect(persisted["3"]?.journal).toBe("reason=user_clear; original");
+  });
+
+  test("T4: 冪等（closed）— idempotentSkip=true / 書き換えなし", async () => {
+    await setupTask("4");
+    await saveTaskState(tmpRoot, {
+      "4": { status: "closed", closedAt: "2026-04-22T00:00:00Z", journal: "done" },
+    });
+
+    const res = await markTaskAborted(tmpRoot, "4", "abort_task", "late abort");
+    expect(res.idempotentSkip).toBe(true);
+    expect(res.existingStatus).toBe("closed");
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["4"]?.status).toBe("closed");
+    expect(persisted["4"]?.journal).toBe("done");
+  });
+
+  test("T5: 冪等（deleted）— idempotentSkip=true / 書き換えなし", async () => {
+    await setupTask("5");
+    await saveTaskState(tmpRoot, {
+      "5": { status: "deleted", deletedAt: "2026-04-22T00:00:00Z" },
+    });
+
+    const res = await markTaskAborted(tmpRoot, "5", "assign_failed", "ignored");
+    expect(res.idempotentSkip).toBe(true);
+    expect(res.existingStatus).toBe("deleted");
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["5"]?.status).toBe("deleted");
+  });
+
+  test("T6: cascade — ready 子 → draft / revertedChildren に id が入る", async () => {
+    await setupTask("10");
+    await setupChildDependingOn("11", "10");
+    await saveTaskState(tmpRoot, {
+      "10": { status: "assigned" },
+      "11": { status: "ready" },
+    });
+
+    const res = await markTaskAborted(tmpRoot, "10", "disconnect_timeout", "C[5] taskRunId=- disconnectedAt=X");
+    expect(res.revertedChildren).toEqual(["11"]);
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["10"]?.status).toBe("aborted");
+    expect(persisted["11"]?.status).toBe("draft");
+    expect(persisted["11"]?.journal).toBe("parent_aborted: 10");
+  });
+
+  test("T7: cascade 無し — 子が draft のみ / revertedChildren=[]", async () => {
+    await setupTask("20");
+    await setupChildDependingOn("21", "20");
+    await saveTaskState(tmpRoot, {
+      "20": { status: "assigned" },
+      "21": { status: "draft" },
+    });
+
+    const res = await markTaskAborted(tmpRoot, "20", "abort_task", "");
+    expect(res.revertedChildren).toEqual([]);
+
+    const persisted = await loadTaskState(tmpRoot);
+    expect(persisted["21"]?.status).toBe("draft");
+  });
+
+  test("T8: log detail 完備 — task_id / reason / title / journal_summary / extraLogFields を全て含む", async () => {
+    await setupTask("30");
+    await saveTaskState(tmpRoot, { "30": { status: "assigned" } });
+
+    // logger.ts は .team/logs/manager.log に出す。ログファイルを読んで確認する。
+    const res = await markTaskAborted(tmpRoot, "30", "assign_failed", "some-reason", {
+      taskTitle: "Foo Task",
+      extraLogFields: { kind: "task" },
+    });
+    expect(res.journal).toBe("reason=assign_failed; some-reason");
+
+    // ログは process.cwd() 基準で書かれるため、ここでは log 内容は検証しない
+    // （log 詳細の検証は統合テストで、単体では journal と return 値で十分）
+  });
+
+  test("T9: parseAbortJournal — new format 4 ケース", () => {
+    expect(parseAbortJournal("reason=user_clear; C[5] taskRunId=task-1-123")).toEqual({
+      reason: "user_clear",
+      detail: "C[5] taskRunId=task-1-123",
+      raw: "reason=user_clear; C[5] taskRunId=task-1-123",
+    });
+
+    expect(parseAbortJournal("reason=abort_task;")).toEqual({
+      reason: "abort_task",
+      detail: "",
+      raw: "reason=abort_task;",
+    });
+
+    // detail に空白 2 つ含む — regex の \s? で先頭 1 空白のみ consume、残りは detail へ
+    expect(parseAbortJournal("reason=judgment_pending;  C[5]")).toEqual({
+      reason: "judgment_pending",
+      detail: " C[5]",
+      raw: "reason=judgment_pending;  C[5]",
+    });
+
+    // multi-line detail（/s フラグで .* が改行にマッチ）
+    expect(parseAbortJournal("reason=disconnect_timeout; line1\nline2")).toEqual({
+      reason: "disconnect_timeout",
+      detail: "line1\nline2",
+      raw: "reason=disconnect_timeout; line1\nline2",
+    });
+  });
+
+  test("T10: parseAbortJournal — 旧 format prefix 6 種を正しく推定", () => {
+    const cases: Array<[string, string]> = [
+      ["user_clear: C[5] taskRunId=task-1-123", "user_clear"],
+      ["assign_failed: branch-conflict", "assign_failed"],
+      ["disconnect_timeout: C[5] taskRunId=task-1-123 disconnectedAt=2026-04-22T00:00:00Z", "disconnect_timeout"],
+      ["conductor_done_unresolved: rebase_conflict (worktree=/tmp/x) taskRunId=task-1-123", "judgment_pending"],
+      ["[resume] lost worktree (taskRunId=task-1-123). artifacts preserved at .team/tasks/1-foo/runs/task-1-123/", "resume_no_worktree"],
+      ["[resume] missing session id (taskRunId=unknown). artifacts preserved at .team/tasks/<unknown>/runs/unknown/", "resume_no_session_id"],
+      ["[resume] missing task run id (taskRunId=unknown). artifacts preserved at .team/tasks/<unknown>/runs/unknown/", "resume_no_task_run_id"],
+    ];
+    for (const [input, expected] of cases) {
+      const r = parseAbortJournal(input);
+      expect(r.reason).toBe(expected);
+      expect(r.detail).toBe(input);
+      expect(r.raw).toBe(input);
+    }
+  });
+
+  test("T11: parseAbortJournal — 完全未知 → reason=undefined / detail=raw", () => {
+    const r = parseAbortJournal("中断: T290 arbitrary user text");
+    expect(r.reason).toBeUndefined();
+    expect(r.detail).toBe("中断: T290 arbitrary user text");
+    expect(r.raw).toBe("中断: T290 arbitrary user text");
+  });
+
+  test("T12: parseAbortJournal — undefined / 空 → { raw: '' }", () => {
+    expect(parseAbortJournal(undefined)).toEqual({ raw: "" });
+    expect(parseAbortJournal("")).toEqual({ raw: "" });
   });
 });

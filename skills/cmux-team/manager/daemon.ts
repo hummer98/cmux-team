@@ -17,7 +17,7 @@ import {
 import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./layout-restore";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren } from "./task";
+import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren, markTaskAborted } from "./task";
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
@@ -2252,26 +2252,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // forceCloseDisconnectedConductor と同パターン
         const taskId = conductor.taskId;
         if (taskId) {
+          // T290: markTaskAborted に集約（load/冪等ガード/journal/cascade/emit を内部化）
           try {
-            const ts = await loadTaskState(state.projectRoot);
-            const current = ts[taskId];
-            if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
-              const journal = `user_clear: ${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
-              ts[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
-              // T241: depends_on 親 abort → ready 子を draft に戻す
-              const { tasks } = await loadTasks(state.projectRoot);
-              const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
-              await saveTaskState(state.projectRoot, ts);
-              await log("task_aborted", `task_id=${taskId} reason=user_clear`);
-              for (const childId of revertedChildren) {
-                await log(
-                  "child_reverted_to_draft",
-                  `parent=${taskId} child=${childId} reason=parent_aborted`
-                );
-              }
-              if (revertedChildren.length > 0) {
-                notifyStateChanged("daemon.ts:handleMessage:session-clear-cascade");
-              }
+            const detail = `${formatSurface(conductor.surface, "C")} taskRunId=${conductor.taskRunId ?? "-"}`;
+            const { revertedChildren } = await markTaskAborted(
+              state.projectRoot,
+              taskId,
+              "user_clear",
+              detail,
+            );
+            if (revertedChildren.length > 0) {
+              notifyStateChanged("daemon.ts:handleMessage:session-clear-cascade");
             }
           } catch (e: any) {
             await log("error", `SESSION_CLEAR task-state update failed: task_id=${taskId} ${e.message}`);
@@ -2618,29 +2609,23 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       if (e instanceof AssignTaskError) {
         if (e.kind === "task") {
           // タスク側の問題 → 該当タスクを abort し Conductor は idle のまま維持
-          const ts = await loadTaskState(state.projectRoot);
-          ts[task.id] = {
-            ...ts[task.id],
-            status: "aborted",
-            abortedAt: new Date().toISOString(),
-            journal: `assign_failed: ${e.reason}`,
-          };
-          // T241: depends_on 親 abort → ready 子を draft に戻す
-          const { tasks: currentTasks } = await loadTasks(state.projectRoot);
-          const { revertedChildren } = cascadeAbortToChildren(ts, currentTasks, task.id);
-          await saveTaskState(state.projectRoot, ts);
-          await log(
-            "task_aborted",
-            `task_id=${task.id} reason=assign_failed title=${task.title} journal_summary=assign_failed: ${e.reason}`
-          );
-          for (const childId of revertedChildren) {
-            await log(
-              "child_reverted_to_draft",
-              `parent=${task.id} child=${childId} reason=parent_aborted`
+          // T290: markTaskAborted に集約（load/冪等ガード/journal/cascade/emit を内部化）
+          try {
+            const { revertedChildren } = await markTaskAborted(
+              state.projectRoot,
+              task.id,
+              "assign_failed",
+              e.reason,
+              { taskTitle: task.title, extraLogFields: { kind: "task" } },
             );
-          }
-          if (revertedChildren.length > 0) {
-            notifyStateChanged("daemon.ts:scanTasks:assign-failed-cascade");
+            if (revertedChildren.length > 0) {
+              notifyStateChanged("daemon.ts:scanTasks:assign-failed-cascade");
+            }
+          } catch (err: any) {
+            await log(
+              "error",
+              `markTaskAborted(assign_failed) failed: task_id=${task.id} ${err.message}`,
+            );
           }
           // T232 R2: 保険 — assigning をセット済みで task kind 例外が飛んだ場合
           //          （現コードでは到達し得ないが将来変更への防衛）、disconnected に倒す。
@@ -3041,40 +3026,18 @@ async function forceCloseDisconnectedConductor(
   const taskRunId = conductor.taskRunId;
 
   // 1. task-state.json に aborted を記録
+  // T290: markTaskAborted に集約（load/冪等ガード/journal/cascade/emit を内部化）
   if (taskId) {
     try {
-      const ts = await loadTaskState(state.projectRoot);
-      const current = ts[taskId];
-      // 既に closed/aborted/deleted 済みならスキップ（冪等）
-      if (
-        current?.status !== "closed" &&
-        current?.status !== "aborted" &&
-        current?.status !== "deleted"
-      ) {
-        const journal = `disconnect_timeout: ${formatSurface(conductor.surface, "C")} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
-        ts[taskId] = {
-          ...current,
-          status: "aborted",
-          abortedAt: new Date().toISOString(),
-          journal,
-        };
-        // T241: depends_on 親 abort → ready 子を draft に戻す
-        const { tasks } = await loadTasks(state.projectRoot);
-        const { revertedChildren } = cascadeAbortToChildren(ts, tasks, taskId);
-        await saveTaskState(state.projectRoot, ts);
-        await log(
-          "task_aborted",
-          `task_id=${taskId} reason=disconnect_timeout journal_summary=${journal}`
-        );
-        for (const childId of revertedChildren) {
-          await log(
-            "child_reverted_to_draft",
-            `parent=${taskId} child=${childId} reason=parent_aborted`
-          );
-        }
-        if (revertedChildren.length > 0) {
-          notifyStateChanged("daemon.ts:forceCloseDisconnectedConductor:cascade");
-        }
+      const detail = `${formatSurface(conductor.surface, "C")} taskRunId=${taskRunId ?? "-"} disconnectedAt=${conductor.disconnectedAt}`;
+      const { revertedChildren } = await markTaskAborted(
+        state.projectRoot,
+        taskId,
+        "disconnect_timeout",
+        detail,
+      );
+      if (revertedChildren.length > 0) {
+        notifyStateChanged("daemon.ts:forceCloseDisconnectedConductor:cascade");
       }
     } catch (e: any) {
       await log(
@@ -3155,32 +3118,26 @@ async function handleConductorDone(
     );
     // T269: preserveWorktree 経路でも task-state は `aborted` に倒す。
     //       assigned のまま残すと applyResumeTransitions が resume 対象と誤分類する。
-    //       共通パターン: user_clear (daemon.ts:2132) と同形。将来 markTaskAborted
-    //       ヘルパーに抽出予定（Decision D1）。journal には opts?.reason を埋めて
-    //       事故後に grep で因果追跡できるようにする（Decision D3）。
+    // T290: markTaskAborted に集約。journal は `reason=judgment_pending;
+    //       conductor_done_unresolved: <opts.reason> (worktree=...) taskRunId=...` 形式。
+    //       log reason（judgment_pending）と journal prefix は同一引数から組み立てるため
+    //       T269 の型乖離は構造的に再発不能。
     try {
-      const current = taskState[taskId];
-      if (current?.status !== "closed" && current?.status !== "aborted" && current?.status !== "deleted") {
-        const journal = `conductor_done_unresolved: ${opts?.reason ?? "-"} (worktree=${conductor.worktreePath ?? "-"}) taskRunId=${conductor.taskRunId ?? "-"}`;
-        taskState[taskId] = { ...current, status: "aborted", abortedAt: new Date().toISOString(), journal };
-        const { tasks } = await loadTasks(state.projectRoot);
-        const { revertedChildren } = cascadeAbortToChildren(taskState, tasks, taskId);
-        await saveTaskState(state.projectRoot, taskState);
-        await log("task_aborted", `task_id=${taskId} reason=judgment_pending`);
-        for (const childId of revertedChildren) {
-          await log(
-            "child_reverted_to_draft",
-            `parent=${taskId} child=${childId} reason=parent_aborted`
-          );
-        }
-        if (revertedChildren.length > 0) {
-          notifyStateChanged("daemon.ts:handleConductorDone:unresolved-cascade");
-        }
-      } else {
+      const detail = `conductor_done_unresolved: ${opts?.reason ?? "-"} (worktree=${conductor.worktreePath ?? "-"}) taskRunId=${conductor.taskRunId ?? "-"}`;
+      const { revertedChildren, idempotentSkip, existingStatus } = await markTaskAborted(
+        state.projectRoot,
+        taskId,
+        "judgment_pending",
+        detail,
+        { taskTitle: conductor.taskTitle },
+      );
+      if (idempotentSkip) {
         await log(
           "conductor_done_unresolved_skip",
-          `task_id=${taskId} reason=already_closed_or_aborted status=${current?.status}`
+          `task_id=${taskId} reason=already_closed_or_aborted status=${existingStatus}`
         );
+      } else if (revertedChildren.length > 0) {
+        notifyStateChanged("daemon.ts:handleConductorDone:unresolved-cascade");
       }
     } catch (e: any) {
       await log("error", `handleConductorDone judgment_pending update failed: task_id=${taskId} ${e.message}`);

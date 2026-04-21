@@ -4466,6 +4466,8 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       expect(tsAfter["263"]?.journal).toContain("conductor_done_unresolved");
       expect(tsAfter["263"]?.journal).toContain("rebase_conflict");
       expect(tsAfter["263"]?.journal).toContain(`worktree=${worktreePath}`);
+      // T290: journal は reason=judgment_pending; で始まる（log reason と journal prefix の構造的整合）
+      expect(tsAfter["263"]?.journal).toMatch(/^reason=judgment_pending;/);
       // task_aborted ログに reason=judgment_pending が記録される
       expect(log).toMatch(/task_aborted task_id=263 reason=judgment_pending/);
     } finally {
@@ -4604,6 +4606,8 @@ describe("handleConductorDone success/task-state 分岐 (T263)", () => {
       const tsAfter = await loadTaskStateC10(testDir);
       expect(tsAfter["266"]?.status).toBe("aborted");
       expect(tsAfter["266"]?.journal).toContain("conductor_done_unresolved");
+      // T290: journal は reason=judgment_pending; で始まる
+      expect(tsAfter["266"]?.journal).toMatch(/^reason=judgment_pending;/);
       expect(log).toMatch(/task_aborted task_id=266 reason=judgment_pending/);
     } finally {
       paneSpy.mockRestore();
@@ -4849,10 +4853,9 @@ describe("T269: preserveWorktree 経路のタスクが restart 時に resume さ
         now: () => new Date().toISOString(),
       });
 
-      // 期待: resume plan にも abortedTaskIds にも含まれない（既に aborted なので走査対象外）
+      // 期待: resume plan にも abortTargets にも含まれない（既に aborted なので走査対象外）
       expect(result.resumePlan.map((p) => p.taskId)).not.toContain("269");
-      expect(result.abortedTaskIds).not.toContain("269");
-      expect(result.modified).toBe(false);
+      expect(result.abortTargets.map((t) => t.taskId)).not.toContain("269");
     } finally {
       paneSpy.mockRestore();
     }

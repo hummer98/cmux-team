@@ -39,7 +39,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, type TaskState, type TaskMeta } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, type TaskState, type TaskMeta } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
@@ -273,6 +273,51 @@ async function findTaskFile(taskId: string): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * T291: ユーザー入力の task-id（数値 id / slug 先頭マッチ / ディレクトリ名全体）を
+ * frontmatter `id:` 値（canonical id）に正規化する。
+ *
+ * - `findTaskFile(inputId)` で該当タスクファイルを特定
+ * - frontmatter 先頭の `id: <value>` 行を読み出して canonical id を返す
+ * - ファイル不在 / id 行欠落 / 読み出し失敗時は undefined
+ *
+ * 呼び出し側はこの返り値で `taskState[id]` / `conductor.taskId === id` /
+ * `postMessage({ taskId: id })` を統一し、task-state.json に slug 入りの
+ * 孤児エントリが作られる事故を防ぐ（T291）。
+ */
+export async function resolveCanonicalTaskId(
+  inputId: string,
+): Promise<string | undefined> {
+  const taskFile = await findTaskFile(inputId);
+  if (!taskFile) return undefined;
+  try {
+    const content = await readFile(taskFile, "utf-8");
+    const idMatch = content.match(/^id:\s*(.+)$/m);
+    const canonical = idMatch?.[1]?.trim();
+    return canonical || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ---- T290: aborted task の表示用 helper -----------------------------------
+
+/**
+ * T290: aborted タスクの journal を表示用に整形する。
+ *
+ * parseAbortJournal を使って新 format（`reason=<reason>; <detail>`）と旧 format
+ * の両方を best-effort でパースし、`Task ${id} aborted [${reason}]: ${detail}`
+ * 形式で返す。reason が parse できない場合は `[unknown]` を使う。
+ *
+ * 呼び出し側: await-task stderr (cmdAwaitTask 内 2 箇所)、printSummaries (aborted 分岐)。
+ */
+export function formatAbortedTaskLine(id: string, journal: string | undefined): string {
+  const parsed = parseAbortJournal(journal);
+  const reason = parsed.reason ?? "unknown";
+  const detail = parsed.detail ?? (journal ?? "(no reason)");
+  return `Task ${id} aborted [${reason}]: ${detail}`;
+}
+
 // ---- T264: cmdStart 起動時 resume 判定 wrapper -----------------------------
 
 export interface ApplyResumeTransitionsDeps {
@@ -288,40 +333,43 @@ export interface ApplyResumeTransitionsResult {
     worktreePath: string;
     sessionId: string;
   }>;
-  /** 新規 aborted 化された task id（既に aborted だったものは含まない） */
-  abortedTaskIds: string[];
-  abortReasons: Record<string, "no_worktree" | "no_session_id" | "no_task_run_id">;
-  journals: Record<string, string>;
-  /** 親 taskId → cascade で draft に戻した子 id 群 */
-  revertedChildrenByParent: Record<string, string[]>;
-  /** state mutation が起きたかどうか（cascade 副作用も含む）。abort が 1 件でもあれば true */
-  modified: boolean;
+  /**
+   * T290: abort 対象の詳細。呼び出し側（cmdStart）が loop で
+   * `markTaskAborted(projectRoot, taskId, "resume_no_*", detail)` を呼ぶ。
+   * applyResumeTransitions 自体は taskState を mutate しない pure-ish function。
+   */
+  abortTargets: Array<{
+    taskId: string;
+    /** markTaskAborted に渡す reason（reason=resume_* prefix 付きで journal に記録される） */
+    reason: "resume_no_worktree" | "resume_no_session_id" | "resume_no_task_run_id";
+    /** classifyResumeAction が返す生の reason（log resume_marked_aborted 用） */
+    classifyReason: "no_worktree" | "no_session_id" | "no_task_run_id";
+    /** buildResumeAbortJournal の戻り値（markTaskAborted の detail 引数として渡す） */
+    detail: string;
+  }>;
 }
 
 /**
- * T264: cmdStart 内 resume 判定ループを切り出した wrapper。
+ * T264 (T290 改): cmdStart 内 resume 判定ループを切り出した pure-ish wrapper。
  *
- * - taskState をミュータブルに書き換える（aborted 化 + cascade 子 draft 化）
- * - emit は呼び出し側の責務。戻り値を消費して
- *   `resume_marked_aborted` → `task_aborted` → `child_reverted_to_draft` の
- *   順で log() を呼ぶこと（plan v2 D12）
- * - cascade は既存 aborted 化 4 経路と同じく `cascadeAbortToChildren` を同期呼出
- *   （CLAUDE.md §依存タスクの cascade を 5 経路 → 6 経路に拡張）
+ * - taskState は **mutate しない**（T290 破壊的変更）。呼び出し側が
+ *   `result.abortTargets` を loop で markTaskAborted に渡して aborted 遷移を行う
+ * - cascade は markTaskAborted 内で行われるため applyResumeTransitions は
+ *   cascadeAbortToChildren を呼ばない（T290 破壊的変更）
+ * - emit（resume_marked_aborted / task_aborted / child_reverted_to_draft）は
+ *   呼び出し側の責務。resume_marked_aborted のみ cmdStart が自前で emit し、
+ *   それ以外は markTaskAborted が emit する
+ * - deps.findTaskFile は detail 生成（buildResumeAbortJournal）でのみ使う
  */
 export async function applyResumeTransitions(
   taskState: Record<string, TaskState>,
-  allTasks: TaskMeta[],
+  _allTasks: TaskMeta[],
   deps: ApplyResumeTransitionsDeps,
 ): Promise<ApplyResumeTransitionsResult> {
   const exists = deps.exists ?? existsSync;
-  const now = deps.now ?? (() => new Date().toISOString());
 
   const resumePlan: ApplyResumeTransitionsResult["resumePlan"] = [];
-  const abortedTaskIds: string[] = [];
-  const abortReasons: ApplyResumeTransitionsResult["abortReasons"] = {};
-  const journals: Record<string, string> = {};
-  const revertedChildrenByParent: Record<string, string[]> = {};
-  let modified = false;
+  const abortTargets: ApplyResumeTransitionsResult["abortTargets"] = [];
 
   for (const [taskId, ts] of Object.entries(taskState)) {
     if (ts.status !== "assigned") continue;
@@ -338,25 +386,16 @@ export async function applyResumeTransitions(
     }
 
     const taskFile = await deps.findTaskFile(taskId);
-    const journal = buildResumeAbortJournal(taskFile, ts, action.reason);
-    taskState[taskId] = {
-      ...ts,
-      status: "aborted",
-      abortedAt: now(),
-      journal,
-    };
-    modified = true;
-    abortedTaskIds.push(taskId);
-    abortReasons[taskId] = action.reason;
-    journals[taskId] = journal;
-
-    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-    if (revertedChildren.length > 0) {
-      revertedChildrenByParent[taskId] = revertedChildren;
-    }
+    const detail = buildResumeAbortJournal(taskFile, ts, action.reason);
+    abortTargets.push({
+      taskId,
+      reason: `resume_${action.reason}` as ApplyResumeTransitionsResult["abortTargets"][number]["reason"],
+      classifyReason: action.reason,
+      detail,
+    });
   }
 
-  return { resumePlan, abortedTaskIds, abortReasons, journals, revertedChildrenByParent, modified };
+  return { resumePlan, abortTargets };
 }
 
 async function cmdStart(): Promise<void> {
@@ -821,31 +860,31 @@ async function cmdStart(): Promise<void> {
   //   ここでは resume ループ用に先取りする（どちらも読み取り専用）
   const { tasks: allTasksForResume } = await loadTasks(PROJECT_ROOT);
 
-  // T264: resume 不可（no_worktree / no_session_id / no_task_run_id）→ aborted 遷移 + cascade
+  // T264 (T290 改): resume 不可（no_worktree / no_session_id / no_task_run_id）→
+  //   applyResumeTransitions は判定のみ。taskState 書き換え + cascade + task_aborted log +
+  //   child_reverted_to_draft log は markTaskAborted に集約。
   const resumeResult = await applyResumeTransitions(taskState, allTasksForResume, {
     findTaskFile,
   });
   rawResumePlan.push(...resumeResult.resumePlan);
-  if (resumeResult.modified) taskStateModified = true;
 
-  for (const taskId of resumeResult.abortedTaskIds) {
-    const reason = resumeResult.abortReasons[taskId]!;
-    const journal = resumeResult.journals[taskId]!;
-    const ts = taskState[taskId]!;
+  for (const target of resumeResult.abortTargets) {
+    const ts = taskState[target.taskId]!;
     await log(
       "resume_marked_aborted",
-      `task_id=${taskId} reason=${reason} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`,
+      `task_id=${target.taskId} reason=${target.classifyReason} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`,
     );
-    await log(
-      "task_aborted",
-      `task_id=${taskId} reason=resume_${reason} journal_summary=${journal}`,
-    );
-    const revertedChildren = resumeResult.revertedChildrenByParent[taskId] ?? [];
-    for (const childId of revertedChildren) {
-      await log(
-        "child_reverted_to_draft",
-        `parent=${taskId} child=${childId} reason=parent_aborted`,
-      );
+    // T290: markTaskAborted が taskState を on-disk で更新し、task_aborted /
+    //       child_reverted_to_draft ログも内部で emit する。
+    await markTaskAborted(PROJECT_ROOT, target.taskId, target.reason, target.detail);
+  }
+
+  // markTaskAborted は on-disk を直接書き換えるため、in-memory taskState を再 load して同期する
+  if (resumeResult.abortTargets.length > 0) {
+    const refreshed = await loadTaskState(PROJECT_ROOT);
+    for (const k of Object.keys(refreshed)) taskState[k] = refreshed[k]!;
+    for (const k of Object.keys(taskState)) {
+      if (!(k in refreshed)) delete taskState[k];
     }
   }
 
@@ -2851,7 +2890,16 @@ async function cmdCreateTask(): Promise<void> {
 
 async function cmdUpdateTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_update_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug / ディレクトリ名を渡された場合でも frontmatter id: を
+  //       canonical key として扱う。以降の taskState[taskId] / postMessage({ taskId })
+  //       は canonical id で統一される。エラー表示は元の入力値を使う。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const newStatus = getArg("status");
   const body = getArg("body");
   const title = getArg("title");
@@ -2962,7 +3010,16 @@ async function cmdUpdateTask(): Promise<void> {
 
 async function cmdCloseTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_close_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug / ディレクトリ名を渡された場合でも frontmatter id: を
+  //       canonical key として扱う。以降の team.json.conductors[].taskId マッチも
+  //       canonical id で比較されるため CONDUCTOR_DONE が確実に発射される。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journal = getArg("journal");
   const force = args.includes("--force");
 
@@ -3064,7 +3121,7 @@ async function cmdAwaitTask(): Promise<void> {
       remaining.delete(id);
     }
     if (st.status === "aborted") {
-      console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+      console.error(formatAbortedTaskLine(id, st.journal));
       process.exit(1);
     }
   }
@@ -3098,7 +3155,7 @@ async function cmdAwaitTask(): Promise<void> {
           if (st?.status === "aborted") {
             clearTimeout(timer);
             watcher.close();
-            console.error(`Task ${id} was aborted: ${st.journal ?? "(no reason)"}`);
+            console.error(formatAbortedTaskLine(id, st.journal));
             process.exit(1);
           }
         }
@@ -3307,13 +3364,19 @@ async function printSummaries(taskIds: string[]): Promise<void> {
     }
 
     // summary が見つからない場合は journal を出力
+    // T290: aborted は reason prefix を parseAbortJournal で復元して表示
     const state = await loadTaskState(PROJECT_ROOT);
-    const journal = state[id]?.journal;
-    if (journal) {
+    const st = state[id];
+    if (st?.status === "aborted") {
       if (taskIds.length > 1) {
         console.log(`\n--- Task ${id} ---`);
       }
-      console.log(journal);
+      console.log(formatAbortedTaskLine(id, st.journal));
+    } else if (st?.journal) {
+      if (taskIds.length > 1) {
+        console.log(`\n--- Task ${id} ---`);
+      }
+      console.log(st.journal);
     } else {
       console.log(`Task ${id}: closed (no summary available)`);
     }
@@ -3436,7 +3499,14 @@ async function cmdClearConductor(): Promise<void> {
 
 async function cmdAbortTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_abort_task"));
-  const taskId = requireArg("task-id");
+  // T291: canonical 不明で exit 1（孤児 taskState を生まないための安全側）
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   // タスクタイトル取得（journal デフォルト生成用）
@@ -3449,15 +3519,12 @@ async function cmdAbortTask(): Promise<void> {
   const journal = journalArg ?? t("abort_journal_default", { id: taskId, title }).replace(/\s+$/, "");
 
   // 1. タスク状態を確認
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  const currentStatus = taskState[taskId]?.status;
+  const taskStateForCheck = await loadTaskState(PROJECT_ROOT);
+  const currentStatus = taskStateForCheck[taskId]?.status;
   if (currentStatus !== "assigned") {
     console.error(`Error: task ${taskId} is not assigned (current status: ${currentStatus ?? "unknown"}). Only assigned tasks can be aborted.`);
     process.exit(1);
   }
-
-  // T241: cascade 用にタスクメタを 1 回だけロード（両分岐で共有）
-  const { tasks: allTasks } = await loadTasks(PROJECT_ROOT);
 
   // 2. team.json から該当 Conductor を特定
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
@@ -3471,23 +3538,9 @@ async function cmdAbortTask(): Promise<void> {
   const conductor = teamJson.conductors?.find((c: any) => c.taskId === taskId);
   if (!conductor) {
     console.error(`Error: no conductor found for task ${taskId}`);
-    // タスク状態だけ aborted にする
-    taskState[taskId] = {
-      ...taskState[taskId],
-      status: "aborted",
-      abortedAt: new Date().toISOString(),
-      journal,
-    };
-    // T241: depends_on 親 abort → ready 子を draft に戻す
-    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-    await saveTaskState(PROJECT_ROOT, taskState);
-    await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
-    for (const childId of revertedChildren) {
-      await log(
-        "child_reverted_to_draft",
-        `parent=${taskId} child=${childId} reason=parent_aborted`
-      );
-    }
+    // T290: taskState 書き換え・cascade・task_aborted log・child_reverted_to_draft log を
+    //       markTaskAborted に集約。journal は detail として渡す（reason=abort_task; prefix が付く）
+    await markTaskAborted(PROJECT_ROOT, taskId, "abort_task", journal, { taskTitle: title });
     // conductor 不在のため CONDUCTOR_DONE は送れない。TUI 即時反映のため TASK_UPDATED を送る
     const taskFilePath = await findTaskFile(taskId);
     await postMessage({
@@ -3511,24 +3564,9 @@ async function cmdAbortTask(): Promise<void> {
     );
   }
 
-  // 6. タスク状態を aborted に変更
-  taskState[taskId] = {
-    ...taskState[taskId],
-    status: "aborted",
-    abortedAt: new Date().toISOString(),
-    journal,
-  };
-  // T241: depends_on 親 abort → ready 子を draft に戻す
-  const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-  await saveTaskState(PROJECT_ROOT, taskState);
-
-  await log("task_aborted", `task_id=${taskId} reason=abort_task${title ? ` title=${title}` : ""} journal_summary=${journal}`);
-  for (const childId of revertedChildren) {
-    await log(
-      "child_reverted_to_draft",
-      `parent=${taskId} child=${childId} reason=parent_aborted`
-    );
-  }
+  // 6. T290: taskState 書き換え・cascade・task_aborted log・child_reverted_to_draft log を
+  //          markTaskAborted に集約。journal は detail として渡す。
+  await markTaskAborted(PROJECT_ROOT, taskId, "abort_task", journal, { taskTitle: title });
 
   // タスク-セッション索引に記録
   try {
@@ -3634,7 +3672,14 @@ async function restartFromAborted(
 
 async function cmdRestartTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_restart_task"));
-  const taskId = requireArg("task-id");
+  // T291: canonical 不明で exit 1（孤児 taskState を生まないための安全側）
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   // タスクタイトル取得（journal デフォルト生成用）
@@ -3742,7 +3787,15 @@ async function cmdRestartTask(): Promise<void> {
 
 async function cmdDeleteTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_delete_task"));
-  const taskId = requireArg("task-id");
+  // T291: --task-id に slug を渡されても canonical id で taskState を更新する。
+  //       cascadeAbortToChildren も canonical id で走る。
+  const taskIdInput = requireArg("task-id");
+  const canonical = await resolveCanonicalTaskId(taskIdInput);
+  if (!canonical) {
+    console.error(`Error: task ${taskIdInput} not found in .team/tasks/`);
+    process.exit(1);
+  }
+  const taskId = canonical;
   const journalArg = getArg("journal");
 
   const taskFile = await findTaskFile(taskId);
