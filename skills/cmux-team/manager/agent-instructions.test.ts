@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -16,15 +15,22 @@ import {
 } from "./agent-instructions";
 import { AGENT_ROLES, normalizeAgentRole } from "./schema";
 import { expandProjectInstructions } from "./template";
+import { createDummyProject, type DummyProject } from "./test-project";
 
+let project: DummyProject;
 let projectRoot: string;
 
 beforeEach(async () => {
-  projectRoot = await mkdtemp(join(tmpdir(), "cmux-agent-inst-"));
+  project = await createDummyProject({
+    prefix: "cmux-agent-inst-",
+    subdirs: [],
+    setProjectRootEnv: false,
+  });
+  projectRoot = project.root;
 });
 
 afterEach(async () => {
-  try { await rm(projectRoot, { recursive: true, force: true }); } catch {}
+  await project.dispose();
 });
 
 // --- §7.1 test 1-2: formatProjectInstructionsBlock (null / empty) ---
