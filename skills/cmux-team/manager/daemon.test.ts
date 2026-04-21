@@ -4853,10 +4853,9 @@ describe("T269: preserveWorktree 経路のタスクが restart 時に resume さ
         now: () => new Date().toISOString(),
       });
 
-      // 期待: resume plan にも abortedTaskIds にも含まれない（既に aborted なので走査対象外）
+      // 期待: resume plan にも abortTargets にも含まれない（既に aborted なので走査対象外）
       expect(result.resumePlan.map((p) => p.taskId)).not.toContain("269");
-      expect(result.abortedTaskIds).not.toContain("269");
-      expect(result.modified).toBe(false);
+      expect(result.abortTargets.map((t) => t.taskId)).not.toContain("269");
     } finally {
       paneSpy.mockRestore();
     }

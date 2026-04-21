@@ -1369,7 +1369,7 @@ describe("normalizeSurfaceArg (T206)", () => {
   });
 });
 
-describe("T264: applyResumeTransitions (cmdStart resume)", () => {
+describe("T264 (T290 改): applyResumeTransitions (cmdStart resume)", () => {
   /** テスト用 TaskMeta ファクトリ（Finding 1 対応） */
   const makeMeta = (id: string, dependsOn: string[] = []): TaskMeta => ({
     id,
@@ -1407,12 +1407,12 @@ describe("T264: applyResumeTransitions (cmdStart resume)", () => {
       worktreePath: "/tmp/exists",
       sessionId: "s",
     });
-    expect(result.abortedTaskIds).toEqual([]);
-    expect(result.modified).toBe(false);
+    expect(result.abortTargets).toEqual([]);
+    // T290: applyResumeTransitions は taskState を mutate しない
     expect(taskState["1"]!.status).toBe("assigned");
   });
 
-  test("(b) assigned + worktree 不在 → aborted 化 + journal", async () => {
+  test("(b) assigned + worktree 不在 → abortTargets に no_worktree + detail", async () => {
     const taskState: Record<string, TaskState> = {
       "1": {
         status: "assigned",
@@ -1426,18 +1426,24 @@ describe("T264: applyResumeTransitions (cmdStart resume)", () => {
       exists: () => false,
       now: fixedNow,
     });
-    expect(result.abortedTaskIds).toEqual(["1"]);
-    expect(result.abortReasons["1"]).toBe("no_worktree");
-    expect(result.journals["1"]).toContain(".team/tasks/1-foo/runs/task-1-123/");
-    expect(result.journals["1"]).toContain("[resume] lost worktree");
-    expect(result.modified).toBe(true);
-    expect(taskState["1"]!.status).toBe("aborted");
-    expect(taskState["1"]!.abortedAt).toBe("2026-04-19T12:00:00Z");
-    expect(taskState["1"]!.journal).toBe(result.journals["1"]);
+    expect(result.abortTargets).toHaveLength(1);
+    const target = result.abortTargets[0]!;
+    expect(target.taskId).toBe("1");
+    expect(target.classifyReason).toBe("no_worktree");
+    expect(target.reason).toBe("resume_no_worktree");
+    expect(target.detail).toContain(".team/tasks/1-foo/runs/task-1-123/");
+    expect(target.detail).toContain("[resume] lost worktree");
+    // T290: taskState は mutate されない — aborted 化は呼び出し側 markTaskAborted の責務
+    expect(taskState["1"]!.status).toBe("assigned");
+    expect(taskState["1"]!.abortedAt).toBeUndefined();
+    expect(taskState["1"]!.journal).toBeUndefined();
     expect(result.resumePlan).toEqual([]);
   });
 
-  test("(c) 親 aborted → ready 子 draft に戻す（cascade 検証）", async () => {
+  test("(c) 親 assigned + worktree 不在 → abortTargets + cascade は呼び出し側", async () => {
+    // T290 破壊的変更: applyResumeTransitions は cascade を行わない。
+    //   markTaskAborted 側で cascade を行う設計のため、本関数の責務は
+    //   「abort 対象を列挙する」ことだけ。
     const taskState: Record<string, TaskState> = {
       "1": {
         status: "assigned",
@@ -1453,11 +1459,11 @@ describe("T264: applyResumeTransitions (cmdStart resume)", () => {
       exists: () => false,
       now: fixedNow,
     });
-    expect(result.abortedTaskIds).toEqual(["1"]);
-    expect(result.revertedChildrenByParent["1"]).toEqual(["2"]);
-    expect(taskState["2"]!.status).toBe("draft");
-    expect(taskState["2"]!.journal).toContain("parent_aborted: 1");
-    expect(taskState["1"]!.status).toBe("aborted");
+    expect(result.abortTargets.map((t) => t.taskId)).toEqual(["1"]);
+    expect(result.abortTargets[0]!.reason).toBe("resume_no_worktree");
+    // taskState は mutate されない
+    expect(taskState["1"]!.status).toBe("assigned");
+    expect(taskState["2"]!.status).toBe("ready");
   });
 
   test("(d) ready タスクは無影響", async () => {
@@ -1470,8 +1476,7 @@ describe("T264: applyResumeTransitions (cmdStart resume)", () => {
       now: fixedNow,
     });
     expect(result.resumePlan).toEqual([]);
-    expect(result.abortedTaskIds).toEqual([]);
-    expect(result.modified).toBe(false);
+    expect(result.abortTargets).toEqual([]);
     expect(taskState["5"]!.status).toBe("ready");
   });
 });

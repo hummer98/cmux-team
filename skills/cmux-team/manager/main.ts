@@ -288,40 +288,43 @@ export interface ApplyResumeTransitionsResult {
     worktreePath: string;
     sessionId: string;
   }>;
-  /** 新規 aborted 化された task id（既に aborted だったものは含まない） */
-  abortedTaskIds: string[];
-  abortReasons: Record<string, "no_worktree" | "no_session_id" | "no_task_run_id">;
-  journals: Record<string, string>;
-  /** 親 taskId → cascade で draft に戻した子 id 群 */
-  revertedChildrenByParent: Record<string, string[]>;
-  /** state mutation が起きたかどうか（cascade 副作用も含む）。abort が 1 件でもあれば true */
-  modified: boolean;
+  /**
+   * T290: abort 対象の詳細。呼び出し側（cmdStart）が loop で
+   * `markTaskAborted(projectRoot, taskId, "resume_no_*", detail)` を呼ぶ。
+   * applyResumeTransitions 自体は taskState を mutate しない pure-ish function。
+   */
+  abortTargets: Array<{
+    taskId: string;
+    /** markTaskAborted に渡す reason（reason=resume_* prefix 付きで journal に記録される） */
+    reason: "resume_no_worktree" | "resume_no_session_id" | "resume_no_task_run_id";
+    /** classifyResumeAction が返す生の reason（log resume_marked_aborted 用） */
+    classifyReason: "no_worktree" | "no_session_id" | "no_task_run_id";
+    /** buildResumeAbortJournal の戻り値（markTaskAborted の detail 引数として渡す） */
+    detail: string;
+  }>;
 }
 
 /**
- * T264: cmdStart 内 resume 判定ループを切り出した wrapper。
+ * T264 (T290 改): cmdStart 内 resume 判定ループを切り出した pure-ish wrapper。
  *
- * - taskState をミュータブルに書き換える（aborted 化 + cascade 子 draft 化）
- * - emit は呼び出し側の責務。戻り値を消費して
- *   `resume_marked_aborted` → `task_aborted` → `child_reverted_to_draft` の
- *   順で log() を呼ぶこと（plan v2 D12）
- * - cascade は既存 aborted 化 4 経路と同じく `cascadeAbortToChildren` を同期呼出
- *   （CLAUDE.md §依存タスクの cascade を 5 経路 → 6 経路に拡張）
+ * - taskState は **mutate しない**（T290 破壊的変更）。呼び出し側が
+ *   `result.abortTargets` を loop で markTaskAborted に渡して aborted 遷移を行う
+ * - cascade は markTaskAborted 内で行われるため applyResumeTransitions は
+ *   cascadeAbortToChildren を呼ばない（T290 破壊的変更）
+ * - emit（resume_marked_aborted / task_aborted / child_reverted_to_draft）は
+ *   呼び出し側の責務。resume_marked_aborted のみ cmdStart が自前で emit し、
+ *   それ以外は markTaskAborted が emit する
+ * - deps.findTaskFile は detail 生成（buildResumeAbortJournal）でのみ使う
  */
 export async function applyResumeTransitions(
   taskState: Record<string, TaskState>,
-  allTasks: TaskMeta[],
+  _allTasks: TaskMeta[],
   deps: ApplyResumeTransitionsDeps,
 ): Promise<ApplyResumeTransitionsResult> {
   const exists = deps.exists ?? existsSync;
-  const now = deps.now ?? (() => new Date().toISOString());
 
   const resumePlan: ApplyResumeTransitionsResult["resumePlan"] = [];
-  const abortedTaskIds: string[] = [];
-  const abortReasons: ApplyResumeTransitionsResult["abortReasons"] = {};
-  const journals: Record<string, string> = {};
-  const revertedChildrenByParent: Record<string, string[]> = {};
-  let modified = false;
+  const abortTargets: ApplyResumeTransitionsResult["abortTargets"] = [];
 
   for (const [taskId, ts] of Object.entries(taskState)) {
     if (ts.status !== "assigned") continue;
@@ -338,25 +341,16 @@ export async function applyResumeTransitions(
     }
 
     const taskFile = await deps.findTaskFile(taskId);
-    const journal = buildResumeAbortJournal(taskFile, ts, action.reason);
-    taskState[taskId] = {
-      ...ts,
-      status: "aborted",
-      abortedAt: now(),
-      journal,
-    };
-    modified = true;
-    abortedTaskIds.push(taskId);
-    abortReasons[taskId] = action.reason;
-    journals[taskId] = journal;
-
-    const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-    if (revertedChildren.length > 0) {
-      revertedChildrenByParent[taskId] = revertedChildren;
-    }
+    const detail = buildResumeAbortJournal(taskFile, ts, action.reason);
+    abortTargets.push({
+      taskId,
+      reason: `resume_${action.reason}` as ApplyResumeTransitionsResult["abortTargets"][number]["reason"],
+      classifyReason: action.reason,
+      detail,
+    });
   }
 
-  return { resumePlan, abortedTaskIds, abortReasons, journals, revertedChildrenByParent, modified };
+  return { resumePlan, abortTargets };
 }
 
 async function cmdStart(): Promise<void> {
@@ -821,31 +815,31 @@ async function cmdStart(): Promise<void> {
   //   ここでは resume ループ用に先取りする（どちらも読み取り専用）
   const { tasks: allTasksForResume } = await loadTasks(PROJECT_ROOT);
 
-  // T264: resume 不可（no_worktree / no_session_id / no_task_run_id）→ aborted 遷移 + cascade
+  // T264 (T290 改): resume 不可（no_worktree / no_session_id / no_task_run_id）→
+  //   applyResumeTransitions は判定のみ。taskState 書き換え + cascade + task_aborted log +
+  //   child_reverted_to_draft log は markTaskAborted に集約。
   const resumeResult = await applyResumeTransitions(taskState, allTasksForResume, {
     findTaskFile,
   });
   rawResumePlan.push(...resumeResult.resumePlan);
-  if (resumeResult.modified) taskStateModified = true;
 
-  for (const taskId of resumeResult.abortedTaskIds) {
-    const reason = resumeResult.abortReasons[taskId]!;
-    const journal = resumeResult.journals[taskId]!;
-    const ts = taskState[taskId]!;
+  for (const target of resumeResult.abortTargets) {
+    const ts = taskState[target.taskId]!;
     await log(
       "resume_marked_aborted",
-      `task_id=${taskId} reason=${reason} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`,
+      `task_id=${target.taskId} reason=${target.classifyReason} worktreePath=${ts.worktreePath ?? "null"} sessionId=${ts.sessionId ? "present" : "absent"} taskRunId=${ts.taskRunId ?? "null"}`,
     );
-    await log(
-      "task_aborted",
-      `task_id=${taskId} reason=resume_${reason} journal_summary=${journal}`,
-    );
-    const revertedChildren = resumeResult.revertedChildrenByParent[taskId] ?? [];
-    for (const childId of revertedChildren) {
-      await log(
-        "child_reverted_to_draft",
-        `parent=${taskId} child=${childId} reason=parent_aborted`,
-      );
+    // T290: markTaskAborted が taskState を on-disk で更新し、task_aborted /
+    //       child_reverted_to_draft ログも内部で emit する。
+    await markTaskAborted(PROJECT_ROOT, target.taskId, target.reason, target.detail);
+  }
+
+  // markTaskAborted は on-disk を直接書き換えるため、in-memory taskState を再 load して同期する
+  if (resumeResult.abortTargets.length > 0) {
+    const refreshed = await loadTaskState(PROJECT_ROOT);
+    for (const k of Object.keys(refreshed)) taskState[k] = refreshed[k]!;
+    for (const k of Object.keys(taskState)) {
+      if (!(k in refreshed)) delete taskState[k];
     }
   }
 
