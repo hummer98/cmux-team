@@ -676,6 +676,8 @@ SHA 比較、ancestor 関係）を収集する。
 判定順序: `detached` → `uncommitted` → remote/local 不在（`no-remote` / feature 側は
 `no-local` 扱い） → SHA 比較（`clean` / `behind-ff` / `ahead` / `diverged`）。
 
+> **注（T298）**: `uncommitted` 判定では `.team/` 配下の変更は除外される（`git status --porcelain -- . :(exclude).team`）。cmux-team 自身がタスクファイル・アーティファクト・ログ等を `.team/` 配下に書き込むため、これらを dirty に数えると ready 昇格が常に reject されてしまうため。
+
 ### bypass 手段
 
 | 手段 | 用途 | ログ |

@@ -228,7 +228,9 @@ export async function collectSyncFacts(
   let hasUncommittedOnMain = false;
   if (headStatus === "on-main") {
     try {
-      const out = await git(["status", "--porcelain"]);
+      // T298: `.team/` 配下の変更は cmux-team 自身が書き込むため uncommitted から除外。
+      // pathspec magic `:(exclude).team` で git 側で除外させ、porcelain 出力の自前パースを避ける。
+      const out = await git(["status", "--porcelain", "--", ".", ":(exclude).team"]);
       hasUncommittedOnMain = out.trim().length > 0;
     } catch {
       hasUncommittedOnMain = false;

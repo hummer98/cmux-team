@@ -265,7 +265,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc123",
       "rev-parse HEAD": "abc123",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "abc123",
       "rev-parse main": "abc123",
       "merge-base --is-ancestor origin/main main": "",
@@ -291,7 +291,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": exitError(1),
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc123",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse main": "abc123",
     });
     const facts = await collectSyncFacts("/tmp", {
@@ -310,7 +310,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": exitError(1),
       "symbolic-ref --short -q HEAD": "feature/x",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "abc",
     });
     const facts = await collectSyncFacts("/tmp", {
@@ -329,7 +329,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
       "symbolic-ref --short -q HEAD": exitError(1),
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "abc",
       "rev-parse main": "abc",
       "merge-base --is-ancestor origin/main main": "",
@@ -349,7 +349,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": " M foo.txt\n?? bar.txt\n",
+      "status --porcelain -- . :(exclude).team": " M foo.txt\n?? bar.txt\n",
       "rev-parse origin/main": "abc",
       "rev-parse main": "abc",
       "merge-base --is-ancestor origin/main main": "",
@@ -369,7 +369,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
       "symbolic-ref --short -q HEAD": "topic",
-      "status --porcelain": " M foo.txt\n",
+      "status --porcelain -- . :(exclude).team": " M foo.txt\n",
       "rev-parse origin/main": "abc",
       "rev-parse main": "abc",
       "merge-base --is-ancestor origin/main main": "",
@@ -389,7 +389,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "old",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "new",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "old",
       "rev-parse main": "new",
       "merge-base --is-ancestor origin/main main": "",
@@ -409,7 +409,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "new",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "old",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "new",
       "rev-parse main": "old",
       "merge-base --is-ancestor origin/main main": exitError(1),
@@ -429,7 +429,7 @@ describe("collectSyncFacts — stub 経由", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "x",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "y",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "x",
       "rev-parse main": "y",
       "merge-base --is-ancestor origin/main main": exitError(1),
@@ -453,7 +453,7 @@ describe("collectSyncFacts — stub 経由", () => {
       if (key === "rev-parse --verify --quiet refs/remotes/origin/main^{commit}") return "abc";
       if (key === "rev-parse --verify --quiet refs/heads/main^{commit}") return "abc";
       if (key === "symbolic-ref --short -q HEAD") return "main";
-      if (key === "status --porcelain") return "";
+      if (key === "status --porcelain -- . :(exclude).team") return "";
       if (key === "rev-parse origin/main") return "abc";
       if (key === "rev-parse main") return "abc";
       if (key === "merge-base --is-ancestor origin/main main") return "";
@@ -474,7 +474,7 @@ describe("collectSyncFacts — stub 経由", () => {
       if (key === "rev-parse --verify --quiet refs/remotes/origin/main^{commit}") return "abc";
       if (key === "rev-parse --verify --quiet refs/heads/main^{commit}") return "abc";
       if (key === "symbolic-ref --short -q HEAD") return "main";
-      if (key === "status --porcelain") return "";
+      if (key === "status --porcelain -- . :(exclude).team") return "";
       if (key === "rev-parse origin/main") return "abc";
       if (key === "rev-parse main") return "abc";
       if (key === "merge-base --is-ancestor origin/main main") return "";
@@ -488,6 +488,71 @@ describe("collectSyncFacts — stub 経由", () => {
     });
     expect(facts.originSha).toBe("abc");
   });
+
+  // T298: `.team/` 配下は uncommitted 判定から除外される
+  test(".team/ のみ dirty → hasUncommittedOnMain=false (pathspec exclude で空文字)", async () => {
+    const stub = makeGitStub({
+      "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
+      "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
+      "symbolic-ref --short -q HEAD": "main",
+      // pathspec `:(exclude).team` により git 側で除外され空文字が返る
+      "status --porcelain -- . :(exclude).team": "",
+      "rev-parse origin/main": "abc",
+      "rev-parse main": "abc",
+      "merge-base --is-ancestor origin/main main": "",
+      "merge-base --is-ancestor main origin/main": "",
+    });
+    const facts = await collectSyncFacts("/tmp", {
+      mainBranch: "main",
+      doFetch: false,
+      git: stub,
+    });
+    expect(facts.headStatus).toBe("on-main");
+    expect(facts.hasUncommittedOnMain).toBe(false);
+    // decideSyncState が clean に分類する（SHA 一致 + 未変更）
+    expect(decideSyncState(facts)).toBe("clean");
+  });
+
+  test("他ファイルのみ dirty → hasUncommittedOnMain=true（既存挙動維持）", async () => {
+    const stub = makeGitStub({
+      "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
+      "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
+      "symbolic-ref --short -q HEAD": "main",
+      "status --porcelain -- . :(exclude).team": " M src/foo.ts\n",
+      "rev-parse origin/main": "abc",
+      "rev-parse main": "abc",
+      "merge-base --is-ancestor origin/main main": "",
+      "merge-base --is-ancestor main origin/main": "",
+    });
+    const facts = await collectSyncFacts("/tmp", {
+      mainBranch: "main",
+      doFetch: false,
+      git: stub,
+    });
+    expect(facts.hasUncommittedOnMain).toBe(true);
+    expect(decideSyncState(facts)).toBe("uncommitted");
+  });
+
+  test(".team/ + 他ファイル両方 dirty → uncommitted（他ファイルが残る）", async () => {
+    const stub = makeGitStub({
+      "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
+      "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
+      "symbolic-ref --short -q HEAD": "main",
+      // `.team/` は除外され、他ファイル分のみが残る想定
+      "status --porcelain -- . :(exclude).team": " M src/foo.ts\n",
+      "rev-parse origin/main": "abc",
+      "rev-parse main": "abc",
+      "merge-base --is-ancestor origin/main main": "",
+      "merge-base --is-ancestor main origin/main": "",
+    });
+    const facts = await collectSyncFacts("/tmp", {
+      mainBranch: "main",
+      doFetch: false,
+      git: stub,
+    });
+    expect(facts.hasUncommittedOnMain).toBe(true);
+    expect(decideSyncState(facts)).toBe("uncommitted");
+  });
 });
 
 // --- checkSyncState e2e ---
@@ -498,7 +563,7 @@ describe("checkSyncState — e2e (collect + decide + classify)", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "abc",
       "rev-parse main": "abc",
       "merge-base --is-ancestor origin/main main": "",
@@ -518,7 +583,7 @@ describe("checkSyncState — e2e (collect + decide + classify)", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "x",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "y",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": "",
+      "status --porcelain -- . :(exclude).team": "",
       "rev-parse origin/main": "x",
       "rev-parse main": "y",
       "merge-base --is-ancestor origin/main main": exitError(1),
@@ -542,7 +607,7 @@ describe("checkSyncState — e2e (collect + decide + classify)", () => {
       "rev-parse --verify --quiet refs/remotes/origin/main^{commit}": "abc",
       "rev-parse --verify --quiet refs/heads/main^{commit}": "abc",
       "symbolic-ref --short -q HEAD": "main",
-      "status --porcelain": " M x.txt\n",
+      "status --porcelain -- . :(exclude).team": " M x.txt\n",
       "rev-parse origin/main": "abc",
       "rev-parse main": "abc",
       "merge-base --is-ancestor origin/main main": "",
