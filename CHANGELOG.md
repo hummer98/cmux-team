@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-04-23
+
+### Fixed
+
+- **ready 昇格時の sync check が `.team/` の変更を dirty と誤判定する問題を修正（T298）**。cmux-team 自身が `.team/` 配下にタスク・アーティファクト・ログを書き込むため、`collectSyncFacts` が `.team/` の untracked エントリを uncommitted としてカウントすると、ほぼ常に `ready_rejected` で昇格が拒否されていた。`git status --porcelain` の呼び出しに pathspec `:(exclude).team` を追加して `.team/` 配下の変更を除外。3 件の新規テストケース（`.team/` のみ dirty → clean / 他ファイル dirty → uncommitted / 混在 → uncommitted）を追加
+
 ## [4.5.0] - 2026-04-22
 
 ### Fixed
