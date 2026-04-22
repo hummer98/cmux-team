@@ -23,7 +23,7 @@ export interface TaskMeta {
   createdAt: string;  // ISO 8601 datetime
   baseBranch?: string;  // マージ先ブランチ（未指定時は暗黙的に main）
   taskDir?: string;  // フォルダ構造の場合のディレクトリパス
-  /** タスク種別（frontmatter kind フィールド）。例: "cmux-team-update" */
+  /** タスク種別（frontmatter kind フィールド）。旧アーカイブ互換のため読み取りのみ維持。 */
   kind?: string;
   /** T229: 作成元 surface（`surface:NNN`）。frontmatter `created_by` 由来 */
   createdBy?: string;

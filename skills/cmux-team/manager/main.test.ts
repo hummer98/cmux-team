@@ -281,20 +281,23 @@ describe("resolveLayout (T176)", () => {
   });
 });
 
-describe("resolveAutoUpdateMode (T187)", () => {
-  test("env=1 → task, source=env（config を上書き）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "1" }))
-      .toEqual({ mode: "task", source: "env" });
+describe("resolveAutoUpdateMode (T187/T294)", () => {
+  // T294: v4.5.0 で autoUpdate の `task` モードと boolean 後方互換を削除した。
+  // 以下 3 ケースは reject される（破壊的変更）。
+
+  test("env=1 → throw（T294 で削除）", () => {
+    expect(() => resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "1" }))
+      .toThrow(/unknown CMUX_TEAM_AUTO_UPDATE/);
   });
 
-  test("env=true → task, source=env", () => {
-    expect(resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "true" }))
-      .toEqual({ mode: "task", source: "env" });
+  test("env=true → throw（T294 で削除）", () => {
+    expect(() => resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "true" }))
+      .toThrow(/unknown CMUX_TEAM_AUTO_UPDATE/);
   });
 
-  test("env=task → task, source=env", () => {
-    expect(resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "task" }))
-      .toEqual({ mode: "task", source: "env" });
+  test("env=task → throw（T294 で削除）", () => {
+    expect(() => resolveAutoUpdateMode({}, { CMUX_TEAM_AUTO_UPDATE: "task" }))
+      .toThrow(/unknown CMUX_TEAM_AUTO_UPDATE/);
   });
 
   test("env=notify → notify, source=env", () => {
@@ -302,34 +305,39 @@ describe("resolveAutoUpdateMode (T187)", () => {
       .toEqual({ mode: "notify", source: "env" });
   });
 
-  test("env=0 → off, source=env（config=true を上書き）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "0" }))
+  test("env=0 → off, source=env（config=\"notify\" を上書き）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: "notify" }, { CMUX_TEAM_AUTO_UPDATE: "0" }))
       .toEqual({ mode: "off", source: "env" });
   });
 
-  test("env=false → off, source=env（config=true を上書き）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "false" }))
+  test("env=false → off, source=env（config=\"notify\" を上書き）", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: "notify" }, { CMUX_TEAM_AUTO_UPDATE: "false" }))
       .toEqual({ mode: "off", source: "env" });
   });
 
   test("env=off → off, source=env", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "off" }))
+    expect(resolveAutoUpdateMode({ autoUpdate: "notify" }, { CMUX_TEAM_AUTO_UPDATE: "off" }))
       .toEqual({ mode: "off", source: "env" });
   });
 
-  test("env 空文字は未設定扱い → config にフォールバック（後方互換 true→task）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, { CMUX_TEAM_AUTO_UPDATE: "" }))
-      .toEqual({ mode: "task", source: "config" });
+  test("env 空文字は未設定扱い → config にフォールバック", () => {
+    expect(resolveAutoUpdateMode({ autoUpdate: "notify" }, { CMUX_TEAM_AUTO_UPDATE: "" }))
+      .toEqual({ mode: "notify", source: "config" });
   });
 
-  test("env 未設定 + config=true → task, source=config（後方互換）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: true }, {}))
-      .toEqual({ mode: "task", source: "config" });
+  test("env 未設定 + config=true → throw（T294 で boolean を削除）", () => {
+    expect(() => resolveAutoUpdateMode({ autoUpdate: true as any }, {}))
+      .toThrow(/unknown autoUpdate/);
   });
 
-  test("env 未設定 + config=false → off, source=config（後方互換）", () => {
-    expect(resolveAutoUpdateMode({ autoUpdate: false }, {}))
-      .toEqual({ mode: "off", source: "config" });
+  test("env 未設定 + config=false → throw（T294 で boolean を削除）", () => {
+    expect(() => resolveAutoUpdateMode({ autoUpdate: false as any }, {}))
+      .toThrow(/unknown autoUpdate/);
+  });
+
+  test("env 未設定 + config=\"task\" → throw（T294 で task モードを削除）", () => {
+    expect(() => resolveAutoUpdateMode({ autoUpdate: "task" as any }, {}))
+      .toThrow(/unknown autoUpdate/);
   });
 
   test("env 未設定 + config=\"notify\" → notify, source=config", () => {
@@ -353,13 +361,23 @@ describe("resolveAutoUpdateMode (T187)", () => {
   });
 });
 
-describe("normalizeAutoUpdate (T187)", () => {
-  test("true → task", () => {
-    expect(normalizeAutoUpdate(true)).toBe("task");
+describe("normalizeAutoUpdate (T187/T294)", () => {
+  // T294: v4.5.0 で boolean 後方互換および `"task"` 受理を削除
+
+  test("true → throw（T294 で削除）", () => {
+    expect(() => normalizeAutoUpdate(true)).toThrow(/unknown autoUpdate/);
   });
 
-  test("false → off", () => {
-    expect(normalizeAutoUpdate(false)).toBe("off");
+  test("false → throw（T294 で削除）", () => {
+    expect(() => normalizeAutoUpdate(false)).toThrow(/unknown autoUpdate/);
+  });
+
+  test("\"task\" → throw（T294 で削除）", () => {
+    expect(() => normalizeAutoUpdate("task")).toThrow(/unknown autoUpdate/);
+  });
+
+  test("\"TASK\" → throw（大文字でも throw）", () => {
+    expect(() => normalizeAutoUpdate("TASK")).toThrow(/unknown autoUpdate/);
   });
 
   test("undefined → off", () => {
@@ -378,14 +396,9 @@ describe("normalizeAutoUpdate (T187)", () => {
     expect(normalizeAutoUpdate("notify")).toBe("notify");
   });
 
-  test("\"task\" → task", () => {
-    expect(normalizeAutoUpdate("task")).toBe("task");
-  });
-
-  test("大文字小文字混在も許容", () => {
+  test("大文字小文字混在も許容（off/notify のみ）", () => {
     expect(normalizeAutoUpdate("OFF")).toBe("off");
     expect(normalizeAutoUpdate("Notify")).toBe("notify");
-    expect(normalizeAutoUpdate("TASK")).toBe("task");
   });
 
   test("不正な文字列は throw", () => {

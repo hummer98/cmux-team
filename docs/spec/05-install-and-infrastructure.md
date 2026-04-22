@@ -137,7 +137,6 @@ skills/cmux-team/manager/
 | `await-agent` | Agent 完了/ask/crash を done マーカーの fs.watch で待機（T181、Conductor から使用） |
 | `send-agent` | Agent/Conductor surface へメッセージ送信（`--surface`, positional message, `--no-return`）。Conductor → 他 surface 操作の唯一の入口 |
 | `trace-task` | 特定タスクのセッション履歴を分析 |
-| `self-update` | update タスクを手動で起票（T187、`--run-after-all` で全 open タスク完了後に install） |
 
 ### メインループ
 
@@ -420,12 +419,14 @@ daemon の `state.rateLimit`（最後に観測した Anthropic API の 5h/7d 使
 
 - `models` — Master / Conductor / Agent のデフォルトモデル（`--model` CLI フラグで上書き可）
 - `envrcHookPromptSkipped` — `.envrc` への `CMUX_CLAUDE_HOOKS_DISABLED=1` 追記提案をスキップ済みかどうかのフラグ（`claude` 直接起動時向けの optional 機能。`cmux-team` 経由の spawn には不要）
-- `autoUpdate` — auto-update モード（`"off" | "notify" | "task"`、後方互換: `true` → task、`false` → off、デフォルト `off`）。env `CMUX_TEAM_AUTO_UPDATE` で上書き可
+- `autoUpdate` — auto-update モード（`"off" | "notify"`、デフォルト `off`）。env `CMUX_TEAM_AUTO_UPDATE` で上書き可。**T294 (v4.5.0) 破壊的変更:** `"task"` モードと boolean 後方互換（`true` / `false`）を削除した。旧値が残る config / env は起動時に exit 1 で reject される。移行は "notify" または "off" に書き換える
 - `mainBranch` — プロジェクトの主開発ブランチ名（T213）。Conductor が worktree のベース・マージ先として使用する。解決順位は env `CMUX_TEAM_MAIN_BRANCH` > `config.mainBranch` > `git symbolic-ref refs/remotes/origin/HEAD` による自動検出。**T253 破壊的変更:** 全て失敗した場合は `cmux-team start` が `MainBranchResolutionError` を throw → console.error に解決手段（env / config / `--main-branch`）を案内した上で `process.exit(1)` する（旧: `"main"` へのサイレントフォールバック）。`cmux-team start` は解決結果を `main_branch_resolved branch=<name> source=<config|detected>` としてログ出力し、source が `detected` の場合のみ `.team/config.json` に書き戻す（初回起動後は常に `config` 経路）。**worktree 作成時の start-point** は `worktree-base.ts:resolveWorktreeBase` が以下の順で解決する（T242 / T275）: (1) task.md `base_branch:` 明示（`explicit`）→ (2) local `<mainBranch>` が `origin/<mainBranch>` より strict ahead（`config-local-ahead`、T275）→ (3) `origin/<mainBranch>` 存在（`config-origin`）→ (4) local `<mainBranch>` 存在（`config-local`）→ (5) HEAD フォールバック（`head-fallback`）。`config-local-ahead` は local `<main>` が `origin/<main>` より strict ahead（同一 SHA でない・origin が local の ancestor）のときのみ採用される。push しない運用や origin が古いケースで、stale な origin から worktree が切られるのを防ぐ（T275）。ログは `worktree_created branch=<new> base=<ref> source=<...> path=<...>`。`CMUX_TEAM_FETCH_BEFORE_WORKTREE`（T283 でデフォルト ON に反転）: worktree 作成前に `git fetch --quiet origin <mainBranch>`（タイムアウト 30 秒、失敗はログのみで継続）を実行するかを制御する。デフォルト ON は stale origin 起点で worktree が切られる事故を防ぐため。offline 環境・rate limit 対策で OFF にしたい場合は `CMUX_TEAM_FETCH_BEFORE_WORKTREE=0` を設定する。起動時に `cmdStart` が `fetch_before_worktree enabled=<on|off> source=<env|default>` を `manager.log` に 1 回 emit する。
 
-### auto-update（update-notifier ベース、T187）
+### auto-update（update-notifier ベース、T187 / T294）
 
-daemon は `update-notifier` v7 で新バージョンを検出するのみで、install は行わない。`task` モードは `--run-after-all` の update タスク（frontmatter `kind: cmux-team-update`）を 12h 周期で自動起票し、Conductor が `npm install -g @hummer98/cmux-team@<latest>` を実行する。`notify` モードは TUI バナー表示のみ。`off` は registry アクセスすら行わない。`NO_UPDATE_NOTIFIER=1` で無効化可能。`cmux-team self-update` で手動起票可。
+daemon は `update-notifier` v7 で新バージョンを検出するのみで、install は行わない。`notify` モードは検出結果を dashboard の TUI バナー（`⬆ update available: vX → vY  (upgrade: npm i -g @hummer98/cmux-team@Y)`）として表示するだけで、install はユーザーが手動で実行する。`off` は registry アクセスすら行わない。`NO_UPDATE_NOTIFIER=1` で無効化可能。
+
+**T294 (v4.5.0) 破壊的変更:** `task` モード（update タスクの自動起票）と `cmux-team self-update` CLI を削除した。`CMUX_TEAM_AUTO_UPDATE=task|1|true` / `.team/config.json: autoUpdate: "task" | true | false` は起動時に exit 1 で reject される。移行は `autoUpdate` を `"notify"` または `"off"` に書き換える。手動更新は `npm install -g @hummer98/cmux-team@latest` を直接実行する。旧アーカイブ内のタスク frontmatter に残る `kind: cmux-team-update` は読み取りのみ維持（実行経路なし）。
 
 ### .envrc 対話提案（初回起動、optional）
 

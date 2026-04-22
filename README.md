@@ -37,27 +37,28 @@ npm install -g @hummer98/cmux-team
 
 ### About auto-update
 
-The daemon **detects** new versions via `update-notifier` but does **not** install them directly. Install is delegated to an auto-created `--run-after-all` update task, executed by a Conductor.
+The daemon **detects** new versions via `update-notifier` and surfaces them in the TUI banner. **Install is always manual** — run `npm i -g @hummer98/cmux-team@<latest>` yourself to avoid surprises across mixed Node environments (Volta / nvm / Homebrew).
 
-Three modes (default: `off`):
+Two modes (default: `off`):
 
 | mode | behavior |
 |------|----------|
 | `off` | do nothing (no registry access) |
 | `notify` | detect every 12h and show a TUI banner; no install |
-| `task` | detect every 12h and auto-create an update task |
 
 Configuration (precedence: **env > config > default**):
 
-- `CMUX_TEAM_AUTO_UPDATE=off|notify|task` (also accepts `0|false` as off, `1|true` as task)
-- `.team/config.json`: `{ "autoUpdate": "off" | "notify" | "task" }` (legacy `true` → task, `false` → off)
+- `CMUX_TEAM_AUTO_UPDATE=off|notify` (also accepts `0|false` as off)
+- `.team/config.json`: `{ "autoUpdate": "off" | "notify" }`
 
 Related:
 - `NO_UPDATE_NOTIFIER=1` disables detection (standard update-notifier env var)
-- `cmux-team self-update` manually queues an update task
-- Boot log: `auto_update_config mode=<mode> source=<env|config|default>` (**breaking change from T186's `enabled=<bool>`**)
+- Boot log: `auto_update_config mode=<mode> source=<env|config|default>`
 
-Default is `off` because mixed Node environments (Volta / nvm / Homebrew) can otherwise overwrite unintended versions.
+**Breaking change (v4.5.0, T294):**
+- The `task` mode (auto-creation of update tasks) is removed. `CMUX_TEAM_AUTO_UPDATE=task|1|true` and `.team/config.json: autoUpdate: "task" | true | false` now exit with status 1.
+- The `cmux-team self-update` subcommand is removed.
+- Migration: set `autoUpdate` to `notify` (or `off`), then run `npm install -g @hummer98/cmux-team@latest` when the banner appears.
 
 ## Usage
 
@@ -128,7 +129,6 @@ See `cmux-team --help` for the full list. Common commands:
 |---------|-------------|
 | `cmux-team trace-task <task-id>` | Show session history for a task |
 | `cmux-team artifacts [add\|show\|open\|search]` | Manage knowledge artifacts |
-| `cmux-team self-update` | Queue an update task manually |
 
 #### Slash Commands (run within Claude)
 

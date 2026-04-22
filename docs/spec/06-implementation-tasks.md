@@ -308,6 +308,7 @@ v3.39.0〜v3.43.0 で実施された主要改善:
 
 ### auto-update
 - **`update-notifier` ベースの 3 モード auto-update（T187）** — `off | notify | task` に拡張。`task` モードで `--run-after-all` の update タスクを自動起票し、install を Conductor に委ねる。daemon は検出のみ。`cmux-team self-update` サブコマンド追加。ログフォーマット破壊的変更（`enabled=<bool>` → `mode=<mode>`）、`npm_auto_update` / `npm_update_check_failed` / `npm_self_update_completed` ログ廃止。
+- **auto-update の `task` モードと `self-update` 削除（T294、v4.5.0）** — T187 で導入した `task` モード（`--run-after-all` の update タスク自動起票）と `cmux-team self-update` CLI を完全削除。`autoUpdate` は `"off" | "notify"` の 2 値のみに縮約。boolean 後方互換（`true`/`false`）も削除。`CMUX_TEAM_AUTO_UPDATE=task|1|true` / `.team/config.json: autoUpdate: "task" | true | false` は起動時に exit 1 で reject され、移行ガイド付きエラーメッセージが表示される。`notify` モードは TUI バナー表示を維持し、バナー文言を `(upgrade: npm i -g @hummer98/cmux-team@<latest>)` に統一。daemon の `createUpdateTask` / `buildUpdateTaskBody` / `DaemonState.updateAvailable.createdTaskId` と dashboard の `task created` / `task skipped` 分岐を削除。手動更新は `npm install -g @hummer98/cmux-team@latest` を直接実行する。旧アーカイブ内のタスク frontmatter `kind: cmux-team-update` は読み取りのみ維持（実行経路なし）。
 
 ---
 

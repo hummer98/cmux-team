@@ -375,22 +375,29 @@ export interface WorktreeBaseResolution {
 
 // --- Auto update mode ---
 
-export const AutoUpdateMode = z.enum(["off", "notify", "task"]);
+export const AutoUpdateMode = z.enum(["off", "notify"]);
 export type AutoUpdateMode = z.infer<typeof AutoUpdateMode>;
 
 /**
- * config / env の生値を AutoUpdateMode に正規化する。
- * - boolean: true→"task", false→"off"（T186 後方互換）
- * - string: "off"/"notify"/"task" のみ許容。それ以外は throw
+ * config / env の生値を AutoUpdateMode に正規化する（T294）。
+ * - string: "off"/"notify" のみ許容。それ以外は throw
  * - undefined/null: "off"
+ *
+ * T294 (v4.5.0): `"task"` と boolean 後方互換（true→"task" / false→"off"）を削除した。
+ * 旧値が残っている場合は明示的に throw してユーザーに移行ガイドを示す。
  */
 export function normalizeAutoUpdate(val: unknown): AutoUpdateMode {
   if (val === undefined || val === null) return "off";
-  if (typeof val === "boolean") return val ? "task" : "off";
   if (typeof val === "string") {
     const v = val.trim().toLowerCase();
-    if (v === "off" || v === "notify" || v === "task") return v;
-    throw new Error(`unknown autoUpdate value: ${JSON.stringify(val)} (expected off|notify|task|true|false)`);
+    if (v === "off" || v === "notify") return v;
+    throw new Error(
+      `unknown autoUpdate value: ${JSON.stringify(val)} (expected "off" or "notify"; ` +
+        `"task" / true / false were removed in v4.5.0 — see CHANGELOG)`,
+    );
   }
-  throw new Error(`unknown autoUpdate value type: ${typeof val}`);
+  throw new Error(
+    `unknown autoUpdate value type: ${typeof val} ` +
+      `(v4.5.0 no longer accepts boolean; use "off" or "notify" instead)`,
+  );
 }

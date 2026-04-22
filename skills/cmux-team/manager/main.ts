@@ -4155,87 +4155,6 @@ async function cmdListAgentInstructions(): Promise<void> {
   process.exit(0);
 }
 
-// --- self-update サブコマンド ---
-async function cmdSelfUpdate(): Promise<void> {
-  if (hasHelpFlag()) {
-    console.log(`Usage: cmux-team self-update
-
-  現在のバージョンと npm registry の最新バージョンを比較し、
-  更新がある場合は --run-after-all の update タスクを起票する。
-
-  Exit codes:
-    0  更新タスク起票 / 既に最新 / 既に予約済み
-    1  fetchInfo 失敗（ネットワーク断など）
-`);
-    process.exit(0);
-  }
-
-  // current version
-  let currentVersion: string;
-  try {
-    const pkgPath = join(dirname(import.meta.path), "../../../package.json");
-    const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
-    currentVersion = pkg.version as string;
-  } catch (e: any) {
-    console.error(`Error: failed to read package.json: ${e.message}`);
-    process.exit(1);
-  }
-
-  // latest version
-  const { fetchLatestVersion } = await import("./daemon");
-  const result = await fetchLatestVersion(currentVersion);
-  if (!result) {
-    console.error(`Error: failed to fetch latest version from npm registry`);
-    process.exit(1);
-  }
-
-  const { current, latest } = result;
-  if (current === latest) {
-    console.log(`already up to date (v${current})`);
-    process.exit(0);
-  }
-
-  // body
-  const body = `cmux-team を v${latest} に更新する（self-update 手動トリガー）。
-
-## 手順
-
-1. \`which cmux-team\` と \`npm root -g\` で現インストール先を確認
-2. \`npm install -g @hummer98/cmux-team@${latest}\`
-3. \`cmux-team --version\` で確認
-4. パス不一致があれば journal に記録
-5. \`cmux-team close-task --task-id <ID> --journal "updated to v${latest}"\`
-`;
-
-  try {
-    const created = await createTaskProgrammatic(PROJECT_ROOT, {
-      title: `cmux-team を v${latest} にアップデート`,
-      priority: "low",
-      status: "ready",
-      runAfterAll: true,
-      kind: "cmux-team-update",
-      body,
-    });
-    await postMessage({
-      type: "TASK_CREATED",
-      taskId: created.id,
-      taskFile: created.filePath,
-      timestamp: new Date().toISOString(),
-    });
-    console.log(`update task created: T${created.id} (v${current} → v${latest})`);
-    process.exit(0);
-  } catch (e: any) {
-    if (e?.code === "RUN_AFTER_ALL_CONFLICT") {
-      console.log(
-        `更新タスクは既に予約されています: T${e.existingTaskId} (run-after-all 競合)`,
-      );
-      process.exit(0);
-    }
-    console.error(`Error: ${e.message}`);
-    process.exit(1);
-  }
-}
-
 // --- gh サブコマンド (T272) ---
 /**
  * cmux-team gh — GitHub issue/PR キャッシュ管理
@@ -4706,9 +4625,6 @@ switch (command) {
     break;
   case "artifacts":
     await cmdArtifacts();
-    break;
-  case "self-update":
-    await cmdSelfUpdate();
     break;
   case "get-agent-instructions":
     await cmdGetAgentInstructions();

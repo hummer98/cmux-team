@@ -344,9 +344,7 @@ async function loadSettingsItems(projectRoot: string): Promise<SettingsItem[]> {
   items.push({
     kind: "config",
     label: "autoUpdate",
-    value: typeof cfg.autoUpdate === "boolean"
-      ? (cfg.autoUpdate ? "task (legacy true)" : "off (legacy false)")
-      : (cfg.autoUpdate ?? "off (default)"),
+    value: cfg.autoUpdate ?? "off (default)",
   });
   items.push({ kind: "config", label: "mainBranch", value: cfg.mainBranch ?? "(unresolved)" });
   items.push({
@@ -1269,18 +1267,11 @@ export async function startDashboard(
             ]),
           ]);
         })(),
-        // Update 通知バナー（T187）— updateAvailable が非 null のときのみ挿入
+        // Update 通知バナー（T187 / T294）— updateAvailable が非 null のときのみ挿入
         ...(daemon.updateAvailable
           ? [(() => {
               const ua = daemon.updateAvailable!;
-              let suffix: string;
-              if (ua.createdTaskId) {
-                suffix = `(task created: T${ua.createdTaskId})`;
-              } else if (daemon.updateMode === "task") {
-                suffix = `(task skipped — check logs)`;
-              } else {
-                suffix = `(run: cmux-team self-update)`;
-              }
+              const suffix = `(upgrade: npm i -g @hummer98/cmux-team@${ua.latest})`;
               return ui.text(
                 `⬆ update available: v${ua.current} → v${ua.latest}  ${suffix}`,
                 { style: { fg: YELLOW, bold: true } },

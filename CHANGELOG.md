@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed (Breaking, T294)
+
+- **auto-update の `task` モードを廃止（v4.5.0）**。`autoUpdate` は `"off" | "notify"` の 2 値のみに縮約。以下は起動時に exit 1 で reject される:
+  - 環境変数 `CMUX_TEAM_AUTO_UPDATE=task` / `=1` / `=true`
+  - `.team/config.json` の `autoUpdate: "task"` / `autoUpdate: true` / `autoUpdate: false`（boolean 後方互換を含む全削除）
+  - 移行: `autoUpdate` を `"notify"` または `"off"` に書き換える
+- **`cmux-team self-update` CLI サブコマンドを削除（v4.5.0）**。
+  - 移行: `npm install -g @hummer98/cmux-team@latest` を直接実行する
+  - TUI バナー文言を `(upgrade: npm i -g @hummer98/cmux-team@X.Y.Z)` に変更し、手動更新導線を一本化
+- **daemon 側で update タスクの自動起票を停止（v4.5.0）**。`createUpdateTask` / `buildUpdateTaskBody` / `DaemonState.updateAvailable.createdTaskId` / `checkUpdateAndNotify` の `task` 分岐を削除
+- **旧アーカイブ互換**: タスク frontmatter の `kind: cmux-team-update` は読み取りのみ維持（実行経路なし）
+
+### Removed (T294)
+
+- `skills/cmux-team/manager/daemon.ts`: `createUpdateTask` / `buildUpdateTaskBody` / `updateAvailable.createdTaskId` フィールド
+- `skills/cmux-team/manager/main.ts`: `cmdSelfUpdate` 関数、switch `"self-update"` case
+- `skills/cmux-team/manager/i18n.ts`: `cmux-team self-update` ヘルプ行（en/ja）
+- `skills/cmux-team/manager/dashboard.tsx`: Team Config `autoUpdate` legacy boolean 分岐、banner の `task created` / `task skipped` / `cmux-team self-update` 分岐
+- `skills/cmux-team/templates/{ja,en}/master.md`: 排他タスク推奨パターン例の `cmux-team-update` 行
+
 ## [4.4.0] - 2026-04-22
 
 ### Added

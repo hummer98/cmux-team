@@ -25,10 +25,11 @@ export interface TeamConfig {
    * auto-update のモード（デフォルト: "off"）。env CMUX_TEAM_AUTO_UPDATE が優先。
    * - "off": 更新チェックしない
    * - "notify": 更新を検出して TUI バナーに表示（install は行わない）
-   * - "task": 更新を検出して update タスクを --run-after-all で自動起票
-   * 後方互換: true→"task", false→"off"
+   *
+   * T294 (v4.5.0): `"task"` モードと boolean 後方互換（true/false）は削除された。
+   * 旧値が残っている場合は resolveAutoUpdateMode が throw する（exit 1）。
    */
-  autoUpdate?: boolean | AutoUpdateMode;
+  autoUpdate?: AutoUpdateMode;
   /**
    * プロジェクトの主開発ブランチ。未設定時は cmux-team start 起動時に
    * `git symbolic-ref refs/remotes/origin/HEAD` で自動検出して書き込まれる。T213 で追加。
@@ -68,14 +69,17 @@ export function resolveLayout(
  * auto-update のモードを解決する。
  * 優先順位: env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > "off"
  *
- * env 値の解釈:
+ * env 値の解釈（T294 v4.5.0 で縮約）:
  * - 未定義 / 空文字 → config にフォールバック
  * - "0" / "false" / "off" → off (source=env)
- * - "1" / "true" / "task" → task (source=env)
  * - "notify" → notify (source=env)
- * - それ以外 → throw
+ * - それ以外（"1"/"true"/"task" を含む）→ throw
  *
- * config 値の解釈: normalizeAutoUpdate に委譲（true→task, false→off, 文字列はそのまま）
+ * T294: `"task"` モード（自動 update タスク起票）と boolean 後方互換を削除した。
+ * 旧値（`task` / `1` / `true` / `true|false` config）は起動時に reject し、
+ * cmdStart の try/catch が process.exit(1) + 移行メッセージを表示する。
+ *
+ * config 値の解釈: normalizeAutoUpdate に委譲（"off" / "notify" のみ受理）
  */
 export function resolveAutoUpdateMode(
   config: Pick<TeamConfig, "autoUpdate">,
@@ -85,9 +89,11 @@ export function resolveAutoUpdateMode(
   if (raw !== undefined && raw !== "") {
     const v = raw.trim().toLowerCase();
     if (v === "0" || v === "false" || v === "off") return { mode: "off", source: "env" };
-    if (v === "1" || v === "true" || v === "task") return { mode: "task", source: "env" };
     if (v === "notify") return { mode: "notify", source: "env" };
-    throw new Error(`unknown CMUX_TEAM_AUTO_UPDATE=${JSON.stringify(raw)} (expected 0|1|true|false|off|notify|task)`);
+    throw new Error(
+      `unknown CMUX_TEAM_AUTO_UPDATE=${JSON.stringify(raw)} (expected 0|false|off|notify; ` +
+        `"1" / "true" / "task" were removed in v4.5.0 — use "notify" or unset to migrate)`,
+    );
   }
   if (config.autoUpdate !== undefined) {
     return { mode: normalizeAutoUpdate(config.autoUpdate), source: "config" };

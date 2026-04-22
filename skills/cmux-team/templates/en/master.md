@@ -198,7 +198,6 @@ exclusive. Never auto-apply:
 
 - **Conflict resolution** — coordinating merge order of multiple PRs, manual conflict fixes
 - **Release work** — tagging, version bumping, `npm publish`
-- **cmux-team self-update** — tasks with `kind: cmux-team-update`
 - **Destructive dependency changes** — major version bumps of shared libs, full lockfile rewrites
 - **Coordinator tasks for multi-task edits on the same files** — large refactor rollups
 - **When the user uses strong phrasing** like "critical", "carefully", "stop everything else"

@@ -686,7 +686,6 @@ Usage:
   cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  write overlay
   cmux-team delete-agent-instructions --role <role> remove overlay
   cmux-team list-agent-instructions                 list overlay status per role
-  cmux-team self-update                            manually queue an update task
 
 For details on each command: cmux-team <command> --help`,
 
@@ -1413,7 +1412,6 @@ Usage:
   cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  overlay を書き込み
   cmux-team delete-agent-instructions --role <role> overlay を削除
   cmux-team list-agent-instructions                 ロールごとの overlay 有無を一覧
-  cmux-team self-update                            update タスクを手動起票
 
 各コマンドの詳細: cmux-team <command> --help`,
 

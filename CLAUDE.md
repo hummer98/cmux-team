@@ -740,7 +740,7 @@ daemon 起動時に参照される永続設定。`cmux-team start` 実行時に�
 | フィールド | 型 | 説明 |
 |-----------|-----|------|
 | `layout` | `"wide" \| "16x9"` | レイアウトモード（CLI `--layout` 引数で上書き可能） |
-| `autoUpdate` | `"off" \| "notify" \| "task"` | 自動更新モード（`CMUX_TEAM_AUTO_UPDATE` env で上書き可能） |
+| `autoUpdate` | `"off" \| "notify"` | 自動更新モード（`CMUX_TEAM_AUTO_UPDATE` env で上書き可能。T294 で `"task"` / boolean を廃止） |
 | `mainBranch` | `string` | プロジェクトの主開発ブランチ名（T213 で追加） |
 
 ### `mainBranch` の優先順位
@@ -908,9 +908,9 @@ daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQ
 
 複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
 
-### auto-update（デフォルト OFF、3モード）
+### auto-update（デフォルト OFF、2モード）
 
-daemon 稼働中の自動更新は `update-notifier` で検出だけ行い、**実際の install は daemon ではなく update タスクを起票して Conductor に委ねる**。複数 Node 環境（Volta / nvm / Homebrew など）で意図しないバージョンに上書きされる問題を回避するため、デフォルトは OFF。
+daemon 稼働中の自動更新は `update-notifier` で **更新検出のみ** 行い、install は行わない。手動更新は TUI バナーに表示された `npm i -g @hummer98/cmux-team@<latest>` をユーザーが実行する。複数 Node 環境（Volta / nvm / Homebrew など）で意図しないバージョンに上書きされる問題を回避するため、デフォルトは OFF。
 
 モード（`autoUpdate`）:
 
@@ -918,19 +918,21 @@ daemon 稼働中の自動更新は `update-notifier` で検出だけ行い、**�
 |------|------|
 | `off`（デフォルト） | 何もしない。registry へのアクセスなし |
 | `notify` | 12h 周期で更新検出 → TUI バナーのみ表示。install はしない |
-| `task` | 12h 周期で更新検出 → `--run-after-all` update タスクを自動起票 |
 
 設定方法（優先順位: **env > config > default**）:
 
-- 環境変数 `CMUX_TEAM_AUTO_UPDATE`: `0|false|off` / `1|true|task` / `notify` を受け付ける（空文字は未設定扱い）
-- `.team/config.json` の `{ "autoUpdate": "off" | "notify" | "task" | true | false }`
-  - 後方互換: `true` → `task`、`false` → `off`
+- 環境変数 `CMUX_TEAM_AUTO_UPDATE`: `0|false|off` / `notify` を受け付ける（空文字は未設定扱い）
+- `.team/config.json` の `{ "autoUpdate": "off" | "notify" }`
 
 関連:
 - `NO_UPDATE_NOTIFIER=1` で無効化（update-notifier 標準の環境変数）
-- `cmux-team self-update` で任意タイミングに update タスクを手動起票（既存 run_after_all / 同 latest タスクがあれば exit 0 でそれを返す）
-- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`（**T186 の `enabled=<bool>` から破壊的変更**）
-- update タスクの frontmatter には `kind: cmux-team-update` が付く（重複検出に使用）
+- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`
+
+**T294 (v4.5.0) 破壊的変更:**
+- `task` モード（update タスク自動起票）を削除。`CMUX_TEAM_AUTO_UPDATE=task|1|true` および `.team/config.json: autoUpdate: "task" | true | false` は起動時に exit 1 で reject される
+- `cmux-team self-update` サブコマンドを削除
+- 移行: `autoUpdate` を `notify` または `off` に変更。手動更新は `npm install -g @hummer98/cmux-team@latest` を直接実行する
+- 旧アーカイブ内のタスク frontmatter に残る `kind: cmux-team-update` は読み取りのみ維持（実行経路なし）
 
 ## Artifacts（知見の記録）
 

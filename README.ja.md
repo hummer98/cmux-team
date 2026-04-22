@@ -37,27 +37,28 @@ npm install -g @hummer98/cmux-team
 
 ### auto-update について
 
-daemon は `update-notifier` で新バージョンを**検出**するだけで、install は行いません。install は `--run-after-all` の update タスクを自動起票し、Conductor に委ねます。
+daemon は `update-notifier` で新バージョンを**検出**し、TUI バナーに表示するだけです。install は常に手動で、ユーザー自身が `npm i -g @hummer98/cmux-team@<latest>` を実行します（複数 Node 環境での予期しない上書きを避けるため）。
 
-3モード（デフォルト: `off`）:
+2モード（デフォルト: `off`）:
 
 | mode | 挙動 |
 |------|------|
 | `off` | 何もしない（registry アクセスなし） |
 | `notify` | 12h 周期で検出 → TUI バナー表示のみ |
-| `task` | 12h 周期で検出 → update タスクを自動起票 |
 
 設定（優先順位: **env > config > default**）:
 
-- `CMUX_TEAM_AUTO_UPDATE=off|notify|task`（`0|false` は off、`1|true` は task として扱う）
-- `.team/config.json`: `{ "autoUpdate": "off" | "notify" | "task" }`（後方互換: `true` → task、`false` → off）
+- `CMUX_TEAM_AUTO_UPDATE=off|notify`（`0|false` は off として扱う）
+- `.team/config.json`: `{ "autoUpdate": "off" | "notify" }`
 
 関連:
 - `NO_UPDATE_NOTIFIER=1` で無効化（update-notifier 標準の環境変数）
-- `cmux-team self-update` で手動起票
-- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`（**T186 の `enabled=<bool>` から破壊的変更**）
+- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`
 
-複数 Node 環境（Volta / nvm / Homebrew など）の混在で意図しないバージョンが上書きされる問題を避けるため、デフォルトは OFF としています。
+**破壊的変更（v4.5.0、T294）:**
+- `task` モード（update タスクの自動起票）を削除しました。`CMUX_TEAM_AUTO_UPDATE=task|1|true` および `.team/config.json: autoUpdate: "task" | true | false` は起動時に exit 1 で reject されます。
+- `cmux-team self-update` サブコマンドを削除しました。
+- 移行: `autoUpdate` を `notify`（または `off`）に変更し、バナーが表示されたら `npm install -g @hummer98/cmux-team@latest` を実行してください。
 
 ## 使い方
 
@@ -128,7 +129,6 @@ Claude: → cmux-team create-task --title "..." --status ready
 |---------|---------|
 | `cmux-team trace-task <task-id>` | タスクのセッション履歴を表示 |
 | `cmux-team artifacts [add\|show\|open\|search]` | アーティファクト管理 |
-| `cmux-team self-update` | update タスクを手動起票 |
 
 #### スラッシュコマンド（Claude 内で実行）
 
