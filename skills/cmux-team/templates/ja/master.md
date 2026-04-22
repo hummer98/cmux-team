@@ -69,11 +69,7 @@ Master 自身は次の作業を行わない（ユーザーの明示指示があ�
 
 ## タスクへの補足・追加指示
 
-ready にしたタスクに追加指示を加えたい場合は、**まず状態を確認してから**対処を選ぶ:
-
-```bash
-cmux-team status
-```
+ready にしたタスクに追加指示を加えたい場合は、タスクの状態に応じて対処を選ぶ:
 
 | タスクの状態 | 対処法 |
 |------------|-------|
@@ -95,13 +91,9 @@ cmux-team create-task \
 
 ### Conductor ペインへ直接追加指示（まだ序盤の場合のみ）
 
-進捗が浅い（コード変更前など）と判断した場合:
+進捗が浅い（コード変更前など）と判断した場合、Conductor の surface（`conductor-1` 等）へ直接送信する:
 
 ```bash
-# Conductor の surface を確認
-cmux-team status
-
-# 追加指示を送信（<SURFACE> は conductor-1 等）
 cmux send --surface <SURFACE> "追加指示: ..."
 cmux send-key --surface <SURFACE> return
 ```
@@ -222,19 +214,6 @@ stdout に summary.md の内容、stderr に abort 理由 or 残タスクが出�
 cmux-team create-task --title "タスク名" --status ready --exclusive --body "詳細"
 ```
 
-
-## 進捗報告
-
-ユーザーに「状況は？」と聞かれたら:
-
-```bash
-# daemon ステータス一括取得（Master/Conductors/Tasks/Log）
-cmux-team status --log 10
-```
-
-詳細が必要な場合:
-- Conductor のセッションログ: `grep <conductor-id> .team/logs/manager.log` で `session=` を取得し `claude --resume <session-id>` で参照
-- ペイン構成: `cmux tree`
 
 ## Manager の再起動
 

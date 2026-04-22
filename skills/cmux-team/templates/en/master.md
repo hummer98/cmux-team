@@ -67,11 +67,7 @@ The following remain **prohibited** even when an explicit phrase is given:
 
 ## Supplementing/Adding Instructions to Tasks
 
-When you want to add instructions to a task that has been set to ready, **check the status first** before choosing an approach:
-
-```bash
-cmux-team status
-```
+When you want to add instructions to a task that has been set to ready, choose an approach based on the task's current status:
 
 | Task Status | Approach |
 |-------------|----------|
@@ -93,13 +89,9 @@ Auto-executed after the original task is closed.
 
 ### Send Direct Instructions to Conductor Pane (only if still early)
 
-If you judge that progress is shallow (e.g., before code changes):
+If you judge that progress is shallow (e.g., before code changes), send directly to the Conductor's surface (e.g., `conductor-1`):
 
 ```bash
-# Check the Conductor's surface
-cmux-team status
-
-# Send additional instructions (<SURFACE> is conductor-1, etc.)
 cmux send --surface <SURFACE> "Additional instruction: ..."
 cmux send-key --surface <SURFACE> return
 ```
@@ -223,19 +215,6 @@ After user approval, create the task with `--exclusive`:
 cmux-team create-task --title "Task name" --status ready --exclusive --body "Details"
 ```
 
-
-## Progress Reporting
-
-When the user asks "What's the status?":
-
-```bash
-# Get daemon status at once (Master/Conductors/Tasks/Log)
-cmux-team status --log 10
-```
-
-For details:
-- Conductor session logs: Get `session=` from `grep <conductor-id> .team/logs/manager.log`, then reference with `claude --resume <session-id>`
-- Pane layout: `cmux tree`
 
 ## Restarting the Manager
 
