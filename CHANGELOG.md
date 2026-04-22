@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed (Breaking, T295)
+
+- **`cmux-team close-task` に `--deliverable-kind <kind>` を必須化**。Conductor Step 9 で選ぶ納品方式（`merged` / `pr` / `files` / `none`）を構造化した `deliverable` フィールドとして `task-state.json` に記録する。kind ごとに付随フラグが異なる（排他検証あり）:
+  - `merged`: `--merged-into <branch>` + `--merge-sha <sha>`
+  - `pr`: `--pr-url <url>`
+  - `files`: `--deliverable <path>` 1 件以上（複数指定可）
+  - `none`: 付随フラグ無し（`--journal` は強く推奨）
+- **`schema.ts` に `Deliverable` zod discriminated union を追加**。`TaskState.deliverable?: Deliverable` として task-state.json に optional フィールドで永続化する。旧 closed 行は `deliverable=undefined` で読める（**読み取り側は後方互換、書き込み側のみ破壊的変更**）
+- **dashboard の closed 行末尾に kind suffix を表示**（`merged/abc1234` / `pr/#42` / `files(3)` / `none`）。旧 closed 行は suffix 無しで従来通り
+- **`cmux-team trace-task <id>` に `Deliverable:` 行を追加**。Base 行の直後に kind 別の詳細（`merged into <branch> @ <sha>` / `PR: <url>` / `files: ...` / `none (see journal)`）を表示。旧 closed 行は `Deliverable: -`
+- **daemon auto-close 経路（T274 セーフティネット）は `{ kind: "none" }` を自動付与**。`handleConductorDone` が close-task 未呼で auto-close する場合でも deliverable の契約を維持する。`auto_closed_by_daemon` journal で手動 `none` との区別は journal 本文から可能
+- **移行**: リリース後、各 Conductor ペインで `/clear` を実行して新プロンプトを再読み込みすること。旧プロンプトを抱えたセッションは `--journal` だけで close-task を呼んで exit 1 で止まる（T274 と同じ流儀）
+- **対象ファイル**: `skills/cmux-team/manager/{schema,task,main,daemon,i18n,dashboard}.ts(x)`、`skills/cmux-team/templates/{ja,en}/{conductor-role,conductor,conductor-task}.md` の 6 ファイル、`docs/spec/{01,04,05,07}-*.md`、`CLAUDE.md`
+
 ### Changed (Breaking, T294)
 
 - **auto-update の `task` モードを廃止（v4.5.0）**。`autoUpdate` は `"off" | "notify"` の 2 値のみに縮約。以下は起動時に exit 1 で reject される:

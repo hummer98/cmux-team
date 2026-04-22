@@ -14,6 +14,7 @@ import {
   ensureAskDetectorScript,
   applyResumeTransitions,
   resolveCanonicalTaskId,
+  parseCloseTaskArgs,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
 import { resolveLayout, resolveAutoUpdateMode } from "./config";
@@ -586,7 +587,8 @@ describe("TASK_UPDATED postMessage (T183)", () => {
   test("close-task: conductor 不在時に TASK_UPDATED が送信される", async () => {
     await setupTeamDir("504", "t4", "draft");
     // team.json を置かない（または conductors なし） → conductor 不在パス
-    const r = await runCli(["close-task", "--task-id", "504"]);
+    // T295: --deliverable-kind を必須化
+    const r = await runCli(["close-task", "--task-id", "504", "--deliverable-kind", "none"]);
     expect(r.code).toBe(0);
     expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
   });
@@ -642,7 +644,8 @@ describe("TASK_UPDATED postMessage (T183)", () => {
 
   test("close-task (T291): slug 渡しで canonical key の taskState が closed に遷移", async () => {
     await setupTeamDir("551", "t", "draft");
-    const r = await runCli(["close-task", "--task-id", "551-example"]);
+    // T295: --deliverable-kind を必須化
+    const r = await runCli(["close-task", "--task-id", "551-example", "--deliverable-kind", "none"]);
     expect(r.code).toBe(0);
     const state = JSON.parse(
       await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
@@ -664,7 +667,8 @@ describe("TASK_UPDATED postMessage (T183)", () => {
       }),
     );
     // CLI 側は slug 渡し
-    const r = await runCli(["close-task", "--task-id", "552-example", "--force"]);
+    // T295: --deliverable-kind を必須化（assigned + force で閉じる）
+    const r = await runCli(["close-task", "--task-id", "552-example", "--deliverable-kind", "none", "--force"]);
     expect(r.code).toBe(0);
     // CONDUCTOR_DONE が送られていること
     const types = receivedMessages.map((m) => m.type);
@@ -706,7 +710,8 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     await wf(join(testDir, ".team/task-state.json"), "{}");
     await wf(join(testDir, ".team/proxy-port"), String(port));
 
-    const r = await runCli(["close-task", "--task-id", "999-bogus"]);
+    // T295: --deliverable-kind を付けても task-id 不正チェックは走る（先にチェックされる）
+    const r = await runCli(["close-task", "--task-id", "999-bogus", "--deliverable-kind", "none"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("task 999-bogus not found");
   });
@@ -720,6 +725,138 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     const r = await runCli(["update-task", "--task-id", "999-bogus", "--title", "x"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("task 999-bogus not found");
+  });
+
+  // --- T295: close-task --deliverable-kind 必須化 ---
+
+  test("close-task (T295): --deliverable-kind 未指定で exit 1", async () => {
+    await setupTeamDir("560", "t-560", "draft");
+    const r = await runCli(["close-task", "--task-id", "560"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--deliverable-kind");
+  });
+
+  test("close-task (T295): kind=files で --deliverable ゼロ件なら exit 1", async () => {
+    await setupTeamDir("561", "t-561", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "561",
+      "--deliverable-kind", "files",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--deliverable");
+  });
+
+  test("close-task (T295): kind=merged で --merged-into 欠落なら exit 1", async () => {
+    await setupTeamDir("562", "t-562", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "562",
+      "--deliverable-kind", "merged",
+      "--merge-sha", "abc1234",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--merged-into");
+  });
+
+  test("close-task (T295): kind=pr で --pr-url 欠落なら exit 1", async () => {
+    await setupTeamDir("563", "t-563", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "563",
+      "--deliverable-kind", "pr",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--pr-url");
+  });
+
+  test("close-task (T295): kind=none + 他 kind 用フラグ併記で exit 1（exclusive 検証）", async () => {
+    await setupTeamDir("564", "t-564", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "564",
+      "--deliverable-kind", "none",
+      "--pr-url", "https://example.com/pull/1",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("does not accept");
+  });
+
+  test("close-task (T295): kind=files で --deliverable 複数指定が配列として記録される", async () => {
+    await setupTeamDir("565", "t-565", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "565",
+      "--deliverable-kind", "files",
+      "--deliverable", "docs/spec/a.md",
+      "--deliverable", ".team/artifacts/A042.md",
+    ]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["565"].deliverable).toEqual({
+      kind: "files",
+      files: ["docs/spec/a.md", ".team/artifacts/A042.md"],
+    });
+  });
+
+  test("close-task (T295): kind=merged で branch + sha が記録される", async () => {
+    await setupTeamDir("566", "t-566", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "566",
+      "--deliverable-kind", "merged",
+      "--merged-into", "task-566/task",
+      "--merge-sha", "deadbeef01234567",
+    ]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["566"].deliverable).toEqual({
+      kind: "merged",
+      branch: "task-566/task",
+      sha: "deadbeef01234567",
+    });
+  });
+
+  test("close-task (T295): kind=pr で --pr-url が記録される", async () => {
+    await setupTeamDir("567", "t-567", "draft");
+    const r = await runCli([
+      "close-task", "--task-id", "567",
+      "--deliverable-kind", "pr",
+      "--pr-url", "https://github.com/owner/repo/pull/42",
+    ]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["567"].deliverable).toEqual({
+      kind: "pr",
+      prUrl: "https://github.com/owner/repo/pull/42",
+    });
+  });
+
+  test("close-task (T295): assigned + kind 指定のみ (journal なし) で close するには --force が必要", async () => {
+    // F1/Rec1: 「kind で意図が明示されたら assigned guard は通す」方針だが、
+    // L3049 の実装は `!force` を ガード条件に残しているため --force が依然必須。
+    // ここではその仕様をロックする。
+    await setupTeamDir("568", "t-568", "assigned");
+    const { writeFile: wf } = await import("fs/promises");
+    await wf(join(testDir, ".team/team.json"), JSON.stringify({ conductors: [] }));
+
+    const r1 = await runCli([
+      "close-task", "--task-id", "568",
+      "--deliverable-kind", "none",
+    ]);
+    expect(r1.code).toBe(1);
+    expect(r1.stderr).toContain("assigned");
+
+    const r2 = await runCli([
+      "close-task", "--task-id", "568",
+      "--deliverable-kind", "none", "--force",
+    ]);
+    expect(r2.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["568"].status).toBe("closed");
+    expect(state["568"].deliverable).toEqual({ kind: "none" });
   });
 });
 
@@ -1715,4 +1852,104 @@ describe("cmdStop 廃止 (T286)", () => {
     expect(r1.stderr).toContain("Unknown command: stop");
     expect(r2.stderr).toContain("Unknown command: stop");
   }, 20000);
+});
+
+// --- T295: parseCloseTaskArgs pure 関数 unit テスト ---
+
+describe("parseCloseTaskArgs (T295)", () => {
+  test("kind 未指定なら error", () => {
+    const r = parseCloseTaskArgs(["--task-id", "1"]);
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error).toContain("--deliverable-kind");
+    }
+  });
+
+  test("kind=files で --deliverable 無しなら error", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "files",
+    ]);
+    expect("error" in r).toBe(true);
+  });
+
+  test("kind=files で --deliverable 複数指定が配列化される", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "files",
+      "--deliverable", "a.md", "--deliverable", "b.md",
+    ]);
+    expect("deliverable" in r).toBe(true);
+    if ("deliverable" in r) {
+      expect(r.deliverable).toEqual({ kind: "files", files: ["a.md", "b.md"] });
+    }
+  });
+
+  test("kind=merged で --merged-into + --merge-sha が両方あれば success", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "merged",
+      "--merged-into", "task-1/task", "--merge-sha", "abc1234",
+    ]);
+    expect("deliverable" in r).toBe(true);
+    if ("deliverable" in r) {
+      expect(r.deliverable).toEqual({ kind: "merged", branch: "task-1/task", sha: "abc1234" });
+    }
+  });
+
+  test("kind=merged で --merge-sha 欠落は error", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "merged",
+      "--merged-into", "b",
+    ]);
+    expect("error" in r).toBe(true);
+  });
+
+  test("kind=pr で --pr-url が記録される", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "pr",
+      "--pr-url", "https://example.com/pull/9",
+    ]);
+    expect("deliverable" in r).toBe(true);
+    if ("deliverable" in r) {
+      expect(r.deliverable).toEqual({ kind: "pr", prUrl: "https://example.com/pull/9" });
+    }
+  });
+
+  test("kind=none で success（付随フラグ無し）", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "none",
+    ]);
+    expect("deliverable" in r).toBe(true);
+    if ("deliverable" in r) {
+      expect(r.deliverable).toEqual({ kind: "none" });
+    }
+  });
+
+  test("kind=none に他 kind 用フラグが混入したら error（exclusive 検証）", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "none",
+      "--pr-url", "https://x",
+    ]);
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error).toContain("does not accept");
+    }
+  });
+
+  test("不明な kind は error", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "invalid-kind",
+    ]);
+    expect("error" in r).toBe(true);
+  });
+
+  test("--journal と --force は deliverable と独立に通る", () => {
+    const r = parseCloseTaskArgs([
+      "--task-id", "1", "--deliverable-kind", "none",
+      "--journal", "done", "--force",
+    ]);
+    expect("deliverable" in r).toBe(true);
+    if ("deliverable" in r) {
+      expect(r.journal).toBe("done");
+      expect(r.force).toBe(true);
+    }
+  });
 });

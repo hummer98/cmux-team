@@ -177,6 +177,26 @@ export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
 export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
 export type NotificationMessage = z.infer<typeof NotificationMessage>;
 
+// --- Deliverable (T295) ---
+
+/**
+ * T295: `close-task` で記録する納品方式。discriminated union で kind ごとに
+ * 必須フィールドを型レベルで分離する。`task-state.json` の closed 行に
+ * optional フィールドとして書き込まれる（旧 closed 行は undefined のまま読める）。
+ *
+ * - `files`: 調査系 / ドキュメント系 / branch を残さない納品。納品物パスの配列を必須
+ * - `merged`: ローカル feature branch を main に ff-only マージした納品。branch 名 + SHA 必須
+ * - `pr`: GitHub PR を open した納品。PR URL 必須
+ * - `none`: 納品物なし（judgment_pending / auto-close / 調査のみで決着等）
+ */
+export const Deliverable = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("files"), files: z.array(z.string()).min(1) }),
+  z.object({ kind: z.literal("merged"), branch: z.string(), sha: z.string() }),
+  z.object({ kind: z.literal("pr"), prUrl: z.string() }),
+  z.object({ kind: z.literal("none") }),
+]);
+export type Deliverable = z.infer<typeof Deliverable>;
+
 // --- Agent 状態 ---
 
 export interface AgentState {

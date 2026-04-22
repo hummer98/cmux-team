@@ -4604,6 +4604,8 @@ describe("T274: handleConductorDone success=true + 整合性ガード", () => {
         "auto_closed_by_daemon: CONDUCTOR_DONE without close-task"
       );
       expect(tsAfter["274"]?.journal).toContain(`taskRunId=${taskRunId}`);
+      // T295: auto-close 経路では deliverable.kind === "none" が付与される
+      expect(tsAfter["274"]?.deliverable).toEqual({ kind: "none" });
 
       // manager.log に task_completed_state_mismatch が出る
       const log = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");

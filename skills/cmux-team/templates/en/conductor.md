@@ -267,9 +267,11 @@ If there are no code changes (documentation/config files only), skip the review 
    git worktree remove {{WORKTREE_PATH}} --force 2>/dev/null || true
    git branch -d {{CONDUCTOR_ID}}/task 2>/dev/null || true
    ```
-7. **Close the task** (record status in task-state.json):
+7. **Close the task** (record status in task-state.json) — **`--deliverable-kind` is required**. The example below is the `merged` kind (the most common case); for other kinds (`pr` / `files` / `none`) see `conductor-role.md` Step 11:
    ```bash
-   cmux-team close-task --task-id <TASK_ID> --journal "<one-line Japanese summary>"
+   cmux-team close-task --task-id <TASK_ID> --deliverable-kind merged \
+     --merged-into {{CONDUCTOR_ID}}/task --merge-sha $(git rev-parse {{CONDUCTOR_ID}}/task) \
+     --journal "<one-line summary>"
    ```
 8. **Send completion notification**:
    ```bash

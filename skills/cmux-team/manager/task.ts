@@ -5,6 +5,8 @@ import { readdir, readFile, writeFile, rename, stat, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { log } from "./logger";
+import { Deliverable } from "./schema";
+import type { Deliverable as DeliverableT } from "./schema";
 
 export interface TaskMeta {
   id: string;
@@ -36,6 +38,12 @@ export interface TaskState {
   abortedAt?: string; // ISO 8601 — abort 時のタイムスタンプ
   deletedAt?: string; // ISO 8601 — delete 時のタイムスタンプ
   journal?: string;   // 完了時/中止時/削除時のサマリー
+  /**
+   * T295: 納品方式（closed 時のみ set）。discriminated union で kind ごとに
+   * 必須フィールドが異なる。旧 closed 行は undefined のまま読める（後方互換）。
+   * schema.ts の `Deliverable` を参照。
+   */
+  deliverable?: DeliverableT;
   /** T229: 作成元 surface（`surface:NNN`）。複数 Master のどちらが作成したかを示す。 */
   createdBy?: string;
   // resume 用情報（assignTask 時に記録）
@@ -305,15 +313,68 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
 
 /**
  * task-state.json の読み込み
+ *
+ * T295: 各 entry の `deliverable` フィールドに対して `Deliverable.safeParse` を
+ * 挟む。壊れた deliverable は warn ログ + 当該 entry の `deliverable` を
+ * undefined に倒して継続（fail-fast しない）。旧 closed 行（deliverable
+ * フィールドなし）は undefined のまま正常に読める。
  */
 export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> {
   const filePath = join(projectRoot, ".team/task-state.json");
   if (!existsSync(filePath)) return {};
   try {
-    return JSON.parse(await readFile(filePath, "utf-8"));
+    const parsed = JSON.parse(await readFile(filePath, "utf-8")) as TaskStateMap;
+    for (const [taskId, entry] of Object.entries(parsed)) {
+      if (entry && typeof entry === "object" && "deliverable" in entry && entry.deliverable !== undefined) {
+        const result = Deliverable.safeParse(entry.deliverable);
+        if (!result.success) {
+          await log(
+            "deliverable_parse_failed",
+            `task_id=${taskId} error=${result.error.message.replace(/\s+/g, " ").slice(0, 200)}`,
+          );
+          entry.deliverable = undefined;
+        } else {
+          entry.deliverable = result.data;
+        }
+      }
+    }
+    return parsed;
   } catch (e: any) {
     await log("error", `loadTaskState parse failed: ${e.message}`);
     return {};
+  }
+}
+
+/**
+ * T295: Deliverable を人間可読表記に整形する。
+ *
+ * - `short`: リスト一覧用（dashboard buildTaskRow の suffix）
+ *   - `merged/abc1234` / `pr/<host>/<path>` / `files(3)` / `none`
+ * - `long`: 詳細表示用（trace-task の Deliverable 行）
+ *   - 複数行出力可。呼び出し側は行単位で console.log すること
+ */
+export function formatDeliverable(d: DeliverableT, mode: "short" | "long"): string {
+  switch (d.kind) {
+    case "files":
+      if (mode === "short") return `files(${d.files.length})`;
+      return `files:\n${d.files.map((f) => `  - ${f}`).join("\n")}`;
+    case "merged":
+      if (mode === "short") return `merged/${d.sha.slice(0, 7)}`;
+      return `merged into ${d.branch} @ ${d.sha}`;
+    case "pr":
+      if (mode === "short") {
+        const m = d.prUrl.match(/\/pull\/(\d+)/);
+        if (m) return `pr/#${m[1]}`;
+        return `pr`;
+      }
+      return `PR: ${d.prUrl}`;
+    case "none":
+      if (mode === "short") return `none`;
+      return `none (see journal)`;
+    default: {
+      const _exhaustive: never = d;
+      return String(_exhaustive);
+    }
   }
 }
 

@@ -15,7 +15,7 @@
  *   ./main.ts close-agent --surface <s>
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
  *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>]
- *   ./main.ts close-task --task-id <id> [--journal <text>] [--force]
+ *   ./main.ts close-task --task-id <id> --deliverable-kind <files|merged|pr|none> [kind-specific flags] [--journal <text>] [--force]
  *   ./main.ts await-task --task-id <id> [--timeout <sec>]  # タスク完了待ち
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
@@ -39,14 +39,14 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, type TaskState, type TaskMeta } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, formatDeliverable, type TaskState, type TaskMeta } from "./task";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, Deliverable } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, Deliverable as DeliverableSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import {
   loadConfig,
@@ -161,6 +161,25 @@ function requireArg(name: string): string {
 /** --<name> （値なし）フラグの有無を判定 */
 function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
+}
+
+/**
+ * T295: `--<name> <value>` の全出現を配列として取得する。
+ *
+ * `close-task --deliverable-kind files --deliverable a.md --deliverable b.md` の
+ * `--deliverable` のような「同一フラグを複数回指定」を受け取るために使う。
+ * `--name=value` 形式は非対応（getArg と一致した非対応ポリシー）。
+ */
+function getMultiArg(argv: string[], name: string): string[] {
+  const key = `--${name}`;
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === key && i + 1 < argv.length) {
+      out.push(argv[i + 1]!);
+      i++;
+    }
+  }
+  return out;
 }
 
 /** --help / -h フラグの有無を判定 */
@@ -3022,6 +3041,105 @@ async function cmdUpdateTask(): Promise<void> {
   console.log(`OK updated ${taskId} ${parts.join(", ")}`);
 }
 
+/**
+ * T295: `close-task` の CLI 引数を pure に解析する。
+ *
+ * 判定ポリシー:
+ * - `--deliverable-kind` 必須。未指定は error
+ * - `files` は `--deliverable <path>` を 1 件以上必須、かつ他 kind 用フラグ禁止
+ * - `merged` は `--merged-into <branch>` + `--merge-sha <sha>` 必須、他 kind 用フラグ禁止
+ * - `pr` は `--pr-url <url>` 必須、他 kind 用フラグ禁止
+ * - `none` は全 kind 用フラグ禁止（journal は全 kind optional）
+ * - zod による discriminated union の最終 validation も通す（型レベルの safety net）
+ *
+ * F1 reflection: assigned ガードは「kind が valid に解決されれば通す」方針にしたため、
+ * この pure parser は assigned 関連判定を持たない（呼び出し側で taskState を見る）。
+ */
+export function parseCloseTaskArgs(
+  argv: string[],
+): { deliverable: Deliverable; journal?: string; force: boolean } | { error: string } {
+  const getOne = (name: string): string | undefined => {
+    const idx = argv.indexOf(`--${name}`);
+    return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined;
+  };
+  const kind = getOne("deliverable-kind");
+  const journal = getOne("journal");
+  const force = argv.includes("--force");
+  const files = getMultiArg(argv, "deliverable");
+  const mergedInto = getOne("merged-into");
+  const mergeSha = getOne("merge-sha");
+  const prUrl = getOne("pr-url");
+
+  if (!kind) {
+    return {
+      error:
+        "--deliverable-kind is required (one of: files, merged, pr, none). " +
+        "See `cmux-team close-task --help` for examples.",
+    };
+  }
+
+  // exclusive check: 他 kind 用フラグが紛れ込んでいたら reject
+  const foreignFlags: string[] = [];
+  if (kind !== "files" && files.length > 0) foreignFlags.push("--deliverable");
+  if (kind !== "merged" && mergedInto !== undefined) foreignFlags.push("--merged-into");
+  if (kind !== "merged" && mergeSha !== undefined) foreignFlags.push("--merge-sha");
+  if (kind !== "pr" && prUrl !== undefined) foreignFlags.push("--pr-url");
+  if (foreignFlags.length > 0) {
+    return {
+      error: `--deliverable-kind ${kind} does not accept: ${foreignFlags.join(", ")}`,
+    };
+  }
+
+  let deliverable: Deliverable;
+  switch (kind) {
+    case "files": {
+      if (files.length === 0) {
+        return {
+          error:
+            "--deliverable-kind files requires at least one --deliverable <path>",
+        };
+      }
+      deliverable = { kind: "files", files };
+      break;
+    }
+    case "merged": {
+      if (!mergedInto || !mergeSha) {
+        return {
+          error:
+            "--deliverable-kind merged requires both --merged-into <branch> and --merge-sha <sha>",
+        };
+      }
+      deliverable = { kind: "merged", branch: mergedInto, sha: mergeSha };
+      break;
+    }
+    case "pr": {
+      if (!prUrl) {
+        return {
+          error: "--deliverable-kind pr requires --pr-url <url>",
+        };
+      }
+      deliverable = { kind: "pr", prUrl };
+      break;
+    }
+    case "none": {
+      deliverable = { kind: "none" };
+      break;
+    }
+    default:
+      return {
+        error: `--deliverable-kind must be one of: files, merged, pr, none (got: ${kind})`,
+      };
+  }
+
+  // zod safety net
+  const parsed = DeliverableSchema.safeParse(deliverable);
+  if (!parsed.success) {
+    return { error: `deliverable schema validation failed: ${parsed.error.message}` };
+  }
+
+  return { deliverable: parsed.data, journal: journal || undefined, force };
+}
+
 async function cmdCloseTask(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_close_task"));
   // T291: --task-id に slug / ディレクトリ名を渡された場合でも frontmatter id: を
@@ -3034,8 +3152,14 @@ async function cmdCloseTask(): Promise<void> {
     process.exit(1);
   }
   const taskId = canonical;
-  const journal = getArg("journal");
-  const force = args.includes("--force");
+
+  // T295: deliverable 引数の解析（kind 必須化）
+  const parsed = parseCloseTaskArgs(args);
+  if ("error" in parsed) {
+    console.error(`Error: ${parsed.error}`);
+    process.exit(1);
+  }
+  const { deliverable, journal, force } = parsed;
 
   const taskFile = await findTaskFile(taskId);
   if (!taskFile) {
@@ -3043,19 +3167,21 @@ async function cmdCloseTask(): Promise<void> {
     process.exit(1);
   }
 
-  // assigned ガード: --journal あり（正常完了フロー）または --force で許可
+  // assigned ガード: --force で明示許可（T295 F1: kind が valid に解決されていれば
+  // それが意図の表明なので、journal の有無ではなく --force を唯一の escape にする）
   const taskState = await loadTaskState(PROJECT_ROOT);
   const currentStatus = taskState[taskId]?.status;
-  if (currentStatus === "assigned" && !journal && !force) {
+  if (currentStatus === "assigned" && !force) {
     console.error(`Error: task ${taskId} is assigned (running). Use --force to close a running task.`);
     process.exit(1);
   }
 
-  // task-state.json で closed + closedAt + journal を設定（ファイルは移動しない）
+  // task-state.json で closed + closedAt + journal + deliverable を設定（ファイルは移動しない）
   taskState[taskId] = {
     status: "closed",
     closedAt: new Date().toISOString(),
     ...(journal ? { journal } : {}),
+    deliverable,
   };
   await saveTaskState(PROJECT_ROOT, taskState);
 
@@ -3910,6 +4036,19 @@ async function cmdTraceTask(): Promise<void> {
     console.log(`Base: ${baseLabel} @${shortSha} (source=${source})`);
   } else {
     console.log("Base: -");
+  }
+
+  // T295: Deliverable 行（Base 行 if/else の外で 1 回だけ出力）
+  const traceTaskState = await loadTaskState(PROJECT_ROOT);
+  const deliverable = traceTaskState[taskId]?.deliverable;
+  if (deliverable) {
+    const longLines = formatDeliverable(deliverable, "long").split("\n");
+    console.log(`Deliverable: ${longLines[0]}`);
+    for (let i = 1; i < longLines.length; i++) {
+      console.log(longLines[i]);
+    }
+  } else {
+    console.log("Deliverable: -");
   }
   console.log();
 

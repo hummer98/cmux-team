@@ -37,7 +37,7 @@ Follow the delivery method (local merge or PR) as specified in conductor-role.md
 ## Completion Notification
 
 Follow the completion procedures in `conductor-role.md` ("Completion Procedures" Steps 1-12). In particular:
-- Step 11: `cmux-team close-task --task-id <TASK_ID> --journal "..."` closes the task and internally sends CONDUCTOR_DONE to daemon.
+- Step 11: `cmux-team close-task --task-id <TASK_ID> --deliverable-kind <files|merged|pr|none> ... --journal "..."` closes the task and internally sends CONDUCTOR_DONE to daemon. **`--deliverable-kind` is required** and must match the delivery method chosen in Step 9 (merged / pr / files / none). See `conductor-role.md` Step 11 for details.
 - Step 12: Display the completion report on the session.
 
 **Do not call `cmux-team send CONDUCTOR_DONE --success true` yourself** — close-task does that on your behalf. Use the `--success false` path in `conductor-role.md` Step 8 only when you need to abort without calling close-task (e.g. rebase conflict).

@@ -16,6 +16,7 @@ import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
+import { formatDeliverable } from "./task";
 import { onStateChanged } from "./eventBus";
 import { buildRateLimitDisplay, type RateLimitColor } from "./rate-limit-display";
 import { isStale5h } from "./rate-limit-persistence";
@@ -708,10 +709,17 @@ function buildTaskRow(
   const iconInfo = statusIcons[statusKey] ?? { nerd: `[${label}]`, fallback: `[${label}]` };
   const statusDisplay = nerdIcon(iconInfo.nerd, iconInfo.fallback);
 
+  // T295: closed 行の末尾に納品方式の short 表記を付ける。旧 closed 行（deliverable 無し）は null。
+  // aborted は納品概念が無いため対象外（null）。
+  const deliverableSuffix = isClosed && !isAborted && task.deliverable
+    ? formatDeliverable(task.deliverable, "short")
+    : null;
+
   // ボタンモード: ui.button でクリック可能な行を返す
   if (buttonConfig) {
     const branchPart = task.baseBranch ? ` ${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}` : "";
-    const flatLabel = `${icon} ${taskId} ${statusDisplay}${branchPart} ${task.title}${timeInfo ? ` ${timeInfo}` : ""}`;
+    const deliverablePart = deliverableSuffix ? ` ${deliverableSuffix}` : "";
+    const flatLabel = `${icon} ${taskId} ${statusDisplay}${branchPart} ${task.title}${timeInfo ? ` ${timeInfo}` : ""}${deliverablePart}`;
     const btnStyle: Record<string, any> = {};
     if (color) btnStyle.fg = color;
     if (!isClosed) btnStyle.bold = true;
@@ -750,6 +758,7 @@ function buildTaskRow(
       branchEl ? ui.text(sp(`${nerdIcon("\ue0a0", "⎇")} ${task.baseBranch}`), mergeStyle({ dim: true })) : null,
       buildTitleWithLinks(` ${task.title}`, repoUrl, mergeStyle(colorStyle)),
       timeInfo ? ui.text(sp(timeInfo), mergeStyle(colorStyle)) : null,
+      deliverableSuffix ? ui.text(sp(deliverableSuffix), mergeStyle({ dim: true })) : null,
     ]);
   }
 
@@ -760,6 +769,7 @@ function buildTaskRow(
     branchEl,
     buildTitleWithLinks(task.title, repoUrl, mergeStyle(colorStyle)),
     timeInfo ? ui.text(timeInfo, mergeStyle(colorStyle)) : null,
+    deliverableSuffix ? ui.text(deliverableSuffix, mergeStyle({ dim: true })) : null,
   ]);
 }
 

@@ -74,7 +74,7 @@ description: >
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
 | `cmux-team create-task` | タスク作成（`--title` 必須、`--priority`, `--status`, `--body`, `--depends-on`, `--base-branch`, `--run-after-all` 任意） |
 | `cmux-team update-task` | タスク状態更新（`--task-id` 必須、`--status` / `--title` / `--body` / `--depends-on` のいずれか必須） |
-| `cmux-team close-task` | タスククローズ（`--task-id` 必須、`--journal`, `--force` 任意。close 後 `CONDUCTOR_DONE` を送信） |
+| `cmux-team close-task` | タスククローズ（`--task-id` + `--deliverable-kind <files\|merged\|pr\|none>` 必須。kind 別付随フラグ: `files` は `--deliverable <path>` 1 件以上、`merged` は `--merged-into <branch>` + `--merge-sha <sha>`、`pr` は `--pr-url <url>`、`none` は付随フラグ無し。`--journal`, `--force` 任意。close 後 `CONDUCTOR_DONE` を送信）。T295 で deliverable 必須化（破壊的変更、作成側のみ） |
 | `cmux-team abort-task` | 実行中タスクの中止（`--task-id` 必須、`--journal` 任意）。Conductor 停止 → worktree 削除 → `aborted` に遷移 → Conductor を再起動 |
 | `cmux-team restart-task` | assigned タスクの Conductor セッションを再起動（`--task-id` 必須、`--journal` 任意）。タスク自体は assigned のまま維持 |
 | `cmux-team delete-task` | draft/ready タスクの削除（`--task-id` 必須、`--journal` 任意）。`assigned` のタスクは `abort-task` を使う |

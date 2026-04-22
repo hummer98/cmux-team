@@ -267,9 +267,11 @@ cmux-team close-agent --surface $REVIEWER_SURFACE
    git worktree remove {{WORKTREE_PATH}} --force 2>/dev/null || true
    git branch -d {{CONDUCTOR_ID}}/task 2>/dev/null || true
    ```
-7. **タスクを close する**（task-state.json に状態を記録）:
+7. **タスクを close する**（task-state.json に状態を記録）— **`--deliverable-kind` 必須**。以下は merged kind の例（最も多いパターン）。他 kind（`pr` / `files` / `none`）については `conductor-role.md` Step 11 を参照:
    ```bash
-   cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
+   cmux-team close-task --task-id <TASK_ID> --deliverable-kind merged \
+     --merged-into {{CONDUCTOR_ID}}/task --merge-sha $(git rev-parse {{CONDUCTOR_ID}}/task) \
+     --journal "<1行の日本語サマリー>"
    ```
 8. **完了通知を送信する**:
    ```bash

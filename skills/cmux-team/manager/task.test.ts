@@ -15,8 +15,10 @@ import {
   loadTaskState,
   normalizeTaskId,
   normalizeTaskIdList,
+  formatDeliverable,
 } from "./task";
 import type { TaskMeta, TaskState, TaskStateMap } from "./task";
+import { Deliverable } from "./schema";
 
 describe("parseTaskMeta", () => {
   test("基本的なタスクをパースできる", () => {
@@ -831,5 +833,108 @@ describe("markTaskAborted (T290)", () => {
   test("T12: parseAbortJournal — undefined / 空 → { raw: '' }", () => {
     expect(parseAbortJournal(undefined)).toEqual({ raw: "" });
     expect(parseAbortJournal("")).toEqual({ raw: "" });
+  });
+});
+
+describe("Deliverable (T295)", () => {
+  let project: DummyProject;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    project = await createDummyProject({ prefix: "cmux-deliverable-test-", subdirs: [] });
+    tmpRoot = project.root;
+  });
+  afterEach(async () => {
+    await project.dispose();
+  });
+
+  test("全 4 variant が zod 往復で保たれる", async () => {
+    const variants: any[] = [
+      { kind: "files", files: ["a.md", "b.md"] },
+      { kind: "merged", branch: "task-1/task", sha: "abc1234" },
+      { kind: "pr", prUrl: "https://example.com/pull/9" },
+      { kind: "none" },
+    ];
+    for (const v of variants) {
+      const parsed = Deliverable.parse(v);
+      expect(parsed).toEqual(v);
+    }
+  });
+
+  test("不正 variant は zod で reject される", () => {
+    const bad = [
+      { kind: "files" },                                // files 無し
+      { kind: "files", files: [] },                     // 空配列
+      { kind: "merged", branch: "b" },                  // sha 無し
+      { kind: "pr" },                                   // url 無し
+      { kind: "unknown" },                              // unknown kind
+    ];
+    for (const b of bad) {
+      expect(Deliverable.safeParse(b).success).toBe(false);
+    }
+  });
+
+  test("loadTaskState: 旧 closed 行（deliverable なし）は undefined で読める", async () => {
+    const legacy: TaskStateMap = {
+      "100": { status: "closed", closedAt: "2026-04-22T00:00:00.000Z", journal: "done" },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(legacy));
+
+    const loaded = await loadTaskState(tmpRoot);
+    expect(loaded["100"]?.status).toBe("closed");
+    expect(loaded["100"]?.deliverable).toBeUndefined();
+  });
+
+  test("loadTaskState: 新 closed 行（deliverable 付き）は zod 往復で保たれる", async () => {
+    const fresh: TaskStateMap = {
+      "200": {
+        status: "closed",
+        closedAt: "2026-04-22T00:00:00.000Z",
+        journal: "done",
+        deliverable: { kind: "merged", branch: "b", sha: "abc" },
+      },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(fresh));
+
+    const loaded = await loadTaskState(tmpRoot);
+    expect(loaded["200"]?.deliverable).toEqual({ kind: "merged", branch: "b", sha: "abc" });
+  });
+
+  test("loadTaskState: 壊れた deliverable は warn 化されて undefined で継続（fail-fast しない）", async () => {
+    const broken = {
+      "300": {
+        status: "closed",
+        deliverable: { kind: "merged", branch: "b" /* sha 欠落 */ },
+      },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(broken));
+
+    const loaded = await loadTaskState(tmpRoot);
+    expect(loaded["300"]?.status).toBe("closed");
+    expect(loaded["300"]?.deliverable).toBeUndefined();
+  });
+
+  test("formatDeliverable short: 各 kind の表記", () => {
+    expect(formatDeliverable({ kind: "files", files: ["a", "b", "c"] }, "short")).toBe("files(3)");
+    expect(formatDeliverable({ kind: "merged", branch: "b", sha: "abc1234ef" }, "short")).toBe("merged/abc1234");
+    expect(formatDeliverable({ kind: "pr", prUrl: "https://github.com/o/r/pull/42" }, "short")).toBe("pr/#42");
+    expect(formatDeliverable({ kind: "pr", prUrl: "https://example.com/no-pull" }, "short")).toBe("pr");
+    expect(formatDeliverable({ kind: "none" }, "short")).toBe("none");
+  });
+
+  test("formatDeliverable long: 各 kind の詳細表記", () => {
+    const files = formatDeliverable({ kind: "files", files: ["a.md", "b.md"] }, "long");
+    expect(files).toContain("files:");
+    expect(files).toContain("- a.md");
+    expect(files).toContain("- b.md");
+
+    expect(formatDeliverable({ kind: "merged", branch: "task-1/task", sha: "abc" }, "long")).toBe(
+      "merged into task-1/task @ abc",
+    );
+    expect(formatDeliverable({ kind: "pr", prUrl: "https://x" }, "long")).toBe("PR: https://x");
+    expect(formatDeliverable({ kind: "none" }, "long")).toBe("none (see journal)");
   });
 });

@@ -651,6 +651,15 @@ cmux-team send CONDUCTOR_DONE --surface $CMUX_SURFACE \
   ```
 判断基準: タスクファイルに指示があればそれに従う。なければローカルマージをデフォルトとする。
 
+#### 納品方式と `close-task --deliverable-kind` の対応（T295）
+
+Step 11 の `close-task` では、ここで選んだ納品方式に対応する `--deliverable-kind` を必ず指定する:
+
+- **ローカルマージ（ff-only）** → `--deliverable-kind merged --merged-into <branch> --merge-sha <sha>`
+- **Pull Request** → `--deliverable-kind pr --pr-url <url>`
+- **調査系 / ドキュメントのみ**（branch を残さない納品） → `--deliverable-kind files --deliverable <path1> --deliverable <path2> ...`
+- **納品物なし**（既に満たされていた / 調査のみで決着） → `--deliverable-kind none`（`--journal` は **強く推奨** — 監査証跡のため、Step 11 で必ず埋める）
+
 #### ローカルマージの ff-only 失敗時
 
 `git merge --ff-only` は worktree branch の HEAD が local `{{MAIN_BRANCH}}` の祖先関係から外れていると失敗する（Step 8 で `REBASE_TARGET` が想定外になっていた、並行タスクが先にマージされた、等）。失敗した場合は Step 8 の conflict 節と同じフォーマットで判断必要レポートを返す:
@@ -698,9 +707,32 @@ git branch -d <タスク割り当てで指定されたブランチ名> 2>/dev/nu
 
 ### Step 11: タスクを close する（task-state.json に状態を記録）
 
+**`--deliverable-kind` は必須。** Step 9 で選んだ納品方式に応じて以下から 1 つを選ぶ:
+
 ```bash
-cmux-team close-task --task-id <TASK_ID> --journal "<1行の日本語サマリー>"
+# ローカル ff-only マージ（最も多いパターン）
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind merged \
+  --merged-into <ブランチ名> --merge-sha $(git rev-parse <ブランチ名>) \
+  --journal "<1行の日本語サマリー>"
+
+# Pull Request 納品
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind pr \
+  --pr-url <PR URL> \
+  --journal "<1行の日本語サマリー>"
+
+# 調査系・ドキュメントのみ（branch を残さない）
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind files \
+  --deliverable <path1> --deliverable <path2> \
+  --journal "<1行の日本語サマリー>"
+
+# 納品物なし（judgment 系を除く正常終了のみ。journal は強く推奨）
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind none \
+  --journal "<納品物なしの理由>"
 ```
+
+- **`--deliverable-kind` を忘れると exit 1 になる**。kind 別フラグは排他（例: kind=merged のとき `--pr-url` は reject される）
+- kind=none を選ぶ場合も `--journal` は原則埋める（監査証跡のため。運用上ほぼ必須）
+- assigned（実行中）状態のタスクは `--force` が追加で必要
 
 ### Step 12: 完了レポートをセッション上に表示する
 

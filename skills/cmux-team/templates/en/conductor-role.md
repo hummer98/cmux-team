@@ -604,6 +604,15 @@ The completion report must be marked [Judgment Required] and must include **stru
   ```
 Criteria: follow the task file instructions if specified. Default to local merge otherwise.
 
+#### Mapping delivery method to `close-task --deliverable-kind` (T295)
+
+In Step 11 below, you MUST specify a `--deliverable-kind` that matches the delivery method you chose here:
+
+- **Local merge (ff-only)** → `--deliverable-kind merged --merged-into <branch> --merge-sha <sha>`
+- **Pull Request** → `--deliverable-kind pr --pr-url <url>`
+- **Docs / research only** (no branch produced) → `--deliverable-kind files --deliverable <path1> --deliverable <path2> ...`
+- **No deliverable** (already satisfied / research-only conclusion) → `--deliverable-kind none` (`--journal` is **strongly recommended** for audit traceability — fill it in Step 11)
+
 #### When the local ff-only merge fails
 
 `git merge --ff-only` fails when the worktree branch HEAD is no longer a descendant of local `{{MAIN_BRANCH}}` (for example, Step 8's `REBASE_TARGET` was the wrong side, or a parallel task merged first). When this happens, return a judgment-required report using the same format as the Step 8 conflict section:
@@ -651,9 +660,32 @@ git branch -d <branch name assigned to this task> 2>/dev/null || true
 
 ### Step 11: Close the task (record status in task-state.json)
 
+**`--deliverable-kind` is required.** Pick exactly one of the following based on the delivery method chosen in Step 9:
+
 ```bash
-cmux-team close-task --task-id <TASK_ID> --journal "<one-line Japanese summary>"
+# Local ff-only merge (the most common case)
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind merged \
+  --merged-into <branch> --merge-sha $(git rev-parse <branch>) \
+  --journal "<one-line summary>"
+
+# Pull Request
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind pr \
+  --pr-url <PR URL> \
+  --journal "<one-line summary>"
+
+# Docs / research only (no branch produced)
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind files \
+  --deliverable <path1> --deliverable <path2> \
+  --journal "<one-line summary>"
+
+# No deliverable (strongly recommend providing --journal for audit trail)
+cmux-team close-task --task-id <TASK_ID> --deliverable-kind none \
+  --journal "<reason for having no deliverable>"
 ```
+
+- **Running without `--deliverable-kind` exits 1.** Kind-specific flags are mutually exclusive (e.g. `--pr-url` is rejected when kind=merged)
+- For kind=none, always provide `--journal` in practice (essentially mandatory for auditability)
+- Assigned (running) tasks additionally require `--force`
 
 ### Step 12: Display the completion report on the session
 

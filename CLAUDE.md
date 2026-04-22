@@ -628,6 +628,28 @@ Notification は記録 only。Agent の idle 判定や Conductor の assignment 
 
 単一行は末尾 `\n` で送信可能。複数行プロンプトは `cmux send` の後に `sleep 0.5` + `cmux send-key return` で送信確定。
 
+## Deliverable 型と `close-task` 納品必須化（T295）
+
+`task-state.json` の closed 行は **納品方式を構造化した `deliverable` フィールドを持つ**（`schema.ts` の `Deliverable` zod discriminated union）。`close-task` CLI は `--deliverable-kind <kind>` を必須引数として受け、kind ごとに付随フラグが異なる。
+
+| kind | 意味 | 必須フラグ |
+|------|------|-----------|
+| `merged` | ローカル feature branch を main に ff-only マージ | `--merged-into <branch>` + `--merge-sha <sha>` |
+| `pr` | GitHub Pull Request を open | `--pr-url <url>` |
+| `files` | 調査系 / ドキュメントのみ（branch を残さない納品） | `--deliverable <path>` 1 件以上（複数指定可） |
+| `none` | 納品物なし（auto-close 経路 / 既に満たされていた等） | 付随フラグ無し（`--journal` は強く推奨） |
+
+- kind 別フラグは **排他**（例: `--deliverable-kind merged` で `--pr-url` 指定は reject）
+- `--journal` は全 kind で optional だが、`none` では実質必須（監査証跡のため）
+- `--force` は assigned（実行中）タスクの強制クローズ用（kind 要件とは独立）
+- Conductor の auto-close 経路（T274 / `handleConductorDone` の success=true + 未 close）は daemon が `{ kind: "none" }` を自動付与して整合性を維持する
+- **旧 closed 行は後方互換で読める**（`deliverable === undefined`）。破壊的変更は書き込み側のみ
+- dashboard の closed 行は末尾に kind suffix（`merged/abc1234` / `pr/#42` / `files(3)` / `none`）を表示。`trace-task` も `Deliverable:` 行で詳細表示する
+
+### 移行（リリース時）
+
+Conductor プロンプトは再読み込みが必要。各 Conductor ペインで `/clear` を実行してもらう（`cmux-team restart-task` でも良い）。旧プロンプトを抱えたセッションは `--journal` だけで close しようとして exit 1 で止まる。
+
 ## Ready 昇格時の sync state ガード（T283）
 
 タスクを `ready` に昇格させる経路（`cmux-team create-task --status ready` /

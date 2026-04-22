@@ -117,7 +117,7 @@ stateDiagram-v2
 | `draft` | 下書き (assign されない) | `create-task` デフォルト / 親 abort cascade |
 | `ready` | 実行待ち (assignable) | `update-task --status ready` / `restart-task` |
 | `assigned` | Conductor に割り当て済 | `assignTask` 成功 |
-| `closed` | 正常完了 | `close-task` CLI / T274 auto-close |
+| `closed` | 正常完了（T295 以降は `deliverable` 必須。CLI 経由は `--deliverable-kind <files\|merged\|pr\|none>`、auto-close 経路は `kind: "none"` を daemon が自動付与） | `close-task` CLI / T274 auto-close |
 | `aborted` | 中止 (人為 or 自動) | `abort-task` / 各 cascade |
 | `deleted` | 明示削除 (終端) | `delete-task` (draft/ready のみ) |
 

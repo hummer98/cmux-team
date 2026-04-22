@@ -22,7 +22,7 @@ import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
-import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode } from "./schema";
+import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode, Deliverable } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal, insertTaskSession, updateNotificationEnrichment } from "./trace-store";
@@ -44,6 +44,8 @@ export interface TaskSummary {
   dependsOn: string[];
   baseBranch?: string;
   filePath?: string;  // タスクファイルのパス
+  /** T295: closed 時のみ set される納品方式。旧 closed 行は undefined */
+  deliverable?: Deliverable;
 }
 
 export interface DaemonState {
@@ -2544,6 +2546,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     dependsOn: t.dependsOn.filter(dep => !closed.has(dep)),
     baseBranch: t.baseBranch,
     filePath: t.filePath,
+    deliverable: taskState[t.id]?.deliverable,
   }));
 
   // 差分検出: taskList / openTasks / pendingTasks のいずれかが変化したら notify
@@ -3155,11 +3158,15 @@ async function handleConductorDone(
     );
     try {
       const journal = `auto_closed_by_daemon: CONDUCTOR_DONE without close-task (taskRunId=${conductor.taskRunId ?? "-"})`;
+      // T295: close-task が呼ばれなかった時点で納品物は不明。`kind: "none"` を書いて
+      //       `closed 時は deliverable が必須` の契約を daemon 経由でも維持する。
+      //       `auto_closed_by_daemon` journal で手動 `none` との区別は journal 本文から可能。
       taskState[taskId] = {
         ...taskState[taskId],
         status: "closed",
         closedAt: new Date().toISOString(),
         journal,
+        deliverable: { kind: "none" },
       };
       await saveTaskState(state.projectRoot, taskState);
       await log(

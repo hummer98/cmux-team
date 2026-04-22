@@ -356,20 +356,42 @@ Notes:
 cmux-team close-task -- mark a task as complete (closed)
 
 Usage:
-  cmux-team close-task --task-id <id> [options]
+  cmux-team close-task --task-id <id> --deliverable-kind <kind> [kind-specific flags] [--journal <text>] [--force]
 
 Options:
-  --task-id <id>          task ID (required)
-  --journal <text>        completion journal (optional, recorded on success)
-  --force                 force-close a running task (optional flag)
+  --task-id <id>                  task ID (required)
+  --deliverable-kind <kind>       deliverable kind (required, one of: files, merged, pr, none)
+  --deliverable <path>            file path (repeatable; required when kind=files)
+  --merged-into <branch>          merge target branch name (required when kind=merged)
+  --merge-sha <sha>               merge commit SHA (required when kind=merged)
+  --pr-url <url>                  pull request URL (required when kind=pr)
+  --journal <text>                completion journal (optional, recorded on success)
+  --force                         force-close a running (assigned) task
 
 Examples:
-  cmux-team close-task --task-id 035 --journal "Implementation complete, tests passed"
-  cmux-team close-task --task-id 035 --force
+  # local ff-only merge (the most common case)
+  cmux-team close-task --task-id 035 --deliverable-kind merged \\
+    --merged-into task-035/task --merge-sha $(git rev-parse task-035/task) \\
+    --journal "Implementation complete, tests passed"
+
+  # GitHub PR
+  cmux-team close-task --task-id 036 --deliverable-kind pr \\
+    --pr-url https://github.com/owner/repo/pull/42 --journal "PR opened"
+
+  # investigation / docs-only delivery (no branch produced)
+  cmux-team close-task --task-id 037 --deliverable-kind files \\
+    --deliverable .team/artifacts/A042.md --deliverable docs/spec/01-x.md \\
+    --journal "Research summary delivered"
+
+  # no deliverable (e.g. spec turned out already satisfied)
+  cmux-team close-task --task-id 038 --deliverable-kind none --journal "Already satisfied by T294"
 
 Notes:
-  - Tasks in assigned (running) state require --journal or --force
-  - Sets status to closed in task-state.json
+  - --deliverable-kind is mandatory; running without it exits 1
+  - kind-specific flags are mutually exclusive across kinds (e.g. --pr-url is rejected for kind=merged)
+  - Assigned (running) tasks require --force to close regardless of kind
+  - Legacy closed rows (before T295) load with deliverable=undefined for read-back compatibility;
+    only the creation path is a breaking change
 `,
 
   help_abort_task: `
@@ -466,6 +488,10 @@ Options:
 Examples:
   cmux-team trace-task 141
   cmux-team trace-task 141 --summary
+
+Output includes:
+  - Base: base branch / SHA / source (when available)
+  - Deliverable: recorded at close-task time (kind + details), or "-" for legacy rows
 `,
 
   help_trace_hooks: `
@@ -1081,20 +1107,42 @@ Notes:
 cmux-team close-task -- タスクを完了（closed）にする
 
 Usage:
-  cmux-team close-task --task-id <id> [options]
+  cmux-team close-task --task-id <id> --deliverable-kind <kind> [kind 別フラグ] [--journal <text>] [--force]
 
 Options:
-  --task-id <id>          タスク ID（必須）
-  --journal <text>        完了ジャーナル（任意、正常完了時に記録）
-  --force                 実行中のタスクを強制クローズ（任意フラグ）
+  --task-id <id>                  タスク ID（必須）
+  --deliverable-kind <kind>       納品方式（必須。files / merged / pr / none のいずれか）
+  --deliverable <path>            ファイルパス（kind=files のとき 1 件以上必須。複数指定可）
+  --merged-into <branch>          マージ先ブランチ名（kind=merged で必須）
+  --merge-sha <sha>               マージコミット SHA（kind=merged で必須）
+  --pr-url <url>                  Pull Request URL（kind=pr で必須）
+  --journal <text>                完了ジャーナル（任意）
+  --force                         assigned（実行中）タスクを強制クローズ
 
 Examples:
-  cmux-team close-task --task-id 035 --journal "実装完了、テストパス"
-  cmux-team close-task --task-id 035 --force
+  # ローカル ff-only マージ（最も多いパターン）
+  cmux-team close-task --task-id 035 --deliverable-kind merged \\
+    --merged-into task-035/task --merge-sha $(git rev-parse task-035/task) \\
+    --journal "実装完了、テストパス"
+
+  # GitHub PR 納品
+  cmux-team close-task --task-id 036 --deliverable-kind pr \\
+    --pr-url https://github.com/owner/repo/pull/42 --journal "PR を open"
+
+  # 調査系・ドキュメントのみ（branch を残さない納品）
+  cmux-team close-task --task-id 037 --deliverable-kind files \\
+    --deliverable .team/artifacts/A042.md --deliverable docs/spec/01-x.md \\
+    --journal "リサーチ結果納品"
+
+  # 納品物なし（例: 既に T294 で満たされていた）
+  cmux-team close-task --task-id 038 --deliverable-kind none --journal "T294 で既に充足"
 
 Notes:
-  - assigned（実行中）のタスクは --journal または --force が必要です
-  - task-state.json の status が closed に設定されます
+  - --deliverable-kind は必須です。未指定時は exit 1 になります
+  - kind 別フラグは排他（例: kind=merged のとき --pr-url は reject されます）
+  - assigned（実行中）タスクは kind を指定しても --force が必要です
+  - T295 以前の旧 closed 行は読み取り時に deliverable=undefined として扱われます
+    （破壊的変更は作成側のみ）
 `,
 
   help_abort_task: `
@@ -1191,6 +1239,10 @@ Options:
 Examples:
   cmux-team trace-task 141
   cmux-team trace-task 141 --summary
+
+Output includes:
+  - Base 行: base branch / SHA / source（記録がある場合）
+  - Deliverable 行: close-task 時に記録された納品方式（kind + 詳細）。旧行は "-"
 `,
 
   help_trace_hooks: `

@@ -123,7 +123,7 @@ skills/cmux-team/manager/
 | `kill-agent` | Agent surface close + AGENT_DONE メッセージ |
 | `create-task` | タスクファイル作成 + task-state.json 初期エントリー（`--depends-on`, `--base-branch`, `--run-after-all` をサポート） |
 | `update-task` | タスク更新（`--status` / `--title` / `--body` / `--depends-on`、draft → ready で TASK_CREATED トリガー） |
-| `close-task` | タスクを closed にマーク + journal 保存 + CONDUCTOR_DONE 送信（`--force` で実行中も強制クローズ可能） |
+| `close-task` | タスクを closed にマーク + deliverable（納品方式）保存 + journal 保存 + CONDUCTOR_DONE 送信。T295 以降 `--deliverable-kind <files\|merged\|pr\|none>` が必須で、kind ごとに付随フラグが異なる（`--deliverable <path>` / `--merged-into <branch> --merge-sha <sha>` / `--pr-url <url>`）。`--force` で実行中も強制クローズ可能 |
 | `abort-task` | 実行中タスクの中止（sub-agent 停止 → Conductor 停止 → worktree 削除 → `aborted` 遷移 → Conductor 再起動） |
 | `delete-task` | draft/ready タスクの削除（`deleted` 遷移、journal 記録）。`assigned` のタスクは `abort-task` を使う |
 | `trace` | トレースDB 検索・表示（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
