@@ -16,6 +16,8 @@ import {
   normalizeTaskId,
   normalizeTaskIdList,
   formatDeliverable,
+  isTerminalStatus,
+  createTaskProgrammatic,
 } from "./task";
 import type { TaskMeta, TaskState, TaskStateMap } from "./task";
 import { Deliverable } from "./schema";
@@ -936,5 +938,193 @@ describe("Deliverable (T295)", () => {
     );
     expect(formatDeliverable({ kind: "pr", prUrl: "https://x" }, "long")).toBe("PR: https://x");
     expect(formatDeliverable({ kind: "none" }, "long")).toBe("none (see journal)");
+  });
+});
+
+describe("isTerminalStatus (T300)", () => {
+  test("closed は terminal", () => {
+    expect(isTerminalStatus("closed")).toBe(true);
+  });
+  test("aborted は terminal", () => {
+    expect(isTerminalStatus("aborted")).toBe(true);
+  });
+  test("deleted は terminal", () => {
+    expect(isTerminalStatus("deleted")).toBe(true);
+  });
+  test("ready は terminal でない", () => {
+    expect(isTerminalStatus("ready")).toBe(false);
+  });
+  test("assigned は terminal でない", () => {
+    expect(isTerminalStatus("assigned")).toBe(false);
+  });
+  test("draft は terminal でない", () => {
+    expect(isTerminalStatus("draft")).toBe(false);
+  });
+  test("未知値は terminal でない（将来の安全側動作）", () => {
+    expect(isTerminalStatus("foo")).toBe(false);
+  });
+});
+
+describe("createTaskProgrammatic run_after_all conflict (T300)", () => {
+  let project: DummyProject;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-T300-",
+      subdirs: ["tasks", "logs"],
+    });
+    tmpRoot = project.root;
+  });
+
+  afterEach(async () => {
+    await project.dispose();
+  });
+
+  /** 既存タスクを作成後、task-state.json の status を上書きする helper */
+  const setupExisting = async (opts: {
+    runAfterAll: boolean;
+    exclusive: boolean;
+    status: string;
+  }): Promise<string> => {
+    const { id } = await createTaskProgrammatic(tmpRoot, {
+      title: `existing-${opts.status}`,
+      status: "ready",
+      runAfterAll: opts.runAfterAll,
+      exclusive: opts.exclusive,
+    });
+    const state = await loadTaskState(tmpRoot);
+    state[id] = { ...state[id], status: opts.status };
+    await saveTaskState(tmpRoot, state);
+    return id;
+  };
+
+  test("aborted な run_after_all があっても新規 run_after_all を作成できる", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: false, status: "aborted" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      runAfterAll: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("deleted な run_after_all があっても新規 run_after_all を作成できる", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: false, status: "deleted" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      runAfterAll: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("closed な run_after_all があっても新規 run_after_all を作成できる（回帰確認）", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: false, status: "closed" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      runAfterAll: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("ready な run_after_all があると conflict で拒否される（回帰確認）", async () => {
+    const existingId = await setupExisting({
+      runAfterAll: true,
+      exclusive: false,
+      status: "ready",
+    });
+
+    try {
+      await createTaskProgrammatic(tmpRoot, {
+        title: "new",
+        status: "draft",
+        runAfterAll: true,
+      });
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as Error & { code?: string; existingTaskId?: string };
+      expect(err.code).toBe("RUN_AFTER_ALL_CONFLICT");
+      expect(err.existingTaskId).toBe(existingId);
+    }
+  });
+
+  test("assigned な run_after_all があると conflict で拒否される（回帰確認）", async () => {
+    const existingId = await setupExisting({
+      runAfterAll: true,
+      exclusive: false,
+      status: "assigned",
+    });
+
+    try {
+      await createTaskProgrammatic(tmpRoot, {
+        title: "new",
+        status: "draft",
+        runAfterAll: true,
+      });
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as Error & { code?: string; existingTaskId?: string };
+      expect(err.code).toBe("RUN_AFTER_ALL_CONFLICT");
+      expect(err.existingTaskId).toBe(existingId);
+    }
+  });
+
+  test("exclusive 同士（既存=ready）は共存可能（回帰確認）", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: true, status: "ready" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      exclusive: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("aborted な非排他 run_after_all があっても新規 exclusive を作成できる", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: false, status: "aborted" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      exclusive: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("deleted な exclusive があっても新規非排他 run_after_all を作成できる", async () => {
+    await setupExisting({ runAfterAll: true, exclusive: true, status: "deleted" });
+
+    const res = await createTaskProgrammatic(tmpRoot, {
+      title: "new",
+      status: "draft",
+      runAfterAll: true,
+    });
+    expect(res.id).toBeTruthy();
+  });
+
+  test("ready な非排他 run_after_all があると新規 exclusive は拒否される（回帰確認）", async () => {
+    const existingId = await setupExisting({
+      runAfterAll: true,
+      exclusive: false,
+      status: "ready",
+    });
+
+    try {
+      await createTaskProgrammatic(tmpRoot, {
+        title: "new",
+        status: "draft",
+        exclusive: true,
+      });
+      throw new Error("should have thrown");
+    } catch (e) {
+      const err = e as Error & { code?: string; existingTaskId?: string };
+      expect(err.code).toBe("RUN_AFTER_ALL_CONFLICT");
+      expect(err.existingTaskId).toBe(existingId);
+    }
   });
 });

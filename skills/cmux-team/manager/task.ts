@@ -735,6 +735,18 @@ export function sortOpenTasksForDisplay(tasks: TaskMeta[]): TaskMeta[] {
 }
 
 /**
+ * T300: 「terminal（これ以上状態が変化しない）」状態の判定。
+ * closed / aborted / deleted を同一視したい 3 箇所（scanTasks の
+ * closed Set / openTasksList フィルタ / createTaskProgrammatic の
+ * run_after_all 競合チェック）で共有する。
+ *
+ * 新しい terminal 状態を追加する場合はここに足すだけで 3 箇所が同期する。
+ */
+export function isTerminalStatus(status: string): boolean {
+  return status === "closed" || status === "aborted" || status === "deleted";
+}
+
+/**
  * タスクをプログラム的に作成する（cmdCreateTask と daemon の双方から呼び出す共通化 API）。
  *
  * - newId の採番（既存タスクの最大 ID + 1、3 桁 zero-pad）
@@ -785,7 +797,7 @@ export async function createTaskProgrammatic(
     const conflict = tasks.find(
       (t) =>
         t.runAfterAll &&
-        t.status !== "closed" &&
+        !isTerminalStatus(t.status) &&
         !(exclusive && t.exclusive),
     );
     if (conflict) {

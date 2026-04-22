@@ -17,7 +17,7 @@ import {
 import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./layout-restore";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
-import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren, markTaskAborted } from "./task";
+import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren, markTaskAborted, isTerminalStatus } from "./task";
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
@@ -2504,11 +2504,11 @@ export async function scanTasks(state: DaemonState): Promise<void> {
 
   const closed = new Set(
     Object.entries(taskState)
-      .filter(([_, s]) => s.status === "closed" || s.status === "aborted" || s.status === "deleted")
+      .filter(([_, s]) => isTerminalStatus(s.status))
       .map(([id]) => id)
   );
 
-  const openTasksList = tasks.filter(t => t.status !== "closed" && t.status !== "aborted" && t.status !== "deleted");
+  const openTasksList = tasks.filter(t => !isTerminalStatus(t.status));
   state.openTasks = openTasksList.length;
 
   const assignedIds = new Set(
