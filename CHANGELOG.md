@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-04-22
+
+### Fixed
+
+- **`--depends-on` をゼロパディング 3 桁 ID に正規化（T267, #25）**。`cmux-team create-task` / `update-task` で `--depends-on 28` のように非ゼロパディング ID を渡した場合、frontmatter に生値で書かれて task-state.json のキー（`"028"`）と一致せず、依存が永遠に解決されないサイレント失敗になっていた。`task.ts` に `normalizeTaskId` / `normalizeTaskIdList` を追加し CLI 入口で正の整数のみを受理、`padStart(3, "0")` で正規化。不正入力（英字・負数・小数・ゼロ等）は stderr + exit 1、空文字は `[]` として依存クリア経路を維持
+
+### Changed (Docs, T296)
+
+- **README / manager.md の close-task 旧署名を sweep**。T295 の `--deliverable-kind <files|merged|pr|none>` 必須化に伴い、README.md / README.ja.md に必須フラグを明記。`skills/cmux-team/templates/{ja,en}/manager.md` の Manager/daemon 動作説明文脈では `cmux-team close-task ...` と抽象化
+
+### Changed (Docs)
+
+- **Master テンプレから `cmux-team status` の案内を削除**。Manager TUI で状況確認できるため、Master プロンプトから status への誘導（補足指示・Conductor surface 確認・進捗報告）を削除。ja/en の `master.md` と `docs/spec/04-templates.md` を同期
+
 ### Changed (Breaking, T295)
 
 - **`cmux-team close-task` に `--deliverable-kind <kind>` を必須化**。Conductor Step 9 で選ぶ納品方式（`merged` / `pr` / `files` / `none`）を構造化した `deliverable` フィールドとして `task-state.json` に記録する。kind ごとに付随フラグが異なる（排他検証あり）:
