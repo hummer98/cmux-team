@@ -107,7 +107,7 @@ Claude: → cmux-team create-task --title "..." --status ready
 |---------|---------|
 | `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all] [--exclusive]` | タスク作成（`--exclusive`: drain 後に単独実行。他タスクを全て止めたい作業用。`--run-after-all` を含む） |
 | `cmux-team update-task --task-id <id> --status <s>` | タスク状態更新 |
-| `cmux-team close-task --task-id <id> [--journal <text>]` | タスク close |
+| `cmux-team close-task --task-id <id> --deliverable-kind <files|merged|pr|none> [kind 別フラグ] [--journal <text>]` | タスク close |
 | `cmux-team abort-task --task-id <id>` | 実行中タスクを中止 |
 | `cmux-team restart-task --task-id <id>` | assigned タスクの Conductor を再起動 |
 | `cmux-team delete-task --task-id <id>` | draft / ready タスクを削除 |

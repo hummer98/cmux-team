@@ -70,7 +70,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] task_assigned task=$TASK_ID" >> .team/log
 
 Conductor completion is detected by the daemon receiving CONDUCTOR_DONE messages via the HTTP API:
 
-- **Primary completion detection**: Conductor executes `cmux-team close-task --task-id <TASK_ID> --journal "..."` → close-task internally sends CONDUCTOR_DONE to daemon's HTTP API `/api/messages`
+- **Primary completion detection**: Conductor executes `cmux-team close-task ...` → close-task internally sends CONDUCTOR_DONE to daemon's HTTP API `/api/messages`
 - **Fallback**: Detect crashed state via surface disappearance
 
 The daemon handles completion processing automatically, so the Manager does not need to monitor directly.
