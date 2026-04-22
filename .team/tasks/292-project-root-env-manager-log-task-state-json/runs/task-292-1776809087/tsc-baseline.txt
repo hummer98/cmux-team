@@ -1,0 +1,5 @@
+conductor.ts(201,3): error TS1016: A required parameter cannot follow an optional parameter.
+daemon.test.ts(3956,9): error TS2322: Type '"new_session"' is not assignable to type '"startup" | "resume" | "clear" | "compact" | undefined'.
+daemon.ts(1597,22): error TS2352: Conversion of type 'string | undefined' to type '{ type: "SESSION_STARTED"; source: "startup" | "resume" | "clear" | "compact" | undefined; isMasterSurface: boolean; } & { type: "SESSION_STARTED"; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'string' is not comparable to type '{ type: "SESSION_STARTED"; source: "startup" | "resume" | "clear" | "compact" | undefined; isMasterSurface: boolean; } & { type: "SESSION_STARTED"; }'.
+    Type 'string' is not comparable to type '{ type: "SESSION_STARTED"; source: "startup" | "resume" | "clear" | "compact" | undefined; isMasterSurface: boolean; }'.
