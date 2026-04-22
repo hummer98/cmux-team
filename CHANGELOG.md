@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-04-22
+
+### Added
+
+- **`CMUX_TEAM_LOGGER_STRICT=1` による fail-fast strict モード（T292）**。`skills/cmux-team/manager/logger.ts` に環境変数ガードを追加し、テスト実行時に `logger.ts` が `.team/logs/manager.log` へ書き込む前に `process.cwd()` が期待通りのテストプロジェクト配下であることを検証する。不一致なら即座に throw し、テストが repo 直下の `.team/` を汚染する回帰を構造的に防ぐ。`package.json` の `bun run test` でデフォルト有効化
+- **`markTaskAborted` / `parseAbortJournal` ヘルパーと abort reason の構造化表示（T290）**。`skills/cmux-team/manager/task.ts` に abort 状態遷移を 1 箇所に統合する `markTaskAborted` を追加し、daemon.ts の 4 経路（`judgment_pending` / `user_clear` / `disconnect_timeout` / `assign_failed`）と main.ts の 2 経路（abort-task CLI）、`applyResumeTransitions` の resume ループを全て置換。journal template が単一定義になり abort 因果の事後追跡が確実になった。併せて `formatAbortedTaskLine` を追加し、`await-task` / `printSummaries` で abort reason を機械可読形式で表示
+
+### Changed
+
+- **test 基盤を `createDummyProject` ヘルパーに全面移行（T292）**。`skills/cmux-team/manager/` 配下の 22 個のテストファイル（`main.test.ts` / `worktree-base.test.ts` / `gh-cache-*.test.ts` / `direnv-check.test.ts` / `cmux.test.ts` / `agent-instructions.test.ts` / `preflight.test.ts` / `pidfile.test.ts` / `trace-store.test.ts` / `task.test.ts` / `rate-limit-persistence.test.ts` / `queue.test.ts` / `proxy.test.ts` / `master.test.ts` / `main-branch.test.ts` / `logger.test.ts` / `eventBus.trace.test.ts` / `envrc-prompt.test.ts` / `daemon.test.ts` / `conductor.test.ts`）を `test-project.ts` の `createDummyProject` helper + 自己テストに統合。テスト毎に一時ディレクトリで `.team/` を構築し、repo 直下の `.team/` を触らない隔離を強制する。`.team/` 汚染検出スクリプト (`test:clean`) を追加し CI で regression を検知
+- **main.ts の module-level `process.chdir` を CLI 起動時のみに限定（T292）**。従来 `main.ts` の module load 直後に条件付き `chdir` が走っていたため、単体テストで main.ts を import するだけで process CWD が変わる副作用があった。`cmdStart` 等の CLI 起動経路にのみ移動し、test import では CWD を汚染しないよう修正
+
+### Fixed
+
+- **`cmux-team close-task` 系 CLI で `--task-id` を frontmatter id に正規化（T291）**。`close-task` / `abort-task` / `restart-task` / `delete-task` の各 CLI で、slug 付き task-id（例: `T042-feature-name`）を渡したときに frontmatter の正規 id（`042`）に正規化されず not-found になる問題を修正。`.team/tasks/<slug>/task.md` の frontmatter を読んで正規化する resolver を追加
+- **Issues タブのスクロールをカーソル追従に修正（T289）**。Tasks / Artifacts タブと同様の `startIdx` 計算ロジックを `buildIssueRows` に適用し、`issueCursor` が visible 範囲を超えた際にビューが追従するようにした
+
+### Refactored (internal)
+
+- **abort 系 daemon ハンドラを `markTaskAborted` に一本化（T290）**。`daemon.ts` の `judgment_pending`（handleConductorDone 経路）/ `user_clear`（SESSION_CLEAR 経路）/ `disconnect_timeout`（spawnPidWatcher 経路）/ `assign_failed`（assignTask 経路）の 4 分岐と、`main.ts` の `abort-task` CLI 2 分岐、および `applyResumeTransitions` の resume ループ内 inline abort を、`markTaskAborted(taskId, reason, journal)` ヘルパーの呼び出しに置換。journal 整形 / trace DB INSERT / state 遷移 / cascade トリガーを 1 関数に集約し、abort 経路追加時の実装ドリフトを構造的に排除
+
 ## [4.3.0] - 2026-04-22
 
 ### Changed (Breaking)
