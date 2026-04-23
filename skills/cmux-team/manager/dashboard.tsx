@@ -41,6 +41,13 @@ import type { IssueRow, LabelRow, AssigneeRow } from "./gh-cache-types";
 import { syncIncremental, RateLimitExhaustedError } from "./gh-cache-sync";
 import { writeFile } from "fs/promises";
 import { tmpdir } from "os";
+import {
+  aggregateApiUsageByRole,
+  aggregateApiUsageByTask,
+  getLatestApiUsageRow,
+  getBurnRateWindow,
+} from "./trace-store";
+import { buildMetricsRows, type MetricsData } from "./dashboard-metrics";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
@@ -390,7 +397,7 @@ export interface IssueListItem {
 
 export interface AppState {
   daemon: DaemonState;
-  activeTab: "journal" | "artifacts" | "log" | "settings" | "issues";
+  activeTab: "journal" | "artifacts" | "log" | "settings" | "issues" | "metrics";
   journalEntries: JournalEntry[];
   logLines: string[];
   artifacts: ArtifactMeta[];
@@ -405,7 +412,7 @@ export interface AppState {
   logScrollOffset: number;   // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   logAutoScroll: boolean;    // true = 最新に自動追従
   spinnerFrame: number;      // スピナーアニメーション用フレームカウンター
-  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts" | "settings" | "issues";
+  focusedArea: "global" | "tasks" | "journal" | "log" | "artifacts" | "settings" | "issues" | "metrics";
   journalScrollOffset: number;  // 0 = 先頭（最新）、正の数 = 下にスクロールした行数（古い方へ）
   journalAutoScroll: boolean;   // true = 最新に自動追従
   settingsItems: SettingsItem[];
@@ -417,6 +424,10 @@ export interface AppState {
   issueSyncing: boolean;
   issueLastSync: string | null;  // 表示用（ISO 文字列 or null）
   issueLastError: string | null;
+  // ── Metrics タブ (T307) ──────────────────────────────────────────
+  metricsData: MetricsData | null;
+  metricsError: string | null;
+  metricsLastLoadedMs: number;
 }
 
 // --- スピナー定義 ---
@@ -1148,6 +1159,8 @@ async function openArtifactInViewer(
 
 let appInstance: NodeApp<AppState> | null = null;
 let spinnerInterval: ReturnType<typeof setInterval> | null = null;
+/** T307: Metrics タブ active 中の 1s polling。非 active で null に戻す。 */
+let metricsInterval: ReturnType<typeof setInterval> | null = null;
 /** TUI が表示中かどうか（ビューア表示中は false にして app.update を防ぐ） */
 let dashboardActive = false;
 let eventBusUnsubscribe: (() => void) | null = null;
@@ -1190,6 +1203,9 @@ export async function startDashboard(
       issueSyncing: false,
       issueLastSync: null,
       issueLastError: null,
+      metricsData: null,
+      metricsError: null,
+      metricsLastLoadedMs: 0,
     },
     config: { executionMode: "inline" },
   });
@@ -1341,6 +1357,13 @@ export async function startDashboard(
             style: state.activeTab === "issues" ? { bold: true } : { dim: true },
             onPress: () => switchTab("issues"),
           }),
+          ui.button({
+            id: "tab-metrics",
+            label: t("metrics_tab_title"),
+            px: 1,
+            style: state.activeTab === "metrics" ? { bold: true } : { dim: true },
+            onPress: () => switchTab("metrics"),
+          }),
         ]),
         ui.column({ gap: 0 },
           state.activeTab === "journal"
@@ -1358,6 +1381,8 @@ export async function startDashboard(
             ? buildSettingsRows(state)
             : state.activeTab === "issues"
             ? buildIssueRows(state)
+            : state.activeTab === "metrics"
+            ? buildMetricsRows(state.metricsData, state.metricsError)
             : (() => {
                 // 逆順表示: 最新が先頭、offset=0 で最新を表示
                 const reversed = [...state.logLines].reverse();
@@ -1430,6 +1455,14 @@ export async function startDashboard(
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("ESC"), ui.text("back"),
             ]
+          : state.focusedArea === "metrics"
+          ? [
+              ui.kbd("J"), ui.text("journal"),
+              ui.kbd("A"), ui.text("artifacts"),
+              ui.kbd("L"), ui.text("log"),
+              ui.kbd("I"), ui.text("issues"),
+              ui.kbd("ESC"), ui.text("back"),
+            ]
           : [ // global
               ui.kbd("T"), ui.text("tasks"),
               ui.kbd("J"), ui.text("journal"),
@@ -1437,6 +1470,7 @@ export async function startDashboard(
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("4"), ui.text("settings"),
               ui.kbd("5"), ui.text("issues"),
+              ui.kbd("M"), ui.text("metrics"),
               ui.kbd("r"), ui.text("reload"),
               ui.kbd("q"), ui.text("quit"),
               ui.kbd("Q"), ui.text("full quit"),
@@ -1455,6 +1489,7 @@ export async function startDashboard(
     log: "log",
     settings: "settings",
     issues: "issues",
+    metrics: "metrics",
   };
   // D17: refresh() が settings 再読み込みすべきかどうか判定するためのミラー
   let currentActiveTab: TabId = "journal";
@@ -1469,6 +1504,12 @@ export async function startDashboard(
       // issues に切り替えたら cache から即時ロード
       if (tab === "issues") {
         loadIssuesFromCache().catch(() => {});
+      }
+      // metrics に切り替えたら 1s interval で loadMetricsData を起動、他タブに切ったら stop
+      if (tab === "metrics") {
+        startMetricsTimer();
+      } else {
+        stopMetricsTimer();
       }
     } catch {}
   }
@@ -1542,8 +1583,9 @@ export async function startDashboard(
     "3": () => switchTab("log"),
     "4": () => switchTab("settings"),
     "5": () => switchTab("issues"),
+    "6": () => switchTab("metrics"),
     Tab: (ctx) => {
-      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings", "issues"];
+      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings", "issues", "metrics"];
       const idx = tabs.indexOf(ctx.state.activeTab);
       const next = tabs[(idx + 1) % tabs.length]!;
       switchTab(next);
@@ -1553,6 +1595,7 @@ export async function startDashboard(
     L: () => switchTab("log"),
     A: () => switchTab("artifacts"),
     I: () => switchTab("issues"),
+    M: () => switchTab("metrics"),
     R: (ctx) => {
       if (ctx.state.focusedArea !== "issues") return;
       syncIssuesFromGh().catch((e: any) => {
@@ -1752,6 +1795,119 @@ export async function startDashboard(
     }
   }
 
+  // ── Metrics タブ (T307) ────────────────────────────────────────────────
+  //
+  // Rec #1 反映: DB 接続は daemon の `state.traceDb` をそのまま reuse する。
+  // dashboard は `startDashboard(() => state, ...)` 経由で daemon と同一プロセス
+  // 内 inline 実行 (main.ts:706 / `config: { executionMode: "inline" }`) されて
+  // おり、`state.traceDb` は writer として確立済み。毎秒 open/close する代わりに
+  // 同じハンドルで read する（better-sqlite3 / bun:sqlite は同プロセス内の
+  // multi-statement 使用が安全）。plan.md Decision D9 の旧根拠「別プロセス想定」は
+  // 事実と食い違っていたため Rec #1 に従い reuse 方式に倒した。
+  const METRICS_POLL_INTERVAL_MS = 1000;
+  const METRICS_BURN_WINDOW_SEC = 60;
+  const METRICS_TASK_TOP_N = 5;
+  const METRICS_WINDOW_MS = 60 * 60 * 1000; // 直近 1h
+
+  function loadMetricsData(): void {
+    const daemon = getState();
+    const db = daemon.traceDb;
+    if (!db) {
+      // proxy / trace DB 未起動 — no data 表示に倒す
+      app.update((s) => ({
+        ...s,
+        metricsData: {
+          nowMs: Date.now(),
+          tokensRemaining: null,
+          tokensLimit: null,
+          tokensResetIso: null,
+          requestsRemaining: null,
+          requestsLimit: null,
+          requestsResetIso: null,
+          burnTokPerSec: 0,
+          roleRows: [],
+          taskRows: [],
+          unifiedFive: daemon.rateLimit?.unified5hUtilization ?? null,
+          unifiedSeven: daemon.rateLimit?.unified7dUtilization ?? null,
+          latestRowRole: null,
+          latestRowSurface: null,
+          latestRowTimestampMs: null,
+        },
+        metricsError: null,
+        metricsLastLoadedMs: Date.now(),
+      }));
+      return;
+    }
+
+    try {
+      const now = Date.now();
+      const sinceIso = new Date(now - METRICS_WINDOW_MS).toISOString();
+      const untilIso = new Date(now).toISOString();
+
+      const roleRows = aggregateApiUsageByRole(db, { sinceIso, untilIso });
+      const taskRows = aggregateApiUsageByTask(db, {
+        sinceIso,
+        untilIso,
+        limit: METRICS_TASK_TOP_N,
+      });
+      const latest = getLatestApiUsageRow(db);
+      const burn = getBurnRateWindow(db, METRICS_BURN_WINDOW_SEC);
+
+      const latestTsMs = latest?.timestamp
+        ? Date.parse(latest.timestamp)
+        : null;
+
+      const metrics: MetricsData = {
+        nowMs: now,
+        tokensRemaining: latest?.ratelimit_tokens_remaining ?? null,
+        tokensLimit: latest?.ratelimit_tokens_limit ?? null,
+        tokensResetIso: latest?.ratelimit_tokens_reset ?? null,
+        requestsRemaining: latest?.ratelimit_requests_remaining ?? null,
+        requestsLimit: latest?.ratelimit_requests_limit ?? null,
+        requestsResetIso: latest?.ratelimit_requests_reset ?? null,
+        burnTokPerSec: burn.tokPerSec,
+        roleRows,
+        taskRows,
+        unifiedFive: daemon.rateLimit?.unified5hUtilization ?? null,
+        unifiedSeven: daemon.rateLimit?.unified7dUtilization ?? null,
+        latestRowRole: latest?.role ?? null,
+        latestRowSurface: latest?.surface ?? null,
+        latestRowTimestampMs:
+          latestTsMs !== null && !Number.isNaN(latestTsMs) ? latestTsMs : null,
+      };
+
+      app.update((s) => ({
+        ...s,
+        metricsData: metrics,
+        metricsError: null,
+        metricsLastLoadedMs: now,
+      }));
+    } catch (e: any) {
+      // D10: stale-while-error — 既存 metricsData は残し error のみ差し替える
+      log("metrics_load_error", e?.message ?? String(e)).catch(() => {});
+      app.update((s) => ({
+        ...s,
+        metricsError: e?.message ?? String(e),
+      }));
+    }
+  }
+
+  function startMetricsTimer(): void {
+    stopMetricsTimer();
+    // 即時 1 回
+    try { loadMetricsData(); } catch {}
+    metricsInterval = setInterval(() => {
+      try { loadMetricsData(); } catch {}
+    }, METRICS_POLL_INTERVAL_MS);
+  }
+
+  function stopMetricsTimer(): void {
+    if (metricsInterval) {
+      clearInterval(metricsInterval);
+      metricsInterval = null;
+    }
+  }
+
   /**
    * incremental sync を走らせてから再ロードする。
    * R キーから呼ばれる。rate limit 到達時はエラー表示のみ。
@@ -1948,6 +2104,10 @@ function cleanup() {
   if (spinnerInterval) {
     clearInterval(spinnerInterval);
     spinnerInterval = null;
+  }
+  if (metricsInterval) {
+    clearInterval(metricsInterval);
+    metricsInterval = null;
   }
   if (eventBusUnsubscribe) {
     eventBusUnsubscribe();

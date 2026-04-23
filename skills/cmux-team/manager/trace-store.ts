@@ -732,3 +732,147 @@ export function getTaskUsageByModel(db: Database, taskId: string): TaskUsageByMo
     cacheRead: r.cache_read,
   }));
 }
+// ── T307: dashboard Metrics タブ用の集計関数 ─────────────────────────────────
+//
+// SQL 集計は trace-store の責務、UI build は dashboard の責務（D4）。
+// 4 関数とも `$param` バインディングで SQL インジェクション回避。
+// timestamp は TEXT 列だが ISO 8601 は辞書順 = 時系列順なので文字列比較で OK。
+
+/** aggregateApiUsageByRole の 1 ロール分の集計結果。 */
+export interface AggregatedRoleRow {
+  /** master / conductor / agent / unknown（NULL は "unknown" に fallback） */
+  role: string;
+  /** このロールの api_usage レコード件数 */
+  requests: number;
+  /** input_tokens SUM（NULL は無視） */
+  input: number;
+  /** output_tokens SUM（NULL は無視） */
+  output: number;
+  /** cache_creation_input_tokens + cache_read_input_tokens の合計（NULL は 0 扱い） */
+  cache: number;
+  /** cache_read_input_tokens SUM のみ（キャッシュヒット量の内訳） */
+  cache_read: number;
+}
+
+/** aggregateApiUsageByTask の 1 タスク分の集計結果。 */
+export interface AggregatedTaskRow {
+  /** T001 / T042 等のタスク ID。task_id IS NULL 行は除外されるため常に非 null。 */
+  task_id: string;
+  /** このタスクの api_usage レコード件数 */
+  requests: number;
+  /** input_tokens SUM */
+  input: number;
+  /** output_tokens SUM */
+  output: number;
+  /** cache_creation + cache_read の合計 */
+  cache: number;
+}
+
+/** getBurnRateWindow の戻り値。 */
+export interface BurnRateResult {
+  /** ウィンドウ内の input_tokens + output_tokens の合計（NULL は 0 扱い） */
+  totalTokens: number;
+  /** 入力で指定されたウィンドウ幅（秒） */
+  windowSec: number;
+  /** totalTokens / windowSec。空ウィンドウなら 0 */
+  tokPerSec: number;
+}
+
+/**
+ * ロール別に `[sinceIso, untilIso]` 範囲の api_usage を集計する。
+ * role が NULL の行は `"unknown"` に fallback される（D8 の方針）。
+ */
+export function aggregateApiUsageByRole(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string },
+): AggregatedRoleRow[] {
+  const stmt = db.prepare(`
+    SELECT
+      COALESCE(role, 'unknown') AS role,
+      COUNT(*) AS requests,
+      COALESCE(SUM(input_tokens), 0) AS input,
+      COALESCE(SUM(output_tokens), 0) AS output,
+      COALESCE(SUM(cache_creation_input_tokens), 0) + COALESCE(SUM(cache_read_input_tokens), 0) AS cache,
+      COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
+    FROM api_usage
+    WHERE timestamp >= $sinceIso AND timestamp <= $untilIso
+    GROUP BY COALESCE(role, 'unknown')
+    ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+  `);
+  return stmt.all({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as AggregatedRoleRow[];
+}
+
+/**
+ * タスク別に `[sinceIso, untilIso]` 範囲の api_usage を集計する。
+ * task_id IS NULL 行（Master 等のタスク紐付きなしリクエスト）は除外（D8 の方針）。
+ * (input + output) の合計降順で limit 件を返す。
+ */
+export function aggregateApiUsageByTask(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string; limit: number },
+): AggregatedTaskRow[] {
+  const stmt = db.prepare(`
+    SELECT
+      task_id AS task_id,
+      COUNT(*) AS requests,
+      COALESCE(SUM(input_tokens), 0) AS input,
+      COALESCE(SUM(output_tokens), 0) AS output,
+      COALESCE(SUM(cache_creation_input_tokens), 0) + COALESCE(SUM(cache_read_input_tokens), 0) AS cache
+    FROM api_usage
+    WHERE task_id IS NOT NULL
+      AND timestamp >= $sinceIso
+      AND timestamp <= $untilIso
+    GROUP BY task_id
+    ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+    LIMIT $limit
+  `);
+  return stmt.all({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+    $limit: opts.limit,
+  }) as AggregatedTaskRow[];
+}
+
+/**
+ * api_usage の最新 1 行（id DESC LIMIT 1）を返す。
+ * Metrics タブの分単位 rate limit remaining/limit/reset 表示に使う
+ * （Anthropic は account 単位ウィンドウなので role を問わず最新で OK）。
+ * 空テーブルなら null。
+ */
+export function getLatestApiUsageRow(db: Database): ApiUsageRecord | null {
+  const row = db
+    .prepare("SELECT * FROM api_usage ORDER BY id DESC LIMIT 1")
+    .get() as ApiUsageRecord | undefined;
+  return row ?? null;
+}
+
+/**
+ * 直近 `windowSec` 秒内の input_tokens + output_tokens 合計と tok/s を返す。
+ *
+ * `timestamp` 列は `2026-04-24T10:00:00.000Z` 形式の ISO 8601 UTC を期待する
+ * （`insertApiUsage` 呼び出し側は `new Date().toISOString()` 等で渡す）。
+ * SQLite 標準の `datetime('now', ...)` は `2026-04-24 10:00:00`（T なし Z なし）
+ * を返すため辞書順比較が壊れる。ここでは境界時刻を JS 側で ISO 8601 に正規化して
+ * パラメータで渡す（cutoff を 1 回計算して文字列比較するだけ）。
+ * 空ウィンドウの場合 `tokPerSec = 0`。
+ */
+export function getBurnRateWindow(db: Database, windowSec: number): BurnRateResult {
+  const cutoffIso = new Date(Date.now() - windowSec * 1000).toISOString();
+  const row = db
+    .prepare(`
+      SELECT
+        COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total
+      FROM api_usage
+      WHERE timestamp >= $cutoffIso
+    `)
+    .get({ $cutoffIso: cutoffIso }) as { total: number };
+  const totalTokens = row?.total ?? 0;
+  return {
+    totalTokens,
+    windowSec,
+    tokPerSec: windowSec > 0 ? totalTokens / windowSec : 0,
+  };
+}

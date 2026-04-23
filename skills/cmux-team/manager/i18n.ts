@@ -779,6 +779,33 @@ Flags:
 Without --full, sync uses If-None-Match + since= to fetch only changes.
 Non-git directories / non-GitHub origins exit 2. Missing auth exits 3.
 Rate-limit exhaustion exits 4.`,
+
+  // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
+  metrics_tab_title: "Metrics",
+  metrics_section_rate_limit: "Rate limit (per-minute)",
+  metrics_section_unified: "Unified (5h / 7d)",
+  metrics_section_role: "By role (last 1h)",
+  metrics_section_task: "By task (last 1h, top {limit})",
+  metrics_label_tokens: "tokens",
+  metrics_label_requests: "requests",
+  metrics_label_burn_rate: "burn rate",
+  metrics_label_projected: "projected to limit",
+  metrics_label_reset_in: "reset in",
+  metrics_label_risk: "RISK",
+  metrics_label_no_data: "no data",
+  metrics_label_idle: "idle",
+  metrics_unit_tok_per_sec: "tok/s",
+  metrics_empty_role: "(no api_usage rows in window)",
+  metrics_empty_task: "(no tasks in window)",
+  metrics_loading: "loading metrics…",
+  metrics_caption_from: "from: {role}/{surface} ({age}s ago)",
+  metrics_proxy_idle: "proxy idle? last seen {age}s ago",
+  metrics_header_role: "role",
+  metrics_header_task: "task",
+  metrics_header_requests: "reqs",
+  metrics_header_input: "input",
+  metrics_header_output: "output",
+  metrics_header_cache: "cache",
 };
 
 const ja: typeof en = {
@@ -1535,6 +1562,33 @@ Flags:
 --full なしの場合、If-None-Match + since= で差分だけを取得します。
 非 git ディレクトリ / 非 GitHub origin は exit 2、認証欠如は exit 3、
 レート制限到達は exit 4 で終了します。`,
+
+  // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
+  metrics_tab_title: "メトリクス",
+  metrics_section_rate_limit: "レート制限（分単位）",
+  metrics_section_unified: "統合（5時間 / 7日）",
+  metrics_section_role: "ロール別（直近 1 時間）",
+  metrics_section_task: "タスク別（直近 1 時間、上位 {limit}）",
+  metrics_label_tokens: "トークン",
+  metrics_label_requests: "リクエスト",
+  metrics_label_burn_rate: "バーンレート",
+  metrics_label_projected: "上限到達予測",
+  metrics_label_reset_in: "リセットまで",
+  metrics_label_risk: "RISK",
+  metrics_label_no_data: "データなし",
+  metrics_label_idle: "idle",
+  metrics_unit_tok_per_sec: "tok/s",
+  metrics_empty_role: "(ウィンドウ内に api_usage レコードなし)",
+  metrics_empty_task: "(ウィンドウ内にタスクなし)",
+  metrics_loading: "メトリクスを読み込み中…",
+  metrics_caption_from: "from: {role}/{surface} ({age}秒前)",
+  metrics_proxy_idle: "proxy idle? last seen {age}秒前",
+  metrics_header_role: "ロール",
+  metrics_header_task: "タスク",
+  metrics_header_requests: "件数",
+  metrics_header_input: "入力",
+  metrics_header_output: "出力",
+  metrics_header_cache: "キャッシュ",
 };
 
 const messages = { en, ja };

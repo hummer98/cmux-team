@@ -61,6 +61,10 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     issueSyncing: false,
     issueLastSync: null,
     issueLastError: null,
+    // T307: Metrics タブ用フィールド
+    metricsData: null,
+    metricsError: null,
+    metricsLastLoadedMs: 0,
     ...overrides,
   };
 }
