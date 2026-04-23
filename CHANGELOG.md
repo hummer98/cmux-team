@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-04-24
+
+### Added
+
+- **Metrics タブを dashboard に追加（T307）**。`6` / `M` キーで切り替え可能な新タブ。直近 60 秒の burn rate（input / output / cache read tokens per second）、ロール別（master/conductor/agent）・タスク別の累積使用量、最新リクエストの model / stop_reason / rate limit 残量を表示する。`trace-store.ts` に `aggregateApiUsageByRole` / `aggregateApiUsageByTask` / `getLatestApiUsageRow` / `getBurnRateWindow` の 4 つの集約関数を追加し、`dashboard-metrics.ts` で UI 用の pure build 関数を提供。既存の `daemon.traceDb` ハンドルを再利用するため DB open/close のオーバーヘッドは無い。i18n ラベル 25 キーを en/ja で追加
+- **`cmux-team trace-task` に Token Usage メトリクス表示を追加（T306）**。Sessions セクションの後に requests / input / output / cache creation / cache read tokens、cache hit rate、総所要時間、ロール別・モデル別の内訳を表示する。過去のスクリプト互換のため `--no-metrics` フラグでプレ T306 の出力に戻せる。T305 より前に実行されたタスクは "no usage data" 行が表示される。`trace-store.ts` に `getTaskUsageTotal` / `getTaskUsageByRole` / `getTaskUsageByModel` を追加
+- **proxy が Anthropic `/v1/messages` の usage / rate limit を SQLite に記録（T305）**。新テーブル `api_usage` に 1 リクエスト 1 レコードで `model` / `stop_reason` / input・output・cache トークン数 / rate limit 残量を INSERT する。non-streaming は body parse、streaming は SSE 行単位 parse（`message_start` / `message_delta` / `message_stop` / `error`）で終端 1 回 INSERT。`content_block_delta` は parse せず CPU コストを最小化。エラー応答（`http_<status>` / `rate_limit_error` / `stream_aborted` / `parse_failed`）も INSERT する。既存の `api-trace.jsonl` / `state.rateLimit` 更新は完全温存。T306 / T307 の集計基盤
+- **Master / Conductor / Agent の settings.json に `x-cmux-role` ヘッダー注入（T304）**。`ANTHROPIC_CUSTOM_HEADERS` env に `x-cmux-role: <role>` を設定することで Claude Code の子プロセスから Anthropic API に自動付与される。proxy の既存ヘッダー優先ロジックがそのまま role を拾うため proxy 側の変更は不要。T305 / T306 / T307 のロール別集計を支える基盤修正。調査時点で 3 ロール全員が `role=unknown` だったため 3 ロール同時に修正
+
+### Changed
+
+- **task-state.json の全 mutation を pure reducer 経由に集約（T303）**。新規 `state-machine/task-state-store.ts` に `applyTaskEvent` / `updateTaskSessionId` / `createTaskEntry` を追加し、`withTaskStateLock`（in-process mutex）で `load → reduce → patch → cascade → save → shadow → notifyStateChanged` を直列化。daemon.ts / main.ts の直接 `taskState[...]=`、`saveTaskState(...)` 呼び出しを全廃（grep invariant: 0 件）。P1（T279）で用意された shadow observer を store 内部から呼ぶことで "shadow wiring = 0 callers" ギャップを解消。新 `REVERT_TO_READY` イベント + reason variants で 5 箇所の ad-hoc "assigned → ready" revert を統一。T302 の緊急ガード（`assign_skipped_terminal`）は reducer noop 経路に吸収され削除。CLI ↔ daemon の cross-process race は reducer guard で観測的に吸収する方針で、file-lock 導入は 24h shadow 観測後に別タスクで判断
+- **daemon の auto-restart 機構を削除（T301）**。source watcher / exit 42 restart ループを撤去。Conductor の merge Step 9 が daemon 自身の完了通知チャンネルを kill する self-referential race（T298 / T300 の根本原因）を構造的に解消。`daemon.ts` から `sourceMtimes` / `restartRequested` / `initSourceWatcher` / `checkSourceChanged` / tick 内の `source_changed` ブロックを削除。`main.ts` / `bin/cmux-team.js` の exit 42 while-loop を単一 `execFileSync` + `process.exit(0)` に単純化
+
+### Fixed
+
+- **run_after_all 競合判定が aborted / deleted を terminal 扱いしない問題を修正（T300）**。`createTaskProgrammatic` の run_after_all 競合判定が `status !== "closed"` のみを terminal として扱っていたため、aborted / deleted な run_after_all タスクが残っていると新規 run_after_all 作成が `RUN_AFTER_ALL_CONFLICT` で拒否されていた。`scanTasks` 側は closed | aborted | deleted の 3 状態を terminal 扱いしており、terminal 定義が 3 箇所でズレていた。`task.ts` に `isTerminalStatus` ヘルパを export 追加し、作成経路・実行経路で共有。将来の terminal 状態追加時も 1 箇所修正で同期される
+- **assignTask 進行中に delete-task が割り込む T220 race を塞ぐ暫定ガード（T302）**。`scanTasks` 内の assign 完了書き込みブロックを `__testApplyAssignCommit` helper に切り出し、`saveTaskState` 直前に `ts[taskId]?.status` が `isTerminalStatus`（closed/aborted/deleted）を満たせば書き込みを skip し、`resetConductor` で worktree cleanup + Conductor idle 化する。ログ: `assign_skipped_terminal`。T303 の reducer 置換で helper ごと削除済み
+
 ## [4.5.1] - 2026-04-23
 
 ### Fixed
