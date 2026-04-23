@@ -4,6 +4,8 @@ import { join } from "path";
 import { start } from "./proxy";
 import { onStateChanged, __resetBusForTest, __listenerCountForTest } from "./eventBus";
 import { createDummyProject, type DummyProject } from "./test-project";
+import { initDB, getApiUsage } from "./trace-store";
+import type { Database } from "bun:sqlite";
 
 let project: DummyProject;
 let testDir: string;
@@ -587,6 +589,521 @@ describe("proxy", () => {
         .join(" ");
       expect(joined).toContain(".team/tasks/");
       expect(joined).toContain("直接書き込みは禁止");
+    });
+  });
+
+  // --- T305: api_usage テーブル書き込み ---
+  describe("api_usage (T305)", () => {
+    let db: Database;
+
+    beforeEach(() => {
+      db = initDB(testDir);
+    });
+
+    afterEach(() => {
+      try { db.close(); } catch {}
+    });
+
+    test("非 streaming /v1/messages: usage / model / stop_reason / rate limit ヘッダーが INSERT される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_abc123",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: 10,
+                cache_read_input_tokens: 200,
+              },
+            }),
+            {
+              headers: {
+                "content-type": "application/json",
+                "anthropic-request-id": "req_xyz789",
+                "anthropic-ratelimit-tokens-remaining": "900000",
+                "anthropic-ratelimit-tokens-limit": "1000000",
+                "anthropic-ratelimit-tokens-reset": "2026-04-24T10:05:00Z",
+                "anthropic-ratelimit-requests-remaining": "4000",
+                "anthropic-ratelimit-requests-limit": "5000",
+              },
+            },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        conductorSurface: "surface:200",
+        taskId: "T305",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+        headers: { "x-cmux-role": "agent" },
+        body: JSON.stringify({ model: "test" }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T305" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.model).toBe("claude-opus-4-7");
+      expect(row.request_id).toBe("msg_abc123"); // body の id を優先（なければヘッダ）
+      expect(row.stop_reason).toBe("end_turn");
+      expect(row.status_code).toBe(200);
+      expect(row.input_tokens).toBe(100);
+      expect(row.output_tokens).toBe(50);
+      expect(row.cache_creation_input_tokens).toBe(10);
+      expect(row.cache_read_input_tokens).toBe(200);
+      expect(row.role).toBe("agent");
+      expect(row.surface).toBe("surface:200");
+      expect(row.ratelimit_tokens_remaining).toBe(900000);
+      expect(row.ratelimit_requests_remaining).toBe(4000);
+      expect(row.ratelimit_tokens_reset).toBe("2026-04-24T10:05:00Z");
+      expect(row.error).toBeNull();
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("SSE /v1/messages: message_start + message_delta + message_stop で usage が集約される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `event: message_start\ndata: ${JSON.stringify({
+                    type: "message_start",
+                    message: {
+                      id: "msg_sse_1",
+                      model: "claude-sonnet-4-6",
+                      usage: {
+                        input_tokens: 500,
+                        output_tokens: 1,
+                        cache_creation_input_tokens: 20,
+                        cache_read_input_tokens: 1000,
+                      },
+                    },
+                  })}\n\n`,
+                ),
+              );
+              // content_block_delta を 3 行（parse 対象外 — JSON.parse を発火させない）
+              for (let i = 0; i < 3; i++) {
+                controller.enqueue(
+                  encoder.encode(
+                    `event: content_block_delta\ndata: ${JSON.stringify({
+                      type: "content_block_delta",
+                      index: 0,
+                      delta: { type: "text_delta", text: "x" },
+                    })}\n\n`,
+                  ),
+                );
+              }
+              // message_delta を 2 回（累積 output_tokens + stop_reason）
+              controller.enqueue(
+                encoder.encode(
+                  `event: message_delta\ndata: ${JSON.stringify({
+                    type: "message_delta",
+                    delta: { stop_reason: null, stop_sequence: null },
+                    usage: { output_tokens: 50 },
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                encoder.encode(
+                  `event: message_delta\ndata: ${JSON.stringify({
+                    type: "message_delta",
+                    delta: { stop_reason: "end_turn", stop_sequence: null },
+                    usage: { output_tokens: 120 },
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                encoder.encode(
+                  `event: message_stop\ndata: ${JSON.stringify({
+                    type: "message_stop",
+                  })}\n\n`,
+                ),
+              );
+              controller.close();
+            },
+          });
+          return new Response(stream, {
+            headers: {
+              "content-type": "text/event-stream",
+              "anthropic-request-id": "req_sse_hdr_1",
+            },
+          });
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-SSE",
+        role: "conductor",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      // client 側ですべて読み切る（tee の片方を drain 完了させるため）
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const rows = getApiUsage(db, { taskId: "T305-SSE" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.model).toBe("claude-sonnet-4-6");
+      // request_id: ヘッダー優先
+      expect(row.request_id).toBe("req_sse_hdr_1");
+      expect(row.input_tokens).toBe(500);
+      // output_tokens: message_delta の最後の値で上書き
+      expect(row.output_tokens).toBe(120);
+      expect(row.cache_creation_input_tokens).toBe(20);
+      expect(row.cache_read_input_tokens).toBe(1000);
+      expect(row.stop_reason).toBe("end_turn");
+      expect(row.status_code).toBe(200);
+      expect(row.error).toBeNull();
+      expect(row.role).toBe("conductor");
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("SSE: chunk が行の途中で分断されてもバッファされて正しく parse される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          const encoder = new TextEncoder();
+          const full =
+            `event: message_start\ndata: ${JSON.stringify({
+              type: "message_start",
+              message: {
+                id: "msg_split",
+                model: "claude-opus-4-7",
+                usage: { input_tokens: 42, output_tokens: 1 },
+              },
+            })}\n\n` +
+            `event: message_delta\ndata: ${JSON.stringify({
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 17 },
+            })}\n\n` +
+            `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`;
+          const fullBytes = encoder.encode(full);
+          // 意図的に 3 バイトずつ chunk 分割（行境界・マルチバイト風）
+          const stream = new ReadableStream({
+            start(controller) {
+              for (let i = 0; i < fullBytes.length; i += 3) {
+                controller.enqueue(fullBytes.slice(i, i + 3));
+              }
+              controller.close();
+            },
+          });
+          return new Response(stream, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-SPLIT",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const rows = getApiUsage(db, { taskId: "T305-SPLIT" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.model).toBe("claude-opus-4-7");
+      expect(row.input_tokens).toBe(42);
+      expect(row.output_tokens).toBe(17);
+      expect(row.stop_reason).toBe("end_turn");
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("非 streaming 429: error.type が rate_limit_error で INSERT される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              type: "error",
+              error: { type: "rate_limit_error", message: "rate limit" },
+            }),
+            {
+              status: 429,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-429",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(429);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T305-429" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.status_code).toBe(429);
+      expect(row.error).toBe("rate_limit_error");
+      expect(row.input_tokens).toBeNull();
+      expect(row.output_tokens).toBeNull();
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("非 streaming 502 で body が空: error=http_502 で INSERT される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response("", {
+            status: 502,
+            headers: { "content-type": "text/plain" },
+          });
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-502",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(502);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T305-502" });
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.error).toBe("http_502");
+      expect(rows[0]!.status_code).toBe(502);
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("/v1/messages/count_tokens は api_usage に INSERT されない（完全一致判定）", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({ input_tokens: 42 }),
+            {
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-CT",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/v1/messages/count_tokens`,
+        { method: "POST" },
+      );
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T305-CT" });
+      expect(rows.length).toBe(0);
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("JSONL (api-trace.jsonl) と api_usage が並存する", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_dual",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: { input_tokens: 1, output_tokens: 2 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T305-DUAL",
+        role: "agent",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 150));
+
+      // JSONL が書かれている
+      const traceFile = join(testDir, ".team/logs/traces/api-trace.jsonl");
+      const jsonlContent = (await readFile(traceFile, "utf-8")).trim();
+      expect(jsonlContent.length).toBeGreaterThan(0);
+      const lastLine = jsonlContent.split("\n").pop()!;
+      const entry = JSON.parse(lastLine);
+      expect(entry.path).toBe("/v1/messages");
+      expect(entry.status).toBe(200);
+
+      // api_usage にも INSERT されている
+      const rows = getApiUsage(db, { taskId: "T305-DUAL" });
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.model).toBe("claude-opus-4-7");
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("db 未指定時は api_usage に INSERT されない（既存テスト互換）", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_nodb",
+              model: "claude-opus-4-7",
+              usage: { input_tokens: 5, output_tokens: 3 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      // db を opts に渡さない
+      const handle = await start(testDir, {
+        taskId: "T305-NODB",
+        role: "agent",
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      // 別途手で db を開いて確認（opts.db は渡していない）
+      const rows = getApiUsage(db, { taskId: "T305-NODB" });
+      expect(rows.length).toBe(0);
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
     });
   });
 });

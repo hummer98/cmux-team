@@ -9,6 +9,9 @@ import {
   insertTaskSession,
   getTaskSessions,
   updateNotificationEnrichment,
+  insertApiUsage,
+  getApiUsage,
+  type ApiUsageRecord,
 } from "./trace-store";
 import type { QueueMessage } from "./schema";
 import { createDummyProject, type DummyProject } from "./test-project";
@@ -646,5 +649,245 @@ describe("trace-store: getHookSignals role/taskId filter (T266)", () => {
     const rows = getHookSignals(db, { role: "agent", taskId: "265", type: "NOTIFICATION" });
     expect(rows.length).toBe(1);
     expect(rows[0]!.role).toBe("agent");
+  });
+});
+
+describe("trace-store: api_usage (T305)", () => {
+  let project: DummyProject;
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-api-usage-t305-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
+    db = initDB(tmpDir);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("新規 DB: api_usage テーブルに全 27 列が作成される", () => {
+    const cols = db
+      .prepare("PRAGMA table_info(api_usage)")
+      .all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    for (const col of [
+      "id",
+      "timestamp",
+      "task_id",
+      "role",
+      "surface",
+      "conductor_id",
+      "model",
+      "request_id",
+      "status_code",
+      "input_tokens",
+      "output_tokens",
+      "cache_creation_input_tokens",
+      "cache_read_input_tokens",
+      "stop_reason",
+      "duration_ms",
+      "ratelimit_tokens_remaining",
+      "ratelimit_tokens_limit",
+      "ratelimit_tokens_reset",
+      "ratelimit_input_tokens_remaining",
+      "ratelimit_input_tokens_limit",
+      "ratelimit_input_tokens_reset",
+      "ratelimit_output_tokens_remaining",
+      "ratelimit_output_tokens_limit",
+      "ratelimit_output_tokens_reset",
+      "ratelimit_requests_remaining",
+      "ratelimit_requests_limit",
+      "ratelimit_requests_reset",
+      "error",
+    ]) {
+      expect(names.has(col)).toBe(true);
+    }
+  });
+
+  test("insertApiUsage: 全列を指定した往復で読み戻せる", () => {
+    const record: ApiUsageRecord = {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T305",
+      role: "agent",
+      surface: "surface:300",
+      conductor_id: "surface:200",
+      model: "claude-opus-4-7",
+      request_id: "req_abc123",
+      status_code: 200,
+      input_tokens: 1234,
+      output_tokens: 567,
+      cache_creation_input_tokens: 100,
+      cache_read_input_tokens: 2000,
+      stop_reason: "end_turn",
+      duration_ms: 5432,
+      ratelimit_tokens_remaining: 900000,
+      ratelimit_tokens_limit: 1000000,
+      ratelimit_tokens_reset: "2026-04-24T10:05:00Z",
+      ratelimit_input_tokens_remaining: 800000,
+      ratelimit_input_tokens_limit: 900000,
+      ratelimit_input_tokens_reset: "2026-04-24T10:05:00Z",
+      ratelimit_output_tokens_remaining: 100000,
+      ratelimit_output_tokens_limit: 150000,
+      ratelimit_output_tokens_reset: "2026-04-24T10:05:00Z",
+      ratelimit_requests_remaining: 4000,
+      ratelimit_requests_limit: 5000,
+      ratelimit_requests_reset: "2026-04-24T10:05:00Z",
+      error: null,
+    };
+
+    const id = insertApiUsage(db, record);
+    expect(id).toBeGreaterThan(0);
+
+    const rows = getApiUsage(db, { taskId: "T305" });
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.model).toBe("claude-opus-4-7");
+    expect(row.request_id).toBe("req_abc123");
+    expect(row.status_code).toBe(200);
+    expect(row.input_tokens).toBe(1234);
+    expect(row.output_tokens).toBe(567);
+    expect(row.cache_creation_input_tokens).toBe(100);
+    expect(row.cache_read_input_tokens).toBe(2000);
+    expect(row.stop_reason).toBe("end_turn");
+    expect(row.duration_ms).toBe(5432);
+    expect(row.ratelimit_tokens_remaining).toBe(900000);
+    expect(row.ratelimit_requests_remaining).toBe(4000);
+    expect(row.ratelimit_tokens_reset).toBe("2026-04-24T10:05:00Z");
+    expect(row.error).toBeNull();
+  });
+
+  test("insertApiUsage: 最小構成（timestamp のみ必須）でも INSERT できる、欠損は NULL", () => {
+    const id = insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+    });
+    expect(id).toBeGreaterThan(0);
+
+    const rows = getApiUsage(db, {});
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.timestamp).toBe("2026-04-24T10:00:00.000Z");
+    expect(row.task_id ?? null).toBeNull();
+    expect(row.model ?? null).toBeNull();
+    expect(row.input_tokens ?? null).toBeNull();
+    expect(row.error ?? null).toBeNull();
+  });
+
+  test("getApiUsage: role / error フィルタが効く", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T1",
+      role: "master",
+      input_tokens: 10,
+      output_tokens: 20,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T2",
+      role: "agent",
+      input_tokens: 30,
+      output_tokens: 40,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:02:00.000Z",
+      task_id: "T3",
+      role: "agent",
+      status_code: 429,
+      error: "rate_limit_error",
+    });
+
+    const agents = getApiUsage(db, { role: "agent" });
+    expect(agents.length).toBe(2);
+
+    const rateLimited = getApiUsage(db, { error: "rate_limit_error" });
+    expect(rateLimited.length).toBe(1);
+    expect(rateLimited[0]!.task_id).toBe("T3");
+
+    // id DESC 順
+    const all = getApiUsage(db, {});
+    expect(all.length).toBe(3);
+    expect(all[0]!.task_id).toBe("T3");
+    expect(all[2]!.task_id).toBe("T1");
+  });
+
+  test("ensureApiUsageColumns: 列欠損の旧 api_usage があっても ALTER TABLE で補完される", async () => {
+    const oldProject = await createDummyProject({
+      prefix: "cmux-team-old-api-usage-",
+      subdirs: [],
+      setProjectRootEnv: false,
+    });
+    const oldDir = oldProject.root;
+    try {
+      await mkdir(join(oldDir, ".team/traces"), { recursive: true });
+      const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
+      // 列数少ない旧スキーマ (timestamp + input_tokens のみ)
+      oldDb.exec(`
+        CREATE TABLE api_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp TEXT NOT NULL,
+          input_tokens INTEGER
+        );
+      `);
+      oldDb
+        .prepare("INSERT INTO api_usage (timestamp, input_tokens) VALUES (?, ?)")
+        .run("2026-01-01T00:00:00.000Z", 42);
+      oldDb.close();
+
+      const migratedDb = initDB(oldDir);
+      try {
+        const cols = migratedDb
+          .prepare("PRAGMA table_info(api_usage)")
+          .all() as Array<{ name: string }>;
+        const names = new Set(cols.map((c) => c.name));
+        for (const col of [
+          "task_id",
+          "role",
+          "surface",
+          "model",
+          "request_id",
+          "status_code",
+          "output_tokens",
+          "cache_creation_input_tokens",
+          "cache_read_input_tokens",
+          "stop_reason",
+          "duration_ms",
+          "ratelimit_tokens_remaining",
+          "ratelimit_requests_reset",
+          "error",
+        ]) {
+          expect(names.has(col)).toBe(true);
+        }
+
+        // 旧行は残ったまま
+        const old = migratedDb
+          .prepare(
+            "SELECT timestamp, input_tokens, output_tokens, model FROM api_usage LIMIT 1",
+          )
+          .get() as {
+            timestamp: string;
+            input_tokens: number;
+            output_tokens: number | null;
+            model: string | null;
+          };
+        expect(old.timestamp).toBe("2026-01-01T00:00:00.000Z");
+        expect(old.input_tokens).toBe(42);
+        expect(old.output_tokens).toBeNull();
+        expect(old.model).toBeNull();
+
+        // 2 回目の initDB 呼び出しでも throw しない（冪等）
+        migratedDb.close();
+        const reopen = initDB(oldDir);
+        reopen.close();
+      } finally {
+        try { migratedDb.close(); } catch {}
+      }
+    } finally {
+      await oldProject.dispose();
+    }
   });
 });

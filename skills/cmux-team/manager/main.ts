@@ -610,8 +610,16 @@ async function cmdStart(): Promise<void> {
   if (existingProxyPort) {
     state.proxyPort = parseInt(existingProxyPort, 10);
     await log("proxy_reused", `port=${existingProxyPort}`);
+    // T305: 既存 proxy 再利用分岐では自分で proxy を起動しないため、api_usage 書き込みは
+    // 別プロセスの proxy が担当する。このプロセスで initDB する必要はない。
   } else {
     try {
+      // T305: 新規 proxy 起動時のみ DB ハンドルを開き、proxy に渡す。
+      // 現行の shutdown() / onFullQuit() は proxyHandle.stop() を呼ばず process.exit(0) に
+      // 任せる設計（既存 Master/Conductor の接続維持のため）なので、ここで開いた
+      // traceDb も shutdown で明示的 close しない。WAL mode により writer 多重でも
+      // DB 破損は起きず、process 終了時に OS が fd を閉じる。
+      const traceDb = initDB(PROJECT_ROOT);
       proxyHandle = await startProxy(PROJECT_ROOT, {
         getState: () => state,
         onMessage: async (msg) => {
@@ -621,6 +629,7 @@ async function cmdStart(): Promise<void> {
           // の不変条件が成立し、spawn-agent → await-agent のレースが解消する。
           await updateTeamJson(state);
         },
+        db: traceDb,
       });
       await writeFile(join(PROJECT_ROOT, ".team/proxy-port"), String(proxyHandle.port));
       state.proxyPort = proxyHandle.port;

@@ -7,12 +7,14 @@
  */
 import { mkdir, appendFile, readFile } from "fs/promises";
 import { join } from "path";
+import type { Database } from "bun:sqlite";
 import { log } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
 import { persistRateLimit, isStale5h } from "./rate-limit-persistence";
+import { insertApiUsage, type ApiUsageRecord } from "./trace-store";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 
@@ -100,9 +102,78 @@ function extractRateLimit(headers: Headers): RateLimitInfo | null {
   };
 }
 
+/**
+ * T305: api_usage 列用の rate limit / request_id ヘッダーを抽出する。
+ * 既存 extractRateLimit は RateLimitInfo 専用（unified/TPM）なので用途が異なる。
+ * 数値列は NaN を NULL に倒す。
+ */
+function extractRateLimitForApiUsage(headers: Headers): Pick<
+  ApiUsageRecord,
+  | "request_id"
+  | "ratelimit_tokens_remaining"
+  | "ratelimit_tokens_limit"
+  | "ratelimit_tokens_reset"
+  | "ratelimit_input_tokens_remaining"
+  | "ratelimit_input_tokens_limit"
+  | "ratelimit_input_tokens_reset"
+  | "ratelimit_output_tokens_remaining"
+  | "ratelimit_output_tokens_limit"
+  | "ratelimit_output_tokens_reset"
+  | "ratelimit_requests_remaining"
+  | "ratelimit_requests_limit"
+  | "ratelimit_requests_reset"
+> {
+  const intOrNull = (name: string): number | null => {
+    const v = headers.get(name);
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? null : n;
+  };
+  const strOrNull = (name: string): string | null => headers.get(name) ?? null;
+
+  return {
+    request_id: strOrNull("anthropic-request-id"),
+    ratelimit_tokens_remaining: intOrNull("anthropic-ratelimit-tokens-remaining"),
+    ratelimit_tokens_limit: intOrNull("anthropic-ratelimit-tokens-limit"),
+    ratelimit_tokens_reset: strOrNull("anthropic-ratelimit-tokens-reset"),
+    ratelimit_input_tokens_remaining: intOrNull("anthropic-ratelimit-input-tokens-remaining"),
+    ratelimit_input_tokens_limit: intOrNull("anthropic-ratelimit-input-tokens-limit"),
+    ratelimit_input_tokens_reset: strOrNull("anthropic-ratelimit-input-tokens-reset"),
+    ratelimit_output_tokens_remaining: intOrNull("anthropic-ratelimit-output-tokens-remaining"),
+    ratelimit_output_tokens_limit: intOrNull("anthropic-ratelimit-output-tokens-limit"),
+    ratelimit_output_tokens_reset: strOrNull("anthropic-ratelimit-output-tokens-reset"),
+    ratelimit_requests_remaining: intOrNull("anthropic-ratelimit-requests-remaining"),
+    ratelimit_requests_limit: intOrNull("anthropic-ratelimit-requests-limit"),
+    ratelimit_requests_reset: strOrNull("anthropic-ratelimit-requests-reset"),
+  };
+}
+
+/**
+ * T305: insertApiUsage を try/catch で囲む thin wrapper。
+ * WAL ディスクフル等で DB 書き込みが throw してもレスポンス転送を止めない。
+ */
+function safeInsertApiUsage(db: Database, record: ApiUsageRecord): void {
+  try {
+    insertApiUsage(db, record);
+  } catch (e: any) {
+    log(
+      "api_usage_insert_failed",
+      `${e?.message ?? "unknown"} task_id=${record.task_id ?? "-"} status=${record.status_code ?? "-"}`,
+    ).catch(() => {});
+  }
+}
+
 export async function start(
   projectRoot: string,
-  opts?: { conductorSurface?: string; taskId?: string; role?: string; getState?: () => any; onMessage?: (msg: QueueMessage) => Promise<void> }
+  opts?: {
+    conductorSurface?: string;
+    taskId?: string;
+    role?: string;
+    getState?: () => any;
+    onMessage?: (msg: QueueMessage) => Promise<void>;
+    /** T305: api_usage 書き込み先。未指定時は INSERT を skip（既存テスト互換）。 */
+    db?: Database;
+  }
 ): Promise<ProxyHandle> {
   const upstream = process.env.ANTHROPIC_API_URL || DEFAULT_UPSTREAM;
   const tracesDir = join(projectRoot, ".team/logs/traces");
@@ -392,8 +463,26 @@ export async function start(
         // streaming: tee して片方をログに使う
         const [clientStream, logStream] = upstreamRes.body.tee();
 
+        // T305: api_usage 用に /v1/messages 完全一致を判定し、db と rate limit ヘッダーを
+        // drainAndRecord に渡す。それ以外（JSONL / バイト数計測）は従来通り全 endpoint で行う。
+        const isMessagesEndpoint =
+          !!opts?.db && url.pathname === "/v1/messages";
+        const { request_id: headerRequestId, ...rateLimits } = isMessagesEndpoint
+          ? extractRateLimitForApiUsage(upstreamRes.headers)
+          : { request_id: null as string | null };
+        const apiUsageCtx = isMessagesEndpoint
+          ? {
+              db: opts!.db!,
+              headerRequestId: headerRequestId ?? null,
+              rateLimits: rateLimits as Omit<
+                ReturnType<typeof extractRateLimitForApiUsage>,
+                "request_id"
+              >,
+            }
+          : null;
+
         // 非同期でログ書き込み（レスポンスはブロックしない）
-        drainAndLog(logStream, {
+        drainAndRecord(logStream, {
           tracesDir: traceFile,
           method: req.method,
           path: url.pathname,
@@ -403,8 +492,9 @@ export async function start(
           conductorSurface,
           taskId,
           role,
+          apiUsage: apiUsageCtx,
         }).catch((e: any) =>
-          log("error", `drainAndLog failed: ${e.message}`).catch(() => {})
+          log("error", `drainAndRecord failed: ${e.message}`).catch(() => {})
         );
 
         return new Response(clientStream, {
@@ -445,6 +535,83 @@ export async function start(
       // 非同期でログ書き込み（JSONL）
       appendFile(traceFile, JSON.stringify(entry) + "\n").catch(() => {});
 
+      // T305: /v1/messages 完全一致の非 streaming レスポンスは api_usage にも INSERT。
+      // JSONL と並存。db 未指定時は skip（既存テスト互換）。
+      if (opts?.db && url.pathname === "/v1/messages") {
+        const { request_id: headerRequestId, ...rateLimits } =
+          extractRateLimitForApiUsage(upstreamRes.headers);
+        let model: string | null = null;
+        let requestId: string | null = headerRequestId ?? null;
+        let inputTokens: number | null = null;
+        let outputTokens: number | null = null;
+        let cacheCreationInputTokens: number | null = null;
+        let cacheReadInputTokens: number | null = null;
+        let stopReason: string | null = null;
+        let errorType: string | null = null;
+
+        const parsedOk = upstreamRes.ok;
+        try {
+          const text = new TextDecoder().decode(resBody);
+          const json = text ? JSON.parse(text) : null;
+          if (json && typeof json === "object") {
+            if (parsedOk) {
+              // 成功レスポンス: ルートに model / stop_reason / usage
+              model = typeof json.model === "string" ? json.model : null;
+              requestId = typeof json.id === "string" ? json.id : requestId;
+              stopReason =
+                typeof json.stop_reason === "string" ? json.stop_reason : null;
+              const usage = json.usage;
+              if (usage && typeof usage === "object") {
+                inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : null;
+                outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : null;
+                cacheCreationInputTokens =
+                  typeof usage.cache_creation_input_tokens === "number"
+                    ? usage.cache_creation_input_tokens
+                    : null;
+                cacheReadInputTokens =
+                  typeof usage.cache_read_input_tokens === "number"
+                    ? usage.cache_read_input_tokens
+                    : null;
+              }
+            } else {
+              // エラーレスポンス: error.type を拾う
+              const err = json.error;
+              if (err && typeof err === "object" && typeof err.type === "string") {
+                errorType = err.type;
+              }
+            }
+          }
+        } catch {
+          if (!parsedOk) {
+            errorType = `http_${upstreamRes.status}`;
+          } else {
+            errorType = "parse_failed";
+          }
+        }
+        if (!parsedOk && !errorType) {
+          errorType = `http_${upstreamRes.status}`;
+        }
+
+        safeInsertApiUsage(opts.db, {
+          timestamp: new Date().toISOString(),
+          task_id: taskId ?? null,
+          role: role ?? null,
+          surface: conductorSurface ?? null,
+          conductor_id: conductorSurface ?? null,
+          model,
+          request_id: requestId,
+          status_code: upstreamRes.status,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          cache_creation_input_tokens: cacheCreationInputTokens,
+          cache_read_input_tokens: cacheReadInputTokens,
+          stop_reason: stopReason,
+          duration_ms: duration,
+          ...rateLimits,
+          error: errorType,
+        });
+      }
+
       return new Response(resBody, {
         status: upstreamRes.status,
         statusText: upstreamRes.statusText,
@@ -475,8 +642,20 @@ export async function start(
   };
 }
 
-/** streaming レスポンスを drain してバイト数をログに記録 */
-async function drainAndLog(
+/**
+ * T305: streaming レスポンスを drain し、バイト数（JSONL）と
+ * /v1/messages の SSE usage（api_usage テーブル）を記録する。
+ *
+ * SSE パーサ方針:
+ * - TextDecoder({ stream: true }) で chunk をデコード。終端で decoder.decode() を呼んで flush
+ * - 内部バッファに append → \n で split → 完全行のみ処理 → 最後の不完全行はバッファに残す
+ * - 各行は line.replace(/\r$/, "") で末尾 \r を剥がす
+ * - ストリーム終端で残った不完全行は破棄（SSE は \n\n 区切りで event/data ペアが途切れたら不正）
+ * - event: <name> を見たら pendingEvent にセット、次の data: 行を pendingEvent で分岐して parse
+ * - 関心イベント: message_start / message_delta / message_stop / error のみ JSON.parse
+ * - 他のイベント（content_block_delta 等）は parse しない（性能確保）
+ */
+async function drainAndRecord(
   stream: ReadableStream<Uint8Array>,
   ctx: {
     tracesDir: string;
@@ -488,21 +667,131 @@ async function drainAndLog(
     conductorSurface?: string;
     taskId?: string;
     role?: string;
+    apiUsage: {
+      db: Database;
+      headerRequestId: string | null;
+      rateLimits: Omit<
+        ReturnType<typeof extractRateLimitForApiUsage>,
+        "request_id"
+      >;
+    } | null;
   }
 ): Promise<void> {
   let responseBytes = 0;
   const reader = stream.getReader();
+
+  // SSE parser state (apiUsage !== null のときのみ更新される)
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let pendingEvent: string | null = null;
+  let model: string | null = null;
+  let sseRequestId: string | null = null;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  let cacheCreationInputTokens: number | null = null;
+  let cacheReadInputTokens: number | null = null;
+  let stopReason: string | null = null;
+  let sseError: string | null = null;
+  let streamAborted = false;
+
+  const INTERESTING_EVENTS = new Set([
+    "message_start",
+    "message_delta",
+    "message_stop",
+    "error",
+  ]);
+
+  const processLine = (rawLine: string) => {
+    const line = rawLine.replace(/\r$/, "");
+    if (line.length === 0) {
+      // 空行は event/data ペアの区切り。pendingEvent は data 行到達時にクリアするが、
+      // 念のためここでもクリアする（`event:` 単独行 + 空行のケース）。
+      pendingEvent = null;
+      return;
+    }
+    if (line.startsWith("event: ")) {
+      const name = line.slice(7).trim();
+      pendingEvent = INTERESTING_EVENTS.has(name) ? name : null;
+      return;
+    }
+    if (line.startsWith("data: ")) {
+      if (!pendingEvent) {
+        // 関心外の event は parse しない（content_block_delta 等）
+        return;
+      }
+      const jsonText = line.slice(6);
+      const currentEvent = pendingEvent;
+      pendingEvent = null;
+      try {
+        const obj = JSON.parse(jsonText) as any;
+        if (currentEvent === "message_start") {
+          const msg = obj?.message;
+          if (msg && typeof msg === "object") {
+            if (typeof msg.model === "string") model = msg.model;
+            if (typeof msg.id === "string") sseRequestId = msg.id;
+            const usage = msg.usage;
+            if (usage && typeof usage === "object") {
+              if (typeof usage.input_tokens === "number") inputTokens = usage.input_tokens;
+              if (typeof usage.output_tokens === "number") outputTokens = usage.output_tokens;
+              if (typeof usage.cache_creation_input_tokens === "number") {
+                cacheCreationInputTokens = usage.cache_creation_input_tokens;
+              }
+              if (typeof usage.cache_read_input_tokens === "number") {
+                cacheReadInputTokens = usage.cache_read_input_tokens;
+              }
+            }
+          }
+        } else if (currentEvent === "message_delta") {
+          // output_tokens は累積値。複数回発火を想定し毎回上書き
+          const usage = obj?.usage;
+          if (usage && typeof usage === "object" && typeof usage.output_tokens === "number") {
+            outputTokens = usage.output_tokens;
+          }
+          const delta = obj?.delta;
+          if (delta && typeof delta === "object" && typeof delta.stop_reason === "string") {
+            stopReason = delta.stop_reason;
+          }
+        } else if (currentEvent === "error") {
+          const err = obj?.error;
+          if (err && typeof err === "object" && typeof err.type === "string") {
+            sseError = err.type;
+          }
+        }
+        // message_stop は parse するだけで特に状態更新なし（終端シグナル）
+      } catch {
+        // 不正 JSON — 次行以降で拾えるので継続
+      }
+    }
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       responseBytes += value.byteLength;
+      if (ctx.apiUsage) {
+        buffer += decoder.decode(value, { stream: true });
+        let nlIdx = buffer.indexOf("\n");
+        while (nlIdx !== -1) {
+          const line = buffer.slice(0, nlIdx);
+          buffer = buffer.slice(nlIdx + 1);
+          processLine(line);
+          nlIdx = buffer.indexOf("\n");
+        }
+      }
+    }
+    if (ctx.apiUsage) {
+      // ストリーム終端で decoder を flush（マルチバイト境界の残骸回収）
+      const tail = decoder.decode();
+      if (tail) buffer += tail;
+      // 終端到達時の不完全行（\n 未到達）は破棄する
     }
   } catch (e: any) {
     // クライアント切断等は無視するが、予期しないエラーは記録
     if (!e.message?.includes("closed") && !e.message?.includes("aborted")) {
       log("proxy_stream_error", e.message).catch(() => {});
     }
+    streamAborted = true;
   } finally {
     reader.releaseLock();
   }
@@ -524,4 +813,34 @@ async function drainAndLog(
 
   // JSONL ログ
   appendFile(ctx.tracesDir, JSON.stringify(entry) + "\n").catch(() => {});
+
+  // T305: api_usage に SSE 集約結果 + ヘッダー情報で 1 回 INSERT
+  if (ctx.apiUsage) {
+    let errorValue: string | null = sseError;
+    if (!errorValue && streamAborted) {
+      errorValue = "stream_aborted";
+    }
+    if (!errorValue && ctx.status >= 400) {
+      errorValue = `http_${ctx.status}`;
+    }
+    safeInsertApiUsage(ctx.apiUsage.db, {
+      timestamp: new Date().toISOString(),
+      task_id: ctx.taskId ?? null,
+      role: ctx.role ?? null,
+      surface: ctx.conductorSurface ?? null,
+      conductor_id: ctx.conductorSurface ?? null,
+      model,
+      // request_id: ヘッダー優先、なければ SSE message_start
+      request_id: ctx.apiUsage.headerRequestId ?? sseRequestId,
+      status_code: ctx.status,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cache_creation_input_tokens: cacheCreationInputTokens,
+      cache_read_input_tokens: cacheReadInputTokens,
+      stop_reason: stopReason,
+      duration_ms: duration,
+      ...ctx.apiUsage.rateLimits,
+      error: errorValue,
+    });
+  }
 }

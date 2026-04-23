@@ -63,6 +63,40 @@ export interface NotificationEnrichment {
   notificationType?: string | null;
 }
 
+// T305: Anthropic API 呼び出しごとの usage / rate limit を記録する。
+// proxy.ts が /v1/messages（完全一致）のレスポンスから 1 リクエスト 1 レコードで INSERT する。
+// 取得できなかったフィールドは NULL のまま（SUM/AVG 集計で無視される）。
+export interface ApiUsageRecord {
+  id?: number;
+  timestamp: string;
+  task_id?: string | null;
+  role?: string | null;
+  surface?: string | null;
+  conductor_id?: string | null;
+  model?: string | null;
+  request_id?: string | null;
+  status_code?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  stop_reason?: string | null;
+  duration_ms?: number | null;
+  ratelimit_tokens_remaining?: number | null;
+  ratelimit_tokens_limit?: number | null;
+  ratelimit_tokens_reset?: string | null;
+  ratelimit_input_tokens_remaining?: number | null;
+  ratelimit_input_tokens_limit?: number | null;
+  ratelimit_input_tokens_reset?: string | null;
+  ratelimit_output_tokens_remaining?: number | null;
+  ratelimit_output_tokens_limit?: number | null;
+  ratelimit_output_tokens_reset?: string | null;
+  ratelimit_requests_remaining?: number | null;
+  ratelimit_requests_limit?: number | null;
+  ratelimit_requests_reset?: string | null;
+  error?: string | null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS task_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +138,36 @@ CREATE TABLE IF NOT EXISTS hook_signals (
 CREATE INDEX IF NOT EXISTS idx_hook_signals_type ON hook_signals(type);
 CREATE INDEX IF NOT EXISTS idx_hook_signals_surface ON hook_signals(surface);
 CREATE INDEX IF NOT EXISTS idx_hook_signals_timestamp ON hook_signals(timestamp);
+CREATE TABLE IF NOT EXISTS api_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL,
+  task_id TEXT,
+  role TEXT,
+  surface TEXT,
+  conductor_id TEXT,
+  model TEXT,
+  request_id TEXT,
+  status_code INTEGER,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_creation_input_tokens INTEGER,
+  cache_read_input_tokens INTEGER,
+  stop_reason TEXT,
+  duration_ms INTEGER,
+  ratelimit_tokens_remaining INTEGER,
+  ratelimit_tokens_limit INTEGER,
+  ratelimit_tokens_reset TEXT,
+  ratelimit_input_tokens_remaining INTEGER,
+  ratelimit_input_tokens_limit INTEGER,
+  ratelimit_input_tokens_reset TEXT,
+  ratelimit_output_tokens_remaining INTEGER,
+  ratelimit_output_tokens_limit INTEGER,
+  ratelimit_output_tokens_reset TEXT,
+  ratelimit_requests_remaining INTEGER,
+  ratelimit_requests_limit INTEGER,
+  ratelimit_requests_reset TEXT,
+  error TEXT
+);
 `;
 
 const HOOK_SIGNAL_PAYLOAD_LIMIT = 64 * 1024;
@@ -127,6 +191,7 @@ export function initDB(projectRoot: string): Database {
   db.exec(SCHEMA);
   ensureTaskSessionsColumns(db);
   ensureHookSignalsColumns(db);
+  ensureApiUsageColumns(db);
   return db;
 }
 
@@ -149,6 +214,67 @@ function ensureTaskSessionsColumns(db: Database): void {
       console.warn(`[trace-store] task_sessions_migrated col=${col}`);
     }
   }
+}
+
+/**
+ * T305: 既存 DB の `api_usage` テーブルに列が無ければ ALTER TABLE で追加する（冪等）。
+ *
+ * 新規 DB では `db.exec(SCHEMA)` 直後に全列が揃っているため ALTER は走らない。
+ * 将来 `service_tier` / `cache_creation.ephemeral_*_input_tokens` 等の列を追加する際も
+ * この関数に required を追記するだけで既存 DB にマイグレーションできる。
+ */
+function ensureApiUsageColumns(db: Database): void {
+  const rows = db
+    .prepare("PRAGMA table_info(api_usage)")
+    .all() as Array<{ name: string }>;
+  const existing = new Set(rows.map((r) => r.name));
+  const required: Array<[string, "TEXT" | "INTEGER"]> = [
+    ["timestamp", "TEXT"],
+    ["task_id", "TEXT"],
+    ["role", "TEXT"],
+    ["surface", "TEXT"],
+    ["conductor_id", "TEXT"],
+    ["model", "TEXT"],
+    ["request_id", "TEXT"],
+    ["status_code", "INTEGER"],
+    ["input_tokens", "INTEGER"],
+    ["output_tokens", "INTEGER"],
+    ["cache_creation_input_tokens", "INTEGER"],
+    ["cache_read_input_tokens", "INTEGER"],
+    ["stop_reason", "TEXT"],
+    ["duration_ms", "INTEGER"],
+    ["ratelimit_tokens_remaining", "INTEGER"],
+    ["ratelimit_tokens_limit", "INTEGER"],
+    ["ratelimit_tokens_reset", "TEXT"],
+    ["ratelimit_input_tokens_remaining", "INTEGER"],
+    ["ratelimit_input_tokens_limit", "INTEGER"],
+    ["ratelimit_input_tokens_reset", "TEXT"],
+    ["ratelimit_output_tokens_remaining", "INTEGER"],
+    ["ratelimit_output_tokens_limit", "INTEGER"],
+    ["ratelimit_output_tokens_reset", "TEXT"],
+    ["ratelimit_requests_remaining", "INTEGER"],
+    ["ratelimit_requests_limit", "INTEGER"],
+    ["ratelimit_requests_reset", "TEXT"],
+    ["error", "TEXT"],
+  ];
+  for (const [col, type] of required) {
+    if (!existing.has(col)) {
+      db.exec(`ALTER TABLE api_usage ADD COLUMN ${col} ${type}`);
+      console.warn(`[trace-store] api_usage_migrated col=${col}`);
+    }
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_api_usage_timestamp ON api_usage(timestamp)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_api_usage_task_id ON api_usage(task_id)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_api_usage_role ON api_usage(role)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_api_usage_surface ON api_usage(surface)",
+  );
 }
 
 /**
@@ -374,4 +500,106 @@ export function updateNotificationEnrichment(
     enrichment.notificationType ?? null,
     id,
   );
+}
+
+/**
+ * T305: /v1/messages 1 リクエスト分の usage / rate limit を api_usage に追記する。
+ * proxy.ts のレスポンス終端（非 streaming body 読み終わり / SSE drain 終端）で 1 回だけ呼ぶ。
+ * 取れなかったフィールドは NULL を明示する（TEXT/INTEGER 列とも NULL 許容）。
+ */
+export function insertApiUsage(db: Database, record: ApiUsageRecord): number {
+  const stmt = db.prepare(`
+    INSERT INTO api_usage (
+      timestamp, task_id, role, surface, conductor_id,
+      model, request_id, status_code,
+      input_tokens, output_tokens,
+      cache_creation_input_tokens, cache_read_input_tokens,
+      stop_reason, duration_ms,
+      ratelimit_tokens_remaining, ratelimit_tokens_limit, ratelimit_tokens_reset,
+      ratelimit_input_tokens_remaining, ratelimit_input_tokens_limit, ratelimit_input_tokens_reset,
+      ratelimit_output_tokens_remaining, ratelimit_output_tokens_limit, ratelimit_output_tokens_reset,
+      ratelimit_requests_remaining, ratelimit_requests_limit, ratelimit_requests_reset,
+      error
+    ) VALUES (
+      $timestamp, $task_id, $role, $surface, $conductor_id,
+      $model, $request_id, $status_code,
+      $input_tokens, $output_tokens,
+      $cache_creation_input_tokens, $cache_read_input_tokens,
+      $stop_reason, $duration_ms,
+      $ratelimit_tokens_remaining, $ratelimit_tokens_limit, $ratelimit_tokens_reset,
+      $ratelimit_input_tokens_remaining, $ratelimit_input_tokens_limit, $ratelimit_input_tokens_reset,
+      $ratelimit_output_tokens_remaining, $ratelimit_output_tokens_limit, $ratelimit_output_tokens_reset,
+      $ratelimit_requests_remaining, $ratelimit_requests_limit, $ratelimit_requests_reset,
+      $error
+    )
+  `);
+  const result = stmt.run({
+    $timestamp: record.timestamp,
+    $task_id: record.task_id ?? null,
+    $role: record.role ?? null,
+    $surface: record.surface ?? null,
+    $conductor_id: record.conductor_id ?? null,
+    $model: record.model ?? null,
+    $request_id: record.request_id ?? null,
+    $status_code: record.status_code ?? null,
+    $input_tokens: record.input_tokens ?? null,
+    $output_tokens: record.output_tokens ?? null,
+    $cache_creation_input_tokens: record.cache_creation_input_tokens ?? null,
+    $cache_read_input_tokens: record.cache_read_input_tokens ?? null,
+    $stop_reason: record.stop_reason ?? null,
+    $duration_ms: record.duration_ms ?? null,
+    $ratelimit_tokens_remaining: record.ratelimit_tokens_remaining ?? null,
+    $ratelimit_tokens_limit: record.ratelimit_tokens_limit ?? null,
+    $ratelimit_tokens_reset: record.ratelimit_tokens_reset ?? null,
+    $ratelimit_input_tokens_remaining: record.ratelimit_input_tokens_remaining ?? null,
+    $ratelimit_input_tokens_limit: record.ratelimit_input_tokens_limit ?? null,
+    $ratelimit_input_tokens_reset: record.ratelimit_input_tokens_reset ?? null,
+    $ratelimit_output_tokens_remaining: record.ratelimit_output_tokens_remaining ?? null,
+    $ratelimit_output_tokens_limit: record.ratelimit_output_tokens_limit ?? null,
+    $ratelimit_output_tokens_reset: record.ratelimit_output_tokens_reset ?? null,
+    $ratelimit_requests_remaining: record.ratelimit_requests_remaining ?? null,
+    $ratelimit_requests_limit: record.ratelimit_requests_limit ?? null,
+    $ratelimit_requests_reset: record.ratelimit_requests_reset ?? null,
+    $error: record.error ?? null,
+  });
+  return Number(result.lastInsertRowid);
+}
+
+export function getApiUsage(
+  db: Database,
+  opts: {
+    taskId?: string;
+    role?: string;
+    surface?: string;
+    error?: string;
+    limit?: number;
+  },
+): ApiUsageRecord[] {
+  const conditions: string[] = [];
+  const params: Record<string, any> = {};
+
+  if (opts.taskId) {
+    conditions.push("task_id = $taskId");
+    params.$taskId = opts.taskId;
+  }
+  if (opts.role) {
+    conditions.push("role = $role");
+    params.$role = opts.role;
+  }
+  if (opts.surface) {
+    conditions.push("surface = $surface");
+    params.$surface = opts.surface;
+  }
+  if (opts.error) {
+    conditions.push("error = $error");
+    params.$error = opts.error;
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = opts.limit ?? 50;
+
+  const stmt = db.prepare(
+    `SELECT * FROM api_usage ${where} ORDER BY id DESC LIMIT ${limit}`,
+  );
+  return stmt.all(params) as ApiUsageRecord[];
 }

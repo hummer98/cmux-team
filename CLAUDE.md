@@ -530,6 +530,14 @@ hook（SessionStart / Stop / SessionEnd / **Notification** 等）は **全イベ
   ```
 - 将来的に CLI サブコマンド化する可能性あり
 
+**運用上の注意（api_usage GC — T305）:**
+- `api_usage` テーブル（`/v1/messages` 1 リクエスト 1 行の usage / rate limit 記録）の自動 GC は未実装。
+  24h 連続稼働で数 MB/日の INSERT が見込まれるため、DB が膨張した場合は手動で古い行を削除する:
+  ```bash
+  sqlite3 .team/traces/traces.db "DELETE FROM api_usage WHERE timestamp < '2026-01-01'"
+  ```
+- `hook_signals` と同じ運用方針。将来的に CLI サブコマンド化する可能性あり
+
 ### Notification hook（T266）
 
 Claude Code native の通知（permission 要求 / idle 通知等）を Manager に集約し、
