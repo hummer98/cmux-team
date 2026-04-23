@@ -2643,19 +2643,59 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     } catch (se: any) {
       await log("error", `shadow_observe_failed ASSIGN(ok) ${se?.message ?? se}`);
     }
-    // task-state.json に assigned + assignedAt + resume 情報を記録
-    const ts = await loadTaskState(state.projectRoot);
-    ts[task.id] = {
-      ...ts[task.id],
-      status: 'assigned',
-      assignedAt: new Date().toISOString(),
-      worktreePath: updated.worktreePath,
-      taskRunId: updated.taskRunId,
-      conductorSlot: updated.surface,
-      sessionId: updated.sessionId,
-    };
-    await saveTaskState(state.projectRoot, ts);
+    // task-state.json に assigned + assignedAt + resume 情報を記録。
+    // T302: terminal race ガードは `__testApplyAssignCommit` に集約している。
+    const r = await __testApplyAssignCommit(state, task.id, updated);
+    if (!r.committed) continue;
   }
+}
+
+/**
+ * T302 暫定ガード付き assign 完了書き込み。
+ *
+ * assignTask は数秒〜十数秒かかるため、その間に `delete-task` / `abort-task` が
+ * race で `task-state.json` を terminal(deleted / aborted / closed) に書き換える
+ * ことがある。ガードなしで `saveTaskState(status:'assigned')` を走らせると
+ * terminal が巻き戻って不整合（例: `deletedAt` と `assignedAt` が同居）を起こす。
+ *
+ * ガードは `loadTaskState` 結果の current status を確認し、terminal なら
+ * saveTaskState を skip して `resetConductor` で worktree / branch / Conductor
+ * state を idle に戻す。既に Claude セッションには `/clear` + プロンプトが
+ * 送信済みだが、resetConductor 後の Conductor は存在しない worktree に cd しようとして
+ * 早期 idle 化する（T263 の `handleConductorDone` 経路でも同様）。
+ *
+ * test-only の export にした理由は、`scanTasks` 全体を git worktree + cmux の
+ * 外部依存込みで走らせずに race 分岐だけを検証するため。T303 の reducer 置換で
+ * ガードごと削除する予定。
+ *
+ * TODO(T303): remove after reducer migration
+ */
+export async function __testApplyAssignCommit(
+  state: DaemonState,
+  taskId: string,
+  updated: ConductorState,
+): Promise<{ committed: boolean; reason?: "terminal"; currentStatus?: string }> {
+  const ts = await loadTaskState(state.projectRoot);
+  const currentStatus = ts[taskId]?.status;
+  if (currentStatus && isTerminalStatus(currentStatus)) {
+    await log(
+      "assign_skipped_terminal",
+      `${formatSurface(updated.surface, "C")} task_id=${taskId} current_status=${currentStatus} taskRunId=${updated.taskRunId ?? "-"}`
+    );
+    await resetConductor(updated, state.projectRoot, state.workspace ?? undefined);
+    return { committed: false, reason: "terminal", currentStatus };
+  }
+  ts[taskId] = {
+    ...ts[taskId],
+    status: 'assigned',
+    assignedAt: new Date().toISOString(),
+    worktreePath: updated.worktreePath,
+    taskRunId: updated.taskRunId,
+    conductorSlot: updated.surface,
+    sessionId: updated.sessionId,
+  };
+  await saveTaskState(state.projectRoot, ts);
+  return { committed: true };
 }
 
 /**
