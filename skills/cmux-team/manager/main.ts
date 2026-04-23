@@ -40,6 +40,8 @@ import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
 import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, formatDeliverable, type TaskState, type TaskMeta } from "./task";
+// T303: task-state mutation は applyTaskEvent / updateTaskSessionId 経由のみ
+import { applyTaskEvent, refreshTaskStateFromDisk } from "./state-machine/task-state-store";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
@@ -807,7 +809,7 @@ async function cmdStart(): Promise<void> {
   //   `cmux-team resume <id>` をシェルに投入する（旧実装は Claude 起動後に
   //   チャット入力として消費されるバグがあった）。
   const taskState = await loadTaskState(PROJECT_ROOT);
-  let taskStateModified = false;
+  // T303: task-state mutation は applyTaskEvent 経由のみ (変更追跡フラグは撤去)
   const rawResumePlan: Array<{
     taskId: string;
     taskRunId: string;
@@ -839,14 +841,19 @@ async function cmdStart(): Promise<void> {
       for (const s of v.surfaces) {
         violationSurfaces.add(s);
       }
-      // 違反 taskId を ready に戻し journal 付与
+      // 違反 taskId を ready に戻し journal 付与 (T303: applyTaskEvent 経由)
       const prev = taskState[v.taskId];
       if (prev) {
         const journal = prev.journal
           ? `${prev.journal}; unique_violation: surfaces=[${v.surfaces.join(",")}]`
           : `unique_violation: surfaces=[${v.surfaces.join(",")}]`;
-        taskState[v.taskId] = { ...prev, status: "ready", journal };
-        taskStateModified = true;
+        await applyTaskEvent(PROJECT_ROOT, {
+          taskId: v.taskId,
+          event: { type: "REVERT_TO_READY", reason: "unique_violation" },
+          ctx: { hasConductor: false, parentAborted: false },
+          patch: (_p, next) => (next === "ready" ? { merge: { journal } } : {}),
+        });
+        await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
       }
       await log(
         "task_unique_violation_startup",
@@ -882,12 +889,9 @@ async function cmdStart(): Promise<void> {
   }
 
   // markTaskAborted は on-disk を直接書き換えるため、in-memory taskState を再 load して同期する
+  // (T303 R6: bulk refresh は当面残す — applyTaskEvent は独立トランザクションで別 reference のため)
   if (resumeResult.abortTargets.length > 0) {
-    const refreshed = await loadTaskState(PROJECT_ROOT);
-    for (const k of Object.keys(refreshed)) taskState[k] = refreshed[k]!;
-    for (const k of Object.keys(taskState)) {
-      if (!(k in refreshed)) delete taskState[k];
-    }
+    await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
   }
 
   // 順序の安定化: taskId を数値として昇順 sort。これによりどの pane に
@@ -899,11 +903,15 @@ async function cmdStart(): Promise<void> {
     return a.taskId.localeCompare(b.taskId);
   });
 
-  // slot 数を超える場合は末尾から ready に差し戻す
+  // slot 数を超える場合は末尾から ready に差し戻す (T303: applyTaskEvent 経由)
   while (rawResumePlan.length > state.maxConductors) {
     const overflow = rawResumePlan.pop()!;
-    taskState[overflow.taskId] = { ...taskState[overflow.taskId], status: "ready" };
-    taskStateModified = true;
+    await applyTaskEvent(PROJECT_ROOT, {
+      taskId: overflow.taskId,
+      event: { type: "REVERT_TO_READY", reason: "overflow" },
+      ctx: { hasConductor: false, parentAborted: false },
+    });
+    await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
     await log("resume_overflow_to_ready", `task_id=${overflow.taskId}`);
   }
 
@@ -970,9 +978,7 @@ async function cmdStart(): Promise<void> {
     );
   }
 
-  if (taskStateModified) {
-    await saveTaskState(PROJECT_ROOT, taskState);
-  }
+  // T303: saveTaskState は applyTaskEvent 内で完結。変更追跡フラグも撤去。
 
   // Master spawn
   state.bootPhase = "master";
@@ -2972,8 +2978,21 @@ async function cmdUpdateTask(): Promise<void> {
       taskId,
     });
 
-    taskState[taskId] = { ...taskState[taskId], status: newStatus };
-    await saveTaskState(PROJECT_ROOT, taskState);
+    // T303: UPDATE_STATUS は draft ⇔ ready のみ対応。それ以外は CLI レベルで reject。
+    //       update-task CLI は上で assigned/closed を既にガード済み。
+    //       aborted/deleted/legacy 値 (in_progress 等) は update-task の想定外。
+    if (newStatus !== "ready" && newStatus !== "draft") {
+      console.error(
+        `Error: --status must be 'ready' or 'draft' (got '${newStatus}'). Use abort-task / delete-task / close-task for other transitions.`,
+      );
+      process.exit(1);
+    }
+    await applyTaskEvent(PROJECT_ROOT, {
+      taskId,
+      event: { type: "UPDATE_STATUS", to: newStatus },
+      ctx: { hasConductor: false, parentAborted: false },
+    });
+    await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
 
     // ready に変更された場合は TASK_CREATED を送信
     if (newStatus === "ready") {
@@ -3142,13 +3161,27 @@ async function cmdCloseTask(): Promise<void> {
   }
 
   // task-state.json で closed + closedAt + journal + deliverable を設定（ファイルは移動しない）
-  taskState[taskId] = {
-    status: "closed",
-    closedAt: new Date().toISOString(),
-    ...(journal ? { journal } : {}),
-    deliverable,
-  };
-  await saveTaskState(PROJECT_ROOT, taskState);
+  // T303: applyTaskEvent(CLOSE) 経由。reducer は assigned / ready / draft → closed に遷移。
+  //       それ以外 (aborted) は noop で弾かれるが CLI 入口で既に reject していない旧経路は
+  //       reducer で拾う (冪等)。
+  await applyTaskEvent(PROJECT_ROOT, {
+    taskId,
+    event: { type: "CLOSE" },
+    ctx: { hasConductor: currentStatus === "assigned", parentAborted: false },
+    patch: (_p, next) =>
+      next === "closed"
+        ? {
+            merge: {
+              closedAt: new Date().toISOString(),
+              ...(journal ? { journal } : {}),
+              deliverable,
+            },
+            // close 時は assigned 時の resume metadata をクリア (冪等)
+            remove: [],
+          }
+        : {},
+  });
+  await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
 
   // CONDUCTOR_DONE メッセージ送信（daemon に完了を通知）
   const teamJsonPath = join(PROJECT_ROOT, ".team/team.json");
@@ -3746,19 +3779,26 @@ async function restartFromAborted(
     }
   }
 
-  const ts = await loadTaskState(PROJECT_ROOT);
-  ts[taskId] = {
-    ...ts[taskId],
-    status: "ready",
-    journal: `[restart] ${journal}`,
-  };
-  delete ts[taskId].assignedAt;
-  delete ts[taskId].abortedAt;
-  delete ts[taskId].worktreePath;
-  delete ts[taskId].taskRunId;
-  delete ts[taskId].conductorSlot;
-  delete ts[taskId].sessionId;
-  await saveTaskState(PROJECT_ROOT, ts);
+  // T303: applyTaskEvent(RESTART) 経由。aborted/closed → ready + resume metadata を remove。
+  await applyTaskEvent(PROJECT_ROOT, {
+    taskId,
+    event: { type: "RESTART" },
+    ctx: { hasConductor: false, parentAborted: false },
+    patch: (_p, next) =>
+      next === "ready"
+        ? {
+            merge: { journal: `[restart] ${journal}` },
+            remove: [
+              "assignedAt",
+              "abortedAt",
+              "worktreePath",
+              "taskRunId",
+              "conductorSlot",
+              "sessionId",
+            ],
+          }
+        : {},
+  });
 
   await log(
     "task_restarted",
@@ -3820,18 +3860,26 @@ async function cmdRestartTask(): Promise<void> {
   }
   const conductor = teamJson.conductors?.find((c: any) => c.taskId === taskId);
   if (!conductor) {
-    // Conductor が見つからない場合: status を ready に戻して TASK_CREATED 通知
-    taskState[taskId] = {
-      ...taskState[taskId],
-      status: "ready",
-      journal: `[restart] ${journal}`,
-    };
-    delete taskState[taskId].assignedAt;
-    delete taskState[taskId].worktreePath;
-    delete taskState[taskId].taskRunId;
-    delete taskState[taskId].conductorSlot;
-    delete taskState[taskId].sessionId;
-    await saveTaskState(PROJECT_ROOT, taskState);
+    // Conductor が見つからない場合: status を ready に戻して TASK_CREATED 通知 (T303: RESTART)
+    await applyTaskEvent(PROJECT_ROOT, {
+      taskId,
+      event: { type: "RESTART" },
+      ctx: { hasConductor: false, parentAborted: false },
+      patch: (_p, next) =>
+        next === "ready"
+          ? {
+              merge: { journal: `[restart] ${journal}` },
+              remove: [
+                "assignedAt",
+                "worktreePath",
+                "taskRunId",
+                "conductorSlot",
+                "sessionId",
+              ],
+            }
+          : {},
+    });
+    await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
     await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal} no_conductor=true`);
     await postMessage({
       type: "TASK_CREATED",
@@ -3849,18 +3897,26 @@ async function cmdRestartTask(): Promise<void> {
   //       戻り値は捨てる（T260 plan Reviewer rec #3）。
   await cleanupAssignedTask(conductor);
 
-  // 4. タスク状態を ready に変更
-  taskState[taskId] = {
-    ...taskState[taskId],
-    status: "ready",
-    journal: `[restart] ${journal}`,
-  };
-  delete taskState[taskId].assignedAt;
-  delete taskState[taskId].worktreePath;
-  delete taskState[taskId].taskRunId;
-  delete taskState[taskId].conductorSlot;
-  delete taskState[taskId].sessionId;
-  await saveTaskState(PROJECT_ROOT, taskState);
+  // 4. タスク状態を ready に変更 (T303: RESTART + patch remove)
+  await applyTaskEvent(PROJECT_ROOT, {
+    taskId,
+    event: { type: "RESTART" },
+    ctx: { hasConductor: false, parentAborted: false },
+    patch: (_p, next) =>
+      next === "ready"
+        ? {
+            merge: { journal: `[restart] ${journal}` },
+            remove: [
+              "assignedAt",
+              "worktreePath",
+              "taskRunId",
+              "conductorSlot",
+              "sessionId",
+            ],
+          }
+        : {},
+  });
+  await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
 
   await log("task_restarted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
 
@@ -3926,18 +3982,24 @@ async function cmdDeleteTask(): Promise<void> {
 
   const journal = journalArg ?? t("delete_journal_default", { id: taskId, title }).replace(/\s+$/, "");
 
-  taskState[taskId] = {
-    status: "deleted",
-    deletedAt: new Date().toISOString(),
-    journal,
-  };
-  // T241: depends_on 親 delete → ready 子を draft に戻す（ログキーは parent_aborted で統一）
-  const { tasks: allTasks } = await loadTasks(PROJECT_ROOT);
-  const { revertedChildren } = cascadeAbortToChildren(taskState, allTasks, taskId);
-  await saveTaskState(PROJECT_ROOT, taskState);
+  // T303: applyTaskEvent(DELETE) 経由。reducer は draft/ready のみ deleted に遷移し
+  //       cascade_children action で子 (ready) を draft に戻す。子 shadow も store 内で呼ばれる。
+  const deletedAt = new Date().toISOString();
+  const result = await applyTaskEvent(PROJECT_ROOT, {
+    taskId,
+    event: { type: "DELETE" },
+    ctx: { hasConductor: false, parentAborted: false },
+    patch: (_p, next) =>
+      next === "deleted"
+        ? {
+            merge: { deletedAt, journal },
+          }
+        : {},
+  });
+  await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
 
   await log("task_deleted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
-  for (const childId of revertedChildren) {
+  for (const childId of result.revertedChildren) {
     await log(
       "child_reverted_to_draft",
       `parent=${taskId} child=${childId} reason=parent_aborted`

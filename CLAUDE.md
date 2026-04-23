@@ -399,6 +399,24 @@ daemon 内の **実 state mutation** → TUI refresh は `eventBus.ts` 経由で
 - `CMUX_TEAM_TRACE_EVENTS=1` で emit ログが `manager.log` に出力される
 - `logger.ts` は `eventBus.ts` を import してはならない（循環依存禁止）
 
+## task-state 書き込みポリシー（T303）
+
+daemon プロセス内の `task-state.json` 書き込みは **必ず `applyTaskEvent` / `updateTaskSessionId` 経由**。
+
+- `skills/cmux-team/manager/state-machine/task-state-store.ts` が唯一の書き込み API
+- daemon.ts / main.ts で `taskState[...] = ...` / `ts[...] = ...` / 直接 `saveTaskState(...)` を呼んではいけない。grep invariant（下記）を 0 件で維持する:
+  ```bash
+  grep -nE 'taskState\[.*\]\s*=' skills/cmux-team/manager/{daemon,main}.ts   # 0 件
+  grep -nE 'ts\[[^\]]+\]\s*='     skills/cmux-team/manager/{daemon,main}.ts   # 0 件
+  grep -nE '(taskState|ts)\[[^\]]+\]\.[a-zA-Z_]+\s*=' skills/cmux-team/manager/{daemon,main}.ts  # 0 件
+  grep -nE 'delete\s+(taskState|ts)\[[^\]]+\]\.[a-zA-Z_]+' skills/cmux-team/manager/{daemon,main}.ts  # 0 件
+  grep -n  'saveTaskState('       skills/cmux-team/manager/{daemon,main}.ts   # 0 件
+  ```
+- 残存許容は `task-state-store.ts` / `apply-task-actions.ts` / `task.ts`（store 経由 + 純粋ヘルパ）のみ
+- `applyTaskEvent` は in-process mutex で `load → reduce → patch → cascade → save → shadow → notifyStateChanged` を直列化する。呼び出し側は trace DB insert / cmux send / resetConductor など外部 I/O のみ担当
+- metadata-only 更新（SESSION_STARTED 由来の `sessionId` 追記）は `updateTaskSessionId` 専用ヘルパを使う（3 段 guard: taskRunId mismatch / status=assigned + sessionId 差分 / silent skip）
+- `cmux-team close-task` 等の CLI 経路は **別 Node プロセス**なので in-process mutex では保護されない。CLI ↔ daemon 間の cross-process race は reducer noop（`ASSIGN_OK` / `CLOSE` / `ABORT` の guard）で観測的に吸収する方針。file lock 導入は 24h shadow 観測後に別タスクで判断する
+
 ## プロンプト編集ルール（厳守）
 
 **テンプレート (`skills/cmux-team/templates/*.md`) がソースオブトゥルース。** ランタイムプロンプト (`.team/prompts/*.md`) は派生物であり、直接編集してはならない。

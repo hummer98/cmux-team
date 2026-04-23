@@ -103,11 +103,22 @@ export type TaskFsmEvent =
   | { type: "UPDATE_STATUS"; to: "draft" | "ready" }
   | { type: "ASSIGN_OK" }
   | { type: "ASSIGN_FAIL"; errorKind: "task" | "conductor" }
-  | { type: "CLOSE" }
+  | { type: "CLOSE"; autoClosed?: boolean }
   | { type: "ABORT"; reason: string }
   | { type: "DELETE" }
   | { type: "RESTART" }
-  | { type: "PARENT_ABORTED" };
+  | { type: "PARENT_ABORTED" }
+  // T303: assigned 救済経路（worktree 消失 / launch 失敗 / unmatched resume /
+  // unique 違反 / overflow など）。assigned 以外からは noop。
+  | {
+      type: "REVERT_TO_READY";
+      reason:
+        | "worktree_missing"
+        | "launch_failed"
+        | "unmatched"
+        | "unique_violation"
+        | "overflow";
+    };
 
 /**
  * Conductor reducer の context (純関数化のため呼び出し側で計算済みの値を渡す)。
@@ -133,6 +144,11 @@ export interface TaskCtx {
   hasConductor: boolean;
   /** cascade_children 起点になるか (親が aborted/deleted に遷移した直後)。 */
   parentAborted: boolean;
+  /**
+   * T303: CREATE event 時の初期 status。`draft` / `ready` のどちらかを呼び出し側から渡す。
+   * 他 event では未使用。
+   */
+  initialStatus?: TaskStatus;
 }
 
 /**

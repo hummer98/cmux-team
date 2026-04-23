@@ -576,37 +576,37 @@ export async function markTaskAborted(
   opts?: MarkTaskAbortedOptions,
 ): Promise<MarkTaskAbortedResult> {
   const now = opts?.now ?? (() => new Date().toISOString());
-  const taskState = await loadTaskState(projectRoot);
-  const current = taskState[taskId];
 
   // T290 D1: journal on-disk 形式 = `reason=<snake_case>; <detail>`（detail 空時は末尾 `;`）
   const journal = detail ? `reason=${reason}; ${detail}` : `reason=${reason};`;
 
-  if (
-    current?.status === "closed" ||
-    current?.status === "aborted" ||
-    current?.status === "deleted"
-  ) {
+  // T303: applyTaskEvent(ABORT) 経由。reducer が cascade_children + task_aborted_core を
+  // emit し、子 shadow も apply-task-actions.ts 側で呼ばれる。
+  // 循環依存 (task.ts ↔ task-state-store.ts) を避けるため dynamic import を使う。
+  const { applyTaskEvent } = await import("./state-machine/task-state-store");
+
+  const result = await applyTaskEvent(projectRoot, {
+    taskId,
+    event: { type: "ABORT", reason },
+    ctx: { hasConductor: false, parentAborted: false },
+    patch: (prev, next) =>
+      next === "aborted"
+        ? { merge: { abortedAt: now(), journal } }
+        : {},
+  });
+
+  if (!result.committed) {
+    // reducer noop = 既に terminal。冪等 skip。
     return {
       revertedChildren: [],
       journal,
       idempotentSkip: true,
-      existingStatus: current.status,
+      existingStatus: result.prev,
     };
   }
 
-  taskState[taskId] = {
-    ...current,
-    status: "aborted",
-    abortedAt: now(),
-    journal,
-  };
-
-  const { tasks } = await loadTasks(projectRoot);
-  const { revertedChildren } = cascadeAbortToChildren(taskState, tasks, taskId);
-
-  await saveTaskState(projectRoot, taskState);
-
+  // T303 R17: wrapper 側で extraLogFields を載せた `task_aborted` を別途 emit
+  //            (reducer は `task_aborted_core` を emit 済み — 二重 emit しない)
   const parts: string[] = [`task_id=${taskId}`, `reason=${reason}`];
   if (opts?.taskTitle) parts.push(`title=${opts.taskTitle}`);
   parts.push(`journal_summary=${journal}`);
@@ -617,14 +617,14 @@ export async function markTaskAborted(
   }
   await log("task_aborted", parts.join(" "));
 
-  for (const childId of revertedChildren) {
+  for (const childId of result.revertedChildren) {
     await log(
       "child_reverted_to_draft",
       `parent=${taskId} child=${childId} reason=parent_aborted`,
     );
   }
 
-  return { revertedChildren, journal };
+  return { revertedChildren: result.revertedChildren, journal };
 }
 
 export interface ParsedAbortJournal {
@@ -692,7 +692,7 @@ export interface CascadeAbortResult {
  *
  * 返り値 `revertedChildren`: draft に戻した子 ID 群（呼び出し側がログ・notify に使う）
  */
-export function cascadeAbortToChildren(
+export function cascadeAbortToChildrenInPlace(
   state: TaskStateMap,
   tasks: TaskMeta[],
   parentTaskId: string
@@ -714,6 +714,12 @@ export function cascadeAbortToChildren(
   }
   return { revertedChildren: reverted };
 }
+
+/**
+ * T303: 後方互換 alias。新規コードでは `cascadeAbortToChildrenInPlace` を使う。
+ * 既存の呼び出し側 (task.ts:markTaskAborted など) はリネーム後もこの関数名を使い続けられる。
+ */
+export const cascadeAbortToChildren = cascadeAbortToChildrenInPlace;
 
 /**
  * 優先度ソート（high > medium > low）
@@ -860,12 +866,24 @@ ${body}
 `;
   await writeFile(filePath, content);
 
-  // task-state.json 更新
-  const taskState = await loadTaskState(projectRoot);
-  const entry: TaskState = { status };
-  if (opts.createdBy) entry.createdBy = opts.createdBy;
-  taskState[newId] = entry;
-  await saveTaskState(projectRoot, taskState);
+  // task-state.json 更新 (T303: applyTaskEvent(CREATE) 経由。循環依存回避で dynamic import)
+  const { applyTaskEvent } = await import("./state-machine/task-state-store");
+  const initialStatus = (status === "ready" || status === "draft"
+    ? status
+    : "draft") as "draft" | "ready";
+  await applyTaskEvent(projectRoot, {
+    taskId: newId,
+    event: { type: "CREATE" },
+    ctx: {
+      hasConductor: false,
+      parentAborted: false,
+      initialStatus,
+    },
+    patch: (_prev, _next) =>
+      opts.createdBy
+        ? { merge: { createdBy: opts.createdBy, status: initialStatus } }
+        : { merge: { status: initialStatus } },
+  });
 
   const relPath = `.team/tasks/${dirName}/task.md`;
   return { id: newId, filePath, dirName, relPath };

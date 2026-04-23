@@ -128,23 +128,32 @@ stateDiagram-v2
 
 | event \ state | `draft` | `ready` | `assigned` | `closed` | `aborted` | `deleted` |
 |---|---|---|---|---|---|---|
-| `CREATE` | — | — | — | — | — | — |
+| `CREATE` | `ctx.initialStatus` [^t1] | — | — | — | — | — |
 | `UPDATE_STATUS(to=ready)` | `ready` | — | — | — | — | — |
 | `UPDATE_STATUS(to=draft)` | — | `draft` | — | — | — | — |
 | `ASSIGN_OK` | — | `assigned` | — | — | — | — |
 | `ASSIGN_FAIL(kind=task)` | — | `aborted` +cascade | — | — | — | — |
 | `ASSIGN_FAIL(kind=conductor)` | — | — | — | — | — | — |
 | `CLOSE` | `closed` | `closed` | `closed` | — | — | — |
-| `ABORT` | `aborted` +cascade | `aborted` +cascade | `aborted` +cascade | — | — | — |
+| `CLOSE(autoClosed=true)` [^t3] | `closed` | `closed` | `closed` | — | — | — |
+| `ABORT` | `aborted` +cascade [^t2] | `aborted` +cascade [^t2] | `aborted` +cascade [^t2] | — | — | — |
 | `DELETE` | `deleted` +cascade | `deleted` +cascade | — | — | — | — |
-| `RESTART` | — | — | — | `ready` | `ready` | — |
+| `RESTART` | — | — | `ready` [^t4] | `ready` | `ready` | — |
+| `REVERT_TO_READY` [^t5] | — | — | `ready` | — | — | — |
 | `PARENT_ABORTED` | — | `draft` | — | — | — | — |
+
+[^t1]: T303: 呼び出し側 store が既存 entry に対しては idempotent skip し、新規時のみ reducer に `prev="draft"` (fake) + `ctx.initialStatus` を渡す。reducer は `initialStatus ?? "draft"` を次状態として返す。
+[^t2]: T303 R17: reducer 側 log は `task_aborted_core`。wrapper (`markTaskAborted`) は `task_aborted` を別 event 名で emit し二重 emit を避ける。
+[^t3]: T303: T274 auto-close 経路の区別。reducer の log event は `task_completed_state_mismatch` (通常 `CLOSE` は `task_closed`)。wrapper (daemon handleConductorDone) は追加 context を載せた `task_completed_state_mismatch` 詳細版と `task_completed auto_closed=true` を別途 emit。
+[^t4]: T303: restart-task CLI は assigned → ready も受理 (cmdRestartTask がクリーンアップ後に再キューに戻す正当経路)。
+[^t5]: T303: assigned 救済経路 (D1〜D4 / M1 / M3)。reason variant: `worktree_missing` / `launch_failed` / `unmatched` / `unique_violation` / `overflow`。assigned 以外はすべて noop。
 
 ### 2.3 状態遷移図 (Mermaid)
 
 ```mermaid
 stateDiagram-v2
     [*] --> draft : CREATE
+    [*] --> ready : CREATE(initialStatus=ready)
     draft --> ready : UPDATE_STATUS(ready)
     ready --> draft : UPDATE_STATUS(draft) / PARENT_ABORTED
     ready --> assigned : ASSIGN_OK
@@ -152,9 +161,9 @@ stateDiagram-v2
     ready --> deleted : DELETE
     draft --> aborted : ABORT
     draft --> deleted : DELETE
-    assigned --> closed : CLOSE
+    assigned --> closed : CLOSE / CLOSE(autoClosed=true)
     assigned --> aborted : ABORT (user_clear / disconnect_timeout / resume_* / judgment_pending)
-    assigned --> ready : RESTART
+    assigned --> ready : RESTART / REVERT_TO_READY
     closed --> ready : RESTART
     aborted --> ready : RESTART
     deleted --> [*]
@@ -229,18 +238,46 @@ shadow ログフォーマット:
 [<ts>] fsm_shadow_diff C[<surface>] scope=conductor event=<TYPE> prev=<s> expected=<s> actual=<s>
 [<ts>] fsm_shadow_action C[<surface>] scope=conductor type=<action> detail=<json>
 [<ts>] fsm_invariant_violation C[<surface>] scope=conductor state=<s> violation=<rule>
+[<ts>] fsm_shadow_diff scope=task task_id=<id> event=<TYPE> prev=<s> expected=<s> actual=<s>
+[<ts>] fsm_invariant_violation scope=task task_id=<id> state=<s> violation=<rule>
 ```
+
+### 4.1 Task 側 shadow 配線 (T303)
+
+Task の shadow observer は `state-machine/task-state-store.ts:applyTaskEvent` の
+**内部から唯一呼ばれる**。daemon.ts / main.ts の直接 mutation は撤去済みで、
+全 task-state 書き込みは store 経由。cascade 子の shadow も `apply-task-actions.ts`
+側で一元化されており、配線漏れが構造的に起きない設計。
+
+| 配線箇所 | 対応 event | 備考 |
+|---------|-----------|------|
+| `task-state-store:applyTaskEvent` (親) | 全 TaskFsmEvent | reducer 呼出後に shadowObserveTask(taskId, prev, event, ctx, next) |
+| `apply-task-actions:cascade_children` (子) | `PARENT_ABORTED` | cascade 対象の各 childId に対して呼ぶ (R5) |
+| `task-state-store:updateTaskSessionId` | — | status 遷移を伴わないため shadow は呼ばない (reducer scope 外) |
 
 ## 5. 段階計画
 
 | フェーズ | 範囲 | リリース条件 |
 |---------|-----|-------------|
 | **P0** | 現状記述 (A017) | 完了 |
-| **P1 (T279, 本タスク)** | 仕様成文化 + pure reducer + shadow observer + 136 単体テスト | 24h runtime で `fsm_shadow_diff` = 0 |
-| **P2 (T280 予定)** | daemon 側 state mutation を reducer の `{next, actions}` で置換 | shadow 合格後 |
+| **P1 (T279)** | 仕様成文化 + pure reducer + shadow observer + 136 単体テスト | 24h runtime で `fsm_shadow_diff` = 0 |
+| **P2 (T303, 本タスク)** | **Task 側 mutation を reducer 経由一本化**: `applyTaskEvent` / `updateTaskSessionId` 新設、daemon.ts / main.ts の全直接 mutation を置換、in-process mutex で atomic write、T302 暫定ガード撤去、Task 側 shadow を 17 箇所配線 | 24h 実稼働で `fsm_shadow_diff` / `fsm_invariant_violation` / `fsm_shadow_error` すべて **0 件** (1 件でも NG) |
+| **P3 (次候補)** | Conductor 側 mutation の reducer 置換 (`reset_conductor` / `close_task_auto` 等の副作用一本化)、CLI ↔ daemon cross-process race の file lock 導入判断 | P2 24h 観測後 |
 
-P1 から P2 へは「shadow 期間中に `fsm_shadow_diff` が 0 件 (or 設計上の既知差分のみ)」
-の 24h 観測を経てから進める。差分は A017 §5 correction section に記録する。
+P2 で達成した SSOT の射程は **daemon プロセス内**。`cmux-team close-task` 等の
+CLI 経路は新 Node プロセスで起動されるため in-process mutex では保護されない。
+CLI ↔ daemon 間の cross-process race は reducer noop (`ASSIGN_OK` / `CLOSE` / `ABORT`
+の guard) で観測的に吸収する方針で、24h 観測の結果次第で file lock 導入を別タスク化する。
+
+### 5.1 T302 脚注
+
+T302 は T220 の assign race (terminal 巻き戻し) を塞ぐ暫定ガードとして
+`__testApplyAssignCommit` 内に `isTerminalStatus` チェックを導入した。
+T303 で reducer の `ASSIGN_OK` が `state === "ready"` のみ遷移し terminal 状態
+(closed/aborted/deleted) では noop を返す挙動に集約され、暫定ガードと
+test-only export は撤去された。旧 `assign_skipped_terminal` ログは
+`assign_skipped reason=terminal` (terminal race) と `assign_skipped_unexpected`
+(scanTasks のバグ / race の兆候) に分離されている。
 
 ## 関連
 
@@ -250,4 +287,6 @@ P1 から P2 へは「shadow 期間中に `fsm_shadow_diff` が 0 件 (or 設計
 - T264: 起動時 resume 不可検出
 - T274: T274 auto-close
 - T276 / T277: `SESSION_IDLE/CLEAR` race 修正
+- T302: terminal race 暫定ガード (T303 で reducer に吸収)
+- T303: Task side SSOT — `applyTaskEvent` / `updateTaskSessionId` 経由一本化
 - CLAUDE.md「EventBus ポリシー」「タスク属性」「エラーリカバリ」

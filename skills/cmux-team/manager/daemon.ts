@@ -18,6 +18,8 @@ import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
 import { loadTasks, loadTaskState, saveTaskState, filterExecutableTasks, filterRunAfterAllTasks, sortByPriority, sortOpenTasksForDisplay, createTaskProgrammatic, cascadeAbortToChildren, markTaskAborted, isTerminalStatus } from "./task";
+// T303: task-state mutation は applyTaskEvent / updateTaskSessionId 経由のみ
+import { applyTaskEvent, updateTaskSessionId, refreshTaskStateFromDisk } from "./state-machine/task-state-store";
 import updateNotifier from "update-notifier";
 import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
@@ -896,18 +898,26 @@ function restoreConductorState(c: any): ConductorState {
 /**
  * 単一タスクの task-state を ready に戻す（unmatched / launch 失敗 / worktree 消失の救済）。
  * 失敗時は error ログのみで握りつぶす（呼び出し側のフローを止めない）。
+ *
+ * T303: applyTaskEvent(REVERT_TO_READY) 経由。assigned 以外からは reducer noop で
+ * silently skip される。
  */
 async function revertTaskToReady(
   projectRoot: string,
   taskId: string,
-  reason: string,
+  reason:
+    | "worktree_missing"
+    | "launch_failed"
+    | "unmatched"
+    | "unique_violation"
+    | "overflow",
 ): Promise<void> {
   try {
-    const ts = await loadTaskState(projectRoot);
-    if (ts[taskId]) {
-      ts[taskId] = { ...ts[taskId], status: "ready" };
-      await saveTaskState(projectRoot, ts);
-    }
+    await applyTaskEvent(projectRoot, {
+      taskId,
+      event: { type: "REVERT_TO_READY", reason },
+      ctx: { hasConductor: false, parentAborted: false },
+    });
   } catch (e: any) {
     await log("error", `revertTaskToReady failed: task_id=${taskId} reason=${reason} ${e.message}`);
   }
@@ -934,8 +944,8 @@ async function applyRestorePlan(
 
   // A: keep-alive
   //    state 登録 + PID watcher 再起動 + taskId 整合性リコンサイル
+  // T303: task-state mutation は applyTaskEvent 経由に統一 (変更追跡フラグは撤去)
   const taskState = await loadTaskState(state.projectRoot);
-  let taskStateModified = false;
   for (const entry of plan.alive) {
     const c = restoreConductorState(entry.raw);
 
@@ -982,8 +992,14 @@ async function applyRestorePlan(
         "resume_worktree_missing_late",
         `task_id=${item.taskId} ${formatSurface(surface, "C")} worktree=${item.worktreePath}`,
       );
-      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
-      taskStateModified = true;
+      // T303: REVERT_TO_READY(worktree_missing) — assigned のみ ready に戻す
+      await applyTaskEvent(state.projectRoot, {
+        taskId: item.taskId,
+        event: { type: "REVERT_TO_READY", reason: "worktree_missing" },
+        ctx: { hasConductor: false, parentAborted: false },
+      });
+      // in-memory taskState を再 load 同期 (T303: ヘルパ経由)
+      await refreshTaskStateFromDisk(state.projectRoot, taskState);
       continue;
     }
 
@@ -1017,8 +1033,13 @@ async function applyRestorePlan(
     } catch (e: any) {
       // rollback: pre-set state を消し、task-state を ready に戻す
       state.conductors.delete(surface);
-      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
-      taskStateModified = true;
+      // T303: REVERT_TO_READY(launch_failed)
+      await applyTaskEvent(state.projectRoot, {
+        taskId: item.taskId,
+        event: { type: "REVERT_TO_READY", reason: "launch_failed" },
+        ctx: { hasConductor: false, parentAborted: false },
+      });
+      await refreshTaskStateFromDisk(state.projectRoot, taskState);
       await log(
         "conductor_resume_launch_failed",
         `task_id=${item.taskId} ${formatSurface(surface, "C")} ${e?.message ?? e}`,
@@ -1036,8 +1057,13 @@ async function applyRestorePlan(
   ];
   for (const item of allUnmatched) {
     if (taskState[item.taskId]) {
-      taskState[item.taskId] = { ...taskState[item.taskId], status: "ready" };
-      taskStateModified = true;
+      // T303: REVERT_TO_READY(unmatched)
+      await applyTaskEvent(state.projectRoot, {
+        taskId: item.taskId,
+        event: { type: "REVERT_TO_READY", reason: "unmatched" },
+        ctx: { hasConductor: false, parentAborted: false },
+      });
+      await refreshTaskStateFromDisk(state.projectRoot, taskState);
     }
     await log(
       "resume_unmatched_to_ready",
@@ -1045,14 +1071,7 @@ async function applyRestorePlan(
     );
   }
 
-  if (taskStateModified) {
-    try {
-      await saveTaskState(state.projectRoot, taskState);
-    } catch (e: any) {
-      await log("error", `applyRestorePlan saveTaskState failed: ${e.message}`);
-    }
-  }
-
+  // T303: saveTaskState は applyTaskEvent 内で完結。ここでは呼ばない。
   notifyStateChanged("daemon.ts:applyRestorePlan:restore-applied");
   return assignments;
 }
@@ -1493,40 +1512,33 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         notifyStateChanged("daemon.ts:handleMessage:session-started-conductor");
         spawnPidWatcher(state, conductor, message.pid);
 
-        // T203 C3: assigned タスクに対する /clear シミュレーションで task-state.json も同期更新
-        // /clear → SessionStart hook 到達までの間に scanTasks が古い sessionId を書く race を補正する。
+        // T203 C3 / T303: updateTaskSessionId に D5 3 段 guard を集約。
+        // hook 配布物は taskRunId を知らないが、daemon 内部の突合で mismatch を検出する。
         if (
           message.sessionId &&
           prevSessionId !== message.sessionId &&
           conductor.taskId
         ) {
           try {
-            const ts = await loadTaskState(state.projectRoot);
-            const cur = ts[conductor.taskId];
-            // T219: 先頭で stale guard。両方 taskRunId が立っており不一致なら書き込みスキップ.
-            //       hook 配布物は taskRunId を知らない（D2）ため、daemon 内部の突合のみで検証する.
-            if (
-              cur &&
-              conductor.taskRunId &&
-              cur.taskRunId &&
-              cur.taskRunId !== conductor.taskRunId
-            ) {
-              await log(
-                "task_session_update_skipped",
-                `${formatSurface(message.surface, "C")} task_id=${conductor.taskId} task_state_task_run_id=${cur.taskRunId} conductor_task_run_id=${conductor.taskRunId} reason=stale_task_run_id`
-              );
-            } else if (
-              cur &&
-              cur.status === "assigned" &&
-              cur.sessionId !== message.sessionId
-            ) {
-              ts[conductor.taskId] = { ...cur, sessionId: message.sessionId };
-              await saveTaskState(state.projectRoot, ts);
+            const r = await updateTaskSessionId(
+              state.projectRoot,
+              conductor.taskId,
+              message.sessionId,
+              conductor.taskRunId,
+            );
+            if (r.written) {
               await log(
                 "task_session_updated",
                 `${formatSurface(message.surface, "C")} task_id=${conductor.taskId} session_id=${message.sessionId} source=${message.source ?? "-"}`
               );
+            } else if (r.reason === "taskrun_mismatch") {
+              // load → guard 時点の taskRunId をログに残せないので surface/session のみ
+              await log(
+                "task_session_update_skipped",
+                `${formatSurface(message.surface, "C")} task_id=${conductor.taskId} conductor_task_run_id=${conductor.taskRunId ?? "-"} reason=stale_task_run_id`
+              );
             }
+            // not_assigned / unchanged / no_entry は silent (T303 R3 契約)
           } catch (e: any) {
             await log(
               "error",
@@ -2644,58 +2656,66 @@ export async function scanTasks(state: DaemonState): Promise<void> {
       await log("error", `shadow_observe_failed ASSIGN(ok) ${se?.message ?? se}`);
     }
     // task-state.json に assigned + assignedAt + resume 情報を記録。
-    // T302: terminal race ガードは `__testApplyAssignCommit` に集約している。
-    const r = await __testApplyAssignCommit(state, task.id, updated);
+    // T303: terminal race ガードは applyTaskEvent(ASSIGN_OK) の reducer noop に集約。
+    const r = await applyAssignCommit(state, task.id, updated);
     if (!r.committed) continue;
   }
 }
 
 /**
- * T302 暫定ガード付き assign 完了書き込み。
+ * T303: assign 完了書き込みを applyTaskEvent(ASSIGN_OK) 経由に集約。
  *
- * assignTask は数秒〜十数秒かかるため、その間に `delete-task` / `abort-task` が
- * race で `task-state.json` を terminal(deleted / aborted / closed) に書き換える
- * ことがある。ガードなしで `saveTaskState(status:'assigned')` を走らせると
- * terminal が巻き戻って不整合（例: `deletedAt` と `assignedAt` が同居）を起こす。
- *
- * ガードは `loadTaskState` 結果の current status を確認し、terminal なら
- * saveTaskState を skip して `resetConductor` で worktree / branch / Conductor
- * state を idle に戻す。既に Claude セッションには `/clear` + プロンプトが
- * 送信済みだが、resetConductor 後の Conductor は存在しない worktree に cd しようとして
- * 早期 idle 化する（T263 の `handleConductorDone` 経路でも同様）。
- *
- * test-only の export にした理由は、`scanTasks` 全体を git worktree + cmux の
- * 外部依存込みで走らせずに race 分岐だけを検証するため。T303 の reducer 置換で
- * ガードごと削除する予定。
- *
- * TODO(T303): remove after reducer migration
+ * reducer の ASSIGN_OK は `state === "ready"` のみ assigned に遷移、それ以外は noop。
+ * noop 時の分岐:
+ *   - prev ∈ { closed, aborted, deleted } → terminal race (T302 旧挙動互換)。
+ *     `assign_skipped` ログ + resetConductor で worktree / branch を巻き戻す
+ *   - それ以外 (assigned / draft / unknown) → scanTasks のバグ or race。
+ *     過剰 reset を避けるため `assign_skipped_unexpected` ログのみ残し reset しない
  */
-export async function __testApplyAssignCommit(
+async function applyAssignCommit(
   state: DaemonState,
   taskId: string,
   updated: ConductorState,
-): Promise<{ committed: boolean; reason?: "terminal"; currentStatus?: string }> {
-  const ts = await loadTaskState(state.projectRoot);
-  const currentStatus = ts[taskId]?.status;
-  if (currentStatus && isTerminalStatus(currentStatus)) {
+): Promise<{ committed: boolean; reason?: "terminal" | "non_ready"; currentStatus?: string }> {
+  const result = await applyTaskEvent(state.projectRoot, {
+    taskId,
+    event: { type: "ASSIGN_OK" },
+    ctx: { hasConductor: true, parentAborted: false },
+    patch: (_prev, next) =>
+      next === "assigned"
+        ? {
+            merge: {
+              assignedAt: new Date().toISOString(),
+              worktreePath: updated.worktreePath,
+              taskRunId: updated.taskRunId,
+              conductorSlot: updated.surface,
+              sessionId: updated.sessionId,
+            },
+          }
+        : {},
+  });
+
+  if (result.committed) {
+    return { committed: true };
+  }
+
+  const prev = result.prev;
+  if (prev === "closed" || prev === "aborted" || prev === "deleted") {
     await log(
-      "assign_skipped_terminal",
-      `${formatSurface(updated.surface, "C")} task_id=${taskId} current_status=${currentStatus} taskRunId=${updated.taskRunId ?? "-"}`
+      "assign_skipped",
+      `${formatSurface(updated.surface, "C")} task_id=${taskId} reason=terminal prev=${prev} taskRunId=${updated.taskRunId ?? "-"}`,
     );
     await resetConductor(updated, state.projectRoot, state.workspace ?? undefined);
-    return { committed: false, reason: "terminal", currentStatus };
+    return { committed: false, reason: "terminal", currentStatus: prev };
   }
-  ts[taskId] = {
-    ...ts[taskId],
-    status: 'assigned',
-    assignedAt: new Date().toISOString(),
-    worktreePath: updated.worktreePath,
-    taskRunId: updated.taskRunId,
-    conductorSlot: updated.surface,
-    sessionId: updated.sessionId,
-  };
-  await saveTaskState(state.projectRoot, ts);
-  return { committed: true };
+
+  // assigned / draft / undefined からの noop。scanTasks のバグ or race の兆候。
+  // reset せず警告のみ。
+  await log(
+    "assign_skipped_unexpected",
+    `${formatSurface(updated.surface, "C")} task_id=${taskId} prev=${prev ?? "missing"} (scanTasks selected non-ready)`,
+  );
+  return { committed: false, reason: "non_ready", currentStatus: prev };
 }
 
 /**
@@ -3133,9 +3153,13 @@ async function handleConductorDone(
       await log("error", `handleConductorDone judgment_pending update failed: task_id=${taskId} ${e.message}`);
     }
   } else if (stateMismatchOnSuccess) {
-    // T274: Conductor が close-task を skip したまま --success true を送った経路。
+    // T274 / T303: Conductor が close-task を skip したまま --success true を送った経路。
     //       state だけ取り残されるのを防ぐため daemon が代替で close に倒す。
     //       pattern は T263/T269 の unresolved inline 書き換えブロック（daemon.ts:2940-2966）と対称。
+    //
+    //       reducer も `task_completed_state_mismatch` brief を emit するが、wrapper は
+    //       追加 context (worktreePath / title / journal_summary) を載せて詳細版を出す
+    //       (grep で同イベント名の 2 行がヒットする設計 — dashboard / trace 互換維持)。
     await log(
       "task_completed_state_mismatch",
       `task_id=${taskId} ${formatSurface(conductor.surface, "C")}` +
@@ -3148,21 +3172,30 @@ async function handleConductorDone(
       const journal = `auto_closed_by_daemon: CONDUCTOR_DONE without close-task (taskRunId=${conductor.taskRunId ?? "-"})`;
       // T295: close-task が呼ばれなかった時点で納品物は不明。`kind: "none"` を書いて
       //       `closed 時は deliverable が必須` の契約を daemon 経由でも維持する。
-      //       `auto_closed_by_daemon` journal で手動 `none` との区別は journal 本文から可能。
-      taskState[taskId] = {
-        ...taskState[taskId],
-        status: "closed",
-        closedAt: new Date().toISOString(),
-        journal,
-        deliverable: { kind: "none" },
-      };
-      await saveTaskState(state.projectRoot, taskState);
+      await applyTaskEvent(state.projectRoot, {
+        taskId,
+        event: { type: "CLOSE", autoClosed: true },
+        ctx: { hasConductor: true, parentAborted: false },
+        patch: (_prev, next) =>
+          next === "closed"
+            ? {
+                merge: {
+                  closedAt: new Date().toISOString(),
+                  journal,
+                  deliverable: { kind: "none" as const },
+                },
+              }
+            : {},
+      });
       await log(
         "task_completed",
         `task_id=${taskId} ${formatSurface(conductor.surface, "C")}${
           conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
-        } auto_closed=true`
+        } auto_closed=true worktreePath=${conductor.worktreePath ?? "-"}${
+          journalSummary ? ` journal_summary=${journalSummary}` : ""
+        }`
       );
+      // T303 R8: trace DB insert は呼び出し側責務
       if (state.traceDb) {
         try {
           insertTaskSession(state.traceDb, {

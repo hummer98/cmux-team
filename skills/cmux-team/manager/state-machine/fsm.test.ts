@@ -42,6 +42,7 @@ function tctx(partial: Partial<TaskCtx> = {}): TaskCtx {
   return {
     hasConductor: partial.hasConductor ?? true,
     parentAborted: partial.parentAborted ?? false,
+    initialStatus: partial.initialStatus,
   };
 }
 
@@ -611,6 +612,7 @@ describe("Task FSM — deleted は終端 state", () => {
     { type: "DELETE" },
     { type: "RESTART" },
     { type: "PARENT_ABORTED" },
+    { type: "REVERT_TO_READY", reason: "worktree_missing" },
   ];
   for (const e of events) {
     test(`deleted + ${e.type} → deleted (no-op)`, () => {
@@ -722,7 +724,7 @@ describe("Task FSM — DELETE (A017 §2.2)", () => {
   });
 });
 
-describe("Task FSM — RESTART (A017 §2.2)", () => {
+describe("Task FSM — RESTART (A017 §2.2, T303 expanded)", () => {
   test("aborted + RESTART → ready", () => {
     const { next } = taskReduce("aborted", { type: "RESTART" }, tctx({ hasConductor: false }));
     expect(next).toBe("ready");
@@ -731,10 +733,146 @@ describe("Task FSM — RESTART (A017 §2.2)", () => {
     const { next } = taskReduce("closed", { type: "RESTART" }, tctx({ hasConductor: false }));
     expect(next).toBe("ready");
   });
+  test("assigned + RESTART → ready (T303: restart-task CLI from running)", () => {
+    const { next } = taskReduce("assigned", { type: "RESTART" }, tctx({ hasConductor: true }));
+    expect(next).toBe("ready");
+  });
   test("ready + RESTART → ready (no-op)", () => {
     const { next } = taskReduce("ready", { type: "RESTART" }, tctx({ hasConductor: false }));
     expect(next).toBe("ready");
   });
+});
+
+describe("Task FSM — REVERT_TO_READY (T303)", () => {
+  const reasons = [
+    "worktree_missing",
+    "launch_failed",
+    "unmatched",
+    "unique_violation",
+    "overflow",
+  ] as const;
+  const nonAssignedStates: TaskStatus[] = [
+    "draft",
+    "ready",
+    "closed",
+    "aborted",
+    "deleted",
+  ];
+
+  for (const reason of reasons) {
+    test(`assigned + REVERT_TO_READY(${reason}) → ready + task_reverted_to_ready log`, () => {
+      const { next, actions } = taskReduce(
+        "assigned",
+        { type: "REVERT_TO_READY", reason },
+        tctx(),
+      );
+      expect(next).toBe("ready");
+      const logAction = actions.find(
+        (a) => a.type === "log" && a.event === "task_reverted_to_ready",
+      );
+      expect(logAction).toBeDefined();
+      if (logAction && logAction.type === "log") {
+        expect(logAction.detail).toBe(`reason=${reason}`);
+      }
+    });
+
+    for (const s of nonAssignedStates) {
+      test(`${s} + REVERT_TO_READY(${reason}) → ${s} (no-op)`, () => {
+        const { next, actions } = taskReduce(
+          s,
+          { type: "REVERT_TO_READY", reason },
+          tctx({ hasConductor: false }),
+        );
+        expect(next).toBe(s);
+        expect(actions).toEqual([]);
+      });
+    }
+  }
+});
+
+describe("Task FSM — CREATE (T303 initialStatus)", () => {
+  test("CREATE with initialStatus=draft (default) → draft + task_created log", () => {
+    const { next, actions } = taskReduce(
+      "draft",  // store 側 fake prev
+      { type: "CREATE" },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("draft");
+    expect(actions.find((a) => a.type === "log" && a.event === "task_created")).toBeDefined();
+  });
+
+  test("CREATE with initialStatus=ready → ready + task_created log", () => {
+    const { next, actions } = taskReduce(
+      "draft",
+      { type: "CREATE" },
+      tctx({ hasConductor: false, initialStatus: "ready" }),
+    );
+    expect(next).toBe("ready");
+    expect(actions.find((a) => a.type === "log" && a.event === "task_created")).toBeDefined();
+  });
+});
+
+describe("Task FSM — CLOSE autoClosed variant (T303)", () => {
+  test("assigned + CLOSE(autoClosed=true) → closed + task_completed_state_mismatch log", () => {
+    const { next, actions } = taskReduce(
+      "assigned",
+      { type: "CLOSE", autoClosed: true },
+      tctx(),
+    );
+    expect(next).toBe("closed");
+    expect(
+      actions.find((a) => a.type === "log" && a.event === "task_completed_state_mismatch"),
+    ).toBeDefined();
+    expect(
+      actions.find((a) => a.type === "log" && a.event === "task_closed"),
+    ).toBeUndefined();
+  });
+
+  test("assigned + CLOSE(autoClosed=false) → closed + task_closed log", () => {
+    const { next, actions } = taskReduce(
+      "assigned",
+      { type: "CLOSE", autoClosed: false },
+      tctx(),
+    );
+    expect(next).toBe("closed");
+    expect(actions.find((a) => a.type === "log" && a.event === "task_closed")).toBeDefined();
+  });
+
+  test("assigned + CLOSE() (default) → closed + task_closed log", () => {
+    const { next, actions } = taskReduce(
+      "assigned",
+      { type: "CLOSE" },
+      tctx(),
+    );
+    expect(next).toBe("closed");
+    expect(actions.find((a) => a.type === "log" && a.event === "task_closed")).toBeDefined();
+  });
+});
+
+describe("Task FSM — ABORT reducer log is task_aborted_core (T303 R17)", () => {
+  for (const s of ["draft", "ready", "assigned"] as const) {
+    test(`${s} + ABORT → aborted + task_aborted_core (not task_aborted) + cascade`, () => {
+      const { next, actions } = taskReduce(
+        s,
+        { type: "ABORT", reason: "user_clear" },
+        tctx(),
+      );
+      expect(next).toBe("aborted");
+      const coreLog = actions.find(
+        (a) => a.type === "log" && a.event === "task_aborted_core",
+      );
+      expect(coreLog).toBeDefined();
+      if (coreLog && coreLog.type === "log") {
+        expect(coreLog.detail).toBe("reason=user_clear");
+      }
+      // wrapper 側 (markTaskAborted) が task_aborted を emit するので
+      // reducer からは task_aborted は出さない (R17 反映)
+      expect(
+        actions.find((a) => a.type === "log" && a.event === "task_aborted"),
+      ).toBeUndefined();
+      expect(actions.find((a) => a.type === "cascade_children")).toBeDefined();
+    });
+  }
 });
 
 describe("Task FSM — PARENT_ABORTED (T241 cascade)", () => {

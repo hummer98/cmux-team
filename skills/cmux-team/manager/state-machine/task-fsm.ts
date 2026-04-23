@@ -33,14 +33,19 @@ export function taskReduce(
   ctx: TaskCtx,
 ): TaskReducerResult {
   // deleted は復活不可な終端 state。全 event で no-op。
+  // CREATE は呼び出し側 (store) が既存 entry に対しては idempotent skip し、
+  // 新規時のみ reducer に fake prev="draft" で渡すため、ここで deleted 除外しても支障ない。
   if (state === "deleted") {
     return noop(state);
   }
 
   switch (event.type) {
     case "CREATE": {
-      // CREATE は新規作成時の記録用。reducer としては state 変化なし。
-      return withActions(state, [{ type: "log", event: "task_created" }]);
+      // T303: CREATE は新規エントリ生成用。ctx.initialStatus で初期 status を指定
+      // (draft / ready)。未指定時は draft。呼び出し側 store で既存 entry に対する
+      // CREATE は reducer 到達前に idempotent skip される契約。
+      const initial: TaskStatus = ctx.initialStatus ?? "draft";
+      return withActions(initial, [{ type: "log", event: "task_created" }]);
     }
 
     case "UPDATE_STATUS": {
@@ -81,8 +86,10 @@ export function taskReduce(
 
     case "CLOSE": {
       // close-task CLI。assigned → closed が主経路。ready / draft からも可 (手動 close)。
+      // T303: autoClosed=true (T274 auto-close) では区別可能な log event を emit する。
       if (state === "assigned" || state === "ready" || state === "draft") {
-        return withActions("closed", [{ type: "log", event: "task_closed" }]);
+        const logEvent = event.autoClosed ? "task_completed_state_mismatch" : "task_closed";
+        return withActions("closed", [{ type: "log", event: logEvent }]);
       }
       // closed / aborted からは no-op。
       return noop(state);
@@ -90,9 +97,11 @@ export function taskReduce(
 
     case "ABORT": {
       // abort-task CLI、user_clear、judgment_pending、resume_marked_aborted など。
+      // T303 R17: reducer 側 log は `task_aborted_core` (wrapper 側の markTaskAborted は
+      // `task_aborted` を別途 emit する)。二重 emit 防止のため別名に分離。
       if (state === "assigned" || state === "ready" || state === "draft") {
         return withActions("aborted", [
-          { type: "log", event: "task_aborted", detail: `reason=${event.reason}` },
+          { type: "log", event: "task_aborted_core", detail: `reason=${event.reason}` },
           { type: "cascade_children" },
         ]);
       }
@@ -111,8 +120,14 @@ export function taskReduce(
     }
 
     case "RESTART": {
-      // restart-task CLI。aborted / closed → ready。
-      if (state === "aborted" || state === "closed") {
+      // restart-task CLI。aborted / closed / assigned → ready。
+      // T303: assigned → ready も許容。cmdRestartTask は走行中タスクのクリーンアップ後に
+      // 再キューに戻す正当な経路で、A017 §2.2 の restart semantics と整合する。
+      if (
+        state === "aborted" ||
+        state === "closed" ||
+        state === "assigned"
+      ) {
         return withActions("ready", [{ type: "log", event: "task_restarted" }]);
       }
       return noop(state);
@@ -126,6 +141,17 @@ export function taskReduce(
         ]);
       }
       // draft / assigned / closed / aborted の子は変更なし (CLAUDE.md T241 節参照)。
+      return noop(state);
+    }
+
+    case "REVERT_TO_READY": {
+      // T303: assigned 救済経路のみ対象。D1〜D4 / M1 / M3 はすべて実 prev=assigned。
+      // draft / ready / terminal (closed / aborted / deleted) はすべて noop。
+      if (state === "assigned") {
+        return withActions("ready", [
+          { type: "log", event: "task_reverted_to_ready", detail: `reason=${event.reason}` },
+        ]);
+      }
       return noop(state);
     }
   }
