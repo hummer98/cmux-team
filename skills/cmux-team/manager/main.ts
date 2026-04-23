@@ -30,7 +30,7 @@ import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initSourceWatcher, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -554,9 +554,6 @@ async function cmdStart(): Promise<void> {
   // Step 4 で DaemonState.mainBranch を追加しているため直接代入で確定させる。
   state.mainBranch = mainBranchResolution.branch;
 
-  // ソースファイル mtime 監視を初期化
-  state.sourceMtimes = await initSourceWatcher();
-
   // ファイルシステム監視（tasks/, queue/ の変更で即時 tick）
   initFileWatcher(state);
 
@@ -711,34 +708,14 @@ async function cmdStart(): Promise<void> {
       // 続けると子が自分自身を "alive cmux-team" と誤検知して fail-stop する。
       await releasePidFile(pidFilePath);
       const { execFileSync } = require("child_process");
-      // exit 42（auto_restart）が来た場合も再起動ループを継続する（cmux-team.js と同じ挙動）
-      // これがないと proxy_reused した子 daemon が auto_restart で終了した瞬間に
-      // 親（onReload 呼び出し元）が process.exit(0) して proxy も道連れになる
-      const MAX_RESTARTS = 10;
-      let restarts = 0;
-      while (restarts < MAX_RESTARTS) {
-        let exitStatus = 0;
-        try {
-          execFileSync("bun", ["run", latestMainTs, "start"], {
-            stdio: "inherit",
-            env: process.env,
-            cwd: process.cwd(),
-          });
-          break; // 正常終了
-        } catch (e: any) {
-          exitStatus = e.status ?? 1;
-        }
-        if (exitStatus === 42) {
-          restarts++;
-          await log("daemon_reload_restart", `restarts=${restarts}/${MAX_RESTARTS}`);
-          try { execFileSync("sleep", ["1"]); } catch {}
-          continue;
-        }
-        await log("error", `daemon reload exec failed status=${exitStatus}`);
-        break;
-      }
-      if (restarts >= MAX_RESTARTS) {
-        await log("error", "daemon reload restart limit reached");
+      try {
+        execFileSync("bun", ["run", latestMainTs, "start"], {
+          stdio: "inherit",
+          env: process.env,
+          cwd: process.cwd(),
+        });
+      } catch (e: any) {
+        await log("error", `daemon reload exec failed status=${e.status ?? 1}`);
       }
       process.exit(0);
     },
@@ -1045,18 +1022,6 @@ async function cmdStart(): Promise<void> {
     if (sleepElapsed > state.pollInterval * 3) {
       await log("wake_detected", `gap=${Math.round(sleepElapsed / 1000)}s`);
     }
-  }
-
-  // ソース変更による再起動要求（proxy は停止しない — 再起動後に再利用される）
-  if (state.restartRequested) {
-    unmountDashboard();
-    await log("daemon_auto_restart");
-    await updateTeamJson(state);
-    // T259: state 永続化の後・process.exit(42) の直前に release（順序厳守）。
-    // 親が execFileSync でブロックする onReload 経路でも、restart 直前に所有権を
-    // 手放すことで子が新 PID で acquire できるようにする。
-    await releasePidFile(pidFilePath);
-    process.exit(42);
   }
 
   await shutdown();

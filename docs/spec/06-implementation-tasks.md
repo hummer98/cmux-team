@@ -20,7 +20,7 @@
 ### Task 1.2: npm パッケージング — 完了（install.sh を置き換え）
 - `@hummer98/cmux-team` として npm 公開
 - postinstall で bun install + claude plugin add を自動実行
-- bin/cmux-team.js で bun を透過呼び出し（exit code 42 で自動再起動）
+- bin/cmux-team.js で bun を透過呼び出し
 
 ### Task 1.3: cmux-agent-role SKILL.md — 完了
 - 出力プロトコル、タスク作成（CLI 経由）、作業境界、ロール別ガイドライン
@@ -116,7 +116,6 @@
 - Bun ランタイムでの常駐プロセス
 - イベント駆動ステートマシン（10秒ポーリング + ファイル監視による即時 tick）
 - ファイルベースメッセージキュー（Zod バリデーション）
-- ソースファイル mtime 監視による自動再起動（exit code 42）
 
 ### Task 6.2: Conductor スロット管理 — 完了
 - 起動時に3台の常駐 Claude セッションを作成
@@ -195,7 +194,7 @@ T082〜T116 で実施された主要改善:
 - **Conductor `starting` 状態のバグ修正（T114）** — `CONDUCTOR_REGISTERED` 送信順序と SESSION_* ハンドラを修正
 - **`close-task` で `CONDUCTOR_DONE` 送信（T106）** — close 後の Conductor stuck 防止
 - **メモリリーク修正（T113）** — interval 重複・`fs.watch` 未クローズ・`drainAndLog` 未 catch を修正
-- **daemon auto-restart 後の Master proxy 再接続（T115）** — proxy ポート変化を検出して Master を自動再起動
+- **proxy 再利用時の Master 再接続（T115）** — proxy ポート変化を検出して Master を再接続
 - **`task_completed` 二重記録防止（T085）** — CONDUCTOR_DONE ハンドラのステータスガード
 - **`SESSION_CLEAR` メッセージ追加（T084）** — `/clear` 時の disconnected 回復
 

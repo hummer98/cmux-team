@@ -431,8 +431,8 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 既に生きている cmux-team daemon があれば `PidFileLockedError` を経由して exit 1。
 stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に
 `main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗
-（空文字）時は保守的に locked 扱いとする。pidfile は shutdown / onFullQuit /
-restartRequested / onReload の全経路で release され、正常系では
+（空文字）時は保守的に locked 扱いとする。pidfile は onReload / onFullQuit /
+shutdown 全経路で release され、正常系では
 必ず削除される。pidfile は daemon main.ts プロセスのみを指し、proxy は別ライフ
 サイクル。
 

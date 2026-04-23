@@ -63,8 +63,7 @@ Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=
 CLI ラッパー。Bun で `skills/cmux-team/manager/main.ts` を実行する。
 
 - `bun` の存在を確認（未インストール時はエラー）
-- `start` コマンドの場合: exit code 42 による自動再起動をサポート（最大10回）
-- その他のコマンド: 引数を透過して `bun run main.ts` に渡す
+- 全コマンド共通で引数を透過して `bun run main.ts` に渡す
 
 ### bin/postinstall.js
 
@@ -151,7 +150,7 @@ while (state.running):
 ```
 
 ファイルシステム監視（tasks/）と HTTP メッセージ通知により変更検出時は即時 tick を実行。
-ソースファイル mtime 監視によりコード変更時は自動再起動（exit code 42）。auto-restart 後に proxy ポートが変わった場合は Master を自動再接続する。
+proxy ポートが変わった場合は Master を再接続する。
 
 daemon は起動時に呼び出し元の workspace を `state.workspace` に記録し、`cmux tree` / `validateSurface` には常に workspace を渡して別ワークスペースの surface ID と混同しないようにする。起動時にワークスペース名を `basename(PROJECT_ROOT)`（起動フォルダ名）に自動設定する（`cmux rename-workspace`）。
 
@@ -190,7 +189,7 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - ストリーミング対応（`text/event-stream` の tee）
 - ポートは `.team/proxy-port` に保存
 - 既存プロセスが生きていれば再利用
-- daemon の auto-restart 後にポートが変わった場合は Master セッションを自動再接続
+- daemon 起動時に proxy を再利用し、前回ポートと異なる場合は Master セッションを自動再接続
 - レート制限ヘッダー（`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status` など）を記録し、TUI に使用率と reset 時刻を反映
 - デバッグエンドポイント: `GET /state`, `GET /tasks`, `GET /conductors`, `GET /rate-limit`（最新のレート制限状態）, `POST /master-state`（Master の稼働ステータス受信。T229 以降は optional `surface` を body に受け付ける。未指定時は Master が 1 個の場合のみ自動解決、2 個以上は `master_state_surface_ambiguous` をログして 400 を返す）, `POST /statusline`（T211、Claude Code の statusline 描画。`X-Cmux-Surface` ヘッダーで対象 surface を識別し、DaemonState から master/conductor/agent のロールを逆引きして 1 行文字列を返す）
 

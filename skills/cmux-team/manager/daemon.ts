@@ -1,7 +1,7 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir, stat, watch, rename } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, watch, rename } from "fs/promises";
 import { existsSync, openSync, readSync, closeSync, fstatSync } from "fs";
 import { join, dirname } from "path";
 import {
@@ -65,8 +65,6 @@ export interface DaemonState {
   pendingTasks: number;
   openTasks: number;
   taskList: TaskSummary[];
-  sourceMtimes: Map<string, number>;
-  restartRequested: boolean;
   /** 最後に update チェックした時刻（Date.now()） */
   lastUpdateCheckAt: number;
   /** update 検出結果（null = 更新なし、または未チェック） */
@@ -329,8 +327,6 @@ export async function createDaemon(
     pendingTasks: 0,
     openTasks: 0,
     taskList: [],
-    sourceMtimes: new Map(),
-    restartRequested: false,
     lastUpdateCheckAt: 0,
     updateAvailable: null,
     updateMode: "off",
@@ -397,44 +393,6 @@ export async function loadVersion(): Promise<string> {
   } catch {
     return "v?.?.?";
   }
-}
-
-/** manager/ ディレクトリ内の全 .ts ファイルの mtime を記録した Map を返す */
-export async function initSourceWatcher(): Promise<Map<string, number>> {
-  const managerDir = dirname(import.meta.path);
-  const mtimes = new Map<string, number>();
-  try {
-    const files = await readdir(managerDir);
-    for (const f of files) {
-      if (!f.endsWith(".ts") && !f.endsWith(".tsx")) continue;
-      const filePath = join(managerDir, f);
-      const s = await stat(filePath);
-      mtimes.set(filePath, s.mtimeMs);
-    }
-  } catch (e: any) {
-    await log("error", `initSourceWatcher failed: ${e.message}`);
-  }
-  return mtimes;
-}
-
-/** 現在の mtime と比較し、変更があれば変更ファイル名を返す（なければ null） */
-export async function checkSourceChanged(mtimeMap: Map<string, number>): Promise<string | null> {
-  const managerDir = dirname(import.meta.path);
-  try {
-    const files = await readdir(managerDir);
-    for (const f of files) {
-      if (!f.endsWith(".ts") && !f.endsWith(".tsx")) continue;
-      const filePath = join(managerDir, f);
-      const s = await stat(filePath);
-      const prev = mtimeMap.get(filePath);
-      if (prev === undefined || s.mtimeMs !== prev) {
-        return f;
-      }
-    }
-  } catch (e: any) {
-    await log("error", `checkSourceChanged failed: ${e.message}`);
-  }
-  return null;
 }
 
 /**
@@ -1279,16 +1237,6 @@ export async function tick(state: DaemonState): Promise<void> {
     }
   }
 
-  // ソースファイルの mtime 変更を検出
-  if (state.sourceMtimes.size > 0) {
-    const changedFile = await checkSourceChanged(state.sourceMtimes);
-    if (changedFile) {
-      await log("source_changed", `file=${changedFile}`);
-      // T234: restart のために watcher もまとめて停止する
-      stopDaemon(state);
-      state.restartRequested = true;
-    }
-  }
 }
 
 export async function handleMessage(state: DaemonState, message: QueueMessage): Promise<void> {
