@@ -483,15 +483,19 @@ Usage:
   cmux-team trace-task <task-id> [options]
 
 Options:
+  --no-metrics           hide the Token Usage / By role / By model metrics section
   --summary              show summary mode (stub for future)
 
 Examples:
   cmux-team trace-task 141
+  cmux-team trace-task 141 --no-metrics
   cmux-team trace-task 141 --summary
 
 Output includes:
   - Base: base branch / SHA / source (when available)
   - Deliverable: recorded at close-task time (kind + details), or "-" for legacy rows
+  - Token Usage: totals (requests / input / output / cache create / cache read / cache hit rate / duration)
+  - By role / By model: token usage breakdown (tasks predating T305 show a single fallback line)
 `,
 
   help_trace_hooks: `
@@ -1234,15 +1238,19 @@ Usage:
   cmux-team trace-task <task-id> [options]
 
 Options:
+  --no-metrics           Token Usage / By role / By model セクションを非表示にする
   --summary              要約モード（将来拡張用スタブ）
 
 Examples:
   cmux-team trace-task 141
+  cmux-team trace-task 141 --no-metrics
   cmux-team trace-task 141 --summary
 
 Output includes:
   - Base 行: base branch / SHA / source（記録がある場合）
   - Deliverable 行: close-task 時に記録された納品方式（kind + 詳細）。旧行は "-"
+  - Token Usage: 全体集計（requests / input / output / cache create / cache read / cache hit rate / duration）
+  - By role / By model: role 別・model 別の内訳（T305 以前のタスクはフォールバック行 1 行のみ）
 `,
 
   help_trace_hooks: `

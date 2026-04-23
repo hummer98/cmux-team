@@ -603,3 +603,132 @@ export function getApiUsage(
   );
   return stmt.all(params) as ApiUsageRecord[];
 }
+
+// T306: trace-task の Metrics セクション用 read-only 集計。
+// いずれも WHERE task_id = ? で idx_api_usage_task_id を活用する。
+// エラー行（error NOT NULL）も COUNT(*) / SUM に含まれる（コスト可視化の意図）。
+// SQL の SUM は NULL を自動で無視するため、cache 列 NULL 混在でも安全。
+// COALESCE(SUM(...), 0) で 0 行ヒット時に NULL ではなく 0 を返す。
+export interface TaskUsageTotal {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreation: number;
+  cacheRead: number;
+}
+
+export interface TaskUsageByRole extends TaskUsageTotal {
+  role: string;
+}
+
+export interface TaskUsageByModel extends TaskUsageTotal {
+  model: string;
+}
+
+export function getTaskUsageTotal(db: Database, taskId: string): TaskUsageTotal {
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation,
+        COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
+      FROM api_usage
+      WHERE task_id = $taskId
+      `,
+    )
+    .get({ $taskId: taskId }) as
+    | {
+        requests: number;
+        input_tokens: number;
+        output_tokens: number;
+        cache_creation: number;
+        cache_read: number;
+      }
+    | null;
+
+  if (!row) {
+    return { requests: 0, inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0 };
+  }
+  return {
+    requests: row.requests,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheCreation: row.cache_creation,
+    cacheRead: row.cache_read,
+  };
+}
+
+export function getTaskUsageByRole(db: Database, taskId: string): TaskUsageByRole[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        COALESCE(role, 'unknown') AS role,
+        COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation,
+        COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
+      FROM api_usage
+      WHERE task_id = $taskId
+      GROUP BY COALESCE(role, 'unknown')
+      ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+      `,
+    )
+    .all({ $taskId: taskId }) as Array<{
+      role: string;
+      requests: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation: number;
+      cache_read: number;
+    }>;
+
+  return rows.map((r) => ({
+    role: r.role,
+    requests: r.requests,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheCreation: r.cache_creation,
+    cacheRead: r.cache_read,
+  }));
+}
+
+export function getTaskUsageByModel(db: Database, taskId: string): TaskUsageByModel[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        COALESCE(model, '(unknown)') AS model,
+        COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation,
+        COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
+      FROM api_usage
+      WHERE task_id = $taskId
+      GROUP BY COALESCE(model, '(unknown)')
+      ORDER BY COUNT(*) DESC
+      `,
+    )
+    .all({ $taskId: taskId }) as Array<{
+      model: string;
+      requests: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation: number;
+      cache_read: number;
+    }>;
+
+  return rows.map((r) => ({
+    model: r.model,
+    requests: r.requests,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheCreation: r.cache_creation,
+    cacheRead: r.cache_read,
+  }));
+}

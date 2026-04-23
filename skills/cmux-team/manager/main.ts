@@ -38,7 +38,21 @@ import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { createHash } from "crypto";
-import { initDB, insertTaskSession, getSessionsForTask, getTaskSessions, getHookSignals, type HookSignalRecord } from "./trace-store";
+import {
+  initDB,
+  insertTaskSession,
+  getSessionsForTask,
+  getTaskSessions,
+  getHookSignals,
+  getTaskUsageTotal,
+  getTaskUsageByRole,
+  getTaskUsageByModel,
+  type HookSignalRecord,
+  type TaskSessionRecord,
+  type TaskUsageTotal,
+  type TaskUsageByRole,
+  type TaskUsageByModel,
+} from "./trace-store";
 import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, formatDeliverable, type TaskState, type TaskMeta } from "./task";
 // T303: task-state mutation は applyTaskEvent / updateTaskSessionId 経由のみ
 import { applyTaskEvent, refreshTaskStateFromDisk } from "./state-machine/task-state-store";
@@ -4070,9 +4084,9 @@ async function cmdTraceTask(): Promise<void> {
   }
 
   // DB からセッション取得
+  // T306: Metrics セクションでも db を使うため close は関数末尾に移動
   const db = initDB(PROJECT_ROOT);
   const sessions = getSessionsForTask(db, taskId);
-  db.close();
 
   // T243: assigned 行から base 情報を表示（worktree 作成時の base branch / 親 commit / 解決ソース）
   const assignedRow = sessions.find(
@@ -4103,6 +4117,7 @@ async function cmdTraceTask(): Promise<void> {
 
   if (sessions.length === 0) {
     console.log("No sessions found.");
+    db.close();
     return;
   }
 
@@ -4133,9 +4148,108 @@ async function cmdTraceTask(): Promise<void> {
     console.log(`  ${role} ${sid}  ${surface.padEnd(12)}  ${lineCount.padEnd(10)}  ${jsonlPath}`);
   }
 
+  // T306: Metrics セクション（既定 ON、--no-metrics で抑止）
+  if (!hasFlag("no-metrics")) {
+    const total = getTaskUsageTotal(db, taskId);
+    const byRole = getTaskUsageByRole(db, taskId);
+    const byModel = getTaskUsageByModel(db, taskId);
+    const durationMs = deriveDuration(sessions);
+    renderTokenUsageSection(total, byRole, byModel, durationMs);
+  }
+
+  db.close();
+
   // --summary スタブ
   if (getArg("summary") !== undefined || args.includes("--summary")) {
     console.log("\n(summary mode is not yet implemented)");
+  }
+}
+
+// T306: Metrics formatters / helpers
+function formatTokenCount(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatCacheHitRate(cacheRead: number, inputTokens: number): string {
+  const denom = inputTokens + cacheRead;
+  if (denom === 0) return "n/a";
+  const rate = (cacheRead / denom) * 100;
+  return `${rate.toFixed(1)}%`;
+}
+
+function deriveDuration(sessions: TaskSessionRecord[]): number | null {
+  const assigned = sessions.find((s) => s.event === "assigned" && s.role === "conductor");
+  const terminal = [...sessions].reverse().find((s) => s.event === "closed" || s.event === "aborted");
+  if (!assigned || !terminal) return null;
+  const start = Date.parse(assigned.timestamp);
+  const end = Date.parse(terminal.timestamp);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return end - start;
+}
+
+function renderTokenUsageSection(
+  total: TaskUsageTotal,
+  byRole: TaskUsageByRole[],
+  byModel: TaskUsageByModel[],
+  durationMs: number | null,
+): void {
+  console.log();
+  if (total.requests === 0) {
+    console.log("Token Usage: (no usage data — task predates T305)");
+    return;
+  }
+
+  console.log("Token Usage:");
+  console.log(`  Requests:     ${formatTokenCount(total.requests)}`);
+  console.log(`  Input:        ${formatTokenCount(total.inputTokens)} tokens`);
+  console.log(`  Output:       ${formatTokenCount(total.outputTokens)} tokens`);
+  console.log(`  Cache create: ${formatTokenCount(total.cacheCreation)} tokens`);
+  console.log(
+    `  Cache read:   ${formatTokenCount(total.cacheRead)} tokens (cache hit rate: ${formatCacheHitRate(total.cacheRead, total.inputTokens)})`,
+  );
+  if (durationMs !== null) {
+    console.log(`  Duration:     ${formatDuration(durationMs)}`);
+  }
+
+  if (byRole.length > 0) {
+    console.log();
+    console.log("By role:");
+    const roleWidth = Math.max(...byRole.map((r) => r.role.length));
+    const reqWidth = Math.max(...byRole.map((r) => formatTokenCount(r.requests).length));
+    const inWidth = Math.max(...byRole.map((r) => formatTokenCount(r.inputTokens).length));
+    const outWidth = Math.max(...byRole.map((r) => formatTokenCount(r.outputTokens).length));
+    const crWidth = Math.max(...byRole.map((r) => formatTokenCount(r.cacheRead).length));
+    for (const r of byRole) {
+      console.log(
+        `  ${r.role.padEnd(roleWidth)}  requests=${formatTokenCount(r.requests).padStart(reqWidth)}  input=${formatTokenCount(r.inputTokens).padStart(inWidth)}  output=${formatTokenCount(r.outputTokens).padStart(outWidth)}  cache_read=${formatTokenCount(r.cacheRead).padStart(crWidth)}`,
+      );
+    }
+  }
+
+  if (byModel.length > 0) {
+    console.log();
+    console.log("By model:");
+    const modelWidth = Math.max(...byModel.map((r) => r.model.length));
+    const reqWidth = Math.max(...byModel.map((r) => formatTokenCount(r.requests).length));
+    const inWidth = Math.max(...byModel.map((r) => formatTokenCount(r.inputTokens).length));
+    const outWidth = Math.max(...byModel.map((r) => formatTokenCount(r.outputTokens).length));
+    const crWidth = Math.max(...byModel.map((r) => formatTokenCount(r.cacheRead).length));
+    for (const r of byModel) {
+      console.log(
+        `  ${r.model.padEnd(modelWidth)}  requests=${formatTokenCount(r.requests).padStart(reqWidth)}  input=${formatTokenCount(r.inputTokens).padStart(inWidth)}  output=${formatTokenCount(r.outputTokens).padStart(outWidth)}  cache_read=${formatTokenCount(r.cacheRead).padStart(crWidth)}`,
+      );
+    }
   }
 }
 

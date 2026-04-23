@@ -11,6 +11,9 @@ import {
   updateNotificationEnrichment,
   insertApiUsage,
   getApiUsage,
+  getTaskUsageTotal,
+  getTaskUsageByRole,
+  getTaskUsageByModel,
   type ApiUsageRecord,
 } from "./trace-store";
 import type { QueueMessage } from "./schema";
@@ -889,5 +892,224 @@ describe("trace-store: api_usage (T305)", () => {
     } finally {
       await oldProject.dispose();
     }
+  });
+});
+
+describe("trace-store: api_usage metrics (T306)", () => {
+  let project: DummyProject;
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-api-usage-t306-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
+    db = initDB(tmpDir);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("getTaskUsageTotal: 0 件タスクで requests=0 / 他列 0 を返す", () => {
+    const total = getTaskUsageTotal(db, "T999");
+    expect(total.requests).toBe(0);
+    expect(total.inputTokens).toBe(0);
+    expect(total.outputTokens).toBe(0);
+    expect(total.cacheCreation).toBe(0);
+    expect(total.cacheRead).toBe(0);
+  });
+
+  test("getTaskUsageTotal: cache 列 NULL 混在で NULL は合算されず他列は合算される", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      model: "claude-opus-4-7",
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 200,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      model: "claude-opus-4-7",
+      input_tokens: 200,
+      output_tokens: 100,
+      // cache 列は null のまま（SUM は NULL を無視して他行と合算する）
+    });
+
+    const total = getTaskUsageTotal(db, "T306");
+    expect(total.requests).toBe(2);
+    expect(total.inputTokens).toBe(300);
+    expect(total.outputTokens).toBe(150);
+    expect(total.cacheCreation).toBe(10);
+    expect(total.cacheRead).toBe(200);
+  });
+
+  test("getTaskUsageByRole: role=NULL 行は 'unknown' に集約される", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      input_tokens: 100,
+      output_tokens: 50,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T306",
+      // role は null
+      input_tokens: 30,
+      output_tokens: 20,
+    });
+
+    const rows = getTaskUsageByRole(db, "T306");
+    const unknown = rows.find((r) => r.role === "unknown");
+    expect(unknown).toBeDefined();
+    expect(unknown!.requests).toBe(1);
+    expect(unknown!.inputTokens).toBe(30);
+    expect(unknown!.outputTokens).toBe(20);
+  });
+
+  test("getTaskUsageByModel: model=NULL 行は '(unknown)' に集約される", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      model: "claude-opus-4-7",
+      input_tokens: 100,
+      output_tokens: 50,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      // model null（エラー応答でモデル未取得のケース）
+      status_code: 429,
+      error: "rate_limit_error",
+    });
+
+    const rows = getTaskUsageByModel(db, "T306");
+    const unknown = rows.find((r) => r.model === "(unknown)");
+    expect(unknown).toBeDefined();
+    expect(unknown!.requests).toBe(1);
+  });
+
+  test("getTaskUsageByRole: 合計 tokens 降順で並ぶ", () => {
+    // conductor: 50 + 30 = 80
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T306",
+      role: "conductor",
+      input_tokens: 50,
+      output_tokens: 30,
+    });
+    // agent: 1000 + 500 = 1500（最大）
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      input_tokens: 1000,
+      output_tokens: 500,
+    });
+    // master: 200 + 100 = 300
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:02:00.000Z",
+      task_id: "T306",
+      role: "master",
+      input_tokens: 200,
+      output_tokens: 100,
+    });
+
+    const rows = getTaskUsageByRole(db, "T306");
+    expect(rows.length).toBe(3);
+    expect(rows[0]!.role).toBe("agent");
+    expect(rows[1]!.role).toBe("master");
+    expect(rows[2]!.role).toBe("conductor");
+  });
+
+  test("getTaskUsageByModel: requests 降順で並ぶ", () => {
+    // opus: 3 件
+    for (let i = 0; i < 3; i++) {
+      insertApiUsage(db, {
+        timestamp: `2026-04-24T10:0${i}:00.000Z`,
+        task_id: "T306",
+        role: "agent",
+        model: "claude-opus-4-7",
+        input_tokens: 100,
+        output_tokens: 50,
+      });
+    }
+    // sonnet: 1 件
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:10:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      model: "claude-sonnet-4-6",
+      input_tokens: 100,
+      output_tokens: 50,
+    });
+    // haiku: 2 件
+    for (let i = 0; i < 2; i++) {
+      insertApiUsage(db, {
+        timestamp: `2026-04-24T10:2${i}:00.000Z`,
+        task_id: "T306",
+        role: "agent",
+        model: "claude-haiku-4-5-20251001",
+        input_tokens: 100,
+        output_tokens: 50,
+      });
+    }
+
+    const rows = getTaskUsageByModel(db, "T306");
+    expect(rows.length).toBe(3);
+    expect(rows[0]!.model).toBe("claude-opus-4-7");
+    expect(rows[0]!.requests).toBe(3);
+    expect(rows[1]!.model).toBe("claude-haiku-4-5-20251001");
+    expect(rows[1]!.requests).toBe(2);
+    expect(rows[2]!.model).toBe("claude-sonnet-4-6");
+    expect(rows[2]!.requests).toBe(1);
+  });
+
+  test("エラー行（error NOT NULL）も集計に含まれる", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:00:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      model: "claude-opus-4-7",
+      input_tokens: 100,
+      output_tokens: 50,
+    });
+    // エラー応答（model null, tokens null, error あり）
+    insertApiUsage(db, {
+      timestamp: "2026-04-24T10:01:00.000Z",
+      task_id: "T306",
+      role: "agent",
+      status_code: 429,
+      error: "rate_limit_error",
+    });
+
+    const total = getTaskUsageTotal(db, "T306");
+    expect(total.requests).toBe(2); // エラー行も COUNT(*) に入る
+    expect(total.inputTokens).toBe(100);
+    expect(total.outputTokens).toBe(50);
+
+    const byRole = getTaskUsageByRole(db, "T306");
+    expect(byRole.length).toBe(1);
+    expect(byRole[0]!.role).toBe("agent");
+    expect(byRole[0]!.requests).toBe(2); // 成功 + エラーの 2 件
+
+    const byModel = getTaskUsageByModel(db, "T306");
+    // model null が "(unknown)" に入り、opus が 1 件 + unknown が 1 件
+    expect(byModel.length).toBe(2);
+    const opusRow = byModel.find((r) => r.model === "claude-opus-4-7");
+    const unknownRow = byModel.find((r) => r.model === "(unknown)");
+    expect(opusRow!.requests).toBe(1);
+    expect(unknownRow!.requests).toBe(1);
   });
 });
