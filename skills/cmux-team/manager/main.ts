@@ -1747,6 +1747,11 @@ export function generateMasterSettings(projectRoot: string): string {
   const settingsPath = join(projectRoot, ".team/prompts/master-settings.json");
   const { busy, stop } = ensureMasterHookScripts(projectRoot);
   const settings: Record<string, any> = {
+    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
+    // proxy 側を触らず Anthropic API リクエストに x-cmux-role ヘッダーが付く。
+    env: {
+      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: master",
+    },
     hooks: {
       // T175: SessionStart hook で daemon に masterPid を渡し spawnMasterPidWatcher を起動する。
       // Conductor の SessionStart hook と完全に同じ command パターン (main.ts:1478-1489)。
@@ -1829,6 +1834,10 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
   const settingsPath = join(projectRoot, `.team/prompts/${surface}-agent-settings.json`);
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const settings: Record<string, any> = {
+    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
+    env: {
+      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: agent",
+    },
     hooks: {
       SessionStart: [
         {
@@ -1892,6 +1901,10 @@ export function generateConductorSettings(projectRoot: string): string {
   const conductorSettingsPath = join(projectRoot, ".team/prompts/conductor-settings.json");
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const conductorSettings: Record<string, any> = {
+    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
+    env: {
+      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: conductor",
+    },
     hooks: {
       PreToolUse: [
         {

@@ -1613,6 +1613,35 @@ describe("T211 Phase 4: CMUX_ROLE 完全削除 regression", () => {
   });
 });
 
+// --- T304: x-cmux-role header injection via settings.env ---
+
+describe("generateMasterSettings (T304: x-cmux-role)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: master を注入する", async () => {
+    const settingsPath = generateMasterSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.env).toBeDefined();
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: master");
+  });
+});
+
+describe("generateConductorSettings (T304: x-cmux-role)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: conductor を注入する", async () => {
+    const settingsPath = generateConductorSettings(testDir);
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.env).toBeDefined();
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: conductor");
+  });
+});
+
+describe("generateAgentSettings (T304: x-cmux-role)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: agent を注入する", async () => {
+    const settingsPath = generateAgentSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.env).toBeDefined();
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: agent");
+  });
+});
+
 // --- T206 normalizeSurfaceArg ---
 
 describe("normalizeSurfaceArg (T206)", () => {
