@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-04-24
+
+### Added
+
+- **`cmux-team status` に Rate Limit セクションを追加（T311）**。Tasks と Log tail の間に 5h / 7d utilization・reset 時刻・unifiedStatus・updatedAt を表示する。これまで dashboard では見えていたが CLI status では見えなかった情報を CLI から確認できる。`rate-limit-status.ts` に純粋関数 `buildRateLimitStatusLines` を新設し、既存 `isStale5h`/`isStale7d` を再利用して dashboard と軸独立 stale semantics を共有。`.team/rate-limit.json` 不在/破損時は `(no rate limit data — proxy not running?)` にフォールバックし、他セクションは通常通り表示される
+- **dashboard Metrics タブにスクロール操作を追加（T310）**。↑/↓ でスクロール、`g` で先頭、`G` で末尾にジャンプできる。Metrics タブが画面下部で見切れる問題を解消。journal / log の実装を参考にした固定レイアウト向けの offset slice（順方向）で、描画時の Math.min clamp により overshoot と行数減少の両方に耐性を持つ。1s polling の loadMetricsData は offset を触らず位置を維持する
+- **RuntimeBackend インターフェースと ClaudeCodeBackend skeleton を追加（Issue #30 M1/M2/M3）**。将来の OpenCode backend 等への拡張に向けた基盤整備。`runtime-backend.ts` に `SessionRef` / `PermissionRef` の opaque 型、`RuntimeEvent` の discriminated union（session_started / idle / reset / ended / permission_asked）、`spawn` / `send` / `reset` / `kill` / `reply` / `onEvent` / `dispose` の 7 メソッドを定義。`/clear` / `SESSION_*` / `ANTHROPIC_BASE_URL` / PID 等のランタイム固有情報は interface に漏らさない設計。`claude-code-backend.ts` で Claude Code CLI アダプタの骨格を実装（`send` / `reset` / `kill` / `reply` / `onEvent` / `dispose` は実装済み、`spawn` は M3-a #31 で実装予定）。`docs/spec/08-runtime-boundary.md` に 43 ファイルを runtime-specific / agnostic / boundary に分類した棚卸し表を追加
+
+### Changed
+
+- **Metrics タブから重複していた「統合（5h/7d）」セクションを削除**。ヘッダー右端の `buildRateLimitDisplay` が出すバー付き `5h:` / `7d:` 表示と情報が重複しており、しかもパーセントのみの劣化版だったため削除。`MetricsData` から `unifiedFive` / `unifiedSeven` フィールド、`buildMetricsRows` から unified 描画ブロック、i18n の `metrics_section_unified` キー（en/ja）を削除。`daemon.rateLimit.unified5hUtilization` / `unified7dUtilization` 本体はヘッダー描画と throttle 判定で引き続き使用。Closes T309
+- **CLAUDE.md を 1036 行 → 230 行に削減、詳細ルールを `agent-instructions/implementer.md` に分離**。ロギング・EventBus・task-state・cmux API の実装ルールを `.team/agent-instructions/implementer.md` に移し、CLAUDE.md は設計思想とガードレールのみに集約。廃止済みコマンドや旧挙動の説明も合わせて削除
+
+### Fixed
+
+- **dashboard Metrics タブラベルを ja locale でも英語表記に統一**。他のタブ（Journal / Artifacts / Log / Settings / Issues）が locale 問わず英語で描画されるのに対し、`metrics_tab_title` のみ「メトリクス」に翻訳されていたためタブバーが視覚的に不整合だった。ラベルは "Metrics" で固定し、タブ内部のセクション見出しはローカライズを継続
+
 ## [4.6.0] - 2026-04-24
 
 ### Added
