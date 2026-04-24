@@ -515,6 +515,7 @@ export async function initInfra(state: DaemonState): Promise<void> {
         "team.json",
         "masters/",
         "proxy-port",
+        "daemon.pid",
         "rate-limit.json",
         "logs/",
         "output/",
@@ -525,6 +526,9 @@ export async function initInfra(state: DaemonState): Promise<void> {
         "conductors/",
         "docs-snapshot/",
         "e2e-results/",
+        "gh-cache.db",
+        "gh-cache.db-shm",
+        "gh-cache.db-wal",
         "",
         "# 追跡すべき（上記以外）",
         "# tasks/        — タスク定義・runs の成果物",
@@ -587,6 +591,54 @@ export async function initInfra(state: DaemonState): Promise<void> {
         }
         changed = true;
         added.push("masters/");
+      }
+
+      // T315: daemon.pid の追加（proxy-port 直後に splice）
+      const hasDaemonPid = lines.some((line) => {
+        const t = line.trim();
+        return t === "daemon.pid" && !line.trimStart().startsWith("#");
+      });
+      if (!hasDaemonPid) {
+        const proxyPortIdx = lines.findIndex((l) => l.trim() === "proxy-port");
+        if (proxyPortIdx >= 0) {
+          lines.splice(proxyPortIdx + 1, 0, "daemon.pid");
+        } else {
+          lines.push("daemon.pid");
+        }
+        changed = true;
+        added.push("daemon.pid");
+      }
+
+      // T315: gh-cache.db 系 3 項目の追加（末尾側の近傍 anchor 直後に splice）
+      for (const name of ["gh-cache.db", "gh-cache.db-shm", "gh-cache.db-wal"]) {
+        const hasEntry = lines.some((line) => {
+          const t = line.trim();
+          return t === name && !line.trimStart().startsWith("#");
+        });
+        if (hasEntry) continue;
+
+        const anchorCandidates = [
+          "gh-cache.db-wal",
+          "gh-cache.db-shm",
+          "gh-cache.db",
+          "rate-limit.json",
+          "proxy-port",
+        ];
+        let anchorIdx = -1;
+        for (const anchor of anchorCandidates) {
+          const idx = lines.findIndex((l) => l.trim() === anchor);
+          if (idx >= 0) {
+            anchorIdx = idx;
+            break;
+          }
+        }
+        if (anchorIdx >= 0) {
+          lines.splice(anchorIdx + 1, 0, name);
+        } else {
+          lines.push(name);
+        }
+        changed = true;
+        added.push(name);
       }
 
       if (changed) {
