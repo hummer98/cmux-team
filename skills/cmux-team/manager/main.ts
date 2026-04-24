@@ -976,7 +976,7 @@ async function cmdStart(): Promise<void> {
       await resetConductor(c, state.projectRoot, state.workspace ?? undefined, {
         targetStatus: "broken",
         reason: "unique_violation",
-      });
+      }, state.backend);
     }
   }
 

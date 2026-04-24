@@ -21,6 +21,25 @@ import type {
 } from "./runtime-backend";
 
 // ---------------------------------------------------------------------------
+// ClaudeCodeBackend 固有の SpawnOptions 拡張
+// ---------------------------------------------------------------------------
+
+/**
+ * ClaudeCodeBackend.spawn() が受け取るオプション。
+ * RuntimeBackend.SpawnOptions を拡張し、Claude Code（cmux）固有のフィールドを追加する。
+ * opencode backend では不要なフィールドのため RuntimeBackend interface には含めない。
+ */
+export interface ClaudeCodeSpawnOptions extends SpawnOptions {
+  /** cmux surface ID（Claude Code 固有 — opencode では不要） */
+  surface: string;
+  /**
+   * conductor / master ロール起動コマンド（例: "cmux-team conductor"）。
+   * 末尾 `\n` がなければ自動付加する。
+   */
+  launchCmd: string;
+}
+
+// ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
 
@@ -48,19 +67,47 @@ export class ClaudeCodeBackend implements RuntimeBackend {
   private disposed = false;
 
   /**
+   * surface 文字列を SessionRef に変換するヘルパー。
+   * conductor.ts の assignTask / resetConductor から surface → SessionRef への変換に使う。
+   */
+  surfaceToRef(surface: string): SessionRef {
+    return toSessionRef(surface);
+  }
+
+  /**
    * 新しいセッションを spawn する。
    *
    * Claude Code CLI の場合、Conductor は既に cmux ペインとして常駐しているため、
    * "spawn" は実質的に「surface に Claude CLI 起動コマンドを送信する」操作になる。
    *
-   * NOTE: M3 実装では launchConductor / spawnMaster の中身をここに移植する。
-   *       現状 stub は surface を options の workdir から推測していない（未実装）。
+   * ClaudeCodeSpawnOptions を受け取り:
+   *   1. env が指定されていればシェルに `export KEY=VAL ...` を送信（500ms wait）
+   *   2. launchCmd を送信（末尾 `\n` 自動付加）
    */
-  async spawn(options: SpawnOptions): Promise<SessionRef> {
-    throw new Error(
-      "ClaudeCodeBackend.spawn: not yet implemented — " +
-        "surface は外部（daemon.ts）から渡す必要がある。M3 PR-1 で実装。",
-    );
+  async spawn(options: ClaudeCodeSpawnOptions): Promise<SessionRef> {
+    if (this.disposed) throw new Error("ClaudeCodeBackend: already disposed");
+    const { surface, launchCmd, env } = options;
+    // 1. 環境変数をシェルに焼き付け
+    if (env && Object.keys(env).length > 0) {
+      const envStr = Object.entries(env)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ");
+      await cmux.send(surface, `export ${envStr}\n`);
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+    // 2. CLI を起動
+    const cmd = launchCmd.endsWith("\n") ? launchCmd : `${launchCmd}\n`;
+    await cmux.send(surface, cmd);
+    return toSessionRef(surface);
+  }
+
+  /**
+   * リクエストメタデータを設定する。
+   * Claude Code backend では ANTHROPIC_CUSTOM_HEADERS 経由で注入するため no-op。
+   * opencode backend では provider.options.headers に注入する想定。
+   */
+  setRequestMetadata(_metadata: Record<string, string>): void {
+    // no-op: Claude Code では proxy / ANTHROPIC_CUSTOM_HEADERS 経由で処理される
   }
 
   /**
@@ -161,8 +208,10 @@ export class ClaudeCodeBackend implements RuntimeBackend {
   // ---------------------------------------------------------------------------
 
   /**
-   * PID watcher を起動して、プロセス死亡時に session_ended を emit する。
-   * 現状は骨格のみ。M3 PR-2 で spawnMasterPidWatcher / spawnConductorPidWatcher から移植する。
+   * PID watcher を起動して、プロセス死亡時に `session_ended` イベントを emit し
+   * onDead コールバックを呼ぶ。
+   * 1 秒間隔で `process.kill(pid, 0)` を試み、ESRCH/EPERM で死亡を検知する。
+   * 同一 surface の watcher が既に起動中なら事前に停止してから再登録する（冪等）。
    */
   startPidWatcher(surface: string, pid: number, onDead: () => void): void {
     if (this.pidWatchers.has(surface)) this.stopPidWatcher(surface);
@@ -171,6 +220,12 @@ export class ClaudeCodeBackend implements RuntimeBackend {
         process.kill(pid, 0);
       } catch {
         this.stopPidWatcher(surface);
+        // session_ended イベントを emit して daemon コアに通知
+        this.emitEvent({
+          type: "session_ended",
+          sessionRef: toSessionRef(surface),
+          reason: "aborted",
+        });
         onDead();
       }
     }, 1000);
