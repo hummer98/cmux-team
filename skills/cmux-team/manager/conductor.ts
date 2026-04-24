@@ -89,7 +89,7 @@ export async function launchConductor(
   surface: string,
   opts: { resumeTaskId?: string; mainBranch: string },
   backend?: ClaudeCodeBackend,
-): Promise<void> {
+): Promise<import("./runtime-backend").SessionRef | undefined> {
   // 1. 環境変数をシェルに焼き付け
   //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
@@ -124,7 +124,7 @@ export async function launchConductor(
   // ClaudeCodeBackend.spawn() は cmux.send を呼び出すため、
   // テストの cmux.send spy は backend 経由でも引き続き有効。
   const _backend = backend ?? new ClaudeCodeBackend();
-  await _backend.spawn({ role: "conductor", prompt: "", workdir: surface, surface, launchCmd, env });
+  const sessionRef = await _backend.spawn({ role: "conductor", prompt: "", workdir: surface, surface, launchCmd, env });
 
   // 3. タブ名設定
   //    resume / 新規問わず `[N] Conductor` を設定する。
@@ -132,6 +132,9 @@ export async function launchConductor(
   //    rename する必要はなく、ここで一度だけ設定すれば十分。
   const num = surface.replace("surface:", "");
   await cmux.renameTab(surface, `[${num}] Conductor`);
+  // Issue #30 M3-b: spawn から得た SessionRef を呼び出し元に返す。
+  // daemon.ts が conductor.runtimeSessionRef に保存して handleRuntimeEvent のルックアップに使う。
+  return sessionRef;
 }
 
 // --- createConductorPanes ---

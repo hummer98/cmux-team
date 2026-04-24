@@ -281,6 +281,10 @@ export type ConductorState = z.infer<typeof ConductorState> & {
   // ユーザーが `cmux-team clear-conductor` で明示的に idle に戻すまで保持される。
   status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected" | "broken";
   pidWatcherInterval?: ReturnType<typeof setInterval>;
+  /** Issue #30 M3-b: spawn 時に backend から返却された SessionRef。
+   *  opencode backend では opencode session ID、claude-code では surface 文字列。
+   *  handleRuntimeEvent が session ref → conductor のルックアップに使う。 */
+  runtimeSessionRef?: string;
 };
 
 // --- レート制限情報 ---

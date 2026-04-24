@@ -15,7 +15,7 @@ import {
   type ResumeAssignment,
 } from "./conductor";
 import { ClaudeCodeBackend } from "./claude-code-backend";
-import type { RuntimeBackend } from "./runtime-backend";
+import type { RuntimeBackend, RuntimeEvent } from "./runtime-backend";
 import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./layout-restore";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
@@ -322,7 +322,7 @@ export async function createDaemon(
       `env=${envMax} layout=${layout} — 16x9 creates only 2 panes; extra conductors will not be created`,
     );
   }
-  return {
+  const state: DaemonState = {
     running: true,
     bootPhase: "infra",
     masters: new Map(),
@@ -352,6 +352,9 @@ export async function createDaemon(
     traceDb: null,
     backend: backend ?? new ClaudeCodeBackend(),
   };
+  // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
+  subscribeRuntimeEvents(state);
+  return state;
 }
 
 /**
@@ -1025,10 +1028,13 @@ async function applyRestorePlan(
     });
 
     try {
-      await launchConductor(state.projectRoot, surface, {
+      const sessionRef = await launchConductor(state.projectRoot, surface, {
         resumeTaskId: item.taskId,
         mainBranch: state.mainBranch,
       }, ccBackend(state.backend));
+      // Issue #30 M3-b: SessionRef を conductor に保存して handleRuntimeEvent のルックアップに使う。
+      const conductorForRef = state.conductors.get(surface);
+      if (conductorForRef && sessionRef) conductorForRef.runtimeSessionRef = sessionRef as string;
       assignments.push({
         surface,
         taskId: item.taskId,
@@ -2785,6 +2791,120 @@ export async function __testSpawnPidWatcherTick(
  */
 export function ccBackend(backend: RuntimeBackend): ClaudeCodeBackend | undefined {
   return backend instanceof ClaudeCodeBackend ? backend : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #30 M3-b Phase 2: RuntimeBackend.onEvent() のサブスクリプション
+// ---------------------------------------------------------------------------
+
+/**
+ * backend.onEvent() を購読して RuntimeEvent を handleRuntimeEvent に流す。
+ *
+ * ClaudeCodeBackend の場合は SESSION_* → handleMessage() で処理されるため
+ * 購読しない（二重処理防止）。opencode 等の非 Claude Code backend でのみ有効。
+ *
+ * createDaemon() 内で呼ぶことで daemon 起動時に一度だけ登録される。
+ */
+export function subscribeRuntimeEvents(state: DaemonState): void {
+  if (state.backend instanceof ClaudeCodeBackend) {
+    // Claude Code は SESSION_* → handleMessage で処理されるため不要
+    return;
+  }
+  state.backend.onEvent((event) => {
+    handleRuntimeEvent(state, event).catch((e: any) => {
+      log("error", `handleRuntimeEvent error: ${e?.message ?? e}`);
+    });
+  });
+}
+
+/**
+ * opencode backend からの RuntimeEvent を daemon 状態機械に適用する。
+ *
+ * Claude Code の SESSION_* ハンドラ（handleMessage）に相当する、
+ * runtime-agnostic な状態遷移ロジック。PID watcher の代わりに session_ended
+ * イベントで死亡を検知する。
+ *
+ * session ref → conductor のルックアップは conductor.runtimeSessionRef を使う。
+ * launchConductor() が spawn() の返り値を daemon.ts で保存することで確立される。
+ */
+async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Promise<void> {
+  if (!state.running) return;
+
+  // conductor を runtimeSessionRef で逆引きする
+  function findConductorByRef(ref: string): ConductorState | undefined {
+    for (const c of state.conductors.values()) {
+      if (c.runtimeSessionRef === ref) return c;
+    }
+    return undefined;
+  }
+
+  switch (event.type) {
+    case "session_started": {
+      const conductor = findConductorByRef(event.sessionRef as string);
+      if (!conductor) break;
+      if (conductor.status === "starting" || conductor.status === "disconnected") {
+        conductor.status = "idle";
+        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-started");
+        await log("conductor_ready", formatSurface(conductor.surface, "C"));
+      } else if (conductor.status === "assigning") {
+        conductor.status = "running";
+        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-started-running");
+        await log("conductor_running", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
+      }
+      break;
+    }
+
+    case "session_idle": {
+      const conductor = findConductorByRef(event.sessionRef as string);
+      if (!conductor) break;
+      if (conductor.status === "running" || conductor.status === "starting") {
+        conductor.status = "idle";
+        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-idle");
+        await log("conductor_idle", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
+        requestWakeup(state);
+      }
+      break;
+    }
+
+    case "session_ended": {
+      const conductor = findConductorByRef(event.sessionRef as string);
+      if (!conductor) break;
+      // session_ended は死亡通知なので disconnected 状態へ遷移する
+      // （Claude Code の spawnPidWatcher と同等の役割）
+      if (conductor.status !== "broken") {
+        conductor.status = "disconnected";
+        conductor.disconnectedAt = new Date().toISOString();
+        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-ended");
+        await log(
+          "conductor_session_ended",
+          `${formatSurface(conductor.surface, "C")} reason=${event.reason ?? "unknown"} via=runtime_event`,
+        );
+      }
+      break;
+    }
+
+    case "permission_asked": {
+      const conductor = findConductorByRef(event.sessionRef as string);
+      const suffix = conductor ? formatSurface(conductor.surface, "C") : `ref=${event.sessionRef}`;
+      await log("permission_asked", `${suffix} title=${event.title} permRef=${event.permissionRef}`);
+      // TODO: パーミッション UI への転送（auto-reply または TUI 表示）
+      break;
+    }
+
+    case "session_reset": {
+      // opencode では reset = abort + create。session_started が後続する想定。
+      const conductor = findConductorByRef(event.sessionRef as string);
+      if (!conductor) break;
+      // 新しい SessionRef があれば更新
+      if (event.newSessionRef) {
+        conductor.runtimeSessionRef = event.newSessionRef as string;
+      }
+      conductor.status = "starting";
+      notifyStateChanged("daemon.ts:handleRuntimeEvent:session-reset");
+      await log("conductor_reset", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
+      break;
+    }
+  }
 }
 
 /** PID ウォッチャー: 指定 PID の終了を検出して disconnected にする */
