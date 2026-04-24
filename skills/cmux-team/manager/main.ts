@@ -71,6 +71,7 @@ import {
   resolveFetchBeforeWorktree,
 } from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
+import { buildRateLimitStatusLines } from "./rate-limit-status";
 import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
 import {
   readProjectInstructions,
@@ -1361,6 +1362,17 @@ async function cmdStatus(): Promise<void> {
   const openCount = tasks.length - closedCount;
   console.log(`─ Tasks ${"─".repeat(51)}`);
   console.log(`  open: ${openCount}  closed: ${closedCount}`);
+
+  // --- Rate Limit ---
+  console.log(`─ Rate Limit ${"─".repeat(46)}`);
+  try {
+    const rl = await loadRateLimit(PROJECT_ROOT);
+    for (const line of buildRateLimitStatusLines(rl, Date.now())) {
+      console.log(line);
+    }
+  } catch {
+    console.log(`  (rate limit read failed)`);
+  }
 
   // --- Log tail ---
   const n = Math.max(1, parseInt(logLines, 10) || 10);
