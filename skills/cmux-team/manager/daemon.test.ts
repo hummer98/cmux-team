@@ -3867,7 +3867,7 @@ describe("T260: formatConductorSnapshot + disconnect snapshot ログ", () => {
         type: "SESSION_STARTED",
         surface: conductor.surface,
         pid: 22222,
-        source: "new_session",
+        source: "startup",
         timestamp: "2026-04-18T09:05:00.000Z",
       });
 

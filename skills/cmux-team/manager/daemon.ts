@@ -1566,7 +1566,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         try {
           const ev: FsmEvent = {
             type: "SESSION_STARTED",
-            source: (message.source as FsmEvent & { type: "SESSION_STARTED" })["source"],
+            source: message.source as "startup" | "resume" | "clear" | "compact" | undefined,
             isMasterSurface: false,
           };
           const cctx: ConductorCtx = {
