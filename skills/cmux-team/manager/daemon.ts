@@ -15,6 +15,7 @@ import {
   type ResumeAssignment,
 } from "./conductor";
 import { ClaudeCodeBackend } from "./claude-code-backend";
+import type { RuntimeBackend } from "./runtime-backend";
 import { planLayoutRestore, type LayoutRestorePlan, type RestoreEntry } from "./layout-restore";
 import { spawnMaster, persistMasterFile, deleteMasterFile, listMasterFiles } from "./master";
 import * as cmux from "./cmux";
@@ -106,9 +107,9 @@ export interface DaemonState {
   mainBranch: string;
   /** T216: hook 全送信を記録する trace DB ハンドル。initInfra で遅延初期化 */
   traceDb: Database | null;
-  /** Issue #30 M3: RuntimeBackend 実装（現状は ClaudeCodeBackend 固定）。
-   *  conductor.ts の launchConductor / assignTask / resetConductor に渡す。*/
-  backend: ClaudeCodeBackend;
+  /** Issue #30 M5: RuntimeBackend 実装。config.runtime に応じて選択される。
+   *  "claude-code"（デフォルト）→ ClaudeCodeBackend, "opencode" → OpenCodeBackend */
+  backend: RuntimeBackend;
 }
 
 /**
@@ -305,6 +306,7 @@ async function logBrokenIgnore(conductor: ConductorState, event: string): Promis
 export async function createDaemon(
   projectRoot: string,
   layout: LayoutMode = "wide",
+  backend?: RuntimeBackend,
 ): Promise<DaemonState> {
   // maxConductors: env が指定されていればそれを優先（既存挙動を破壊しない）。
   // 未指定なら layout 派生値（wide=3, 16x9=2）を使う。
@@ -348,7 +350,7 @@ export async function createDaemon(
     version: "v?.?.?",
     mainBranch: "",
     traceDb: null,
-    backend: new ClaudeCodeBackend(),
+    backend: backend ?? new ClaudeCodeBackend(),
   };
 }
 
@@ -1026,7 +1028,7 @@ async function applyRestorePlan(
       await launchConductor(state.projectRoot, surface, {
         resumeTaskId: item.taskId,
         mainBranch: state.mainBranch,
-      }, state.backend);
+      }, ccBackend(state.backend));
       assignments.push({
         surface,
         taskId: item.taskId,
@@ -1170,7 +1172,7 @@ export async function initializeLayout(
       resumePlan,
       state.layout,
       state.mainBranch,
-      state.backend,
+      ccBackend(state.backend),
     );
     return assignments;
   }
@@ -1208,7 +1210,7 @@ export async function initializeLayout(
       resumePlan,
       state.layout,
       state.mainBranch,
-      state.backend,
+      ccBackend(state.backend),
     );
   }
 
@@ -1282,7 +1284,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
 
   // M3-b Phase 1: hook signal を正規化イベントに変換して backend リスナーに通知する。
   // SESSION_* の state 遷移ロジックは引き続き下記 switch で処理される（Phase 2 で移植予定）。
-  state.backend.acceptHookSignal(message);
+  // opencode backend では hook signal を使わないため ClaudeCodeBackend のみ対象。
+  if (state.backend instanceof ClaudeCodeBackend) {
+    state.backend.acceptHookSignal(message);
+  }
 
   switch (message.type) {
     case "TASK_CREATED": {
@@ -1385,7 +1390,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
         targetStatus: "idle",
         reason: message.reason ?? "cleared",
-      }, state.backend);
+      }, ccBackend(state.backend));
       // 即時 tick を発火し、次の scanTasks で新タスクを拾えるようにする
       requestWakeup(state);
       break;
@@ -2246,7 +2251,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         // T195: /clear で旧 Claude は死ぬ。次の SESSION_STARTED で新 pid が届くまで保留
         conductor.pid = undefined;
-        await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, undefined, state.backend);
+        await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, undefined, ccBackend(state.backend));
       }
       // idle 時は何もしない（TUI チラつき防止）
       // T236: Conductor にマッチしなかった場合 Agent surface として status をリセット
@@ -2577,7 +2582,7 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     const shadowPrevAssign: ConductorStatus = idleConductor.status;
     let updated: ConductorState;
     try {
-      updated = await assignTask(idleConductor, task.id, state.projectRoot, state.mainBranch, state.backend);
+      updated = await assignTask(idleConductor, task.id, state.projectRoot, state.mainBranch, ccBackend(state.backend));
     } catch (e: unknown) {
       if (e instanceof AssignTaskError) {
         if (e.kind === "task") {
@@ -2716,7 +2721,7 @@ async function applyAssignCommit(
       "assign_skipped",
       `${formatSurface(updated.surface, "C")} task_id=${taskId} reason=terminal prev=${prev} taskRunId=${updated.taskRunId ?? "-"}`,
     );
-    await resetConductor(updated, state.projectRoot, state.workspace ?? undefined, undefined, state.backend);
+    await resetConductor(updated, state.projectRoot, state.workspace ?? undefined, undefined, ccBackend(state.backend));
     return { committed: false, reason: "terminal", currentStatus: prev };
   }
 
@@ -2771,6 +2776,15 @@ export async function __testSpawnPidWatcherTick(
     await log("error", `shadow_observe_failed PID_DIED ${e?.message ?? e}`);
   }
   return "dead";
+}
+
+/**
+ * RuntimeBackend から ClaudeCodeBackend を取り出すヘルパー。
+ * opencode backend の場合は undefined を返す（conductor 関数は ClaudeCodeBackend を期待）。
+ * Claude Code 固有の操作（launchConductor / assignTask 等）に渡す時に使う。
+ */
+export function ccBackend(backend: RuntimeBackend): ClaudeCodeBackend | undefined {
+  return backend instanceof ClaudeCodeBackend ? backend : undefined;
 }
 
 /** PID ウォッチャー: 指定 PID の終了を検出して disconnected にする */
@@ -3079,7 +3093,7 @@ async function forceCloseDisconnectedConductor(
   await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
     targetStatus: "broken",
     reason: "disconnect_timeout",
-  }, state.backend);
+  }, ccBackend(state.backend));
 }
 
 async function handleConductorDone(
@@ -3246,7 +3260,7 @@ async function handleConductorDone(
   // Conductor をリセットして idle に戻す（unresolved 時は worktree/branch を温存）
   await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
     preserveWorktree: unresolved,
-  }, state.backend);
+  }, ccBackend(state.backend));
 
   // T279 shadow: handleConductorDone 完了後に reducer と比較する。
   //   reducer 側は {success, unresolved, currentTaskStatus} から分岐を決める。
