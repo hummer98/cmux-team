@@ -55,6 +55,7 @@ const JOURNAL_VISIBLE_LINES = 30;
 const ARTIFACT_VISIBLE_LINES = 12;
 const ISSUE_VISIBLE_LINES = 20;
 const SETTINGS_PREVIEW_LINES = 20;
+const METRICS_VISIBLE_LINES = 30;
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -428,6 +429,7 @@ export interface AppState {
   metricsData: MetricsData | null;
   metricsError: string | null;
   metricsLastLoadedMs: number;
+  metricsScrollOffset: number;
 }
 
 // --- スピナー定義 ---
@@ -1206,6 +1208,7 @@ export async function startDashboard(
       metricsData: null,
       metricsError: null,
       metricsLastLoadedMs: 0,
+      metricsScrollOffset: 0,
     },
     config: { executionMode: "inline" },
   });
@@ -1382,7 +1385,16 @@ export async function startDashboard(
             : state.activeTab === "issues"
             ? buildIssueRows(state)
             : state.activeTab === "metrics"
-            ? buildMetricsRows(state.metricsData, state.metricsError)
+            ? (() => {
+                const rows = buildMetricsRows(state.metricsData, state.metricsError);
+                const total = rows.length;
+                const startIdx = Math.min(
+                  state.metricsScrollOffset,
+                  Math.max(0, total - METRICS_VISIBLE_LINES),
+                );
+                const endIdx = Math.min(startIdx + METRICS_VISIBLE_LINES, total);
+                return rows.slice(startIdx, endIdx);
+              })()
             : (() => {
                 // 逆順表示: 最新が先頭、offset=0 で最新を表示
                 const reversed = [...state.logLines].reverse();
@@ -1457,6 +1469,8 @@ export async function startDashboard(
             ]
           : state.focusedArea === "metrics"
           ? [
+              ui.kbd("↑/↓"), ui.text("scroll"),
+              ui.kbd("g/G"), ui.text("top/bottom"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("L"), ui.text("log"),
@@ -1542,6 +1556,9 @@ export async function startDashboard(
         case "issues": {
           return { ...s, issueCursor: Math.max(s.issueCursor - 1, 0) };
         }
+        case "metrics": {
+          return { ...s, metricsScrollOffset: Math.max(s.metricsScrollOffset - 1, 0) };
+        }
         default:
           return s;
       }
@@ -1573,6 +1590,9 @@ export async function startDashboard(
         case "issues": {
           const max = Math.max(s.issueItems.length - 1, 0);
           return { ...s, issueCursor: Math.min(s.issueCursor + 1, max) };
+        }
+        case "metrics": {
+          return { ...s, metricsScrollOffset: s.metricsScrollOffset + 1 };
         }
         default:
           return s;
@@ -1692,6 +1712,9 @@ export async function startDashboard(
       if (s.focusedArea === "log") {
         return { ...s, logScrollOffset: 0, logAutoScroll: true };
       }
+      if (s.focusedArea === "metrics") {
+        return { ...s, metricsScrollOffset: 0 };
+      }
       return s;
     }),
     G: () => app.update((s) => {
@@ -1703,6 +1726,11 @@ export async function startDashboard(
       if (s.focusedArea === "log") {
         const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
         return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
+      }
+      if (s.focusedArea === "metrics") {
+        const rows = buildMetricsRows(s.metricsData, s.metricsError);
+        const maxOffset = Math.max(0, rows.length - METRICS_VISIBLE_LINES);
+        return { ...s, metricsScrollOffset: maxOffset };
       }
       return s;
     }),
