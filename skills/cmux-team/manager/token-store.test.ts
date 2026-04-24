@@ -1,0 +1,889 @@
+/**
+ * token-store のユニットテスト。plan.md §9 のテスト計画を網羅する。
+ *
+ * - DB は `mkdtempSync` + `TOKEN_STORE_DB_PATH` 上書きで一時ディレクトリに隔離
+ * - Keychain は KEYCHAIN_TEST_MODE=1 で in-memory Map にフォールバック
+ * - macOS 実機テストは process.platform === "darwin" のときのみ実行 (それ以外は skip)
+ */
+import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
+import { mkdtempSync, rmSync, existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { Database } from "bun:sqlite";
+import {
+  initTokenDB,
+  insertToken,
+  getTokenByHandle,
+  getTokenByOrganizationId,
+  listTokens,
+  upsertUsageSnapshot,
+  getLatestUsageSnapshot,
+  acquireLease,
+  releaseLease,
+  expireLeases,
+  listActiveLeases,
+  isKeychainSupported,
+  storeTokenInKeychain,
+  retrieveTokenFromKeychain,
+  deleteTokenFromKeychain,
+  computePoolCapacity,
+  KeychainUnsupportedError,
+  KeychainNotFoundError,
+  REFERENCE_FLOW,
+  __resetInMemoryKeychainForTest,
+  __resolveDbPathForTest,
+  __statMode,
+  type InsertTokenInput,
+  type TokenForCapacity,
+} from "./token-store";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 共通セットアップ
+// ─────────────────────────────────────────────────────────────────────────────
+
+let testDir: string;
+let db: Database;
+
+function makeToken(partial: Partial<InsertTokenInput> = {}): InsertTokenInput {
+  return {
+    handle: "@test",
+    organization_id: "00000000-0000-0000-0000-000000000001",
+    auth_hash: "abcdef012345",
+    plan: "max-x20",
+    plan_ratio: 20.0,
+    tags: ["any"],
+    credential_source: "manual",
+    ...partial,
+  };
+}
+
+beforeEach(() => {
+  testDir = mkdtempSync(join(tmpdir(), "cmux-token-store-"));
+  db = initTokenDB({
+    dirPath: testDir,
+    dbPath: join(testDir, "tokens.db"),
+  });
+});
+
+afterEach(() => {
+  try {
+    db.close();
+  } catch {
+    // close 失敗は無視（DB 未初期化テストなどで開いていない可能性）
+  }
+  try {
+    rmSync(testDir, { recursive: true, force: true });
+  } catch {
+    // CI など rm 失敗を許容
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// initTokenDB
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("initTokenDB", () => {
+  test("新規 DB ファイルを作成し mode 0600 が設定される", () => {
+    const dbPath = join(testDir, "tokens.db");
+    expect(existsSync(dbPath)).toBe(true);
+    // mode 0600 (rw only owner)
+    expect(__statMode(dbPath)).toBe(0o600);
+  });
+
+  test("2 回目の initTokenDB 呼び出しでエラーなし（冪等）", () => {
+    db.close();
+    const db2 = initTokenDB({
+      dirPath: testDir,
+      dbPath: join(testDir, "tokens.db"),
+    });
+    // スキーマが重複作成されていないこと
+    const tables = db2
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      )
+      .all() as Array<{ name: string }>;
+    const names = tables.map((t) => t.name);
+    expect(names).toContain("tokens");
+    expect(names).toContain("usage_snapshots");
+    expect(names).toContain("leases");
+    db2.close();
+  });
+
+  test("WAL モードが有効", () => {
+    const row = db
+      .prepare("PRAGMA journal_mode")
+      .get() as { journal_mode: string };
+    expect(row.journal_mode.toLowerCase()).toBe("wal");
+  });
+
+  test("foreign_keys が ON", () => {
+    const row = db
+      .prepare("PRAGMA foreign_keys")
+      .get() as { foreign_keys: number };
+    expect(row.foreign_keys).toBe(1);
+  });
+
+  test("3 テーブルが揃っている", () => {
+    const tables = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      )
+      .all() as Array<{ name: string }>;
+    const names = tables.map((t) => t.name);
+    expect(names).toContain("tokens");
+    expect(names).toContain("usage_snapshots");
+    expect(names).toContain("leases");
+  });
+
+  test("必要な index が作成されている", () => {
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+      .all() as Array<{ name: string }>;
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain("idx_tokens_selectable");
+    expect(names).toContain("idx_usage_snapshots_token_time");
+    expect(names).toContain("idx_leases_expires");
+  });
+
+  test("TOKEN_STORE_DB_PATH 環境変数が優先される (明示 opts 省略時)", () => {
+    const envDir = mkdtempSync(join(tmpdir(), "cmux-token-store-env-"));
+    const envPath = join(envDir, "env-tokens.db");
+    const prev = process.env.TOKEN_STORE_DB_PATH;
+    process.env.TOKEN_STORE_DB_PATH = envPath;
+    try {
+      const resolved = __resolveDbPathForTest();
+      expect(resolved.dbPath).toBe(envPath);
+      expect(resolved.dirPath).toBe(envDir);
+    } finally {
+      if (prev === undefined) delete process.env.TOKEN_STORE_DB_PATH;
+      else process.env.TOKEN_STORE_DB_PATH = prev;
+      rmSync(envDir, { recursive: true, force: true });
+    }
+  });
+
+  test("opts.dbPath が env より優先される", () => {
+    const envPath = "/tmp/should-not-be-used/tokens.db";
+    const prev = process.env.TOKEN_STORE_DB_PATH;
+    process.env.TOKEN_STORE_DB_PATH = envPath;
+    try {
+      const resolved = __resolveDbPathForTest({
+        dbPath: "/tmp/override/tokens.db",
+      });
+      expect(resolved.dbPath).toBe("/tmp/override/tokens.db");
+    } finally {
+      if (prev === undefined) delete process.env.TOKEN_STORE_DB_PATH;
+      else process.env.TOKEN_STORE_DB_PATH = prev;
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// insertToken / getTokenBy*
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("insertToken / getTokenBy*", () => {
+  test("INSERT → getTokenByHandle で取得できる", () => {
+    const inserted = insertToken(db, makeToken({ handle: "@pers" }));
+    expect(inserted.id).toBeGreaterThan(0);
+    expect(inserted.handle).toBe("@pers");
+    expect(inserted.plan).toBe("max-x20");
+    expect(inserted.plan_ratio).toBe(20.0);
+    expect(inserted.tags).toEqual(["any"]);
+    expect(inserted.selectable).toBe(true);
+    expect(inserted.created_at).toMatch(/^20\d{2}-/);
+
+    const got = getTokenByHandle(db, "@pers");
+    expect(got).not.toBeNull();
+    expect(got?.id).toBe(inserted.id);
+    expect(got?.tags).toEqual(["any"]);
+  });
+
+  test("getTokenByOrganizationId で取得できる", () => {
+    const orgId = "11111111-2222-3333-4444-555555555555";
+    insertToken(db, makeToken({ handle: "@alpha", organization_id: orgId }));
+    const got = getTokenByOrganizationId(db, orgId);
+    expect(got).not.toBeNull();
+    expect(got?.handle).toBe("@alpha");
+  });
+
+  test("tags が JSON として復元される (複数要素)", () => {
+    const inserted = insertToken(
+      db,
+      makeToken({ handle: "@multi", tags: ["chat", "code"] }),
+    );
+    expect(inserted.tags).toEqual(["chat", "code"]);
+
+    const got = getTokenByHandle(db, "@multi");
+    expect(got?.tags).toEqual(["chat", "code"]);
+  });
+
+  test("selectable=false を指定すると 0 で保存・復元される", () => {
+    const inserted = insertToken(
+      db,
+      makeToken({ handle: "@off", selectable: false }),
+    );
+    expect(inserted.selectable).toBe(false);
+
+    const got = getTokenByHandle(db, "@off");
+    expect(got?.selectable).toBe(false);
+  });
+
+  test("handle 重複は UNIQUE 制約違反で throw", () => {
+    insertToken(db, makeToken({ handle: "@dup" }));
+    expect(() =>
+      insertToken(
+        db,
+        makeToken({
+          handle: "@dup",
+          organization_id: "99999999-0000-0000-0000-000000000099",
+        }),
+      ),
+    ).toThrow();
+  });
+
+  test("organization_id 重複は UNIQUE 制約違反で throw", () => {
+    insertToken(db, makeToken({ organization_id: "org-dup-xxx" }));
+    expect(() =>
+      insertToken(
+        db,
+        makeToken({
+          handle: "@another",
+          organization_id: "org-dup-xxx",
+        }),
+      ),
+    ).toThrow();
+  });
+
+  test("getTokenByHandle は未登録で null", () => {
+    expect(getTokenByHandle(db, "@none")).toBeNull();
+  });
+
+  test("getTokenByOrganizationId は未登録で null", () => {
+    expect(getTokenByOrganizationId(db, "not-exist")).toBeNull();
+  });
+
+  test("listTokens({ selectableOnly: true }) が selectable=true のみ返す", () => {
+    insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    insertToken(
+      db,
+      makeToken({
+        handle: "@b",
+        organization_id: "org-b",
+        selectable: false,
+      }),
+    );
+    insertToken(db, makeToken({ handle: "@c", organization_id: "org-c" }));
+
+    const all = listTokens(db);
+    expect(all.length).toBe(3);
+
+    const selectable = listTokens(db, { selectableOnly: true });
+    expect(selectable.length).toBe(2);
+    expect(selectable.map((t) => t.handle).sort()).toEqual(["@a", "@c"]);
+  });
+
+  test("plan_ratio=null を保存・復元できる (plan=unknown 想定)", () => {
+    const inserted = insertToken(
+      db,
+      makeToken({
+        handle: "@unknown",
+        plan: "unknown",
+        plan_ratio: null,
+      }),
+    );
+    expect(inserted.plan_ratio).toBeNull();
+
+    const got = getTokenByHandle(db, "@unknown");
+    expect(got?.plan_ratio).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// upsertUsageSnapshot / getLatestUsageSnapshot
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("upsertUsageSnapshot", () => {
+  test("初回は INSERT で 1 行増える", () => {
+    const token = insertToken(db, makeToken());
+    const snap = upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.2,
+      util_7d: 0.1,
+      reset_5h_at: "2026-04-25T10:00:00.000Z",
+      reset_7d_at: "2026-05-01T10:00:00.000Z",
+      unified_status: "active",
+    });
+    expect(snap.util_5h).toBe(0.2);
+    expect(snap.recorded_at).toMatch(/^20\d{2}-/);
+
+    const count = db
+      .prepare("SELECT COUNT(*) AS c FROM usage_snapshots")
+      .get() as { c: number };
+    expect(count.c).toBe(1);
+  });
+
+  test("同 token_id で 2 回目は UPDATE (行数 1 のまま、値が更新)", () => {
+    const token = insertToken(db, makeToken());
+    upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.2,
+      util_7d: 0.1,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: "active",
+    });
+    const second = upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.9,
+      util_7d: 0.5,
+      reset_5h_at: "2026-04-25T11:00:00.000Z",
+      reset_7d_at: "2026-05-02T11:00:00.000Z",
+      unified_status: "approaching_limit",
+    });
+    expect(second.util_5h).toBe(0.9);
+    expect(second.util_7d).toBe(0.5);
+    expect(second.unified_status).toBe("approaching_limit");
+
+    const count = db
+      .prepare("SELECT COUNT(*) AS c FROM usage_snapshots")
+      .get() as { c: number };
+    expect(count.c).toBe(1);
+  });
+
+  test("getLatestUsageSnapshot が最新値を返す", () => {
+    const token = insertToken(db, makeToken());
+    expect(getLatestUsageSnapshot(db, token.id)).toBeNull();
+
+    upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.5,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    const latest = getLatestUsageSnapshot(db, token.id);
+    expect(latest).not.toBeNull();
+    expect(latest?.util_5h).toBe(0.5);
+    expect(latest?.util_7d).toBeNull();
+  });
+
+  test("recorded_at が自動で付与され、UPSERT 時に更新される", async () => {
+    const token = insertToken(db, makeToken());
+    const first = upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: null,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    // ISO 8601 は辞書順 = 時系列順。十分な待機で recorded_at が進むことを確認
+    await new Promise((r) => setTimeout(r, 10));
+    const second = upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.1,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    expect(second.recorded_at >= first.recorded_at).toBe(true);
+  });
+
+  test("存在しない token_id で UPSERT は FK 違反で throw", () => {
+    expect(() =>
+      upsertUsageSnapshot(db, {
+        token_id: 9999,
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: null,
+        reset_7d_at: null,
+        unified_status: null,
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// leases
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("leases (atomic)", () => {
+  test("acquireLease 初回成功 → Lease 返却、listActiveLeases に含まれる", () => {
+    const token = insertToken(db, makeToken());
+    const lease = acquireLease(db, token.id, "conductor-1", 60);
+    expect(lease).not.toBeNull();
+    expect(lease?.token_id).toBe(token.id);
+    expect(lease?.holder).toBe("conductor-1");
+
+    const active = listActiveLeases(db);
+    expect(active.length).toBe(1);
+    expect(active[0]?.holder).toBe("conductor-1");
+  });
+
+  test("同 token_id を別 holder が取ろうとすると null", () => {
+    const token = insertToken(db, makeToken());
+    expect(acquireLease(db, token.id, "h1", 60)).not.toBeNull();
+    expect(acquireLease(db, token.id, "h2", 60)).toBeNull();
+  });
+
+  test("同 token_id を同じ holder が再度 acquire しても null (2 重取得不可)", () => {
+    const token = insertToken(db, makeToken());
+    expect(acquireLease(db, token.id, "h1", 60)).not.toBeNull();
+    expect(acquireLease(db, token.id, "h1", 60)).toBeNull();
+  });
+
+  test("releaseLease 後に別 holder が acquire 可", () => {
+    const token = insertToken(db, makeToken());
+    acquireLease(db, token.id, "h1", 60);
+    releaseLease(db, token.id, "h1");
+    expect(acquireLease(db, token.id, "h2", 60)).not.toBeNull();
+  });
+
+  test("releaseLease 他 holder 指定は no-op (勝手に解放しない)", () => {
+    const token = insertToken(db, makeToken());
+    acquireLease(db, token.id, "h1", 60);
+    releaseLease(db, token.id, "h-other"); // 他 holder → 消えない
+    const active = listActiveLeases(db);
+    expect(active.length).toBe(1);
+    expect(active[0]?.holder).toBe("h1");
+  });
+
+  test("TTL 過ぎた lease は acquireLease 前置の cleanup で DELETE されて次の acquire 成功", () => {
+    const token = insertToken(db, makeToken());
+    const expired = acquireLease(db, token.id, "h1", -10); // 負の TTL = 即期限切れ
+    expect(expired).not.toBeNull();
+    // 別 holder が acquire → 前置 cleanup で期限切れ lease 削除 → 成功
+    const next = acquireLease(db, token.id, "h2", 60);
+    expect(next).not.toBeNull();
+    expect(next?.holder).toBe("h2");
+  });
+
+  test("expireLeases(nowIso) で過去 lease の削除件数を得る", () => {
+    const token1 = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const token2 = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    acquireLease(db, token1.id, "h1", 10); // expires = now+10s
+    acquireLease(db, token2.id, "h2", 3600); // expires = now+3600s
+
+    // 未来の時刻を渡すと token1 の lease のみ期限切れ扱いになる
+    const futureIso = new Date(Date.now() + 20_000).toISOString();
+    const deleted = expireLeases(db, futureIso);
+    expect(deleted).toBe(1);
+    const active = listActiveLeases(db, futureIso);
+    expect(active.length).toBe(1);
+    expect(active[0]?.holder).toBe("h2");
+  });
+
+  test("並行 race: Promise.all で 10 並列 acquire → 成功は 1 件のみ", async () => {
+    const token = insertToken(db, makeToken());
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        Promise.resolve().then(() => acquireLease(db, token.id, `holder-${i}`, 60)),
+      ),
+    );
+    const successes = results.filter((r) => r !== null);
+    expect(successes.length).toBe(1);
+  });
+
+  test("listActiveLeases は expires_at >= now のみ返す", () => {
+    const token1 = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const token2 = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    acquireLease(db, token1.id, "h1", 3600);
+    acquireLease(db, token2.id, "h2", -100); // 即期限切れ
+
+    const now = new Date().toISOString();
+    const active = listActiveLeases(db, now);
+    expect(active.length).toBe(1);
+    expect(active[0]?.holder).toBe("h1");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keychain (KEYCHAIN_TEST_MODE=1 in-memory)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Keychain (in-memory mode)", () => {
+  const prev = process.env.KEYCHAIN_TEST_MODE;
+
+  beforeAll(() => {
+    process.env.KEYCHAIN_TEST_MODE = "1";
+  });
+
+  afterAll(() => {
+    if (prev === undefined) delete process.env.KEYCHAIN_TEST_MODE;
+    else process.env.KEYCHAIN_TEST_MODE = prev;
+    __resetInMemoryKeychainForTest();
+  });
+
+  beforeEach(() => {
+    __resetInMemoryKeychainForTest();
+  });
+
+  test("store → retrieve で同じ値が返る", () => {
+    storeTokenInKeychain("@x", "sk-secret-abc");
+    expect(retrieveTokenFromKeychain("@x")).toBe("sk-secret-abc");
+  });
+
+  test("delete 後の retrieve は KeychainNotFoundError", () => {
+    storeTokenInKeychain("@x", "sk-to-delete");
+    deleteTokenFromKeychain("@x");
+    expect(() => retrieveTokenFromKeychain("@x")).toThrow(KeychainNotFoundError);
+  });
+
+  test("未登録 handle の retrieve は KeychainNotFoundError", () => {
+    expect(() => retrieveTokenFromKeychain("@never")).toThrow(KeychainNotFoundError);
+  });
+
+  test("未登録 handle の delete は冪等 (throw しない)", () => {
+    expect(() => deleteTokenFromKeychain("@never")).not.toThrow();
+  });
+
+  test("isKeychainSupported() は test-mode で false", () => {
+    expect(isKeychainSupported()).toBe(false);
+  });
+
+  test("同じ handle を再 store すると値が上書きされる", () => {
+    storeTokenInKeychain("@x", "old");
+    storeTokenInKeychain("@x", "new");
+    expect(retrieveTokenFromKeychain("@x")).toBe("new");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keychain (macOS 実機)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Keychain (macOS real)", () => {
+  const shouldRun =
+    process.platform === "darwin" && process.env.KEYCHAIN_TEST_MODE !== "1";
+  const prev = process.env.KEYCHAIN_TEST_MODE;
+
+  // test prefix をユニーク化して並列/再実行で衝突しないようにする
+  const TEST_PREFIX = `@cmux-team-test-${process.pid}-`;
+  const testHandle = (suffix: string) => `${TEST_PREFIX}${suffix}`;
+
+  beforeAll(() => {
+    if (shouldRun) delete process.env.KEYCHAIN_TEST_MODE;
+  });
+
+  afterAll(() => {
+    if (prev === undefined) delete process.env.KEYCHAIN_TEST_MODE;
+    else process.env.KEYCHAIN_TEST_MODE = prev;
+  });
+
+  // 各テスト終わりに掃除
+  afterEach(() => {
+    if (!shouldRun) return;
+    for (const suffix of ["a", "b", "meta;rm", "dup"]) {
+      try {
+        deleteTokenFromKeychain(testHandle(suffix));
+      } catch {
+        // 掃除失敗は無視
+      }
+    }
+  });
+
+  test.skipIf(!shouldRun)(
+    "store → retrieve → delete のラウンドトリップが成功する",
+    () => {
+      const handle = testHandle("a");
+      const value = "sk-test-roundtrip-xyz";
+      storeTokenInKeychain(handle, value);
+      expect(retrieveTokenFromKeychain(handle)).toBe(value);
+      deleteTokenFromKeychain(handle);
+      expect(() => retrieveTokenFromKeychain(handle)).toThrow(KeychainNotFoundError);
+    },
+  );
+
+  test.skipIf(!shouldRun)(
+    "shell metacharacter を含む handle でも args 渡しなので安全",
+    () => {
+      const handle = testHandle("meta;rm"); // セミコロン含む
+      const value = "sk-meta-test";
+      storeTokenInKeychain(handle, value);
+      expect(retrieveTokenFromKeychain(handle)).toBe(value);
+      deleteTokenFromKeychain(handle);
+    },
+  );
+
+  test.skipIf(!shouldRun)(
+    "存在しない handle の retrieve は KeychainNotFoundError",
+    () => {
+      const handle = testHandle("b"); // 未登録
+      expect(() => retrieveTokenFromKeychain(handle)).toThrow(KeychainNotFoundError);
+    },
+  );
+
+  test.skipIf(!shouldRun)(
+    "存在しない handle の delete は冪等 (throw しない)",
+    () => {
+      const handle = testHandle("b");
+      expect(() => deleteTokenFromKeychain(handle)).not.toThrow();
+    },
+  );
+
+  test.skipIf(!shouldRun)(
+    "同じ handle を再 store すると値が上書きされる (-U)",
+    () => {
+      const handle = testHandle("dup");
+      storeTokenInKeychain(handle, "v1");
+      storeTokenInKeychain(handle, "v2");
+      expect(retrieveTokenFromKeychain(handle)).toBe("v2");
+      deleteTokenFromKeychain(handle);
+    },
+  );
+
+  test.skipIf(!shouldRun)("isKeychainSupported() は macOS 実機で true", () => {
+    expect(isKeychainSupported()).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keychain (非 macOS / test-mode OFF のガード)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Keychain (unsupported platform guard)", () => {
+  const shouldRun =
+    process.platform !== "darwin" && process.env.KEYCHAIN_TEST_MODE !== "1";
+
+  test.skipIf(!shouldRun)(
+    "非 macOS かつ test-mode OFF では KeychainUnsupportedError を throw",
+    () => {
+      expect(() => storeTokenInKeychain("@x", "v")).toThrow(
+        KeychainUnsupportedError,
+      );
+      expect(() => retrieveTokenFromKeychain("@x")).toThrow(
+        KeychainUnsupportedError,
+      );
+      expect(() => deleteTokenFromKeychain("@x")).toThrow(
+        KeychainUnsupportedError,
+      );
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computePoolCapacity — A019 §pool_capacity §検証表 (式基準の期待値)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("computePoolCapacity", () => {
+  // nowIso を固定してテスト可能にする
+  const NOW = "2026-04-25T00:00:00.000Z";
+  const nowMs = new Date(NOW).getTime();
+
+  /** now からの hours を ISO 8601 に変換するヘルパ */
+  function hoursFromNow(h: number): string {
+    return new Date(nowMs + h * 3_600_000).toISOString();
+  }
+
+  test("ケース 1: x20 満タン、reset 5h → 式基準では 100% (A019 表の 672% と不整合、plan.md §8.3)", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(5),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // flow_7d = 1.0 × 20 / 168 = 0.1190..., flow_5h = 1.0 × 20 / 5 = 4.0
+    // min = 0.1190..., cap = 0.1190/0.1190 × 100 = 100
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    expect(result.per_token.length).toBe(1);
+    expect(result.per_token[0]?.cap_pct).toBeCloseTo(100, 2);
+  });
+
+  test("ケース 2: x20 満タン、reset 7d → 100%", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+  });
+
+  test("ケース 3: x20 10% 残、reset 30min → 式基準で ~50% (A019 表 336% と不整合)", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.9,
+        util_7d: 0.5,
+        reset_5h_at: hoursFromNow(0.5),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // flow_5h = 0.1 × 20 / 0.5 = 4.0
+    // flow_7d = 0.5 × 20 / 168 = 0.0595...
+    // min = 0.0595..., cap ≒ 50%
+    expect(result.capacity_pct).toBeCloseTo(50, 1);
+  });
+
+  test("ケース 4: x20 10% 残、reset 3h → 式基準で ~50% (A019 表 112% と不整合)", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.9,
+        util_7d: 0.5,
+        reset_5h_at: hoursFromNow(3),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // flow_5h = 0.1 × 20 / 3 = 0.6667
+    // flow_7d = 0.5 × 20 / 168 = 0.0595
+    // min = 0.0595, cap ≒ 50%
+    expect(result.capacity_pct).toBeCloseTo(50, 1);
+  });
+
+  test("ケース 5: Pro 満タン、reset 7d → 5%", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@pro",
+        plan_ratio: 1.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // flow = 1.0 × 1 / 168 = 0.00595..., cap = 0.00595 / (20/168) × 100 = 5
+    expect(result.capacity_pct).toBeCloseTo(5, 2);
+  });
+
+  test("ケース 6: x20 + Pro 両方満タン 7d → 105%", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+      {
+        handle: "@pro",
+        plan_ratio: 1.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    expect(result.capacity_pct).toBeCloseTo(105, 2);
+    expect(result.per_token.length).toBe(2);
+  });
+
+  test("plan_ratio=null のアカウントは capacity 計算から除外される", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@unknown",
+        plan_ratio: null,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    expect(result.per_token.length).toBe(1);
+    expect(result.per_token[0]?.handle).toBe("@x20");
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+  });
+
+  test("util が null なら満タン扱い (残量 1.0)", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: hoursFromNow(168),
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+  });
+
+  test("reset_5h_at=null は 5h window を skip、7d のみで計算", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.9,
+        util_7d: 0.0,
+        reset_5h_at: null,
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // 5h は skip、flow_7d = 1.0 × 20 / 168 = 0.1190 → cap = 100
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+  });
+
+  test("両 reset が過去 → フル 7d 扱いで plan_ratio / 168 基準", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.5,
+        util_7d: 0.5,
+        reset_5h_at: hoursFromNow(-5), // 過去
+        reset_7d_at: hoursFromNow(-168), // 過去
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // どちらも過去 → skip → フル 7d: 1.0 × 20 / 168 = 0.1190 → cap = 100
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+  });
+
+  test("空配列 → capacity_pct=0, per_token=[]", () => {
+    const result = computePoolCapacity([], NOW);
+    expect(result.capacity_pct).toBe(0);
+    expect(result.per_token).toEqual([]);
+  });
+
+  test("REFERENCE_FLOW は 20/168 (≒0.119)", () => {
+    expect(REFERENCE_FLOW).toBeCloseTo(20 / 168, 6);
+  });
+
+  test("reset が極めて近い (1 秒後) → MIN_HOURS (1分) に clamp されノイズで flow が無限大にならない", () => {
+    const tokens: TokenForCapacity[] = [
+      {
+        handle: "@x20",
+        plan_ratio: 20.0,
+        util_5h: 0.0,
+        util_7d: 0.0,
+        reset_5h_at: hoursFromNow(1 / 3600), // 1 秒後
+        reset_7d_at: hoursFromNow(168),
+      },
+    ];
+    const result = computePoolCapacity(tokens, NOW);
+    // flow_7d が min になるので結果は ~100
+    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    // per_token.cap_pct は finite
+    expect(Number.isFinite(result.per_token[0]?.cap_pct ?? 0)).toBe(true);
+  });
+});
