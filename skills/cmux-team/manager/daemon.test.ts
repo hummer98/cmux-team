@@ -5068,3 +5068,131 @@ describe("handleMessage: NOTIFICATION case (T266)", () => {
 // T303 で挙動変更: missing entry (undefined) は `assign_skipped_unexpected` (reset せず)
 //   に倒す (§3.6 R7)。従来の「undefined → assigned 書き込み」挙動は撤去。
 
+// T315: .team/.gitignore テンプレートに daemon.pid と gh-cache.db* を追加
+describe("initInfra: .team/.gitignore (T315)", () => {
+  const T315_RUNTIME_ENTRIES = [
+    "daemon.pid",
+    "gh-cache.db",
+    "gh-cache.db-shm",
+    "gh-cache.db-wal",
+  ] as const;
+
+  test("新規生成: 4 項目すべてが template に含まれる", async () => {
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+
+    const content = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+    const lines = content.split("\n").map((l) => l.trim());
+    for (const name of T315_RUNTIME_ENTRIES) {
+      expect(lines).toContain(name);
+    }
+    // proxy-port の直後に daemon.pid が来ること（T315 挿入位置）
+    const proxyPortIdx = lines.indexOf("proxy-port");
+    const daemonPidIdx = lines.indexOf("daemon.pid");
+    expect(proxyPortIdx).toBeGreaterThanOrEqual(0);
+    expect(daemonPidIdx).toBe(proxyPortIdx + 1);
+  });
+
+  test("migration: 旧 gitignore に 4 項目が追記される", async () => {
+    // rate-limit.json と masters/ は含まれているが daemon.pid / gh-cache.db* は無い旧状態
+    const legacy = [
+      "# セッション固有（追跡不要）",
+      "team.json",
+      "masters/",
+      "proxy-port",
+      "rate-limit.json",
+      "logs/",
+      "output/",
+      "prompts/",
+      "queue/",
+      "traces/",
+      "sessions/",
+      "conductors/",
+      "docs-snapshot/",
+      "e2e-results/",
+      "",
+    ].join("\n");
+    await writeFile(join(testDir, ".team/.gitignore"), legacy);
+
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+
+    const content = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+    const trimmed = content.split("\n").map((l) => l.trim());
+    for (const name of T315_RUNTIME_ENTRIES) {
+      expect(trimmed).toContain(name);
+    }
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    // team_gitignore_migrated ログに 4 項目すべてが現れる
+    const migratedLine = logContent
+      .split("\n")
+      .find((l) => l.includes("team_gitignore_migrated"));
+    expect(migratedLine).toBeDefined();
+    for (const name of T315_RUNTIME_ENTRIES) {
+      expect(migratedLine).toContain(name);
+    }
+  });
+
+  test("冪等性: 2 回目の initInfra で内容が変化しない", async () => {
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+    const firstPass = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+
+    // 同じ state で再実行
+    await initInfra(state);
+    const secondPass = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+
+    expect(secondPass).toBe(firstPass);
+  });
+
+  test("冪等性: migration 後に再実行しても変化しない", async () => {
+    const legacy = [
+      "# セッション固有（追跡不要）",
+      "team.json",
+      "masters/",
+      "proxy-port",
+      "rate-limit.json",
+      "",
+    ].join("\n");
+    await writeFile(join(testDir, ".team/.gitignore"), legacy);
+
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+    const afterMigrate = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+
+    await initInfra(state);
+    const afterSecond = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+
+    expect(afterSecond).toBe(afterMigrate);
+  });
+
+  test("コメントアウト行は未記載扱い（コメントは残し本行を追記）", async () => {
+    const legacy = [
+      "# セッション固有（追跡不要）",
+      "team.json",
+      "masters/",
+      "proxy-port",
+      "# daemon.pid",
+      "rate-limit.json",
+      "",
+    ].join("\n");
+    await writeFile(join(testDir, ".team/.gitignore"), legacy);
+
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+
+    const content = await readFile(join(testDir, ".team/.gitignore"), "utf-8");
+    const rawLines = content.split("\n");
+    // コメント行は残っている
+    expect(rawLines).toContain("# daemon.pid");
+    // 本行も追記されている
+    expect(rawLines).toContain("daemon.pid");
+  });
+});
+
