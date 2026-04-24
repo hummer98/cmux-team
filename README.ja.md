@@ -63,6 +63,33 @@ daemon は `update-notifier` で新バージョンを**検出**し、TUI バナ�
 - `cmux-team self-update` サブコマンドを削除しました。
 - 移行: `autoUpdate` を `notify`（または `off`）に変更し、バナーが表示されたら `npm install -g @hummer98/cmux-team@latest` を実行してください。
 
+### 設定ファイル（`.team/config.json`）
+
+`cmux-team start` がプロジェクトごとに自動生成します。全キーは任意で、手動編集も可能（次回 start 時に再読込されます）。共通の優先順位: **CLI フラグ > 環境変数 > `.team/config.json` > 組み込みデフォルト**。
+
+| キー | 型 | デフォルト | 用途 |
+|-----|---|----------|------|
+| `mainBranch` | string | `origin/HEAD` から自動検出 | 主開発ブランチ。worktree のデフォルト起点・マージ先として使用。上書き: 環境変数 `CMUX_TEAM_MAIN_BRANCH`、CLI `--main-branch`、タスク単位の `--base-branch`。 |
+| `layout` | `"wide"` \| `"16x9"` | `"wide"` | 起動時のペインレイアウト。上書き: CLI `--layout`。 |
+| `sleepPrevention` | boolean | `true` | `cmux-team start` 時に `caffeinate` で macOS スリープを抑止するか。上書き: CLI `--no-sleep-prevention`。 |
+| `autoUpdate` | `"off"` \| `"notify"` | `"off"` | バージョン検出モード（上記参照）。上書き: 環境変数 `CMUX_TEAM_AUTO_UPDATE`。 |
+| `models.master` / `models.conductor` / `models.agent` | string | Claude デフォルト | ロール別モデル指定（例: `"claude-sonnet-4-6"`）。 |
+| `envrcHookPromptSkipped` | boolean | `false` | direnv hook プロンプトをスキップした際の内部フラグ。通常手動編集しません。 |
+
+例:
+
+```json
+{
+  "mainBranch": "develop",
+  "layout": "16x9",
+  "sleepPrevention": false,
+  "autoUpdate": "notify",
+  "models": { "conductor": "claude-sonnet-4-6" }
+}
+```
+
+解決順や自動検出の詳細は `docs/spec/05-install-and-infrastructure.md` を参照してください。
+
 ## 使い方
 
 ### 基本的な流れ
@@ -108,13 +135,15 @@ Claude: → cmux-team create-task --title "..." --status ready
 **タスク管理**
 | コマンド | やること |
 |---------|---------|
-| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all] [--exclusive]` | タスク作成（`--exclusive`: drain 後に単独実行。他タスクを全て止めたい作業用。`--run-after-all` を含む） |
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--base-branch <branch>] [--run-after-all] [--exclusive]` | タスク作成（`--base-branch`: worktree の起点・マージ先ブランチ、デフォルト: main。`--exclusive`: drain 後に単独実行、`--run-after-all` を含む） |
 | `cmux-team update-task --task-id <id> --status <s>` | タスク状態更新 |
 | `cmux-team close-task --task-id <id> --deliverable-kind <files|merged|pr|none> [kind 別フラグ] [--journal <text>]` | タスク close |
 | `cmux-team abort-task --task-id <id>` | 実行中タスクを中止 |
 | `cmux-team restart-task --task-id <id>` | assigned タスクの Conductor を再起動 |
 | `cmux-team delete-task --task-id <id>` | draft / ready タスクを削除 |
 | `cmux-team await-task --task-id <id> [--timeout <sec>]` | タスク完了待ち |
+
+> **ベースブランチ (`--base-branch`)**: デフォルトでは各タスクの worktree は `mainBranch`（解決順: 環境変数 `CMUX_TEAM_MAIN_BRANCH` → `config.mainBranch` → `origin/HEAD`）から切られ、Conductor はそれをマージ先として扱います。`--base-branch develop` を渡すと代わりに `develop` から切って `develop` に戻します — hotfix や main 以外の feature ブランチに対する作業向け。起点の解決順位: 明示指定 `--base-branch` → local `<mainBranch>`（origin より ahead）→ `origin/<mainBranch>` → local `<mainBranch>` → `HEAD`（詳細は `docs/spec/05-install-and-infrastructure.md`）。
 
 **Agent / Conductor**
 | コマンド | やること |

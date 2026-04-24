@@ -63,6 +63,33 @@ Related:
 - The `cmux-team self-update` subcommand is removed.
 - Migration: set `autoUpdate` to `notify` (or `off`), then run `npm install -g @hummer98/cmux-team@latest` when the banner appears.
 
+### Configuration (`.team/config.json`)
+
+Created per-project by `cmux-team start`. All keys are optional — the file can be edited by hand and is re-read on next start. General precedence: **CLI flag > env var > `.team/config.json` > built-in default**.
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `mainBranch` | string | auto-detected from `origin/HEAD` | Primary development branch used as the default worktree base & merge target. Overrides: env `CMUX_TEAM_MAIN_BRANCH`, CLI `--main-branch`, per-task `--base-branch`. |
+| `layout` | `"wide"` \| `"16x9"` | `"wide"` | Pane layout preset at startup. Override: CLI `--layout`. |
+| `sleepPrevention` | boolean | `true` | Whether `cmux-team start` runs `caffeinate` to prevent macOS sleep. Override: CLI `--no-sleep-prevention`. |
+| `autoUpdate` | `"off"` \| `"notify"` | `"off"` | Version detection mode (see above). Override: env `CMUX_TEAM_AUTO_UPDATE`. |
+| `models.master` / `models.conductor` / `models.agent` | string | Claude defaults | Per-role model selection (e.g. `"claude-sonnet-4-6"`). |
+| `envrcHookPromptSkipped` | boolean | `false` | Internal flag set when the user declines the direnv hook prompt — normally not edited by hand. |
+
+Example:
+
+```json
+{
+  "mainBranch": "develop",
+  "layout": "16x9",
+  "sleepPrevention": false,
+  "autoUpdate": "notify",
+  "models": { "conductor": "claude-sonnet-4-6" }
+}
+```
+
+See `docs/spec/05-install-and-infrastructure.md` for the full resolution semantics (including `mainBranch` auto-detection and worktree start-point order).
+
 ## Usage
 
 ### Basic Workflow
@@ -108,13 +135,15 @@ See `cmux-team --help` for the full list. Common commands:
 **Task management**
 | Command | What it does |
 |---------|-------------|
-| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--run-after-all] [--exclusive]` | Create a task (`--exclusive`: run alone after drain; implies `--run-after-all`) |
+| `cmux-team create-task --title <t> [--status ready] [--body <b>] [--depends-on <ids>] [--base-branch <branch>] [--run-after-all] [--exclusive]` | Create a task (`--base-branch`: worktree start-point & merge target, default: main; `--exclusive`: run alone after drain, implies `--run-after-all`) |
 | `cmux-team update-task --task-id <id> --status <s>` | Update task status |
 | `cmux-team close-task --task-id <id> --deliverable-kind <files|merged|pr|none> [kind-specific flags] [--journal <text>]` | Close a task |
 | `cmux-team abort-task --task-id <id>` | Abort a running task |
 | `cmux-team restart-task --task-id <id>` | Restart an assigned Conductor session |
 | `cmux-team delete-task --task-id <id>` | Delete a draft/ready task |
 | `cmux-team await-task --task-id <id> [--timeout <sec>]` | Wait for task completion |
+
+> **Base branch (`--base-branch`)**: By default each task's worktree is cut from your `mainBranch` (resolved via env `CMUX_TEAM_MAIN_BRANCH` → `config.mainBranch` → `origin/HEAD`), and the Conductor treats it as the merge target. Pass `--base-branch develop` to cut from and merge back to `develop` instead — useful for hotfixes or feature branches that should not target main. Start-point resolution order: explicit `--base-branch` → local `<mainBranch>` ahead of origin → `origin/<mainBranch>` → local `<mainBranch>` → `HEAD` (see `docs/spec/05-install-and-infrastructure.md` for details).
 
 **Agent / Conductor**
 | Command | What it does |
