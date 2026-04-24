@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-04-25
+
+### Added
+
+- **`.team/.gitignore` テンプレートに `daemon.pid` と `gh-cache.db*` を追加（T315）**。新規生成されるテンプレートに加え、既存プロジェクトの `.team/.gitignore` に対しても冪等な migration を実行する。`daemon.pid` は daemon 多重起動防止の pidfile、`gh-cache.db` / `gh-cache.db-shm` / `gh-cache.db-wal` は `gh-cache-sync` の SQLite + WAL。これまで新しい `.team/` を作るたびに手動で追記が必要だった 4 項目を自動化。migration は T227/T229 と同じ `lines.some + !startsWith("#")` の冪等追記パターンで、追加項目は `team_gitignore_migrated` ログに集約出力される
+
+### Changed
+
+- **README に `--base-branch` オプションと `.team/config.json` の説明を追加**。`--base-branch` は実装済み（i18n help / `docs/spec/*` には記載あり）だが README.md / README.ja.md 両方に未記載だった。`create-task` 行にフラグを追加し、デフォルト挙動と start-point 解決順序を blockquote で解説。合わせて Configuration セクションを新設し、`mainBranch` / `layout` / `sleepPrevention` / `autoUpdate` / `models.{master,conductor,agent}` / `envrcHookPromptSkipped` のデフォルト値・上書き方法・使用例を記載。これまで `autoUpdate` しか README に書かれていなかった設定項目全体のギャップを解消
+- **README に npm version / monthly downloads / total downloads バッジを追加（T313）**。License バッジの上に 3 バッジを配置し、公開バージョンとダウンロード数を README 冒頭で一目で確認できるようにした。日本語版・英語版で順序と URL を完全一致させる
+
+### Fixed
+
+- **`cmux-team status` の open count から aborted / deleted を除外（T314）**。これまで `open = total - closed` の引き算集計だったため、aborted / deleted 状態のタスクが open に混入して実態より膨らんで見える問題があった。明示的な allowlist（`draft` / `ready` / `assigned`）ベースの集計に変更し、aborted は独立セグメントとして表示、deleted は常に非表示。aborted=0 のときは aborted セグメント自体を省略して既存の簡潔表示を維持する。純粋関数 `buildTasksSectionLines` として抽出し、6 ケースの unit test で境界ケースを網羅
+
 ## [4.7.0] - 2026-04-24
 
 ### Added
