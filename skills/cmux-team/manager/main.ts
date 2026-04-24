@@ -72,6 +72,7 @@ import {
 } from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
+import { buildTasksSectionLines } from "./tasks-status";
 import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
 import {
   readProjectInstructions,
@@ -1358,10 +1359,10 @@ async function cmdStatus(): Promise<void> {
 
   // --- Tasks ---
   const { tasks } = await loadTasks(PROJECT_ROOT);
-  const closedCount = tasks.filter(t => t.status === "closed").length;
-  const openCount = tasks.length - closedCount;
   console.log(`─ Tasks ${"─".repeat(51)}`);
-  console.log(`  open: ${openCount}  closed: ${closedCount}`);
+  for (const line of buildTasksSectionLines(tasks)) {
+    console.log(line);
+  }
 
   // --- Rate Limit ---
   console.log(`─ Rate Limit ${"─".repeat(46)}`);
