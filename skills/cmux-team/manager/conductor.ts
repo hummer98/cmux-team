@@ -205,7 +205,7 @@ export async function initializeConductorSlots(
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
   layout: LayoutMode = "wide",
-  mainBranch: string,
+  mainBranch: string = "",
   backend?: ClaudeCodeBackend,
 ): Promise<ResumeAssignment[]> {
   // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）

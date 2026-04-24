@@ -26,8 +26,10 @@ export type PermissionRef = string & { readonly __brand: "PermissionRef" };
  * Claude Code hook ↔ opencode SSE の対応:
  *   SESSION_STARTED    → session_started   ← session.status(running) / SESSION_STARTED hook
  *   SESSION_IDLE       → session_idle      ← session.idle           / SESSION_IDLE hook
+ *   SESSION_STOP       → session_idle      ← （SESSION_IDLE に合流）/ SESSION_STOP hook
  *   SESSION_CLEAR      → session_reset     ← session delete+create  / SESSION_CLEAR hook
  *   SESSION_ENDED      → session_ended     ← session.status(stopped)/ SESSION_ENDED hook
+ *   SESSION_ASK        → session_ask       ← （opencode 未対応 — extension point）
  *   NOTIFICATION       → permission_asked  ← permission.updated     / NOTIFICATION hook
  */
 export type RuntimeEvent =
@@ -35,6 +37,7 @@ export type RuntimeEvent =
   | SessionIdleEvent
   | SessionResetEvent
   | SessionEndedEvent
+  | SessionAskEvent
   | PermissionAskedEvent;
 
 export interface SessionStartedEvent {
@@ -60,6 +63,14 @@ export interface SessionEndedEvent {
   sessionRef: SessionRef;
   /** 終了理由（任意）— backend は提供できる範囲で埋める */
   reason?: "completed" | "aborted" | "error" | "killed";
+}
+
+/** AskUserQuestion ツール起動など、ユーザー入力待ちになったことを示す（Claude Code 固有）。 */
+export interface SessionAskEvent {
+  type: "session_ask";
+  sessionRef: SessionRef;
+  /** 質問本文（任意） */
+  question?: string;
 }
 
 export interface PermissionAskedEvent {

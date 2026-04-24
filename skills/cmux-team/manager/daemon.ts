@@ -1280,6 +1280,10 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
     }
   }
 
+  // M3-b Phase 1: hook signal を正規化イベントに変換して backend リスナーに通知する。
+  // SESSION_* の state 遷移ロジックは引き続き下記 switch で処理される（Phase 2 で移植予定）。
+  state.backend.acceptHookSignal(message);
+
   switch (message.type) {
     case "TASK_CREATED": {
       let title = "";

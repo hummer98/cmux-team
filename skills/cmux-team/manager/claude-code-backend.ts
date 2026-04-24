@@ -19,6 +19,7 @@ import type {
   SpawnOptions,
   PermissionReply,
 } from "./runtime-backend";
+import type { QueueMessage } from "./schema";
 
 // ---------------------------------------------------------------------------
 // ClaudeCodeBackend 固有の SpawnOptions 拡張
@@ -238,5 +239,65 @@ export class ClaudeCodeBackend implements RuntimeBackend {
       clearInterval(interval);
       this.pidWatchers.delete(surface);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hook signal → 正規化イベント変換（M3-b Phase 1）
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Claude Code の hook signal（SESSION_* / NOTIFICATION）を受け取り、
+   * 正規化 RuntimeEvent に変換して emit する。
+   *
+   * daemon.ts の handleMessage 入口で呼ぶことで、hook signal が来るたびに
+   * backend.onEvent リスナーにも届く。SESSION_* の state 遷移ロジックは
+   * 引き続き handleMessage 内で処理される（M3-b Phase 2 で移植予定）。
+   *
+   * 変換ルール:
+   *   SESSION_STARTED  → session_started
+   *   SESSION_IDLE     → session_idle
+   *   SESSION_STOP     → session_idle  （SESSION_IDLE に合流）
+   *   SESSION_ACTIVE   → session_started
+   *   SESSION_CLEAR    → session_reset
+   *   SESSION_ENDED    → session_ended
+   *   SESSION_ASK      → session_ask
+   *   NOTIFICATION     → permission_asked
+   *   その他            → 変換しない（emit しない）
+   */
+  acceptHookSignal(msg: QueueMessage): void {
+    if (this.disposed) return;
+    const surface = ("surface" in msg && typeof msg.surface === "string") ? msg.surface : undefined;
+    if (!surface) return;
+    const ref = toSessionRef(surface);
+
+    let event: RuntimeEvent | null = null;
+    switch (msg.type) {
+      case "SESSION_STARTED":
+      case "SESSION_ACTIVE":
+        event = { type: "session_started", sessionRef: ref };
+        break;
+      case "SESSION_IDLE":
+      case "SESSION_STOP":
+        event = { type: "session_idle", sessionRef: ref };
+        break;
+      case "SESSION_CLEAR":
+        event = { type: "session_reset", sessionRef: ref };
+        break;
+      case "SESSION_ENDED":
+        event = { type: "session_ended", sessionRef: ref, reason: "completed" };
+        break;
+      case "SESSION_ASK": {
+        const q = ("question" in msg && typeof msg.question === "string") ? msg.question : undefined;
+        event = { type: "session_ask", sessionRef: ref, question: q };
+        break;
+      }
+      case "NOTIFICATION": {
+        const title = ("message" in msg && typeof msg.message === "string") ? msg.message : "permission_request";
+        const permRef = toPermissionRef(surface);
+        event = { type: "permission_asked", sessionRef: ref, permissionRef: permRef, title };
+        break;
+      }
+    }
+    if (event) this.emitEvent(event);
   }
 }
