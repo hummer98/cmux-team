@@ -46,10 +46,6 @@ export interface MetricsData {
   roleRows: AggregatedRoleRow[];
   /** タスク別集計（直近 1h、input+output 降順で limit 件） */
   taskRows: AggregatedTaskRow[];
-  /** unified 5h 使用率（0.0-1.0、未取得なら null） */
-  unifiedFive: number | null;
-  /** unified 7d 使用率 */
-  unifiedSeven: number | null;
   /** Rec #5: 最新 api_usage 行の role（rate limit ヘッダーの取得元） */
   latestRowRole: string | null;
   /** Rec #5: 最新 api_usage 行の surface */
@@ -312,22 +308,6 @@ export function buildMetricsRows(
       parts.push(ui.text(riskLabel, { style: { fg: color, bold: true } }));
     }
     rows.push(ui.row({ gap: 1 }, parts));
-  }
-
-  // ── 上段追加: unified 5h / 7d ─────────────────────────────────────────────
-  rows.push(ui.text(""));
-  rows.push(
-    ui.text(`── ${t("metrics_section_unified")} ──`, { dim: true }),
-  );
-  {
-    const five = utilizationColor(data.unifiedFive);
-    const seven = utilizationColor(data.unifiedSeven);
-    rows.push(
-      ui.row({ gap: 2 }, [
-        ui.text(`5h: ${five.text}`, { style: { fg: five.color } }),
-        ui.text(`7d: ${seven.text}`, { style: { fg: seven.color } }),
-      ]),
-    );
   }
 
   // ── 中段: ロール別集計 ─────────────────────────────────────────────────

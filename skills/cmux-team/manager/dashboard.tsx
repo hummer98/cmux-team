@@ -1827,8 +1827,6 @@ export async function startDashboard(
           burnTokPerSec: 0,
           roleRows: [],
           taskRows: [],
-          unifiedFive: daemon.rateLimit?.unified5hUtilization ?? null,
-          unifiedSeven: daemon.rateLimit?.unified7dUtilization ?? null,
           latestRowRole: null,
           latestRowSurface: null,
           latestRowTimestampMs: null,
@@ -1868,8 +1866,6 @@ export async function startDashboard(
         burnTokPerSec: burn.tokPerSec,
         roleRows,
         taskRows,
-        unifiedFive: daemon.rateLimit?.unified5hUtilization ?? null,
-        unifiedSeven: daemon.rateLimit?.unified7dUtilization ?? null,
         latestRowRole: latest?.role ?? null,
         latestRowSurface: latest?.surface ?? null,
         latestRowTimestampMs:

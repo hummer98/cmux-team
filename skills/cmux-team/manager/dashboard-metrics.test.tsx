@@ -37,8 +37,6 @@ function makeData(overrides: Partial<MetricsData> = {}): MetricsData {
     burnTokPerSec: 1_000,
     roleRows: [],
     taskRows: [],
-    unifiedFive: 0.4,
-    unifiedSeven: 0.2,
     latestRowRole: "agent",
     latestRowSurface: "surface:300",
     latestRowTimestampMs: now - 5_000,

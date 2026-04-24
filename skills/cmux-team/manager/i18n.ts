@@ -783,7 +783,6 @@ Rate-limit exhaustion exits 4.`,
   // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
   metrics_tab_title: "Metrics",
   metrics_section_rate_limit: "Rate limit (per-minute)",
-  metrics_section_unified: "Unified (5h / 7d)",
   metrics_section_role: "By role (last 1h)",
   metrics_section_task: "By task (last 1h, top {limit})",
   metrics_label_tokens: "tokens",
@@ -1566,7 +1565,6 @@ Flags:
   // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
   metrics_tab_title: "Metrics",
   metrics_section_rate_limit: "レート制限（分単位）",
-  metrics_section_unified: "統合（5時間 / 7日）",
   metrics_section_role: "ロール別（直近 1 時間）",
   metrics_section_task: "タスク別（直近 1 時間、上位 {limit}）",
   metrics_label_tokens: "トークン",
