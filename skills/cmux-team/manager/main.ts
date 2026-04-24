@@ -30,13 +30,16 @@ import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon, ccBackend } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
+import { ClaudeCodeBackend } from "./claude-code-backend";
+import { OpenCodeBackend } from "./opencode-backend";
+import type { RuntimeBackend } from "./runtime-backend";
 import { createHash } from "crypto";
 import {
   initDB,
@@ -566,7 +569,20 @@ async function cmdStart(): Promise<void> {
     `branch=${mainBranchResolution.branch} source=${mainBranchResolution.source}`,
   );
 
-  const state = await createDaemon(PROJECT_ROOT, layout);
+  // Issue #30 M5: config.runtime に応じて RuntimeBackend を選択する。
+  // 未設定 / "claude-code" は ClaudeCodeBackend（既存動作）。
+  // "opencode" は OpenCodeBackend（opencode serve へ接続）。
+  let runtimeBackend: RuntimeBackend;
+  if (startConfig.runtime === "opencode") {
+    const serverUrl = startConfig.opencode?.serverUrl ?? "http://localhost:54321";
+    runtimeBackend = new OpenCodeBackend(serverUrl);
+    await log("runtime_backend", `backend=opencode serverUrl=${serverUrl}`);
+  } else {
+    runtimeBackend = new ClaudeCodeBackend();
+    await log("runtime_backend", `backend=claude-code`);
+  }
+
+  const state = await createDaemon(PROJECT_ROOT, layout, runtimeBackend);
   state.updateMode = autoUpdate.mode;
   // Step 4 で DaemonState.mainBranch を追加しているため直接代入で確定させる。
   state.mainBranch = mainBranchResolution.branch;
@@ -977,7 +993,7 @@ async function cmdStart(): Promise<void> {
       await resetConductor(c, state.projectRoot, state.workspace ?? undefined, {
         targetStatus: "broken",
         reason: "unique_violation",
-      });
+      }, ccBackend(state.backend));
     }
   }
 

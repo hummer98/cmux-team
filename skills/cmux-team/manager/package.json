@@ -16,6 +16,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "^1.14.22",
     "@rezi-ui/core": "^0.1.0-alpha.60",
     "@rezi-ui/node": "^0.1.0-alpha.60",
     "ink": "^6.8.0",

@@ -19,6 +19,17 @@ export interface TeamConfig {
   };
   envrcHookPromptSkipped?: boolean;
   layout?: LayoutMode;
+  /**
+   * 使用する AI runtime backend（デフォルト: "claude-code"）。Issue #30 M5
+   * - "claude-code": Claude Code CLI + cmux（既存動作）
+   * - "opencode": opencode REST API / SSE
+   */
+  runtime?: "claude-code" | "opencode";
+  /** opencode backend の設定。runtime が "opencode" の時のみ参照。Issue #30 M5 */
+  opencode?: {
+    /** opencode server の URL（デフォルト: "http://localhost:54321"） */
+    serverUrl?: string;
+  };
   /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
   sleepPrevention?: boolean;
   /**

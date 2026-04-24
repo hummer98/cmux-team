@@ -16,6 +16,7 @@ import { initDB, insertTaskSession } from "./trace-store";
 import { resolveWorktreeBase } from "./worktree-base";
 import { resolveFetchBeforeWorktree } from "./config";
 import type { ConductorState, LayoutMode } from "./schema";
+import { ClaudeCodeBackend } from "./claude-code-backend";
 
 const execFile = promisify(execFileCb);
 
@@ -87,7 +88,8 @@ export async function launchConductor(
   projectRoot: string,
   surface: string,
   opts: { resumeTaskId?: string; mainBranch: string },
-): Promise<void> {
+  backend?: ClaudeCodeBackend,
+): Promise<import("./runtime-backend").SessionRef | undefined> {
   // 1. 環境変数をシェルに焼き付け
   //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
@@ -104,20 +106,25 @@ export async function launchConductor(
   // T283: Conductor 自身が直接 shell で `cmux-team create-task --status ready`
   // を叩く経路で、worktree 配下の HEAD 状態に起因する false reject を防ぐために
   // `CMUX_TEAM_SKIP_SYNC_CHECK=1` を明示的に焼き付ける（Master shell には注入しない）。
-  await cmux.send(
-    surface,
-    `export CMUX_SURFACE=${surface} CMUX_CLAUDE_HOOKS_DISABLED=1 CMUX_TEAM_MAIN_BRANCH=${mainBranchEnv} CMUX_TEAM_SKIP_SYNC_CHECK=1\n`,
-  );
-  await sleep(500);
+  const env: Record<string, string> = {
+    CMUX_SURFACE: surface,
+    CMUX_CLAUDE_HOOKS_DISABLED: "1",
+    CMUX_TEAM_MAIN_BRANCH: mainBranchEnv,
+    CMUX_TEAM_SKIP_SYNC_CHECK: "1",
+  };
 
   // 2. Claude 起動
   //    - resumeTaskId 指定時: 既存セッションを cmdResume 経由で復元
   //    - それ以外: 通常起動（--session-id なし — cmdConductor が自己生成して daemon に通知）
-  if (opts?.resumeTaskId) {
-    await cmux.send(surface, `cmux-team resume ${opts.resumeTaskId}\n`);
-  } else {
-    await cmux.send(surface, `cmux-team conductor\n`);
-  }
+  const launchCmd = opts?.resumeTaskId
+    ? `cmux-team resume ${opts.resumeTaskId}`
+    : "cmux-team conductor";
+
+  // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
+  // ClaudeCodeBackend.spawn() は cmux.send を呼び出すため、
+  // テストの cmux.send spy は backend 経由でも引き続き有効。
+  const _backend = backend ?? new ClaudeCodeBackend();
+  const sessionRef = await _backend.spawn({ role: "conductor", prompt: "", workdir: surface, surface, launchCmd, env });
 
   // 3. タブ名設定
   //    resume / 新規問わず `[N] Conductor` を設定する。
@@ -125,6 +132,9 @@ export async function launchConductor(
   //    rename する必要はなく、ここで一度だけ設定すれば十分。
   const num = surface.replace("surface:", "");
   await cmux.renameTab(surface, `[${num}] Conductor`);
+  // Issue #30 M3-b: spawn から得た SessionRef を呼び出し元に返す。
+  // daemon.ts が conductor.runtimeSessionRef に保存して handleRuntimeEvent のルックアップに使う。
+  return sessionRef;
 }
 
 // --- createConductorPanes ---
@@ -198,7 +208,8 @@ export async function initializeConductorSlots(
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
   layout: LayoutMode = "wide",
-  mainBranch: string,
+  mainBranch: string = "",
+  backend?: ClaudeCodeBackend,
 ): Promise<ResumeAssignment[]> {
   // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
   if (!mainBranch.trim()) {
@@ -226,7 +237,7 @@ export async function initializeConductorSlots(
         await launchConductor(projectRoot, surface, {
           resumeTaskId: resumeItem.taskId,
           mainBranch,
-        });
+        }, backend);
         assignments.push({
           surface,
           taskId: resumeItem.taskId,
@@ -236,7 +247,7 @@ export async function initializeConductorSlots(
           taskTitle: resumeItem.taskTitle,
         });
       } else {
-        await launchConductor(projectRoot, surface, { mainBranch });
+        await launchConductor(projectRoot, surface, { mainBranch }, backend);
       }
     }
 
@@ -278,6 +289,7 @@ export async function assignTask(
   taskId: string,
   projectRoot: string,
   mainBranch: string,
+  backend?: ClaudeCodeBackend,
 ): Promise<ConductorState> {
   // T253: mainBranch は required。空文字なら fail-stop（silent failure 防止）
   if (!mainBranch.trim()) {
@@ -482,10 +494,15 @@ export async function assignTask(
     conductor.status = "assigning";
     conductor.assigningSetAt = new Date().toISOString();
     notifyStateChanged("conductor.ts:assignTask:assigning-set");
+    // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
+    // ClaudeCodeBackend.send() は自動的に \n を付加するため sendKey("return") は不要。
+    // ClaudeCodeBackend は内部で cmux.send を呼び出すため、テストの cmux.send spy は引き続き有効。
+    const _backend = backend ?? new ClaudeCodeBackend();
+    const sessionRef = _backend.surfaceToRef(conductor.surface);
     try {
-      await cmux.send(conductor.surface, "/clear");
+      await _backend.send(sessionRef, "/clear");
       // T261: user_clear 判定のための snapshot フィールドを埋める。
-      //       cmux.send 成功直後に set することで、送信失敗時に stale 値を残さない。
+      //       send 成功直後に set することで、送信失敗時に stale 値を残さない。
       conductor.clearSentAt = new Date().toISOString();
       await log(
         "clear_sent",
@@ -496,12 +513,11 @@ export async function assignTask(
         `${formatSurface(conductor.surface, "C")} task_id=${taskId} clear_sent_at=${conductor.clearSentAt}`
       );
       await sleep(500);
-      await cmux.sendKey(conductor.surface, "return");
       await sleep(2000);
 
       // 新しいプロンプトを送信
       const promptText = `${promptFile} を読んで指示に従って作業してください。`;
-      await cmux.send(conductor.surface, promptText);
+      await _backend.send(sessionRef, promptText);
       // T261: 送信したプロンプトの時刻と byte 長を記録
       //       byte 長は UTF-8 換算（D9: API レート制限の byte 感覚と揃える）。
       conductor.promptSentAt = new Date().toISOString();
@@ -511,7 +527,6 @@ export async function assignTask(
         `${formatSurface(conductor.surface, "C")} task_id=${taskId} bytes=${conductor.promptBytes} prompt_file=${promptFile}`
       );
       await sleep(500);
-      await cmux.sendKey(conductor.surface, "return");
     } catch (e: any) {
       throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
     }
@@ -607,6 +622,7 @@ export async function resetConductor(
     //       無関係に必ずリセットされる（Decision D7）— さもないと次タスク割当が破綻する。
     preserveWorktree?: boolean;
   },
+  backend?: ClaudeCodeBackend,
 ): Promise<void> {
   try {
     // 0. surface 実在確認（T251: 幽霊 Conductor 防止）
@@ -626,21 +642,26 @@ export async function resetConductor(
       ? "surface_missing"
       : opts?.reason;
 
+    // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
+    // ClaudeCodeBackend.kill() は cmux.closeSurface を呼び出す。
+    const _backend = backend ?? new ClaudeCodeBackend();
+
     // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
     //    cmux tree 1 回で Conductor の所属 pane と同 pane の全 surface を取得し、
     //    Conductor 自身を除いた sibling surface を閉じる。
     //    取得失敗時 / 結果 0 件時は agents の surface を個別に閉じる safety net に落ちる。
+    //    peer discovery（listSiblingSurfaces）は cmux 固有のため backend 切り替え対象外（M3-b で対応予定）。
     const siblings = await cmux.listSiblingSurfaces(conductor.surface, workspace);
     if (siblings.length > 0) {
       for (const s of siblings) {
         if (s !== conductor.surface) {
-          await cmux.closeSurface(s);
+          await _backend.kill(_backend.surfaceToRef(s));
         }
       }
     } else {
       // safety net: tree 取得失敗 or sibling 0 件 → 既知の agents を個別に閉じる
       for (const agent of conductor.agents) {
-        await cmux.closeSurface(agent.surface);
+        await _backend.kill(_backend.surfaceToRef(agent.surface));
       }
     }
 
