@@ -1564,7 +1564,7 @@ Flags:
 レート制限到達は exit 4 で終了します。`,
 
   // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
-  metrics_tab_title: "メトリクス",
+  metrics_tab_title: "Metrics",
   metrics_section_rate_limit: "レート制限（分単位）",
   metrics_section_unified: "統合（5時間 / 7日）",
   metrics_section_role: "ロール別（直近 1 時間）",
