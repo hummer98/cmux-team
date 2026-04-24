@@ -515,6 +515,15 @@ export async function assignTask(
       await sleep(500);
       await sleep(2000);
 
+      // T302-race: /clear 送信後の待機中に SESSION_ENDED が先に処理され disconnected に
+      // なっていた場合、プロンプトを送っても届かない。例外として上位に伝播させ、
+      // assignTask catch ブロックが worktree を巻き戻す。タスクは "ready" のまま残り
+      // 次の idle Conductor に再割り当てされる。
+      // （TypeScript は上の代入から "assigning" に絞り込むが、await 点で他ルートが変異し得るため型アサーション）
+      if ((conductor.status as "assigning" | "disconnected") === "disconnected") {
+        throw new AssignTaskError("conductor", "session ended during assign (race: session_ended before prompt_sent)");
+      }
+
       // 新しいプロンプトを送信
       const promptText = `${promptFile} を読んで指示に従って作業してください。`;
       await _backend.send(sessionRef, promptText);

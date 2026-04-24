@@ -1557,6 +1557,11 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
             formatSurface(message.surface, "C")
           );
+          // T302-race: disconnected → idle 復帰時に即 scanTasks を発火し、
+          // "ready" 状態で待機中のタスクをこの Conductor に再割り当てする。
+          if (prevStatus === "disconnected") {
+            requestWakeup(state);
+          }
         } else if (conductor.status === "assigning") {
           // T232: assignTask 実行中の /clear 完了 → SESSION_STARTED(source=clear) で running へ遷移
           conductor.status = "running";

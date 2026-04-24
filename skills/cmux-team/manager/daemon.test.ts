@@ -2408,6 +2408,64 @@ describe("monitorConductors: assigning timeout (T232)", () => {
   });
 });
 
+// T302-race: /clear 送信成功後に SESSION_ENDED race で conductor が disconnected に → タスクは ready のまま
+describe("scanTasks: SESSION_ENDED race — assignTask 中に session が死んだ場合 (T302-race)", () => {
+  test("sleep 中に conductor.status が disconnected → タスクは ready のまま + conductor は disconnected", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await createTask("302", "race-task");
+
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+
+    // conductor への参照を保持してスパイ内から変異させる
+    let conductorRef: ConductorState | undefined;
+    let sendCallCount = 0;
+    const sendSpy = spyOn(cmux, "send").mockImplementation(async (_surface, _text) => {
+      sendCallCount++;
+      if (sendCallCount === 1 && conductorRef) {
+        // 1 回目 (/clear) 送信完了直後に SESSION_ENDED race を模倣:
+        // daemon の handleMessage が SESSION_ENDED を処理して disconnected にする
+        conductorRef.status = "disconnected";
+      }
+    });
+    const sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+
+    try {
+      const state = await createDaemon(testDir);
+      state.mainBranch = "main"; // T302-race: assignTask の fail-stop を回避して cmux.send まで進める
+      conductorRef = {
+        surface: "surface:302r",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "idle",
+      };
+      state.conductors.set(conductorRef.surface, conductorRef);
+
+      await scanTasks(state);
+
+      // race guard が発火 → AssignTaskError(conductor) → scanTasks が disconnected に倒す
+      expect(conductorRef.status).toBe("disconnected");
+      expect(conductorRef.disconnectedAt).toBeDefined();
+
+      // send は /clear の 1 回だけ（race guard でプロンプト送信がブロックされた）
+      expect(sendCallCount).toBe(1);
+
+      // タスクは "ready" のまま（applyAssignCommit が呼ばれていない）
+      const { loadTaskState } = await import("./task");
+      const ts = await loadTaskState(testDir);
+      expect(ts["302"]?.status ?? "ready").toBe("ready");
+    } finally {
+      sendSpy.mockRestore();
+      sendKeySpy.mockRestore();
+    }
+  }, 30000);
+});
+
 // R4 (b): assignTask 中に /clear 送信失敗 → AssignTaskError("conductor") → disconnected
 describe("scanTasks: /clear 送信失敗時の conductor disconnected (T232 R4)", () => {
   test("cmux.send で例外 → AssignTaskError(conductor) → idleConductor.status === 'disconnected'", async () => {
