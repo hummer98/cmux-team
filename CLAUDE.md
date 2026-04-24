@@ -29,7 +29,7 @@ Master（ユーザー対話）→ Manager（イベント駆動監視）→ Condu
 ### タスクの優先順位（高→低）
 
 1. **バグ修正** — 既存機能が壊れている場合は最優先
-2. **実験で発見された問題の修正** — 実際に動かして判明した issue（#12 のような具体的な失敗事例）
+2. **実験で発見された問題の修正** — 実際に動かして判明した issue
 3. **ユーザー体験の改善** — インストール・起動・操作が簡単になる変更
 4. **ドキュメントの正確性** — README や SKILL.md が実装と乖離していれば修正
 5. **新機能** — 新しいエージェントロールやコマンドの追加
@@ -37,131 +37,36 @@ Master（ユーザー対話）→ Manager（イベント駆動監視）→ Condu
 
 ### 判断に迷ったとき
 
-- **「構造的に正しく動くか？」が最優先** — 表面的に動くだけでなく、状態遷移・エラー経路・並行動作を含めて正しいこと。同種のバグが再発している領域は局所修正ではなく構造変更で解決する
-- **抽象化の導入をためらわない** — 状態管理・並行制御・プロトコル処理など本質的に難しい領域では、専用ライブラリや state machine を積極的に採用する。「Three similar lines is better than a premature abstraction」を盾に構造改善を拒まない
+- **「構造的に正しく動くか？」が最優先** — 同種のバグが再発している領域は局所修正ではなく構造変更で解決する
+- **抽象化の導入をためらわない** — state machine・専用ライブラリを積極的に採用する
 - **実験で検証してから本実装** — cmux-team-lab 等で試してから SKILL.md に反映
 - **既存の動作を壊さない** — CLI コマンドのインターフェースを安定させる（内部実装の書き換えは制約しない）
 - **ユーザーに聞く** — 設計判断で迷ったら issue を作ってユーザーの判断を仰ぐ
-
-## GitHub issue 作成ガイドライン
-
-> **注意:** ここでの「issue」は GitHub issue を指す。ローカルのタスク管理（`.team/tasks/`）とは別の概念。
-
-### issue を作成すべき場面
-
-- 実験中に発見した具体的な失敗パターン（再現手順付き）
-- SKILL.md の指示と実際のエージェント動作の乖離
-- cmux 側の制約による回避策が必要な場合
-- 設計判断が必要で、複数の選択肢がある場合
-
-### issue に含めるべき情報
-
-- **問題**: 何が起きたか（発生事例があれば具体的に）
-- **原因**: なぜ起きたか
-- **修正内容**: 具体的な変更案（ファイル名・セクション番号まで）
-- **対象ファイル**: 修正が必要なファイル一覧
-
-### issue を作成すべきでない場面
-
-- typo やフォーマットの軽微な修正 → 直接コミットでよい
-- 明らかなバグ修正 → 直接コミットでよい
-- 将来的な夢の機能 → 現在のゴールに集中する
 
 ## リポジトリ構造
 
 ```
 cmux-team/
-├── .claude-plugin/
-│   ├── plugin.json                   # プラグインマニフェスト
-│   └── marketplace.json              # Marketplace カタログ
-├── package.json                      # npm パッケージ定義
-├── .npmignore                        # npm publish 除外設定
-├── bin/
-│   ├── cmux-team.js                  # CLI エントリポイント
-│   └── postinstall.js                # npm postinstall スクリプト
-├── skills/
-│   ├── cmux-team/
-│   │   ├── SKILL.md                  # 4層アーキテクチャ定義スキル
-│   │   ├── manager/                  # Manager daemon（TypeScript / Bun）
-│   │   │   ├── main.ts               #   CLI エントリー（サブコマンド実装）
-│   │   │   ├── daemon.ts             #   メインループ・ファイル監視
-│   │   │   ├── conductor.ts          #   Conductor 初期化・タスク割当・監視
-│   │   │   ├── master.ts             #   Master spawn・監視
-│   │   │   ├── cmux.ts               #   cmux コマンドラッパー
-│   │   │   ├── proxy.ts              #   ロギングプロキシ（API 透過傍受）
-│   │   │   ├── queue.ts              #   メッセージキュー
-│   │   │   ├── trace-store.ts        #   SQLite FTS5 トレース
-│   │   │   ├── task.ts               #   タスク管理
-│   │   │   ├── template.ts           #   プロンプトテンプレート展開
-│   │   │   ├── artifact.ts           #   アーティファクト管理
-│   │   │   ├── dashboard.tsx         #   TUI ダッシュボード
-│   │   │   ├── logger.ts             #   ログ出力
-│   │   │   ├── schema.ts             #   Zod スキーマ定義
-│   │   │   └── package.json          #   Bun 依存関係
-│   │   └── templates/                # エージェントプロンプトテンプレート (14個)
-│   │       ├── common-header.md      #   全エージェント共通ヘッダー
-│   │       ├── master.md             #   Master ロール
-│   │       ├── manager.md            #   Manager ロール
-│   │       ├── conductor.md          #   Conductor ロール（旧）
-│   │       ├── conductor-role.md     #   Conductor 常駐ロール
-│   │       ├── conductor-task.md     #   Conductor タスク割り当て時プロンプト
-│   │       ├── researcher.md         #   リサーチャーロール
-│   │       ├── architect.md          #   アーキテクトロール
-│   │       ├── planner.md            #   計画立案ロール
-│   │       ├── design-reviewer.md    #   設計レビューロール
-│   │       ├── implementer.md        #   実装者ロール
-│   │       ├── inspector.md          #   検品ロール
-│   │       ├── dockeeper.md          #   ドキュメント管理者ロール
-│   │       └── task-manager.md       #   タスク管理者ロール
-│   └── cmux-agent-role/
-│       └── SKILL.md                  # サブエージェント行動規範スキル
-├── commands/                         # スラッシュコマンド定義 (5個)
-│   ├── master.md                     #   Master ロール再読み込み（/clear 復帰用）
-│   ├── team-spec.md                  #   要件ブレスト（対話型）
-│   ├── team-task.md                  #   タスク管理
-│   ├── team-archive.md              #   完了タスクのアーカイブ
-│   └── artifact.md                  #   知見のアーティファクト化
-├── docs/
-│   ├── spec/                         # 統合仕様書（実装と同期された仕様）
-│   │   ├── 00-project-overview.md
-│   │   ├── 01-skill-cmux-team.md
-│   │   ├── 02-skill-cmux-agent-role.md
-│   │   ├── 03-commands.md
-│   │   ├── 04-templates.md
-│   │   ├── 05-install-and-infrastructure.md
-│   │   ├── 06-implementation-tasks.md
-│   │   └── 07-state-machine.md
-│   ├── research/                     # リサーチドキュメント
-│   └── slides/                       # プレゼン資料
-├── CHANGELOG.md                      # 変更ログ
-├── LICENSE                           # MIT
-├── README.md                         # ユーザー向けドキュメント（英語）
-└── README.ja.md                      # ユーザー向けドキュメント（日本語）
+├── skills/cmux-team/
+│   ├── SKILL.md              # 4層アーキテクチャ定義スキル
+│   ├── manager/              # Manager daemon（TypeScript / Bun）
+│   └── templates/            # エージェントプロンプトテンプレート
+├── skills/cmux-agent-role/SKILL.md  # サブエージェント行動規範スキル
+├── commands/                 # スラッシュコマンド定義
+├── docs/spec/                # 統合仕様書（実装と同期）
+└── bin/                      # CLI エントリポイント
 ```
 
-### 2つのスキルの役割分担
-
-| スキル | 誰が読むか | 内容 |
-|--------|-----------|------|
-| `cmux-team` (SKILL.md) | Master（ユーザーセッション） | 4層アーキテクチャ全体の定義、Master 行動原則 |
-| `cmux-agent-role` (SKILL.md) | Agent（実作業エージェント） | 出力プロトコル・タスク作成・作業境界 |
-
-### docs/spec/（統合仕様書）
-
-実装と同期された統合仕様書。各ファイルはプロジェクトの設計・実装仕様を定義しており、コード変更時に参照すべきドキュメント。
-
-**cmux-team の仕様・挙動について質問された場合は、該当する `docs/spec/` のファイルを Read して回答すること。**
+**cmux-team の仕様・挙動について質問された場合は、`docs/spec/` の該当ファイルを Read して回答すること。**
 
 | ファイル | 内容 |
 |---------|------|
-| 00-project-overview.md | プロジェクト概要・4層アーキテクチャ・設計原則 |
-| 01-skill-cmux-team.md | cmux-team スキル（SKILL.md）の仕様 |
-| 02-skill-cmux-agent-role.md | cmux-agent-role スキル（SKILL.md）の仕様 |
-| 03-commands.md | スラッシュコマンド定義 |
-| 04-templates.md | エージェントプロンプトテンプレート仕様 |
-| 05-install-and-infrastructure.md | インストール・インフラ構成 |
-| 06-implementation-tasks.md | 実装タスク定義 |
-| 07-state-machine.md | Conductor / Task FSM 仕様（T279。pure reducer + shadow observability） |
+| `docs/spec/00-project-overview.md` | プロジェクト概要・4層アーキテクチャ |
+| `docs/spec/01-skill-cmux-team.md` | cmux-team スキルの仕様 |
+| `docs/spec/04-templates.md` | テンプレート変数仕様（`{{VARIABLE}}` 全一覧） |
+| `docs/spec/05-install-and-infrastructure.md` | インストール・レイアウト・config・worktree 解決 |
+| `docs/spec/07-state-machine.md` | Conductor / Task FSM・cascade・CONDUCTOR_DONE・Ready sync guard |
+| `docs/spec/08-runtime-boundary.md` | Deliverable 型・close-task 仕様 |
 
 ## スキル・コマンドの追加・修正方法
 
@@ -175,124 +80,13 @@ cmux-team/
 
 1. `commands/<command-name>.md` を作成
 2. YAML frontmatter に `allowed-tools`, `description` を記載
-3. Markdown 本文に手順・引数仕様・注意事項を記述
-4. `$ARGUMENTS` でユーザーからの引数を参照できる
+3. Markdown 本文に手順・引数仕様・注意事項を記述（`$ARGUMENTS` で引数を参照）
 
 ### テンプレートの追加
 
 1. `skills/cmux-team/templates/<role-name>.md` を作成
-2. `{{VARIABLE}}` プレースホルダーを使用（下記参照）
+2. `{{VARIABLE}}` プレースホルダーを使用（変数一覧は `docs/spec/04-templates.md` 参照）
 3. Conductor（または Manager）が spawn 時にテンプレート変数を置換し `.team/prompts/` に書き出す
-
-## テンプレート変数仕様
-
-テンプレート内の `{{VARIABLE}}` プレースホルダーは、Conductor（または Manager）がプロンプト生成時に実際の値に置換する。
-
-### 共通変数（common-header.md 由来）
-
-| 変数 | 説明 |
-|------|------|
-| `{{ROLE_ID}}` | エージェントの識別子（例: `researcher-1`, `architect`） |
-| `{{TASK_DESCRIPTION}}` | タスクの説明文 |
-| `{{PROJECT_ROOT}}` | プロジェクトルートの絶対パス |
-
-### Conductor 変数
-
-| 変数 | 使用テンプレート | 説明 |
-|------|----------------|------|
-| `{{TASK_CONTENT}}` | conductor-task | タスクファイル本文 |
-| `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree のパス |
-| `{{OUTPUT_DIR}}` | conductor, conductor-task | 出力ディレクトリパス（例: `.team/output/<taskRunId>/`） |
-| `{{CONDUCTOR_ID}}` | conductor, conductor-task | Conductor 実行 ID（`task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`） |
-| `{{TASK_STATUS_FILE}}` | conductor, conductor-task | 完了マーカーファイルパス |
-| `{{PROJECT_ROOT}}` | conductor-role | プロジェクトルートの絶対パス |
-| `{{MAIN_BRANCH}}` | conductor-role, conductor-task | プロジェクトの主開発ブランチ名（`.team/config.json` の `mainBranch` または `git symbolic-ref refs/remotes/origin/HEAD` で自動検出。T213 で追加） |
-
-### Agent ロール固有変数
-
-| 変数 | 使用テンプレート | 説明 |
-|------|----------------|------|
-| `{{COMMON_HEADER}}` | 全 Agent ロール | common-header.md の展開結果 |
-| `{{PROJECT_INSTRUCTIONS}}` | 全 Agent ロール + Conductor heredoc | `.team/agent-instructions/<role>.md` の本文に展開される overlay。不在時は空文字。spawn-agent 時に展開される（T247） |
-| `{{OUTPUT_FILE}}` | 全 Agent ロール | 出力ファイルパス（例: `.team/output/researcher-1.md`） |
-| `{{TOPIC}}` | researcher | リサーチトピック |
-| `{{SUB_QUESTIONS}}` | researcher | 調査すべきサブ質問リスト |
-| `{{REQUIREMENTS_CONTENT}}` | architect | requirements.md の内容 |
-| `{{RESEARCH_SUMMARY}}` | architect | リサーチ結果の要約 |
-| `{{CODEBASE_CONTEXT}}` | architect | 既存コードベースのコンテキスト |
-| `{{PLAN_CONTENT}}` | planner, design-reviewer, implementer, inspector | plan.md の内容 |
-| `{{TASK_CONTENT}}` | planner, design-reviewer, inspector | タスク内容 |
-| `{{DESIGN_CONTENT}}` | implementer | design.md の内容 |
-| `{{TASKS_CONTENT}}` | implementer | tasks.md のアサインされたタスク |
-| `{{SPECS_CONTENT}}` | dockeeper | 現在の仕様書全体 |
-| `{{LAST_SNAPSHOT_SUMMARY}}` | dockeeper | 前回の docs スナップショットの要約 |
-| `{{OPEN_TASKS_LIST}}` | task-manager | オープンタスクの一覧 |
-
-## インストール方法
-
-```bash
-npm install -g @hummer98/cmux-team
-```
-
-`postinstall` スクリプトにより manager/ の依存関係が自動解決される。
-
-## テスト方法
-
-自動テストはない。以下の手順で E2E テストを行う。
-
-### 前提
-
-- cmux がインストールされていること
-- Claude Code が利用可能であること（Claude Max 推奨）
-
-### インストールテスト
-
-```bash
-# グローバルインストール
-npm install -g @hummer98/cmux-team
-# → ~/.claude/ にスキル・コマンド・テンプレートが配置されること
-# → cmux-team コマンドが利用可能になること
-
-# アンインストール
-npm uninstall -g @hummer98/cmux-team
-```
-
-### 機能テスト（ターミナルで実行）
-
-```bash
-# 1. cmux を起動
-cmux
-
-# 2. チーム体制構築（daemon + Master + Conductor 起動）
-cmux-team start
-# → .team/ が作成され team.json が正しいこと
-# → daemon が起動し Manager として機能すること
-# → Master Claude セッションが spawn されること
-# → 3つの Conductor が固定ペインに配置されること
-
-# 3. タスク作成（Master セッション内で）
-cmux-team create-task --title "テストタスク" --status ready --body "テスト用"
-# → .team/tasks/ にタスクファイルが作成されること
-# → daemon がタスクを検出し idle Conductor に割り当てること
-# → Conductor がタスクを自律実行すること
-
-# 4. ステータス確認
-cmux-team status
-# → daemon 状態、Conductor 一覧、タスク数、ログが表示されること
-
-# 5. クリーンアップ
-# cmux を終了すると daemon も自動停止する（pidfile が release される）
-# 明示的な停止コマンドは廃止（T286）。残骸 pid が気になる場合は `kill <pid>` で手動停止
-```
-
-### 確認ポイント
-
-- 4層構造（Master → Manager(daemon) → Conductor → Agent）が正しく機能すること
-- daemon がタスクを検出し idle Conductor に割り当てること
-- Conductor がタスク完了後に done マーカーを作成し idle に戻ること
-- Agent は git worktree 内で作業し、メインブランチを汚さないこと
-- `cmux send` 後に `cmux send-key return` で送信されること
-- Trust 確認が出た場合に自動承認されること
 
 ## コーディング規約
 
@@ -303,119 +97,17 @@ cmux-team status
 - テンプレートは `{{VARIABLE}}` プレースホルダーを使用
 - README.md やユーザー向けテキストは日本語
 
-### 開発者用スキル
+別プロジェクト（mado, Dear 等）の `.team/` 調査は `.claude/skills/cmux-team-investigate/SKILL.md` を参照（npm publish 対象外）。
 
-別プロジェクト（mado, Dear 等）の `.team/` 調査は `.claude/skills/cmux-team-investigate/SKILL.md` を参照。
-このスキルはこのリポジトリのワークツリー内でのみ有効で、npm publish には含まれない（配布外）。
+## 実装ルール（ガードレール）
 
-## cmux API 使用上の注意
+詳細は `.team/agent-instructions/implementer.md` を参照。**絶対に守るべき制約のみ抜粋：**
 
-`cmux tree` はデフォルトで**全ワークスペース**のsurfaceを返す。
-複数のワークスペースで cmux-team を同時起動している場合、別ワークスペースのsurface IDと混同する原因になる。
-
-以下のルールを守ること：
-
-- `validateSurface(surface)` ではなく `validateSurface(surface, workspace)` を使う
-- `tree()` ではなく `tree(workspace)` を使う（`cmux tree --workspace <id>` に対応）
-- daemon の `state.workspace` に起動時のワークスペースが格納されている（`main.ts` 起動時に `getCallerWorkspace()` で取得・設定）
-- `getCallerWorkspace()` で呼び出し元のワークスペースを取得できる（`cmux identify` の `caller.workspace_ref`）
-- 既存surfaceの検証（`initializeLayout`, `isMasterAlive`, `checkConductorStatus` など）では必ず workspace を渡す
-- `newSplit` 直後など**新規作成したsurface**は現在のワークスペースに確実に属するため、workspace指定は不要
-
-## ロギングポリシー
-
-Manager daemon（`skills/cmux-team/manager/`）のロギングに関するルール。
-
-### ログインターフェース
-
-`logger.ts` の `log(event, detail)` を使用する。イベント名でレベルを区別する。
-
-| イベント名パターン | 用途 | 例 |
-|-------------------|------|-----|
-| `error` | 操作失敗・例外 | `log("error", "assignTask failed: ...")` |
-| `*_failed` | 特定操作の失敗 | `log("proxy_start_failed", ...)` |
-| `*_started`, `*_completed` | ライフサイクルイベント | `log("daemon_started", ...)` |
-| その他 | 状態変化・判断記録 | `log("conductor_reset", ...)` |
-
-### 必ずログすべきイベント
-
-1. **例外捕捉時**: `catch` で例外を処理する場合、最低限 `log("error", ...)` でメッセージを記録する
-2. **外部コマンド失敗時**: cmux コマンド（`send`, `sendKey`, `tree` 等）の失敗は `log("error", ...)` で記録する。**error オブジェクトに `stderr` / `stdout` が付いている場合は必ず detail に含める**（`e.message` のみでは "Command failed: <cmd>" で終わり原因追跡が不能になる）。例: `log("error", \`tree failed: ${e.message} stderr=${e.stderr ?? ""}\`)`。
-3. **判断分岐**: 複数パスがある場合、どのパスに入ったか記録する（例: done マーカー検出方法、フォールバック発動）
-4. **状態遷移**: Conductor/Agent のステータス変化は必ず記録する（既存で実施済み）
-5. **Ready 昇格判定（T283）**: `ready_rejected` / `ready_warning` / `ready_force_bypass` / `ready_sync_skipped` を必ずログする。詳細は「Ready 昇格時の sync state ガード（T283）」参照
-6. **rerere 設定の結果（T284）**: worktree scope で `rerere.enabled=true` を設定した結果を `rerere_enabled scope=<worktree|local>` でログする。失敗時は `rerere_enable_failed stderr=<stderr>`（いずれも best-effort、失敗しても worktree 作成は成功扱い）
-
-### 禁止事項
-
-- **空の `catch {}`**: 例外を完全に握りつぶさない。最低限ログを残す。ただし以下は例外として許容:
-  - **冪等な後処理**（`closeSurface`, `renameTab`, `branch -d` 等）: 失敗しても影響がない操作
-  - **存在チェック的な操作**（`validateSurface`, ファイル存在確認等）: 失敗＝不在として扱う設計
-- **高頻度ループ内の過剰ログ**: `tick()` 毎回のログは不要。状態変化があった場合のみ記録する
-- **機密情報のログ**: API キー、トークン等をログに含めない
-
-### ログフォーマット
-
-```
-[2026-04-04T10:30:00+09:00] event_name key1=value1 key2=value2
-```
-
-- タイムスタンプはローカル TZ 付き ISO 8601（`logger.ts` の `localISOString()` が生成）
-- detail は `key=value` のスペース区切り。値にスペースを含む場合はそのまま末尾に付与
-- 1 行 1 イベント。複数行ログは避ける
-
-#### surface 表記（T192）
-
-surface はロール別プレフィックス + `[ID]` で表記する。生の `surface:NNN` や `surface=surface:NNN` は使わない。`formatSurface(surface, role)` / `formatPair(parent, child, pRole, cRole)`（`logger.ts`）を利用する。
-
-| ロール | 意味 | 例 |
-|-------|------|-----|
-| `C` | Conductor | `C[665]` |
-| `A` | Agent | `A[719]` |
-| `M` | Manager (daemon) | `M[120]` |
-| `U` | User session (Master) | `U[100]` |
-| `S` | 不明（`cmux.ts` の低レベル箇所のみ） | `S[300]` |
-
-親子関係は `>` で連結する: `C[665]>A[719]`（Conductor → Agent）。
-
-例:
-
-```
-[2026-04-14T10:30:00+09:00] daemon_started v0.23.0 pid=12345 poll=10000ms ...
-[2026-04-14T10:30:05+09:00] conductor_started C[665] task_id=T042 conductor_id=task-042-1712345678
-[2026-04-14T10:31:00+09:00] agent_done C[665]>A[719] trigger=session_idle status=completed
-```
-
-`task_id=` / `conductor_id=` / `artifact_id=` / `pid=` 等の他のキーは従来通り `key=value` 形式を維持する。
-
-## EventBus ポリシー
-
-daemon 内の **実 state mutation** → TUI refresh は `eventBus.ts` 経由で通知する。
-
-- `notifyStateChanged(source)` / `onStateChanged(cb)` のみ使用可
-- `bus.emit` / `bus.on` の直接呼び出しは `eventBus.ts` 外では禁止（`rg "bus\.(emit|on)\b" skills/cmux-team/manager | rg -v eventBus.ts` で 0 件を維持）
-- emit は **実際に state が変化した直後のみ**。中間処理の完了点（外部コマンド終了、ローカル変数更新）では emit しない。「emit 箇所 = state mutation 箇所」の不変条件を維持する
-- source 引数は `"<ファイル>:<関数>:<理由>"` 形式で呼び出し位置を明示する
-- `CMUX_TEAM_TRACE_EVENTS=1` で emit ログが `manager.log` に出力される
-- `logger.ts` は `eventBus.ts` を import してはならない（循環依存禁止）
-
-## task-state 書き込みポリシー（T303）
-
-daemon プロセス内の `task-state.json` 書き込みは **必ず `applyTaskEvent` / `updateTaskSessionId` 経由**。
-
-- `skills/cmux-team/manager/state-machine/task-state-store.ts` が唯一の書き込み API
-- daemon.ts / main.ts で `taskState[...] = ...` / `ts[...] = ...` / 直接 `saveTaskState(...)` を呼んではいけない。grep invariant（下記）を 0 件で維持する:
-  ```bash
-  grep -nE 'taskState\[.*\]\s*=' skills/cmux-team/manager/{daemon,main}.ts   # 0 件
-  grep -nE 'ts\[[^\]]+\]\s*='     skills/cmux-team/manager/{daemon,main}.ts   # 0 件
-  grep -nE '(taskState|ts)\[[^\]]+\]\.[a-zA-Z_]+\s*=' skills/cmux-team/manager/{daemon,main}.ts  # 0 件
-  grep -nE 'delete\s+(taskState|ts)\[[^\]]+\]\.[a-zA-Z_]+' skills/cmux-team/manager/{daemon,main}.ts  # 0 件
-  grep -n  'saveTaskState('       skills/cmux-team/manager/{daemon,main}.ts   # 0 件
-  ```
-- 残存許容は `task-state-store.ts` / `apply-task-actions.ts` / `task.ts`（store 経由 + 純粋ヘルパ）のみ
-- `applyTaskEvent` は in-process mutex で `load → reduce → patch → cascade → save → shadow → notifyStateChanged` を直列化する。呼び出し側は trace DB insert / cmux send / resetConductor など外部 I/O のみ担当
-- metadata-only 更新（SESSION_STARTED 由来の `sessionId` 追記）は `updateTaskSessionId` 専用ヘルパを使う（3 段 guard: taskRunId mismatch / status=assigned + sessionId 差分 / silent skip）
-- `cmux-team close-task` 等の CLI 経路は **別 Node プロセス**なので in-process mutex では保護されない。CLI ↔ daemon 間の cross-process race は reducer noop（`ASSIGN_OK` / `CLOSE` / `ABORT` の guard）で観測的に吸収する方針。file lock 導入は 24h shadow 観測後に別タスクで判断する
+- **cmux tree**: `tree(workspace)` / `validateSurface(surface, workspace)` を使う（workspace 省略禁止）
+- **ログ**: 外部コマンド失敗時は `stderr` / `stdout` を必ず detail に含める。空の `catch {}` 禁止
+- **EventBus**: `notifyStateChanged` / `onStateChanged` のみ使用可。`bus.emit` / `bus.on` の直接呼び出し禁止。`logger.ts` からの `eventBus.ts` import 禁止（循環依存）
+- **task-state**: `applyTaskEvent` / `updateTaskSessionId` 経由のみ。`daemon.ts` / `main.ts` で `taskState[...] =` / `saveTaskState(` を直接書いてはいけない
+- **hook**: hook shell には分岐ロジックを持たせない。全イベントを daemon に転送する
 
 ## プロンプト編集ルール（厳守）
 
@@ -424,421 +116,86 @@ daemon プロセス内の `task-state.json` 書き込みは **必ず `applyTaskE
 | やること | やらないこと |
 |---------|-------------|
 | `skills/cmux-team/templates/master.md` を編集 | `.team/prompts/master.md` を直接編集 |
-| `skills/cmux-team/templates/manager.md` を編集 | `.team/prompts/manager.md` を直接編集 |
-| 編集後に `cmux-team start` で再生成 or テンプレートからコピー | ランタイムだけ書き換えて「動いた」で終わり |
+| 編集後に `cmux-team start` で再生成 | ランタイムだけ書き換えて「動いた」で終わり |
 
-**理由:** ランタイムプロンプトだけ書き換えると、テンプレートとの乖離が蓄積する。次回の `cmux-team start` や別プロジェクトでの起動時に変更が消失する。
+プロンプトを変更する場合: テンプレートを編集 → `.team/prompts/` にコピー（または `cmux-team start` で再生成）→ コミット・リリース。
 
-プロンプトを変更する場合の手順:
-1. `skills/cmux-team/templates/*.md` を編集
-2. `.team/prompts/*.md` にコピー（または `cmux-team start` で再生成）
-3. 他プロジェクト（Dear 等）のランタイムプロンプトも更新
-4. コミット・リリース
+## Manager プロトコル（概要）
 
-## Manager プロトコル（内部実装）
+TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行。
 
-TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行。キューベースのイベント駆動でタスク管理を行う。
-
-- **ログ**: `.team/logs/manager.log` に状態変化を追記形式で記録（`conductor_started`, `task_completed`, `idle_start` 等）
-- **状態確認**: `cmux-team status` で daemon 状態・Conductor 一覧・タスク数・ログ末尾を表示
-
-### 多重起動防止（pidfile ロック — T259）
-
-`cmdStart` 冒頭（preflight 成功後・direnv / resolveMainBranch / `createDaemon` の前）で
-`.team/daemon.pid` を `writeFile(..., { flag: "wx" })` により atomic に取得する。
-既に生きている cmux-team daemon があれば `PidFileLockedError` を経由して exit 1。
-stale 判定は `isAlive(pid)` false を優先、alive でも `ps -p <pid> -o command=` 出力に
-`main.ts` / `cmux-team` が含まれなければ PID 再利用とみなして上書き。ps 取得失敗
-（空文字）時は保守的に locked 扱いとする。pidfile は onReload / onFullQuit /
-shutdown 全経路で release され、正常系では
-必ず削除される。pidfile は daemon main.ts プロセスのみを指し、proxy は別ライフ
-サイクル。
-
-### タスク検出
-
-`task-state.json` で `status: ready` のタスクを検出し Conductor に割り当てる。なければ待機して再チェック。
-
-### Conductor へのタスク割り当て
-
-1. idle Conductor を検出（ConductorState の `status: "idle"` + surface 生存）
-2. worktree 作成・プロンプト生成
-3. Conductor surface に `/clear` + 新プロンプト送信
-
-**Conductor は spawn しない。** 起動時に作成された固定ペインに対してタスクを送信するだけ。
-
-### Conductor 監視（push + PID）
-
-- **主要判定**: done マーカーファイル（`.team/output/conductor-N/done`）の存在で完了判定
-- **生存確認**: 独自 hook の `SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED` が daemon に push され、PID 単位で `spawnPidWatcher` が生存追跡（`process.kill(pid, 0)` を 1 秒間隔）
-- **重要**: T195 以降 `cmux tree` / `cmux list-status` への依存は完全撤廃。Conductor / Agent / Master の生存確認は PID ベース + hook push に一本化
+- **ログ**: `.team/logs/manager.log`（`cmux-team status` でログ末尾を表示）
+- **タスク検出**: `task-state.json` で `status: ready` のタスクを検出し idle Conductor に割り当てる
+- **Conductor は spawn しない**: 起動時に作成された固定ペインにタスクを送信するだけ
+- **完了検出**: done マーカーファイル（`.team/output/conductor-N/done`）+ PID ベース生存確認（`spawnPidWatcher`）
+- **アイドル化**: open tasks ゼロで待機、`[TASK_CREATED]` 通知で起床
+- **多重起動防止**: `.team/daemon.pid` を `writeFile({ flag: "wx" })` で atomic に取得
 
 ### タスクの作成・更新は CLI 経由（直接ファイル操作禁止）
 
-タスクの作成・更新は必ず CLI を使うこと。`.team/tasks/` への直接ファイル書き込みは hook でブロックされる。
+`.team/tasks/` への直接ファイル書き込みは hook でブロックされる。
 
 ```bash
 cmux-team create-task --title "タイトル" --status draft --body "説明"
 cmux-team update-task --task-id 112 --status ready
 ```
 
-> **注意:** `.team/artifacts/` は直接ファイル作成が前提だが、`.team/tasks/` は CLI 経由のみ。混同しないこと。
+> `.team/artifacts/` は直接ファイル作成が前提。`.team/tasks/` は CLI 経由のみ。混同しないこと。
 
-### assigned タスクの編集禁止
-
-assigned 状態のタスクファイルの編集は禁止。Conductor は起動時のプロンプトのスナップショットで動作するため、タスクファイルの変更は実行中の作業に反映されない。変更が必要な場合: `abort-task` で中止 → 新タスク作成。
-
-### 結果回収
-
-完了検出後: ログ記録 → Conductor リセット（`/clear`）→ done マーカー削除。
-
-Manager がやらないこと:
-- タスクの close（Conductor が `cmux-team close-task` を実行）
-- Conductor ペインの close（persistent — 閉じない）
-- worktree の削除（Conductor の責務）
-- マージ処理（Conductor が納品方法を判断する）
-
-### ループ継続・アイドル化
-
-- **Conductor 稼働中**: デフォルト10秒間隔（`CMUX_TEAM_POLL_INTERVAL`）で pull 型監視を実行
-- **アイドル時（open tasks ゼロ）**: 停止して待機。`idle_start` をログ記録
-- **起床トリガー**: `[TASK_CREATED]` 通知で再起動
-
-### hook 全送信ポリシー（T216 / T266）
-
-hook（SessionStart / Stop / SessionEnd / **Notification** 等）は **全イベントを Manager に転送する**。
-フィルタリング・ルーティング・state 遷移判定は **Manager 側（daemon.ts handleMessage）で
-のみ** 行う。hook の shell スクリプトには分岐ロジックを持たせない。
-
-**根拠:**
-- hook 側でフィルタすると、後からデバッグする際に「hook は発火したか」が追跡不能
-- trace DB の `hook_signals` テーブルに全シグナルが記録されるため、事後解析が可能
-- matcher は Claude Code 側の regex 仕様に依存するため、cmux-team 固有の判定を載せると脆くなる
-
-**実装上の不変条件:**
-- `handleMessage` の入口（switch 分岐より前）で必ず `insertHookSignal` を呼ぶ
-- 各 case は必要に応じて `updateHookSignalEnrichment` / `updateNotificationEnrichment` で
-  enrichment 列を埋める（INSERT は case 前に完了している前提）
-- SessionEnd の `reason=other` は記録のみ行い state 遷移しない
-  （`/clear` 等の曖昧な終了を disconnected と誤判定しないため）
-- hook shell は `cmux-team send ... --from-stdin` で stdin JSON を
-  そのまま転送する。hook 内で `--reason` をハードコードしない
-
-**運用上の注意（hook_signals GC）:**
-- `hook_signals` テーブルの自動 GC は未実装。DB が膨張した場合は手動で古い行を削除する:
-  ```bash
-  sqlite3 .team/traces/traces.db "DELETE FROM hook_signals WHERE timestamp < '2026-01-01'"
-  ```
-- 将来的に CLI サブコマンド化する可能性あり
-
-**運用上の注意（api_usage GC — T305）:**
-- `api_usage` テーブル（`/v1/messages` 1 リクエスト 1 行の usage / rate limit 記録）の自動 GC は未実装。
-  24h 連続稼働で数 MB/日の INSERT が見込まれるため、DB が膨張した場合は手動で古い行を削除する:
-  ```bash
-  sqlite3 .team/traces/traces.db "DELETE FROM api_usage WHERE timestamp < '2026-01-01'"
-  ```
-- `hook_signals` と同じ運用方針。将来的に CLI サブコマンド化する可能性あり
-
-### Notification hook（T266）
-
-Claude Code native の通知（permission 要求 / idle 通知等）を Manager に集約し、
-`hook_signals` テーブルに enrichment 付きで INSERT する。
-
-**対象:** Master / Conductor / Agent の全 settings.json に `Notification` hook を登録
-（`generateMasterSettings` / `generateConductorSettings` / `generateAgentSettings`）。
-
-**hook command 形式:**
-```bash
-cmux-team send NOTIFICATION --from-stdin \
-  --surface "${CMUX_SURFACE}" --pid "$PPID" \
-  --surface-uuid "${CMUX_SURFACE_UUID:-}" \
-  --workspace-uuid "${CMUX_WORKSPACE_UUID:-}" \
-  --role <master|conductor|agent>
-```
-
-**D9 Case B（空文字 → undefined 正規化）:** `CMUX_SURFACE_UUID` / `CMUX_WORKSPACE_UUID`
-の env が未設定でも `${VAR:-}` で空文字が渡る。`buildMessageFromHookInput` の
-`emptyToUndef` ヘルパが空文字を undefined に戻してから zod parse するため、
-schema 的には optional として扱える。
-
-**hook_signals enrichment 列（8 列）:**
-- `surface_uuid` — hook 送信元 surface の UUID（`CMUX_SURFACE_UUID` env 由来、空文字は undefined に正規化）
-- `workspace_uuid` — hook 送信元 workspace の UUID（`CMUX_WORKSPACE_UUID` env 由来、空文字は undefined に正規化）
-- `role` — master / conductor / agent / unknown
-- `task_id` — role=conductor / agent の場合に daemon 側で解決
-- `conductor_surface` — role=agent の場合に親 conductor の surface を解決
-- `agent_role` — role=agent の場合に conductor の assigned agent map から解決
-- `message` — stdin JSON の `message`（自由文）
-- `notification_type` — stdin JSON の `notification_type`（例: `permission_request`）
-
-**ログ形式（`notification_received`）:**
-```
-notification_received <prefix>[<ID>] role=<role> task_id=<T|-> ntype=<type> message="..."
-```
-- prefix は `U`（master）/ `C`（conductor）/ `A`（agent）/ `S`（unknown）
-- `message` は `JSON.stringify` で空白・改行をエスケープ
-
-**Notification を `cmux-team trace-hooks` で検索:**
-```bash
-cmux-team trace-hooks --type NOTIFICATION --role agent --task-id 266
-```
-
-**Manager が state 遷移しない:**
-Notification は記録 only。Agent の idle 判定や Conductor の assignment は
-従来の `SESSION_IDLE` / `SESSION_ENDED` / done マーカーで行う。Notification は
-観測のためだけに存在する（誤検知で pane を close したくないため）。
+**assigned 状態のタスクファイル編集は禁止。** 変更が必要な場合は `abort-task` で中止 → 新タスク作成。
 
 ## タスク属性
-
-タスク frontmatter で表現される実行制御属性。CLI で指定すると frontmatter に永続化される。
 
 | 属性 | 意味 | CLI フラグ |
 |------|------|-----------|
 | `run_after_all: true` | 全 open タスクが closed になってから実行（非排他 drain） | `--run-after-all` |
-| `exclusive: true` | drain 後に単独実行。assigned の間は他の全 assignment を停止（closed になると再開）。`--run-after-all` を暗黙に含む | `--exclusive` |
-
-### exclusive の 3 フェーズモデル
-
-1. **drain** — 他の全 open タスクが closed になるまで `ready` で待機（run_after_all と同一セマンティクス）
-2. **exclusive run** — 自身が `assigned` になった後、他のタスク（exclusive / 通常 / run_after_all）の assignment を停止
-3. **resume** — 自身が `closed` になった次 tick から通常 assignment を再開
-
-### 競合ルール
+| `exclusive: true` | drain 後に単独実行。assigned の間は他の全 assignment を停止 | `--exclusive` |
 
 - `--exclusive` 同士は共存可能（ID 昇順に順次排他実行）
-- `--exclusive` と非排他 `--run-after-all` は共存不可（どちら側から起票しても `RUN_AFTER_ALL_CONFLICT`）
-- 非排他 `--run-after-all` 同士は従来通り共存不可（1 つまで）
-- `--run-after-all` と `--exclusive` の冗長指定は `create_task_redundant_flags` 警告のみで処理継続
-
-### 用途
-
-- **`--run-after-all`**: 「全タスク完了後の後片付け」用（並列実行はしないが、走行中の他タスクの停止はしない）
-- **`--exclusive`**: リリース作業・コンフリクト解消・破壊的依存変更・cmux-team 自身の更新など、他タスクを全て止めて単独で走らせたい作業
+- `--exclusive` と非排他 `--run-after-all` は共存不可
+- 詳細な FSM 仕様は `docs/spec/07-state-machine.md` を参照
 
 ## 通信プロトコル
 
-### ファイルベース通信
-
-`.team/` ディレクトリ構造:
+### .team/ ディレクトリ構造（主要）
 
 ```
 .team/
-├── tasks/             # タスクファイル（フラット構造）
+├── tasks/             # タスクファイル（CLI 経由でのみ作成・更新）
 ├── task-state.json    # タスク状態管理（status: draft/ready/assigned/closed）
-├── artifacts/         # Axxx — 知見の記録（調査・設計判断・セッション要約）
-├── agent-instructions/ # Agent ロール別の project-local overlay（T247）
+├── artifacts/         # Axxx — 知見の記録（直接ファイル作成）
 ├── output/            # Conductor/Agent の出力（taskRunId 別）
-├── conductors/        # Conductor 状態ファイル
-├── prompts/           # プロンプト（監査証跡）
-├── specs/             # 要件・設計ドキュメント
-├── queue/             # メッセージキュー（incoming/ + processed/）
 ├── logs/              # manager.log + traces/bodies/
 ├── traces/            # SQLite トレースDB（traces.db）
-├── sessions/          # セッション情報
-├── proxy-port         # プロキシポート番号
-├── daemon.pid         # daemon 多重起動防止の pidfile（T259）
-└── team.json          # チーム構成（daemon が自動更新）
+├── queue/             # メッセージキュー（incoming/ + processed/）
+├── daemon.pid         # daemon 多重起動防止の pidfile
+└── team.json          # チーム構成（daemon が自動更新。直接書き込み禁止）
 ```
 
-### cmux コマンド通信
+### 進捗情報の取得方法
 
-| コマンド | 用途 |
-|---------|------|
-| `cmux send` | 上位→下位のプロンプト送信 |
-| `cmux send-key return` | 複数行プロンプトの送信確定 |
-| `cmux tree` | init 時の pane 逆引きのみ使用（監視は hook + PID に一本化） |
-| `cmux read-screen` | Trust 確認・エラー確認 |
-| `cmux close-surface` | 完了した Agent タブの終了 |
-| `cmux-team spawn-agent` | Agent 起動（タブ作成・プロキシ設定・Trust 承認を一括実行） |
+| 情報 | 取得方法 |
+|------|---------|
+| Manager の状態 | `cmux-team status` または `cat .team/logs/manager.log` |
+| 稼働中 Master / Conductor | `jq .masters .team/team.json` / `jq .conductors .team/team.json` |
+| open task 数 | `cat .team/task-state.json` |
 
-### 複数行テキスト送信
+## Ready 昇格時の sync state ガード
 
-単一行は末尾 `\n` で送信可能。複数行プロンプトは `cmux send` の後に `sleep 0.5` + `cmux send-key return` で送信確定。
+`cmux-team create-task --status ready` / `update-task --status ready` は昇格前に local と `origin/<mainBranch>` の sync state を判定する。
 
-## Deliverable 型と `close-task` 納品必須化（T295）
+- `diverged` / `uncommitted` / `detached` → exit 1（`ready_rejected`）
+- `behind-ff` / `no-remote` → 警告のみ、昇格続行
+- bypass: `--force`（一回限り）/ `CMUX_TEAM_SKIP_SYNC_CHECK=1`（Conductor/Agent 環境に自動注入）
 
-`task-state.json` の closed 行は **納品方式を構造化した `deliverable` フィールドを持つ**（`schema.ts` の `Deliverable` zod discriminated union）。`close-task` CLI は `--deliverable-kind <kind>` を必須引数として受け、kind ごとに付随フラグが異なる。
-
-| kind | 意味 | 必須フラグ |
-|------|------|-----------|
-| `merged` | ローカル feature branch を main に ff-only マージ | `--merged-into <branch>` + `--merge-sha <sha>` |
-| `pr` | GitHub Pull Request を open | `--pr-url <url>` |
-| `files` | 調査系 / ドキュメントのみ（branch を残さない納品） | `--deliverable <path>` 1 件以上（複数指定可） |
-| `none` | 納品物なし（auto-close 経路 / 既に満たされていた等） | 付随フラグ無し（`--journal` は強く推奨） |
-
-- kind 別フラグは **排他**（例: `--deliverable-kind merged` で `--pr-url` 指定は reject）
-- `--journal` は全 kind で optional だが、`none` では実質必須（監査証跡のため）
-- `--force` は assigned（実行中）タスクの強制クローズ用（kind 要件とは独立）
-- Conductor の auto-close 経路（T274 / `handleConductorDone` の success=true + 未 close）は daemon が `{ kind: "none" }` を自動付与して整合性を維持する
-- **旧 closed 行は後方互換で読める**（`deliverable === undefined`）。破壊的変更は書き込み側のみ
-- dashboard の closed 行は末尾に kind suffix（`merged/abc1234` / `pr/#42` / `files(3)` / `none`）を表示。`trace-task` も `Deliverable:` 行で詳細表示する
-
-### 移行（リリース時）
-
-Conductor プロンプトは再読み込みが必要。各 Conductor ペインで `/clear` を実行してもらう（`cmux-team restart-task` でも良い）。旧プロンプトを抱えたセッションは `--journal` だけで close しようとして exit 1 で止まる。
-
-## Ready 昇格時の sync state ガード（T283）
-
-タスクを `ready` に昇格させる経路（`cmux-team create-task --status ready` /
-`cmux-team update-task --task-id N --status ready`）では、**昇格前に local リポジトリと
-`origin/<mainBranch>` の sync state を判定**し、状態に応じて昇格を拒否・警告する。
-
-stale origin や未コミット変更を起点に worktree が切られる事故を防ぐのが目的。判定は
-`skills/cmux-team/manager/git-sync.ts` の `checkSyncState` で行い、`collectSyncFacts`
-が必要な git 情報（`origin/<mainBranch>` / local `<mainBranch>` の有無、HEAD 情報、
-SHA 比較、ancestor 関係）を収集する。
-
-### 7 状態 × 3 分類
-
-| state | 意味 | 分類 | 挙動 |
-|---|---|---|---|
-| `clean` | local と origin が一致 | **allow** | 昇格 |
-| `ahead` | local が origin の先を指している（未 push コミットあり） | **allow** | 昇格 |
-| `behind-ff` | origin が local より進んでいる（FF で追従可能） | warn | 警告のみ、昇格は続行 |
-| `no-remote` | `origin/<mainBranch>` が無い（fresh clone / 未 push） | warn | 警告のみ、昇格は続行 |
-| `diverged` | 双方に未共有コミット | **reject** | exit 1、`ready_rejected` |
-| `uncommitted` | 作業ツリーに未コミット変更 | **reject** | exit 1、`ready_rejected` |
-| `detached` | HEAD が detached（branch を checkout していない） | **reject** | exit 1、`ready_rejected` |
-
-判定順序: `detached` → `uncommitted` → remote/local 不在（`no-remote` / feature 側は
-`no-local` 扱い） → SHA 比較（`clean` / `behind-ff` / `ahead` / `diverged`）。
-
-> **注（T298）**: `uncommitted` 判定では `.team/` 配下の変更は除外される（`git status --porcelain -- . :(exclude).team`）。cmux-team 自身がタスクファイル・アーティファクト・ログ等を `.team/` 配下に書き込むため、これらを dirty に数えると ready 昇格が常に reject されてしまうため。
-
-### bypass 手段
-
-| 手段 | 用途 | ログ |
-|---|---|---|
-| `--force` CLI フラグ | 一回限りの強制昇格 | `ready_force_bypass` |
-| `CMUX_TEAM_SKIP_SYNC_CHECK=1` env | Conductor / Agent shell（自分で `cmux-team create-task --status ready` を叩く場合の再帰チェック回避） | `ready_sync_skipped` |
-| `--skip-fetch` CLI フラグ | sync check 時の `git fetch` を抑止（offline / rate limit 回避） | （fetch のみ抑止、判定は実施） |
-
-**Conductor shell / Agent shell への env 注入**:
-- Conductor spawn 時の shell 環境: `CMUX_TEAM_SKIP_SYNC_CHECK=1` を export（`conductor.ts`）
-- `cmdSpawnAgent` の `exportVars`: 同じ env を Agent surface にも注入（`main.ts`）
-- 目的: Conductor / Agent が `cmux-team create-task --status ready` を発行した瞬間に
-  自分自身の worktree の sync state をチェックするのを回避する（意味をなさないため）
-
-### ログイベント
-
-| event | 契機 | detail |
-|---|---|---|
-| `ready_rejected` | reject state で exit 1 | `phase=<create\|update>` `state=<state>` `task_id=<NNN>` |
-| `ready_warning` | warn state で継続 | `phase=<create\|update>` `state=<state>` `task_id=<NNN>` |
-| `ready_force_bypass` | `--force` で bypass | `phase=<create\|update>` `task_id=<NNN>` |
-| `ready_sync_skipped` | env / config で skip | `phase=<create\|update>` `reason=<env\|no_main_branch>` `task_id=<NNN>` |
-
-## チーム状態管理
-
-### team.json
-
-daemon の `updateTeamJson()` が定期的に自動更新する。Master、Conductor、手動コマンドから直接書き込んではならない。
-
-`team.json.masters` は **配列**で、複数の Master 稼働を許容する（T229）。各要素は `{ surface, status, pid?, startedAt }` のサブセットを書き出す（`daemon.ts:updateTeamJson` 実装準拠）。旧 `team.json.master`（単一オブジェクト）は廃止済み。`masters[0]` への単純な依存は避け、複数 Master 前提で扱うこと。
-
-Master は **任意の pane から** `cmux-team spawn-master` で追加できる（T230）。pane 内の `cmdLaunchMaster` が `MASTER_REGISTERED` メッセージを daemon に POST → handler が `.team/masters/<surface>.json` を書き出し `state.masters` に登録する。daemon 未起動時は fail-fast（exit 1）。
-
-### 進捗情報の取得方法（Master 向け）
-
-status.json は廃止。Master は以下の真のソースから直接情報を取得する:
-
-| 情報 | 真のソース | 取得方法 |
-|------|-----------|---------|
-| Manager の状態 | `.team/logs/manager.log` | `cat .team/logs/manager.log` または `cmux-team status` |
-| 稼働中 Master | `.team/team.json` | `jq .masters .team/team.json` |
-| 稼働中 Conductor | `.team/team.json` | `jq .conductors .team/team.json` |
-| open task 数 | task-state.json | `cat .team/task-state.json`（status で絞り込み） |
-| 完了タスク履歴 | ログ | `cat .team/logs/manager.log` |
-
-## レイアウト戦略
-
-起動時にレイアウトモードに応じたペイン構成を作成し、セッション終了まで変更しない。モードは `cmux-team start --layout=<wide|16x9>` または `.team/config.json` の `layout` で指定する（デフォルト: `wide`）。
-
-### wide（デフォルト — 2x2、Conductor x3）
-
-```
-[Manager|Master] | [Conductor-1]
-[Conductor-2   ] | [Conductor-3]
-```
-
-- **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
-- **右上〜右下**: Conductor-1〜3（常駐 Claude セッション）
-- **最大3タスク並列**、4つ目以降はキューイング
-
-### 16x9（上段フル幅 + 下段 2 分割、Conductor x2）
-
-```
-[ Manager | Master (上段フル幅) ]
-[ Conductor-1 | Conductor-2    ]
-```
-
-- **上段**: Manager | Master（タブとして同居、横幅 100%）
-- **下段左/右**: Conductor-1 / Conductor-2
-- **最大2タスク並列**、3つ目以降はキューイング
-- 16:9 ディスプレイで Conductor ペインの横幅を最大化する用途
-
-### 共通事項
-
-- **ペイン構成は不動** — セッション中に close しない
-- **サブエージェント**は `spawn-agent` CLI で Conductor ペイン内にタブとして作成（タブはスペースを消費しないためレイアウトが崩れない）
-- 優先順位: CLI 引数 > `.team/config.json` > デフォルト（`wide`）
-- `CMUX_TEAM_MAX_CONDUCTORS` で Conductor 数を上書き可能。`16x9` で 2 超を指定すると警告ログ出力で 2 にクランプ
-
-## プロジェクト設定（.team/config.json）
-
-daemon 起動時に参照される永続設定。`cmux-team start` 実行時に必要なフィールドが自動補完される。
-
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `layout` | `"wide" \| "16x9"` | レイアウトモード（CLI `--layout` 引数で上書き可能） |
-| `autoUpdate` | `"off" \| "notify"` | 自動更新モード（`CMUX_TEAM_AUTO_UPDATE` env で上書き可能。T294 で `"task"` / boolean を廃止） |
-| `mainBranch` | `string` | プロジェクトの主開発ブランチ名（T213 で追加） |
-
-### `mainBranch` の優先順位
-
-Conductor が worktree 作成時のベース・マージ先として使うブランチ名。以下の優先順位で解決される:
-
-1. **`CMUX_TEAM_MAIN_BRANCH` 環境変数** — `cmdConductor` 起動時に env から取得（daemon が `launchConductor` で注入）
-2. **`.team/config.json` の `mainBranch`** — `cmdStart` 時に解決・永続化された値
-
-`cmdStart` 実行時は以下の順で `mainBranch` を決定する（config が既にあればそれを優先）:
-
-1. `.team/config.json` に `mainBranch` があればそれを採用（source=`config`）
-2. なければ `git symbolic-ref refs/remotes/origin/HEAD` で検出（source=`detected`）
-3. 両方失敗した場合は **fail-stop**（`process.exit(1)`）— `MainBranchResolutionError` を catch して console.error にユーザー向けガイダンス（`--main-branch` / env / config の 3 つの解決手段）を出した上で終了（T253）
-
-source=`detected` の場合のみ結果を `.team/config.json` に書き戻し、`main_branch_resolved branch=<name> source=<config|detected>` をログ出力する。初回起動後は常に config 経路が使われる。
-
-**T253 破壊的変更:** 従来あった「検出失敗時に `"main"` へサイレントフォールバック」する経路を撤去。main ブランチが存在しない / 検出できないプロジェクト（新規 repo で push 前 / shallow clone / detached HEAD / `origin/HEAD` 未設定）では `cmux-team start` が exit 1 する。env `CMUX_TEAM_MAIN_BRANCH=<name>` か `.team/config.json` の `mainBranch` を事前設定することで回避できる。
-
-### worktree 作成時の start-point 解決（T242 / T275）
-
-Conductor が worktree を作成する際、start-point は以下の優先順位で決定される（`worktree-base.ts:resolveWorktreeBase`）:
-
-1. **`explicit`** — task.md frontmatter の `base_branch:` が明示されている場合 (T242)
-2. **`config-local-ahead`** — local `<mainBranch>` が `origin/<mainBranch>` より strict ahead（同一 SHA でない・origin が local の ancestor）の場合、local を優先 (T275)
-3. **`config-origin`** — `origin/<mainBranch>` が存在すれば採用（他タスクの PR マージ後の最新状態を起点にする） (T242)
-4. **`config-local`** — `origin/<mainBranch>` が無く、local `<mainBranch>` が存在する場合 (T242)
-5. **`head-fallback`** — 上記いずれも解決できない場合（`git worktree add -b <new>` のみ発行、現在の HEAD から分岐） (T242)
-
-ログは `worktree_created branch=<new> base=<ref> source=<explicit|config-local-ahead|config-origin|config-local|head-fallback> path=<worktreePath>` 形式。
-
-**注意:** local `<mainBranch>` が `origin/<mainBranch>` より strict ahead のときは `config-local-ahead` が自動選択される（push しない運用向け。T275）。`origin/<mainBranch>` を必ず使いたい場合は事前に `git fetch` で origin を最新化し、かつ local が ahead でない状態にすること。現在の HEAD を起点にしたい場合は従来通り task.md の `base_branch: HEAD` で `explicit` に倒す。
-
-**環境変数 `CMUX_TEAM_FETCH_BEFORE_WORKTREE`（T283 でデフォルト ON に反転）**:
-worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行するかどうかを制御する（タイムアウト 30 秒、失敗はログのみで継続）。**デフォルトは ON** — stale origin を起点に worktree が切られる事故を防ぐため。offline 環境・rate limit 対策・並列負荷回避で OFF にしたい場合は `CMUX_TEAM_FETCH_BEFORE_WORKTREE=0` を設定する。
-
-起動時に `cmdStart` が `fetch_before_worktree enabled=<on|off> source=<env|default>` を
-`manager.log` に 1 回 emit する（解決結果のトレース用）。
+詳細は `docs/spec/07-state-machine.md` および `docs/spec/05-install-and-infrastructure.md` を参照。
 
 ## git worktree（概要）
 
 すべての作業は `.worktrees/<taskRunId>/` 内で行う。main ブランチは常に無傷。
 
-- **作成**: `git worktree add .worktrees/<taskRunId> -b <taskRunId> <start-point>`（taskRunId は `task-<NNN>-<timestamp>` 形式。例: `task-042-1712345678`）。`<start-point>` は上記「worktree 作成時の start-point 解決」の通り、`origin/<mainBranch>` を優先
-- **ブートストラップ**: tracked files のみチェックアウトされるため、`npm install` 等の初期化が必要（詳細は `templates/conductor.md` 参照）
-- **成功時**: worktree 内でコミット → main にマージ → worktree 削除
-- **失敗時**: `git worktree remove --force` + ブランチ削除
-- **クリーンアップ**: `git worktree list` で確認、`git worktree remove <path> --force` で削除、`git worktree prune` で壊れた参照を修復
+- start-point 優先順位: `explicit`（`base_branch:` 明示）→ `config-local-ahead` → `config-origin` → `config-local` → `head-fallback`
+- 詳細は `docs/spec/05-install-and-infrastructure.md` を参照
 
 ## エラーリカバリ
 
@@ -849,188 +206,25 @@ worktree 作成前に `git fetch --quiet origin <mainBranch>` を実行するか
 | Manager クラッシュ | Master | Manager が応答なし → 再 spawn |
 | API レート制限 | 各層 | 待機して再試行、同時 Agent 数を削減 |
 
-**異常検出**: PID ベース生存確認（`spawnPidWatcher` が `process.kill(pid, 0)` を 1 秒間隔で呼ぶ）と hook push（`SESSION_STARTED` / `SESSION_IDLE` / `SESSION_CLEAR` / `SESSION_ENDED`）で行う。`cmux read-screen` は Trust 確認検出にのみ使う。
-
-### Step 8 rebase conflict の semantic 自解決（T284）
-
-Conductor Step 8（`{{MAIN_BRANCH}}` への rebase）で conflict が発生した際、従来は即 `git rebase --abort` → `judgment_pending` escalation だったが、T284 以降は以下フローに変更:
-
-1. **conflict 情報収集**（`PRE_REBASE=$(git rev-parse HEAD)` を rebase 試行前に保持、`ALL_CONFLICT_FILES` を iteration で積み上げ）
-2. **衝突元 task ID 抽出**（commit message 末尾の `(TXXX)` → `.team/tasks/` / `.team/archive/` から task.md / plan.md / summary.md を読む）
-3. **semantic resolution 試行**（Conductor 自身が conflict marker 出現ファイルのみを Edit / Write、`git rebase --continue`、iteration 上限 5 回）
-4. **検証**（scope_violation 構造的検知 + `bun test` + `bunx tsc --noEmit` 新規エラー 0 件）
-5. **成功時** → `runs/<taskRunId>/conflict-resolution.md` を書き出し Step 9 へ
-6. **失敗時** → `failure_mode`（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）で escalate、`rebase-merge` / `rebase-apply` 有無で rollback 分岐（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）、worktree / branch は温存
-
-新しく加わる安全装置として worktree 作成直後に `git config rerere.enabled true`（worktree scope 優先、失敗時 main repo `.git/config` にフォールバック、best-effort）を適用するため、同一 conflict の再出現を高速化できる。詳細は `skills/cmux-team/templates/{ja,en}/conductor-role.md` Step 8 と `docs/spec/04-templates.md` の「conflict-resolution.md フォーマット」節を参照。
-
-### 起動時 resume 不可検出（T264）
-
-`cmdStart` 起動時、`task-state.json` で `status=assigned` のタスクが
-`sessionId` / `taskRunId` / `worktreePath`（かつ worktree 実在）を満たさない場合、
-**ready へ差し戻さず `aborted` に倒す**（旧挙動 `resume_fallback_to_ready` は撤去）。
-
-旧 1 回目の成果物（`.team/tasks/<slug>/runs/<taskRunId>/`）を人間が確認する前に
-自動再実行されるのを防ぐための安全側設計。journal に runs ディレクトリの相対パスを
-埋め、ユーザーは `cmux-team restart-task --task-id <X>` で明示的に再走させる。
-
-| `resume_marked_aborted` reason | 対応する `task_aborted` reason | 意味 |
-|-------------------------------|-------------------------------|------|
-| `no_session_id` | `resume_no_session_id` | Claude セッション ID が未記録（SESSION_STARTED 到達前の異常終了） |
-| `no_task_run_id` | `resume_no_task_run_id` | taskRunId が未記録（assign 直後の異常終了） |
-| `no_worktree` | `resume_no_worktree` | worktreePath が null または worktree ディレクトリ不在 |
-
-ログは `resume_marked_aborted` → `task_aborted reason=resume_*` →
-`child_reverted_to_draft`（cascade 副作用）の順で emit される。
-
-### CONDUCTOR_DONE の state 遷移（T263 / T269）
-
-Conductor は完遂結果を `CONDUCTOR_DONE --success <bool> [--reason ...]` で
-daemon に報告する。daemon 側 `handleConductorDone` は success と task-state の
-現在値の組み合わせから以下の 3 パターンに分岐する:
-
-| success | task-state before | 挙動 |
-|---|---|---|
-| `true` | any | `task_completed`（Conductor 側で `close-task` 済み想定）, worktree 削除, ConductorState=idle |
-| `false` | `closed` / `aborted` / `deleted` | `task_completed`（late failure regression guard）, worktree 削除, ConductorState=idle |
-| `false` | `assigned` / missing | **`task_aborted reason=judgment_pending`**, **worktree=preserved**, ConductorState=idle |
-
-3 番目（preserveWorktree 経路）は「Conductor が自力完遂できず人間判断待ち」。
-task-state は `aborted` に倒すが worktree / branch は温存するため、
-`cmux-team restart-task --task-id <X>` で再投入できる（T269 で
-`assigned` のまま残す旧挙動から変更。旧挙動は daemon 再起動時の
-applyResumeTransitions が resume 可能と誤分類する事故を招いていた）。
-
-**脚注（T284）**: 3 番目（`false` + `assigned` → `judgment_pending`）経路には Step 8 semantic resolution 失敗も含まれる。T284 は T269 の escalation 経路を**継承**し、その上流に LLM による semantic 自解決の試行を挟む変更で、daemon 側の state 遷移自体は変えていない。reason 値は `Step 8 semantic resolution unresolvable: <failure_mode>` 形式（`failure_mode` は `spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）。詳細は上記「Step 8 rebase conflict の semantic 自解決（T284）」節参照。
-
-journal には `conductor_done_unresolved: <reason> (worktree=<path>) taskRunId=<id>`
-形式で因果が記録され、`cmux-team show-task <X>` または task-state.json の
-journal フィールドで確認できる。
-
-### 依存タスクの cascade（T241）
-
-親タスクが `aborted` / `deleted` に遷移したとき、`depends_on` に親を含む
-**ready** 状態の子タスクは自動的に `draft` に戻される。
-
-- `draft` 子: 変更なし
-- `ready` 子: **`draft` に戻す**（journal に `parent_aborted: <parentId>` 追記）
-- `assigned` 子: 変更なし（走行中の作業は止めない）
-- `closed` / `aborted` / `deleted` 子: 変更なし
-
-cascade は以下 7 経路で同期的に走る:
-1. `cmux-team abort-task` CLI
-2. `cmux-team delete-task` CLI
-3. Conductor forced close（disconnect timeout）
-4. user_clear（手動 /clear で running を abort）
-5. assign_failed（worktree 作成失敗等）
-6. `resume_marked_aborted`（cmdStart 起動時、assigned タスクの resume 不可検出 — T264）
-7. `handleConductorDone` unresolved 分岐（CONDUCTOR_DONE --success=false で assigned task を aborted — T269）
-
-ログ: `child_reverted_to_draft parent=<X> child=<Y> reason=parent_aborted`
-（delete 経路でも `reason=parent_aborted` で統一）
+state 遷移・cascade・CONDUCTOR_DONE 分岐・rebase conflict 自解決の詳細は `docs/spec/07-state-machine.md` を参照。
 
 ## 既知の注意点
 
-### Trust 確認（初回起動時）
-
-新しいディレクトリで Claude を起動すると「Trust this folder?」確認が表示される。Manager または Conductor が `cmux read-screen` で検出し `cmux send-key return` で自動承認するが、タイミングによっては手動介入が必要な場合がある。
-
-### ペイン幅の注意
-
-サブエージェントは Conductor と同じ pane 内にタブとして作成される（`cmux new-surface`）。タブ作成に失敗した場合は `new-split right` にフォールバックする。
-
-### パーミッション確認
-
-`--dangerously-skip-permissions` で起動しても `.claude/commands/` や `.claude/skills/` への書き込み時に確認ダイアログが出る場合がある。最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること。
-
-### トレーサビリティ（v3.4.0）
-
-daemon 起動時に API Proxy が自動起動し、全 API リクエストを SQLite FTS5 データベースに記録する。
-
-- **DB パス**: `.team/traces/traces.db`
-- **本文保存**: `.team/logs/traces/bodies/`
-- **検索**: `cmux-team trace-task <id>`（旧 `cmux-team trace --task / --search / --show` は廃止され `trace-task` に集約）
-- **メタデータ**: `x-cmux-task-id`, `x-cmux-conductor-surface`, `x-cmux-role` ヘッダーで伝播
-- **自動設定**: Master/Conductor に `ANTHROPIC_BASE_URL` を設定し、全リクエストを Proxy 経由にする
-- **base 列（T243）**: `task_sessions` テーブルの `event=assigned` 行に `base_branch` / `base_sha` / `base_source` を記録する。worktree 作成時の出発点（branch ラベル + 親 commit SHA + 解決ソース）を事後追跡できるようにするための列で、`event=agent_spawned` / `closed` / `aborted` 行は NULL のまま。T243 より前の旧レコードも NULL のまま（マイグレーションでは過去行を更新しない）
-
-### API レート制限
-
-複数エージェント同時実行で API 過負荷になりやすい。4層構造により同時セッション数が増えるため、Claude Max 推奨。
-
-### auto-update（デフォルト OFF、2モード）
-
-daemon 稼働中の自動更新は `update-notifier` で **更新検出のみ** 行い、install は行わない。手動更新は TUI バナーに表示された `npm i -g @hummer98/cmux-team@<latest>` をユーザーが実行する。複数 Node 環境（Volta / nvm / Homebrew など）で意図しないバージョンに上書きされる問題を回避するため、デフォルトは OFF。
-
-モード（`autoUpdate`）:
-
-| mode | 挙動 |
-|------|------|
-| `off`（デフォルト） | 何もしない。registry へのアクセスなし |
-| `notify` | 12h 周期で更新検出 → TUI バナーのみ表示。install はしない |
-
-設定方法（優先順位: **env > config > default**）:
-
-- 環境変数 `CMUX_TEAM_AUTO_UPDATE`: `0|false|off` / `notify` を受け付ける（空文字は未設定扱い）
-- `.team/config.json` の `{ "autoUpdate": "off" | "notify" }`
-
-関連:
-- `NO_UPDATE_NOTIFIER=1` で無効化（update-notifier 標準の環境変数）
-- 起動時ログ: `auto_update_config mode=<mode> source=<env|config|default>`
-
-**T294 (v4.5.0) 破壊的変更:**
-- `task` モード（update タスク自動起票）を削除。`CMUX_TEAM_AUTO_UPDATE=task|1|true` および `.team/config.json: autoUpdate: "task" | true | false` は起動時に exit 1 で reject される
-- `cmux-team self-update` サブコマンドを削除
-- 移行: `autoUpdate` を `notify` または `off` に変更。手動更新は `npm install -g @hummer98/cmux-team@latest` を直接実行する
-- 旧アーカイブ内のタスク frontmatter に残る `kind: cmux-team-update` は読み取りのみ維持（実行経路なし）
+- **Trust 確認**: 新しいディレクトリでの起動時に「Trust this folder?」が出る。タイミングによっては手動介入が必要
+- **パーミッション確認**: 最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること
+- **API レート制限**: 複数エージェント同時実行で API 過負荷になりやすい。Claude Max 推奨
+- **DB GC**: `hook_signals` / `api_usage` テーブルの自動 GC は未実装。膨張した場合は手動削除: `sqlite3 .team/traces/traces.db "DELETE FROM <table> WHERE timestamp < '2026-01-01'"`
+- **トレース検索**: `cmux-team trace-task <id>`
 
 ## Artifacts（知見の記録）
 
-会話中の調査結果・設計判断・セッション要約は `.team/artifacts/` に Axxx 番号付きで保存する。
-
-### Txxx と Axxx の違い
+調査結果・設計判断・セッション要約は `.team/artifacts/Axxx-<slug>.md` に保存する。
 
 | | Txxx（タスク） | Axxx（アーティファクト） |
 |---|---|---|
 | 本質 | 「やること」の管理 | 「わかったこと」の記録 |
-| ライフサイクル | draft → ready → assigned → closed | 作成 → 参照（→ アーカイブ） |
-| 誰が作る | Master / ユーザー | 誰でも（Master, Conductor, Agent） |
+| 誰が作る | Master / ユーザー（CLI 経由） | 誰でも（直接ファイル作成） |
 
-### いつ Artifact を作るか
-
-- 調査・リサーチを行ったとき（type: research）
-- 設計上の判断を下したとき（type: decision）
-- セッション終了時に重要な発見があったとき（type: session）
-- 要件・仕様を整理したとき（type: spec）
-- 分析レポートを作成したとき（type: report）
-
-### フォーマット
-
-ファイル名: `.team/artifacts/Axxx-<slug>.md`
-
-```yaml
----
-id: A001
-type: research          # research | decision | session | spec | report
-title: "タイトル"
-created: <ISO 8601>
-updated: <ISO 8601>     # 任意 — 更新時に付与
-author: surface:100     # 作成した surface ID（T229 で "master" 等の固定ラベルから surface 文字列へ破壊的変更）
-task: T038              # 任意 — 関連タスク
-tags: [tag1, tag2]      # 任意
----
-```
-
-> **T229 破壊的変更:** `author` は従来 `master` / `conductor-N` / `agent-xxx` の固定ラベルを使用していたが、複数 Master 時代に備え surface ID 文字列（例: `surface:100`）に変更された。`/artifact` コマンド経由で作成する場合は自動的に呼び出し元の `CMUX_SURFACE` が設定される。既存 artifact の `author` 値は保持される（マイグレーション不要）。
-
-### 参照方法
-
-- 会話中: 「A001で調査した通り」「A003の設計判断に基づき」
-- タスクとの紐付け: フロントマターの `task: T038` で関連付け
-- 新セッション開始時: 直近の artifacts を確認してコンテキストを復元
-
-### コマンド
-
-- `/artifact [type] "タイトル"` — 会話コンテキストから要約生成・保存
-- `/artifact list` — 一覧表示
-- `/artifact show Axxx` — 内容表示
+- `type`: `research` / `decision` / `session` / `spec` / `report`
+- `author`: surface ID 文字列（例: `surface:100`）
+- `/artifact` コマンドで会話から要約生成・保存
