@@ -1,0 +1,450 @@
+/**
+ * `cmux-team token` サブコマンド群（T319）。
+ *
+ * token add | list | remove | rotate | set-plan
+ *
+ * token-store.ts（T318）が提供する tokens.db / Keychain CRUD を利用する。
+ */
+
+import { createInterface } from "readline";
+import { createHash } from "crypto";
+import { readFile } from "fs/promises";
+import { homedir } from "os";
+import { join } from "path";
+import {
+  initTokenDB,
+  insertToken,
+  listTokens,
+  getTokenByHandle,
+  getLatestUsageSnapshot,
+  storeTokenInKeychain,
+  retrieveTokenFromKeychain,
+  deleteTokenFromKeychain,
+  isKeychainSupported,
+  KeychainUnsupportedError,
+  type TokenPlan,
+  type Token,
+  type UsageSnapshot,
+} from "./token-store";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ユーティリティ
+// ─────────────────────────────────────────────────────────────────────────────
+
+function computeAuthHash(token: string): string {
+  return createHash("sha256").update(`Bearer ${token}`).digest("hex").slice(0, 12);
+}
+
+const PLAN_MAP: Record<string, { plan: TokenPlan; ratio: number }> = {
+  default_claude_max_20x: { plan: "max-x20", ratio: 20.0 },
+  default_claude_max_5x: { plan: "max-x5", ratio: 5.0 },
+  default_claude_pro: { plan: "pro", ratio: 1.0 },
+};
+
+async function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => resolve(answer));
+  });
+}
+
+/** `~/.claude/.credentials.json` を読んで claudeAiOauth を返す。 */
+async function readClaudeCredentials(): Promise<{
+  accessToken: string;
+  rateLimitTier: string | undefined;
+} | null> {
+  const credPath = join(homedir(), ".claude", ".credentials.json");
+  try {
+    const raw = JSON.parse(await readFile(credPath, "utf-8"));
+    const oauth = raw?.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+    return { accessToken: oauth.accessToken, rateLimitTier: oauth.rateLimitTier };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bearer token を使って api.anthropic.com へ軽量 probe を行い、
+ * レスポンスヘッダーの `anthropic-organization-id` を返す。
+ * 取得できない場合は null。
+ */
+async function probeOrganizationId(accessToken: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/models", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    return res.headers.get("anthropic-organization-id") ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** UTIL_5H / UTIL_7D / NEXT_RESET を人間向け文字列に整形 */
+function formatUtil(val: number | null): string {
+  if (val == null) return "--";
+  return `${(val * 100).toFixed(0)}%`;
+}
+
+function formatReset(isoStr: string | null): string {
+  if (!isoStr) return "--";
+  const d = new Date(isoStr);
+  if (Number.isNaN(d.getTime())) return "--";
+  const now = Date.now();
+  const diffMs = d.getTime() - now;
+  if (diffMs <= 0) return "now";
+  const diffH = diffMs / 3_600_000;
+  if (diffH < 24) return `${diffH.toFixed(1)}h`;
+  return `${(diffH / 24).toFixed(1)}d`;
+}
+
+function formatSelectable(tok: Token, snap: UsageSnapshot | null): string {
+  if (!tok.selectable) return "no";
+  const util5h = snap?.util_5h ?? null;
+  if (util5h != null && util5h > 0.95) return "blocked";
+  return "yes";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token add
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function cmdTokenAdd(): Promise<void> {
+  // KEYCHAIN_TEST_MODE=1 の場合は in-memory Keychain でフォールバック（テスト用）
+  if (process.platform !== "darwin" && process.env.KEYCHAIN_TEST_MODE !== "1") {
+    console.error("Error: token pool は macOS Keychain が必要です（macOS 以外は未対応）");
+    process.exit(1);
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    console.log("source:");
+    console.log("  [1] Claude Code credential (~/.claude/.credentials.json)");
+    console.log("  [2] 手動入力（token を貼り付け）");
+    const source = (await prompt(rl, "> ")).trim();
+
+    let accessToken: string;
+    let rateLimitTier: string | undefined;
+
+    if (source === "1") {
+      const cred = await readClaudeCredentials();
+      if (!cred) {
+        console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+        process.exit(1);
+      }
+      accessToken = cred.accessToken;
+      rateLimitTier = cred.rateLimitTier;
+    } else if (source === "2") {
+      accessToken = (await prompt(rl, "token を貼り付け: ")).trim();
+      if (!accessToken) {
+        console.error("Error: token が空です");
+        process.exit(1);
+      }
+      rateLimitTier = undefined;
+    } else {
+      console.error("Error: 1 または 2 を選択してください");
+      process.exit(1);
+    }
+
+    // organization_id を probe
+    process.stdout.write("organization_id を取得中...");
+    const organizationId = await probeOrganizationId(accessToken);
+    process.stdout.write("\r");
+
+    if (!organizationId) {
+      console.error("Error: organization_id を取得できませんでした（token が無効または期限切れの可能性があります）");
+      process.exit(1);
+    }
+
+    const planEntry = rateLimitTier ? PLAN_MAP[rateLimitTier] : undefined;
+    const plan = planEntry?.plan ?? "unknown";
+    const planRatio = planEntry?.ratio ?? null;
+    const planLabel = planEntry ? `${plan} (ratio ${planEntry.ratio.toFixed(1)})` : "unknown (NULL)";
+
+    console.log(`\nFound credential:`);
+    console.log(`  organizationId: ${organizationId}`);
+    if (rateLimitTier) {
+      console.log(`  rateLimitTier: ${rateLimitTier}  → plan: ${planLabel}`);
+    }
+
+    // handle
+    const handleRaw = (await prompt(rl, "\ndisplay name (例: personal, kddi-dev): ")).trim();
+    if (!handleRaw) {
+      console.error("Error: display name は必須です");
+      process.exit(1);
+    }
+    // handle は先頭 4 文字（小文字英数）→ @xxxx 形式
+    const handleSlug = handleRaw.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4);
+    if (!handleSlug) {
+      console.error("Error: handle に使える英数字が含まれていません");
+      process.exit(1);
+    }
+    const handle = `@${handleSlug}`;
+
+    // tags
+    const tagsRaw = (await prompt(rl, "tags (comma-separated, 例: any / oss-only / org:kddi): ")).trim();
+    const tags = tagsRaw
+      ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
+      : ["any"];
+
+    // DB に登録
+    const db = initTokenDB();
+    const authHash = computeAuthHash(accessToken);
+
+    // 既存チェック
+    const existingByOrg = db.prepare("SELECT handle FROM tokens WHERE organization_id = ?").get(organizationId) as { handle: string } | undefined;
+    if (existingByOrg) {
+      console.error(`Error: organization_id が既に ${existingByOrg.handle} として登録されています。rotate コマンドを使ってください。`);
+      process.exit(1);
+    }
+    const existingByHandle = db.prepare("SELECT id FROM tokens WHERE handle = ?").get(handle) as { id: number } | undefined;
+    if (existingByHandle) {
+      console.error(`Error: handle ${handle} は既に使用されています。別の名前を指定してください。`);
+      process.exit(1);
+    }
+
+    // Keychain に保存
+    storeTokenInKeychain(handle, accessToken);
+
+    insertToken(db, {
+      handle,
+      organization_id: organizationId,
+      auth_hash: authHash,
+      plan,
+      plan_ratio: planRatio,
+      tags,
+      credential_source: source === "1" ? "claude-credentials" : "manual",
+      selectable: true,
+    });
+    db.close();
+
+    console.log(`\nRegistered: ${handle}  ${plan}  tags:[${tags.join(", ")}]  ✓`);
+  } finally {
+    rl.close();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token list
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function cmdTokenList(): Promise<void> {
+  const db = initTokenDB();
+  const tokens = listTokens(db);
+
+  if (tokens.length === 0) {
+    console.log("登録済みトークンがありません。`cmux-team token add` で追加してください。");
+    db.close();
+    return;
+  }
+
+  const header = [
+    "HANDLE  ",
+    "PLAN    ",
+    "TAGS      ",
+    "SELECTABLE",
+    "CAP   ",
+    "UTIL_5H",
+    "UTIL_7D",
+    "NEXT_RESET",
+  ].join("  ");
+  console.log(header);
+  console.log("-".repeat(header.length));
+
+  for (const tok of tokens) {
+    const snap = getLatestUsageSnapshot(db, tok.id);
+    const selectable = formatSelectable(tok, snap);
+
+    // CAP は pool_capacity の per-token cap_pct（util があれば計算）
+    let capStr = "--";
+    if (tok.plan_ratio != null && snap) {
+      const { computePoolCapacity } = await import("./token-store");
+      const { per_token } = computePoolCapacity([
+        {
+          handle: tok.handle,
+          plan_ratio: tok.plan_ratio,
+          util_5h: snap.util_5h,
+          util_7d: snap.util_7d,
+          reset_5h_at: snap.reset_5h_at,
+          reset_7d_at: snap.reset_7d_at,
+        },
+      ]);
+      const capPct = per_token[0]?.cap_pct;
+      if (capPct != null) capStr = `${Math.round(capPct)}%`;
+    }
+
+    // NEXT_RESET: 5h と 7d の近い方
+    const resetCandidates: string[] = [];
+    if (snap?.reset_5h_at) resetCandidates.push(`5h@${formatReset(snap.reset_5h_at)}`);
+    if (snap?.reset_7d_at) resetCandidates.push(`7d@${formatReset(snap.reset_7d_at)}`);
+    const nextReset = resetCandidates.length > 0 ? resetCandidates[0] : "--";
+
+    const row = [
+      tok.handle.padEnd(8),
+      tok.plan.padEnd(8),
+      tok.tags.join(",").slice(0, 10).padEnd(10),
+      selectable.padEnd(10),
+      capStr.padEnd(6),
+      formatUtil(snap?.util_5h ?? null).padEnd(7),
+      formatUtil(snap?.util_7d ?? null).padEnd(7),
+      nextReset,
+    ].join("  ");
+    console.log(row);
+  }
+
+  db.close();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token remove
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function cmdTokenRemove(): Promise<void> {
+  const handle = getHandleArg();
+  const db = initTokenDB();
+  const tok = getTokenByHandle(db, handle);
+  if (!tok) {
+    console.error(`Error: ${handle} は登録されていません`);
+    db.close();
+    process.exit(1);
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const confirm = (await prompt(rl, `${handle} を削除します。よろしいですか？ [y/N] `)).trim().toLowerCase();
+    if (confirm !== "y") {
+      console.log("キャンセルしました。");
+      db.close();
+      return;
+    }
+  } finally {
+    rl.close();
+  }
+
+  // leases / usage_snapshots は CASCADE ではなく手動削除
+  db.prepare("DELETE FROM usage_snapshots WHERE token_id = ?").run(tok.id);
+  db.prepare("DELETE FROM leases WHERE token_id = ?").run(tok.id);
+  db.prepare("DELETE FROM tokens WHERE id = ?").run(tok.id);
+  db.close();
+
+  try {
+    deleteTokenFromKeychain(handle);
+  } catch (e: any) {
+    if (!(e instanceof KeychainUnsupportedError)) {
+      console.warn(`Warning: Keychain 削除に失敗しました: ${e?.message ?? e}`);
+    }
+  }
+
+  console.log(`${handle} を削除しました。`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token rotate
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function cmdTokenRotate(): Promise<void> {
+  const handle = getHandleArg();
+  const db = initTokenDB();
+  const tok = getTokenByHandle(db, handle);
+  if (!tok) {
+    console.error(`Error: ${handle} は登録されていません`);
+    db.close();
+    process.exit(1);
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let newToken: string;
+
+  try {
+    console.log(`新しい token を貼り付け（または [1] credential ファイルから再取得）:`);
+    const input = (await prompt(rl, "> ")).trim();
+
+    if (input === "1") {
+      const cred = await readClaudeCredentials();
+      if (!cred) {
+        console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+        process.exit(1);
+      }
+      newToken = cred.accessToken;
+    } else {
+      newToken = input;
+    }
+  } finally {
+    rl.close();
+  }
+
+  if (!newToken) {
+    console.error("Error: token が空です");
+    db.close();
+    process.exit(1);
+  }
+
+  const newAuthHash = computeAuthHash(newToken);
+
+  // Keychain 更新（storeTokenInKeychain は -U フラグで上書き）
+  storeTokenInKeychain(handle, newToken);
+
+  // DB 更新（auth_hash のみ）
+  db.prepare("UPDATE tokens SET auth_hash = ? WHERE id = ?").run(newAuthHash, tok.id);
+  db.close();
+
+  console.log(`Keychain の token を更新し、auth_hash を更新しました。  ✓`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token set-plan
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function cmdTokenSetPlan(): Promise<void> {
+  const handle = getHandleArg();
+  const planArg = process.argv[5]; // cmux-team token set-plan @handle <plan>
+  if (!planArg) {
+    console.error("Usage: cmux-team token set-plan @handle <plan>");
+    console.error("  plan: pro | max-x5 | max-x20");
+    process.exit(1);
+  }
+
+  const validPlans: Record<string, number> = {
+    pro: 1.0,
+    "max-x5": 5.0,
+    "max-x20": 20.0,
+  };
+  const ratio = validPlans[planArg];
+  if (ratio == null) {
+    console.error(`Error: 不正な plan: ${planArg}（pro / max-x5 / max-x20 のいずれかを指定）`);
+    process.exit(1);
+  }
+
+  const db = initTokenDB();
+  const tok = getTokenByHandle(db, handle);
+  if (!tok) {
+    console.error(`Error: ${handle} は登録されていません`);
+    db.close();
+    process.exit(1);
+  }
+
+  db.prepare("UPDATE tokens SET plan = ?, plan_ratio = ? WHERE id = ?").run(planArg, ratio, tok.id);
+  db.close();
+
+  console.log(`${handle} の plan を ${planArg} (ratio ${ratio.toFixed(1)}) に設定しました。`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 内部ヘルパ
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getHandleArg(): string {
+  // cmux-team token remove @handle → process.argv[4]
+  const raw = process.argv[4];
+  if (!raw) {
+    console.error("Error: handle を指定してください（例: @pers）");
+    process.exit(1);
+  }
+  return raw.startsWith("@") ? raw : `@${raw}`;
+}

@@ -106,6 +106,13 @@ import {
   cmdPrList,
   type CliDeps as CliDepsImport,
 } from "./gh-cache-cli";
+import {
+  cmdTokenAdd,
+  cmdTokenList,
+  cmdTokenRemove,
+  cmdTokenRotate,
+  cmdTokenSetPlan,
+} from "./token-cli";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -5046,6 +5053,21 @@ switch (command) {
   case "list-agent-instructions":
     await cmdListAgentInstructions();
     break;
+  case "token": {
+    const tokenSub = process.argv[3];
+    switch (tokenSub) {
+      case "add":    await cmdTokenAdd();     break;
+      case "list":   await cmdTokenList();    break;
+      case "remove": await cmdTokenRemove();  break;
+      case "rotate": await cmdTokenRotate();  break;
+      case "set-plan": await cmdTokenSetPlan(); break;
+      default:
+        console.error(`Unknown token subcommand: ${tokenSub ?? "(none)"}`);
+        console.error("Usage: cmux-team token add|list|remove|rotate|set-plan");
+        process.exit(1);
+    }
+    break;
+  }
   case "gh":
     await cmdGh();
     break;
