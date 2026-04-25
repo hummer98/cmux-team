@@ -174,6 +174,8 @@ cmux-team update-task --task-id 112 --status ready
 
 ### 進捗情報の取得方法
 
+**ユーザーは Manager の surface（TUI）をリアルタイムに見ているため、エージェントから `cmux-team status` 等のコマンド案内は不要。**
+
 | 情報 | 取得方法 |
 |------|---------|
 | Manager の状態 | `cmux-team status` または `cat .team/logs/manager.log` |
