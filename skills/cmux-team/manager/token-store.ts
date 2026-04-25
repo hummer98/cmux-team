@@ -453,6 +453,11 @@ export function releaseLease(db: Database, token_id: number, holder: string): vo
   );
 }
 
+/** holder（agent surface）が持つ全 lease を解放する。agent 完了時に呼ぶ。 */
+export function releaseLeaseByHolder(db: Database, holder: string): void {
+  db.prepare("DELETE FROM leases WHERE holder = ?").run(holder);
+}
+
 export function expireLeases(
   db: Database,
   nowIso: string = new Date().toISOString(),
@@ -631,6 +636,93 @@ export function computePoolCapacity(
   }
 
   return { capacity_pct: totalCap, per_token: perToken };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token selection（T321）
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SelectedToken {
+  token: Token;
+  lease: Lease;
+}
+
+/**
+ * tokens.db から最適トークンを選択して 120 秒の lease を取得する（T321）。
+ *
+ * 選択ロジック:
+ *  1. selectable=1 かつ project_tags に適合するものを候補に絞る
+ *  2. ブロッカー除外: util_5h > 0.95 / stale（30 分超未更新）/ lease 中
+ *  3. score = 0.3 * util_5h + 0.7 * util_7d（null は 0 扱い）
+ *  4. score 最小を選択
+ *  5. atomic lease 取得（INSERT OR IGNORE）
+ *
+ * project_tags が空 / ["any"] の場合は全 selectable=1 が候補。
+ * tags 適合: token.tags が "any" を含む、または project_tags との交差がある。
+ *
+ * @returns 選択結果 or null（候補なし / lease 取得失敗）
+ */
+export function selectToken(
+  db: Database,
+  holder: string,
+  projectTags: string[] = ["any"],
+  nowIso: string = new Date().toISOString(),
+): SelectedToken | null {
+  expireLeases(db, nowIso);
+
+  const now = new Date(nowIso).getTime();
+  const staleThresholdMs = 30 * 60 * 1000;
+
+  const tokens = listTokens(db, { selectableOnly: true });
+  const activeLeases = new Set(
+    (db.prepare("SELECT token_id FROM leases WHERE expires_at >= ?").all(nowIso) as Array<{ token_id: number }>)
+      .map((r) => r.token_id),
+  );
+
+  const projectTagSet = new Set(projectTags);
+  const candidates: Array<{ token: Token; score: number }> = [];
+
+  for (const tok of tokens) {
+    // tags フィルタ
+    const tokenTags = tok.tags;
+    const tagsMatch =
+      tokenTags.includes("any") ||
+      projectTagSet.has("any") ||
+      tokenTags.some((t) => projectTagSet.has(t));
+    if (!tagsMatch) continue;
+
+    // lease 中は除外
+    if (activeLeases.has(tok.id)) continue;
+
+    const snap = getLatestUsageSnapshot(db, tok.id);
+
+    // stale 除外（30 分以上未更新）
+    if (snap) {
+      const recAt = new Date(snap.recorded_at).getTime();
+      if (now - recAt > staleThresholdMs) continue;
+    }
+
+    const util5h = snap?.util_5h ?? 0;
+    const util7d = snap?.util_7d ?? 0;
+
+    // ブロッカー除外: 5h > 95%
+    if (util5h > 0.95) continue;
+
+    const score = 0.3 * util5h + 0.7 * util7d;
+    candidates.push({ token: tok, score });
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => a.score - b.score);
+  const best = candidates[0];
+  if (!best) return null;
+  const selected = best.token;
+
+  const lease = acquireLease(db, selected.id, holder, 120);
+  if (!lease) return null; // race で他が先に取得
+
+  return { token: selected, lease };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

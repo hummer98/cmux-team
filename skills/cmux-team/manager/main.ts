@@ -113,6 +113,11 @@ import {
   cmdTokenRotate,
   cmdTokenSetPlan,
 } from "./token-cli";
+import {
+  initTokenDB,
+  selectToken,
+  retrieveTokenFromKeychain,
+} from "./token-store";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -2512,6 +2517,20 @@ async function cmdSpawnAgent(): Promise<void> {
   }
   if (proxyPort) {
     exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
+  }
+  // T321: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
+  try {
+    const tokDb = initTokenDB();
+    const selected = selectToken(tokDb, surface);
+    if (selected) {
+      const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
+      exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
+      await log("token_pool_assigned", `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id}`);
+    } else {
+      await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=no_candidate`);
+    }
+  } catch (e: any) {
+    await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=error err=${e?.message ?? e}`);
   }
   await cmux.send(surface, `export ${exportVars.join(" ")}\n`);
   await sleep(500);

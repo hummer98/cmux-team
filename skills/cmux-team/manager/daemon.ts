@@ -36,6 +36,7 @@ import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths"
 // T279: FSM shadow observer (observe only, no state mutation).
 import { shadowObserveConductor } from "./state-machine/shadow";
 import type { FsmEvent, ConductorCtx, ConductorStatus } from "./state-machine/events";
+import { initTokenDB, releaseLeaseByHolder } from "./token-store";
 
 export interface TaskSummary {
   id: string;
@@ -161,6 +162,16 @@ export async function writeAgentDone(
     lines.push(`question=${q}`);
   }
   await writeFile(file, lines.join("\n") + "\n");
+}
+
+/** T321: agent surface に紐付く token pool lease を解放する。 */
+async function releaseAgentTokenLease(agentSurface: string): Promise<void> {
+  try {
+    const db = initTokenDB();
+    releaseLeaseByHolder(db, agentSurface);
+  } catch (e: any) {
+    await log("error", `releaseAgentTokenLease failed surface=${agentSurface}: ${e?.message ?? e}`);
+  }
 }
 
 /** 長い文字列をログ用に短縮 */
@@ -1924,6 +1935,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
               "agent_done",
               `${formatPair(c.surface, message.surface, "C", "A")} trigger=session_ended status=${agentStatus}`
             );
+            await releaseAgentTokenLease(agent.surface);
             break;
           }
         }
@@ -2949,6 +2961,7 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
           "oc_agent_done",
           `agent=${idleEntry.agent.surface} conductor=${formatSurface(idleEntry.conductor.surface, "C")} status=completed`,
         );
+        await releaseAgentTokenLease(idleEntry.agent.surface);
       }
       break;
     }
@@ -2979,6 +2992,7 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
           "oc_agent_done",
           `agent=${endedEntry.agent.surface} conductor=${formatSurface(endedEntry.conductor.surface, "C")} status=crashed reason=${event.reason ?? "unknown"}`,
         );
+        await releaseAgentTokenLease(endedEntry.agent.surface);
       }
       break;
     }
@@ -3077,6 +3091,7 @@ export async function __testSpawnAgentPidWatcherTick(
     "agent_done",
     `${formatPair(conductor.surface, agent.surface, "C", "A")} trigger=pid_watcher status=crashed pid=${pid}`
   );
+  await releaseAgentTokenLease(agent.surface);
   return "dead";
 }
 
