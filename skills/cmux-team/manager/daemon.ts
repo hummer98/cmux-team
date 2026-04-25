@@ -110,6 +110,12 @@ export interface DaemonState {
   /** Issue #30 M5: RuntimeBackend 実装。config.runtime に応じて選択される。
    *  "claude-code"（デフォルト）→ ClaudeCodeBackend, "opencode" → OpenCodeBackend */
   backend: RuntimeBackend;
+  /**
+   * opencode server 子プロセス（Issue #37 M2）。
+   * config.opencode.agentEnabled が true のとき cmdStart が起動し stopDaemon が終了させる。
+   * null = opencode agent 機能が無効または未起動。
+   */
+  openCodeServerProcess: import("child_process").ChildProcess | null;
 }
 
 /**
@@ -351,6 +357,7 @@ export async function createDaemon(
     mainBranch: "",
     traceDb: null,
     backend: backend ?? new ClaudeCodeBackend(),
+    openCodeServerProcess: null,
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
@@ -2895,6 +2902,16 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
     return undefined;
   }
 
+  // opencode Agent を surface（"oc:<sessionRef>"）で逆引きする（Issue #37 M3）
+  function findOcAgent(ref: string): { agent: AgentState; conductor: ConductorState } | undefined {
+    const surface = `oc:${ref}`;
+    for (const c of state.conductors.values()) {
+      const agent = c.agents.find(a => a.surface === surface);
+      if (agent) return { agent, conductor: c };
+    }
+    return undefined;
+  }
+
   switch (event.type) {
     case "session_started": {
       const conductor = findConductorByRef(event.sessionRef as string);
@@ -2913,38 +2930,76 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
 
     case "session_idle": {
       const conductor = findConductorByRef(event.sessionRef as string);
-      if (!conductor) break;
-      if (conductor.status === "running" || conductor.status === "starting") {
-        conductor.status = "idle";
-        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-idle");
-        await log("conductor_idle", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
-        requestWakeup(state);
+      if (conductor) {
+        if (conductor.status === "running" || conductor.status === "starting") {
+          conductor.status = "idle";
+          notifyStateChanged("daemon.ts:handleRuntimeEvent:session-idle");
+          await log("conductor_idle", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
+          requestWakeup(state);
+        }
+        break;
+      }
+      // opencode Agent の idle → done-file に STATUS=completed を書く（Issue #37 M3）
+      const idleEntry = findOcAgent(event.sessionRef as string);
+      if (idleEntry) {
+        await writeAgentDone(state.projectRoot, idleEntry.conductor.surface, idleEntry.agent.surface, {
+          status: "completed",
+        });
+        await log(
+          "oc_agent_done",
+          `agent=${idleEntry.agent.surface} conductor=${formatSurface(idleEntry.conductor.surface, "C")} status=completed`,
+        );
       }
       break;
     }
 
     case "session_ended": {
       const conductor = findConductorByRef(event.sessionRef as string);
-      if (!conductor) break;
-      // session_ended は死亡通知なので disconnected 状態へ遷移する
-      // （Claude Code の spawnPidWatcher と同等の役割）
-      if (conductor.status !== "broken") {
-        conductor.status = "disconnected";
-        conductor.disconnectedAt = new Date().toISOString();
-        notifyStateChanged("daemon.ts:handleRuntimeEvent:session-ended");
+      if (conductor) {
+        // session_ended は死亡通知なので disconnected 状態へ遷移する
+        if (conductor.status !== "broken") {
+          conductor.status = "disconnected";
+          conductor.disconnectedAt = new Date().toISOString();
+          notifyStateChanged("daemon.ts:handleRuntimeEvent:session-ended");
+          await log(
+            "conductor_session_ended",
+            `${formatSurface(conductor.surface, "C")} reason=${event.reason ?? "unknown"} via=runtime_event`,
+          );
+        }
+        break;
+      }
+      // opencode Agent の session 終了 → done-file に STATUS=crashed を書く（Issue #37 M3）
+      const endedEntry = findOcAgent(event.sessionRef as string);
+      if (endedEntry) {
+        await writeAgentDone(state.projectRoot, endedEntry.conductor.surface, endedEntry.agent.surface, {
+          status: "crashed",
+          reason: event.reason ?? "session_ended",
+        });
         await log(
-          "conductor_session_ended",
-          `${formatSurface(conductor.surface, "C")} reason=${event.reason ?? "unknown"} via=runtime_event`,
+          "oc_agent_done",
+          `agent=${endedEntry.agent.surface} conductor=${formatSurface(endedEntry.conductor.surface, "C")} status=crashed reason=${event.reason ?? "unknown"}`,
         );
       }
       break;
     }
 
     case "permission_asked": {
+      // opencode Agent の permission_asked → done-file に STATUS=ask を書く（Issue #37 M3）
+      const askEntry = findOcAgent(event.sessionRef as string);
+      if (askEntry) {
+        await writeAgentDone(state.projectRoot, askEntry.conductor.surface, askEntry.agent.surface, {
+          status: "ask",
+          question: event.title,
+        });
+        await log(
+          "oc_agent_done",
+          `agent=${askEntry.agent.surface} conductor=${formatSurface(askEntry.conductor.surface, "C")} status=ask title=${event.title}`,
+        );
+        break;
+      }
       const conductor = findConductorByRef(event.sessionRef as string);
       const suffix = conductor ? formatSurface(conductor.surface, "C") : `ref=${event.sessionRef}`;
       await log("permission_asked", `${suffix} title=${event.title} permRef=${event.permissionRef}`);
-      // TODO: パーミッション UI への転送（auto-reply または TUI 表示）
       break;
     }
 
@@ -2952,7 +3007,6 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
       // opencode では reset = abort + create。session_started が後続する想定。
       const conductor = findConductorByRef(event.sessionRef as string);
       if (!conductor) break;
-      // 新しい SessionRef があれば更新
       if (event.newSessionRef) {
         conductor.runtimeSessionRef = event.newSessionRef as string;
       }

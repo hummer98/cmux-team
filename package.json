@@ -50,5 +50,8 @@
     "team",
     "claude-code",
     "cli"
-  ]
+  ],
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.14.24"
+  }
 }

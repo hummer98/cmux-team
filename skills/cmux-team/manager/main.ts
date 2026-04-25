@@ -39,6 +39,7 @@ import { start as startProxy } from "./proxy";
 import { launchConductor, resetConductor } from "./conductor";
 import { ClaudeCodeBackend } from "./claude-code-backend";
 import { OpenCodeBackend } from "./opencode-backend";
+import { spawnOpenCodeAgent, killOpenCodeAgent, parseOcSurface, startOpenCodeServer, stopOpenCodeServer } from "./opencode-agent";
 import type { RuntimeBackend } from "./runtime-backend";
 import { createHash } from "crypto";
 import {
@@ -210,6 +211,8 @@ function hasHelpFlag(): boolean {
 
 const SURFACE_REF_RE = /^surface:\d+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** opencode Agent の surface パターン（"oc:ses_<alphanumeric>"）。Issue #37 */
+const OC_SURFACE_RE = /^oc:ses_[0-9a-zA-Z]+$/;
 
 /**
  * `--surface` 引数を `surface:NNN` ref に正規化する（T206）。
@@ -225,8 +228,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 export async function normalizeSurfaceArg(input: string): Promise<string> {
   if (SURFACE_REF_RE.test(input)) return input;
+  // opencode Agent の surface はそのまま pass-through（Issue #37）
+  if (OC_SURFACE_RE.test(input)) return input;
   if (!UUID_RE.test(input)) {
-    throw new Error(`Invalid --surface value: ${JSON.stringify(input)} (expected "surface:NNN" or UUID)`);
+    throw new Error(`Invalid --surface value: ${JSON.stringify(input)} (expected "surface:NNN", "oc:<UUID>", or UUID)`);
   }
   const target = input.toLowerCase();
   let json: string;
@@ -588,6 +593,12 @@ async function cmdStart(): Promise<void> {
   // Step 4 で DaemonState.mainBranch を追加しているため直接代入で確定させる。
   state.mainBranch = mainBranchResolution.branch;
 
+  // Issue #37 M2: agentEnabled なら opencode server を子プロセスとして起動する。
+  if (startConfig.opencode?.agentEnabled) {
+    const ocServerUrl = startConfig.opencode.serverUrl ?? "http://localhost:54321";
+    state.openCodeServerProcess = startOpenCodeServer(ocServerUrl);
+  }
+
   // ファイルシステム監視（tasks/, queue/ の変更で即時 tick）
   initFileWatcher(state);
 
@@ -712,6 +723,10 @@ async function cmdStart(): Promise<void> {
     stopDaemon(state);
     state.fileWatcherAbort?.abort();
     state.fileWatcherAbort = null;
+    // Issue #37 M2: opencode server を停止する
+    if (state.openCodeServerProcess) {
+      stopOpenCodeServer(state.openCodeServerProcess);
+    }
     updateCaffeinate(false);
     if (state.workspace) {
       await cmux.clearStatus("claude_code", state.workspace);
@@ -746,6 +761,10 @@ async function cmdStart(): Promise<void> {
       stopDaemon(state);
       state.fileWatcherAbort?.abort();
       state.fileWatcherAbort = null;
+      // Issue #37 M2: reload 時も opencode server を一旦停止（新プロセスが再起動する）
+      if (state.openCodeServerProcess) {
+        stopOpenCodeServer(state.openCodeServerProcess);
+      }
       // T259: 子 daemon が acquire できるよう親は execFileSync より前に pidfile を release する。
       // 親自身は execFileSync でブロッキングするためシグナルを受け取れず、pidfile を握り
       // 続けると子が自分自身を "alive cmux-team" と誤検知して fail-stop する。
@@ -2381,7 +2400,49 @@ async function cmdSpawnAgent(): Promise<void> {
     }
   }
 
-  // --- 2. タブ作成（new-surface → new-split right フォールバック） ---
+  // --- 2. opencode Agent パス（Issue #37 M4） ---
+  // config.opencode.agentEnabled が true の場合、cmux ペインを作らず REST で session を作成して即 return。
+  const spawnConfig = await loadConfig(PROJECT_ROOT);
+  if (spawnConfig.opencode?.agentEnabled) {
+    const ocServerUrl = spawnConfig.opencode.serverUrl ?? "http://localhost:54321";
+    const ocModel = spawnConfig.opencode.agentModel ?? "claude-sonnet-4-5";
+
+    // prompt テキストを解決（promptFile があれば読んで展開する）
+    let ocPromptText = prompt ?? "";
+    if (promptFile) {
+      try {
+        const rawPrompt = await readFile(promptFile, "utf-8");
+        const { expanded } = await expandProjectInstructions(PROJECT_ROOT, role, rawPrompt);
+        ocPromptText = expanded;
+      } catch (e: any) {
+        await log("spawn_agent_expand_failed", `role=${role} prompt_file=${promptFile} error=${e?.message ?? e}`);
+        ocPromptText = await readFile(promptFile, "utf-8").catch(() => prompt ?? "");
+      }
+    }
+
+    const { surface: ocSurface } = await spawnOpenCodeAgent(ocServerUrl, {
+      role,
+      prompt: ocPromptText,
+      workdir: worktreePath ?? PROJECT_ROOT,
+      model: ocModel,
+    });
+
+    await postMessage({
+      type: "AGENT_SPAWNED",
+      conductorSurface,
+      surface: ocSurface,
+      role,
+      taskTitle,
+      timestamp: new Date().toISOString(),
+      callerPid: process.pid,
+      callerSurface: process.env.CMUX_SURFACE,
+    });
+
+    console.log(`SURFACE=${ocSurface}`);
+    return;
+  }
+
+  // --- 3. タブ作成（new-surface → new-split right フォールバック） ---
   //   T207: 対象 pane はキャッシュせず、cmux tree から on-demand 解決する。
   //   解決失敗時は undefined のまま newSurface に渡し、cmux 側のデフォルト pane に
   //   作成 → 失敗時は new-split right のフォールバック経路に乗せる。
@@ -2567,6 +2628,22 @@ async function cmdKillAgent(): Promise<void> {
   } catch (e: any) {
     console.error(`Error: ${e?.message ?? e}`);
     process.exit(1);
+  }
+
+  // opencode Agent の場合は REST API で abort して即 return（Issue #37 M5）
+  const ocKillRef = parseOcSurface(surface);
+  if (ocKillRef) {
+    const killConfig = await loadConfig(PROJECT_ROOT);
+    const serverUrl = killConfig.opencode?.serverUrl ?? "http://localhost:54321";
+    await killOpenCodeAgent(serverUrl, ocKillRef);
+    await postMessage({
+      type: "SESSION_ENDED",
+      surface,
+      reason: "kill-agent",
+      timestamp: new Date().toISOString(),
+    });
+    console.log(`OK killed ${surface}`);
+    return;
   }
 
   // surface を閉じる（closeSurface は SESSION_ENDED を送信しないため、明示的に通知する）

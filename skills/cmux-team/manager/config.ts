@@ -25,10 +25,21 @@ export interface TeamConfig {
    * - "opencode": opencode REST API / SSE
    */
   runtime?: "claude-code" | "opencode";
-  /** opencode backend の設定。runtime が "opencode" の時のみ参照。Issue #30 M5 */
+  /** opencode backend の設定。Issue #30 M5 / #37 */
   opencode?: {
     /** opencode server の URL（デフォルト: "http://localhost:54321"） */
     serverUrl?: string;
+    /**
+     * Agent ロールに opencode を使うかどうか（デフォルト: false）。Issue #37
+     * true のとき spawn-agent / await-agent / kill-agent が opencode 経路を使う。
+     * Conductor は常に Claude Code のまま。
+     */
+    agentEnabled?: boolean;
+    /**
+     * opencode Agent で使うモデル名（デフォルト: "claude-sonnet-4-5"）。Issue #37
+     * opencode provider layer に渡す。例: "kiwi-2.6", "claude-haiku-4-5"
+     */
+    agentModel?: string;
   };
   /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
   sleepPrevention?: boolean;

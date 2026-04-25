@@ -10,6 +10,11 @@ traces/
 debug/dump.jsonl
 debug/otel-dump.jsonl
 rate-limit.json
+gh-cache.db
+gh-cache.db-shm
+gh-cache.db-wal
 masters/
 conductors/
 team.json
+
+daemon.pid
