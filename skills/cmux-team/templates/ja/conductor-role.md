@@ -434,6 +434,30 @@ git add .team/artifacts/
 `cmux-team artifacts add` の stdout から `Axxx` を拾い、後段の完了レポートの
 【成果】項目に記載する。
 
+### Step 6.5: commit 前の残課題チェック（厳守）
+
+`git add -A` および artifact 登録が済んだ後、commit の前に以下を確認する。
+
+**1. Inspector の指摘（minor 以上）を全て処理したか**
+
+Inspector が GO を出した場合でも minor 以上の指摘が残っている場合、
+**自分が touch したファイルに関連するもの**はこの場で修正する。
+
+- 禁止: 「後続タスクで」「別タスクとして起票予定」と書いて先送りする
+- 例外: 修正に他コンポーネント全体の設計変更が必要で本タスクのスコープを明確に超える場合のみ先送り可
+  - その場合は**実際に `cmux-team create-task` を呼んで起票し、タスク ID を summary.md に記載**してから先へ進む
+  - 「起票予定」は禁止。起票してから「T○○ として切り出した」と書くこと
+
+**2. 自分が touch したファイルの tsc エラーが増えていないか**
+
+```bash
+bunx tsc --noEmit 2>&1 | head -50
+```
+
+自分が touch した（`git diff --cached --name-only` に含まれる）ファイルに関連するエラーは
+「既存エラー」「別タスクで」は禁止。その場で修正する。
+他ファイルの既存エラーで今回触っていないものは無視してよい。
+
 ### Step 7: commit
 
 ```bash

@@ -386,6 +386,31 @@ git add .team/artifacts/
 
 Extract `Axxx` from the stdout of `cmux-team artifacts add` and include it in the [Results] section of the completion report.
 
+### Step 6.5: Pre-commit residual check (mandatory)
+
+After `git add -A` and artifact registration, before committing, verify the following.
+
+**1. Have all Inspector findings (minor or above) been addressed?**
+
+Even if the Inspector gave a GO verdict, any minor-or-above findings related to
+**files you touched** must be fixed now.
+
+- Prohibited: deferring with "will handle in a follow-up task" or "to be filed as a separate task later"
+- Exception: only if a fix requires a full cross-component design change that clearly exceeds this task's scope
+  - In that case, **actually call `cmux-team create-task` to file the task, and record the task ID in summary.md** before proceeding
+  - "Plan to file" is prohibited. Write "filed as T○○" only after actually filing it
+
+**2. Have any tsc errors increased in the files you touched?**
+
+```bash
+bunx tsc --noEmit 2>&1 | head -50
+```
+
+For errors in files you touched (`git diff --cached --name-only`):
+- Prohibited: treating them as "pre-existing errors" or deferring to another task
+- Fix them on the spot
+- Pre-existing errors in files you did **not** touch may be ignored
+
 ### Step 7: commit
 
 ```bash
