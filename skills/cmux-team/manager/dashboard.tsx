@@ -497,7 +497,11 @@ function buildMasterSection(state: DaemonState) {
   return rows.length === 1 ? rows[0]! : ui.column({ gap: 0 }, rows);
 }
 
-function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
+/**
+ * T326: テスト用に export。Conductor 1 行 + 配下 Agent サブツリーを ui ノードとして組み立てる。
+ * 内部実装は変えない（純粋追加の export）。
+ */
+export function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
   const isStarting = c.status === "starting";
   const isAssigning = c.status === "assigning";
   const isIdle = c.status === "idle";
@@ -676,6 +680,29 @@ function buildConductorsSection(state: DaemonState, repoUrl: string | null, spin
     return ui.text("idle — waiting for tasks", { dim: true });
   }
   return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl, spinnerFrame)));
+}
+
+/**
+ * T326: Conductors セクションタイトル文字列を組み立てる純関数。
+ * `startDashboard` 内 inline で組まれていた文字列を切り出したもので、
+ * 生成結果は完全一致する（挙動不変リファクタ）。テスト容易性のために export する。
+ */
+export function formatConductorsSectionLabel(conductors: readonly { status: string }[]): string {
+  let startingCount = 0;
+  let assigningCount = 0;
+  let askingCount = 0;
+  let runningCount = 0;
+  let brokenCount = 0;
+  for (const c of conductors) {
+    switch (c.status) {
+      case "starting": startingCount++; break;
+      case "assigning": assigningCount++; break;
+      case "asking": askingCount++; break;
+      case "running": runningCount++; break;
+      case "broken": brokenCount++; break;
+    }
+  }
+  return `Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}${brokenCount > 0 ? ` ${brokenCount} broken` : ""}`;
 }
 
 function buildTaskRow(
@@ -1215,11 +1242,7 @@ export async function startDashboard(
 
   function buildViewWithApp(state: AppState) {
     const { daemon, repoUrl } = state;
-    const startingCount = [...daemon.conductors.values()].filter(c => c.status === "starting").length;
-    const assigningCount = [...daemon.conductors.values()].filter(c => c.status === "assigning").length;
-    const runningCount = [...daemon.conductors.values()].filter(c => c.status === "running").length;
-    const askingCount = [...daemon.conductors.values()].filter(c => c.status === "asking").length;
-    const brokenCount = [...daemon.conductors.values()].filter(c => c.status === "broken").length;
+    const conductorsSectionLabel = formatConductorsSectionLabel([...daemon.conductors.values()]);
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
@@ -1311,7 +1334,7 @@ export async function startDashboard(
         sectionTitle("Master"),
         buildMasterSection(daemon),
         // Conductors セクション
-        sectionTitle(`Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}${brokenCount > 0 ? ` ${brokenCount} broken` : ""}`),
+        sectionTitle(conductorsSectionLabel),
         buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
         // Tasks セクション（クリックでフォーカス）
         ui.button({

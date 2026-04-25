@@ -1519,6 +1519,133 @@ describe("handleMessage: SESSION_STOP (T189)", () => {
     // ここまで到達すれば OK（早期 return で break）
     expect(state.conductors.size).toBe(0);
   });
+
+  // T326: Conductor SESSION_ASK 統合経路の入口テスト。
+  // 既存の Agent ASK / Conductor IDLE / text-only end_turn とは独立して、
+  // Conductor surface に対する ASK transcript を投入したときの副作用を検証する。
+  test("T326: Conductor / Case A (ASK) → conductor.status='asking' に遷移し conductor_asking ログが出る (cmux.notify は呼ばれない)", async () => {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    const notifySpy = spyOn(cmux, "notify").mockImplementation(async () => {});
+
+    try {
+      const state = await createDaemon(testDir);
+      const fixedTimestamp = "2026-04-25T07:30:00.000Z";
+      const conductor: ConductorState = {
+        surface: "surface:c1",
+        startedAt: new Date().toISOString(),
+        agents: [],
+        status: "running",
+        taskRunId: "task-326-test",
+        taskId: "326",
+        taskTitle: "demo",
+        // 後で undefined にクリアされることを確認するため敢えてセット
+        disconnectedAt: new Date(0).toISOString(),
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const transcriptPath = await writeTranscript([
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "text", text: "どちらにしますか?" },
+              { type: "tool_use", name: "AskUserQuestion", input: {} },
+            ],
+          },
+        },
+      ]);
+
+      await handleMessage(state, {
+        type: "SESSION_STOP",
+        surface: "surface:c1",
+        pid: 999,
+        timestamp: fixedTimestamp,
+        payload: { transcript_path: transcriptPath },
+      });
+
+      // 念のため fire-and-forget の解決待ち
+      await new Promise(r => setImmediate(r));
+
+      // conductor 副作用
+      expect(conductor.status).toBe("asking");
+      expect(conductor.askQuestion).toBe("どちらにしますか?");
+      expect(conductor.disconnectedAt).toBeUndefined();
+      expect(conductor.lastHookAt).toBe(fixedTimestamp);
+      expect(conductor.pid).toBe(999);
+
+      // conductor_asking ログが manager.log に出力されている
+      const managerLog = await readFile(
+        join(testDir, ".team/logs/manager.log"),
+        "utf-8",
+      );
+      expect(managerLog).toContain("conductor_asking");
+      expect(managerLog).toContain("question=どちらにしますか?");
+
+      // Conductor の SESSION_ASK 経路では cmux.notify を呼ばない (Agent との非対称性)
+      expect(notifySpy).toHaveBeenCalledTimes(0);
+    } finally {
+      notifySpy.mockRestore();
+    }
+  });
+
+  test("T326: Agent / Case A (ASK) → cmux.notify が 1 回呼ばれ title='Agent asking' / subtitle に taskTitle/role が入る", async () => {
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    const notifySpy = spyOn(cmux, "notify").mockImplementation(async () => {});
+
+    try {
+      const state = await createDaemon(testDir);
+      const conductor: ConductorState = {
+        surface: "surface:c1",
+        startedAt: new Date().toISOString(),
+        agents: [
+          {
+            surface: "surface:a1",
+            spawnedAt: new Date().toISOString(),
+            status: "running" as const,
+            role: "implementer",
+            taskTitle: "demo agent task",
+          },
+        ],
+        status: "running",
+      };
+      state.conductors.set(conductor.surface, conductor);
+
+      const transcriptPath = await writeTranscript([
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "text", text: "どうしますか?" },
+              { type: "tool_use", name: "AskUserQuestion", input: {} },
+            ],
+          },
+        },
+      ]);
+
+      await handleMessage(state, {
+        type: "SESSION_STOP",
+        surface: "surface:a1",
+        pid: 123,
+        timestamp: new Date().toISOString(),
+        payload: { transcript_path: transcriptPath },
+      });
+
+      // void cmux.notify(...) は fire-and-forget なのでマイクロタスクの解決を待つ
+      await new Promise(r => setImmediate(r));
+
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+      const call = notifySpy.mock.calls[0]!;
+      expect(call[0]).toBe("surface:a1");
+      expect(call[1]).toBe("Agent asking");
+      expect(call[2]).toContain("どうしますか?"); // body = truncate(question, 200)
+      // subtitle は taskTitle ?? role ?? "Agent" の優先順位で入る (daemon.ts:2224)
+      expect(call[3]?.subtitle).toBe("demo agent task");
+    } finally {
+      notifySpy.mockRestore();
+    }
+  });
 });
 
 describe("updateTeamJson: layout 反映 (T176)", () => {
