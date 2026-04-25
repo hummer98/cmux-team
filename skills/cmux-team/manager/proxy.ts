@@ -15,8 +15,120 @@ import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
 import { persistRateLimit, isStale5h } from "./rate-limit-persistence";
 import { insertApiUsage, type ApiUsageRecord } from "./trace-store";
+import {
+  initTokenDB,
+  getTokenByAuthHash,
+  insertToken,
+  getLatestUsageSnapshot,
+  upsertUsageSnapshot,
+} from "./token-store";
+import { createHash } from "crypto";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
+
+// ─── tokens.db シングルトン（T320）───────────────────────────────────────────
+// 複数プロジェクトが並列実行しても tokens.db は WAL モードで safe。
+// proxy は 1 プロセスに 1 インスタンスなのでシングルトンで十分。
+let _tokensDb: ReturnType<typeof initTokenDB> | null = null;
+function getTokensDB(): ReturnType<typeof initTokenDB> {
+  if (!_tokensDb) {
+    try {
+      _tokensDb = initTokenDB();
+    } catch {
+      // tokens.db が開けない環境（permission 等）は機能を無効化する
+      _tokensDb = null as any;
+      return null as any;
+    }
+  }
+  return _tokensDb;
+}
+
+/** Authorization header の値全体を sha256 して 12 文字 prefix を返す（T320/A020）。 */
+function computeProxyAuthHash(authHeader: string | null): string | null {
+  if (!authHeader) return null;
+  return createHash("sha256").update(authHeader).digest("hex").slice(0, 12);
+}
+
+/**
+ * auto-discover 用 handle を生成する。organization_id の先頭 4 文字から始め、
+ * 衝突時は 5, 6... と伸長する。
+ */
+function genAutoDiscoverHandle(
+  db: ReturnType<typeof initTokenDB>,
+  orgId: string,
+): string {
+  for (let len = 4; len <= orgId.length; len++) {
+    const candidate = `@${orgId.slice(0, len)}`;
+    const existing = db.prepare("SELECT id FROM tokens WHERE handle = ?").get(candidate);
+    if (!existing) return candidate;
+  }
+  return `@${orgId.slice(0, 8)}${Date.now().toString(36).slice(-4)}`;
+}
+
+/**
+ * Anthropic レスポンス 1 件につき tokens.db を更新する（T320）。
+ * - auth_hash が既知: utilization 変化時のみ throttled UPSERT
+ * - auth_hash 未知: organization_id が取れれば auto-discover 登録（selectable=0）
+ *
+ * エラーは全て fire-and-forget（既存 traces.db 書き込みに影響させない）。
+ */
+function updateTokensDB(
+  authHash: string | null,
+  rl: RateLimitInfo | null,
+  organizationId: string | null,
+): void {
+  if (!authHash) return;
+  const db = getTokensDB();
+  if (!db) return;
+  if (!rl) return;
+
+  try {
+    const tok = getTokenByAuthHash(db, authHash);
+
+    if (tok) {
+      // throttle: 変化があるときのみ UPSERT
+      const prev = getLatestUsageSnapshot(db, tok.id);
+      const u5h = rl.unified5hUtilization;
+      const u7d = rl.unified7dUtilization;
+      const changed =
+        prev == null ||
+        (u5h != null && prev.util_5h != null && Math.abs(u5h - prev.util_5h) >= 0.01) ||
+        (u7d != null && prev.util_7d != null && Math.abs(u7d - prev.util_7d) >= 0.01) ||
+        (u5h != null && prev.util_5h == null) ||
+        (u7d != null && prev.util_7d == null) ||
+        rl.unified5hReset !== prev.reset_5h_at ||
+        rl.unified7dReset !== prev.reset_7d_at ||
+        (rl.unifiedStatus ?? null) !== prev.unified_status;
+
+      if (changed) {
+        upsertUsageSnapshot(db, {
+          token_id: tok.id,
+          util_5h: u5h,
+          util_7d: u7d,
+          reset_5h_at: rl.unified5hReset,
+          reset_7d_at: rl.unified7dReset,
+          unified_status: rl.unifiedStatus ?? null,
+        });
+      }
+    } else if (organizationId) {
+      // auto-discover: 未知アカウントを selectable=0 で登録
+      const handle = genAutoDiscoverHandle(db, organizationId);
+      insertToken(db, {
+        handle,
+        organization_id: organizationId,
+        auth_hash: authHash,
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["auto"],
+        credential_source: "auto-discover",
+        selectable: false,
+      });
+      log("token_auto_discovered", `handle=${handle} org=${organizationId.slice(0, 8)}`).catch(() => {});
+    }
+  } catch (e: any) {
+    log("token_db_update_failed", `auth_hash=${authHash} err=${e?.message ?? e}`).catch(() => {});
+  }
+}
 
 // epoch 秒（10桁数値）または ISO 8601 文字列を受けて unix epoch 秒に正規化
 // daemon.ts:1244-1245 / dashboard.tsx:189-195 と同じロジック — 別タスク（#175 等）で整理予定
@@ -426,6 +538,9 @@ export async function start(
       const reqBody = req.body ? await req.arrayBuffer() : null;
       const requestBytes = reqBody?.byteLength ?? 0;
 
+      // T320: auth_hash を算出（Authorization header 全体を sha256）
+      const authHash = computeProxyAuthHash(req.headers.get("authorization"));
+
       // Host ヘッダーを除外して転送（そのまま渡すと Bun が
       // Host の値を接続先に使い、プロキシ自身に接続してしまう）
       const fwdHeaders = new Headers(req.headers);
@@ -459,6 +574,13 @@ export async function start(
             );
           }
         }
+
+        // T320: tokens.db を fire-and-forget で更新（streaming path）
+        updateTokensDB(
+          authHash,
+          extractRateLimit(upstreamRes.headers),
+          upstreamRes.headers.get("anthropic-organization-id"),
+        );
 
         // streaming: tee して片方をログに使う
         const [clientStream, logStream] = upstreamRes.body.tee();
@@ -518,6 +640,13 @@ export async function start(
           );
         }
       }
+
+      // T320: tokens.db を fire-and-forget で更新（非 streaming path）
+      updateTokensDB(
+        authHash,
+        extractRateLimit(upstreamRes.headers),
+        upstreamRes.headers.get("anthropic-organization-id"),
+      );
 
       const entry: TraceEntry = {
         timestamp: new Date().toISOString(),

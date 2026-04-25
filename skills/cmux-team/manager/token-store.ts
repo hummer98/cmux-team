@@ -322,6 +322,13 @@ export function getTokenByHandle(db: Database, handle: string): Token | null {
   return row ? rowToToken(row) : null;
 }
 
+export function getTokenByAuthHash(db: Database, authHash: string): Token | null {
+  const row = db
+    .prepare("SELECT * FROM tokens WHERE auth_hash = ?")
+    .get(authHash) as TokenRow | undefined;
+  return row ? rowToToken(row) : null;
+}
+
 export function listTokens(
   db: Database,
   opts?: { selectableOnly?: boolean },
