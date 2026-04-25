@@ -127,6 +127,7 @@ import {
 import { buildPoolHeaderLines, type PoolHeaderInput } from "./pool-status-header";
 import { formatSurfaceRow } from "./pool-surface-row";
 import { computeNextReset } from "./pool-next-reset";
+import { resolveProjectTags } from "./project-tags";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -2680,7 +2681,17 @@ async function cmdSpawnAgent(): Promise<void> {
     // T321: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
     try {
       const tokDb = initTokenDB();
-      const selected = selectToken(tokDb, surface);
+      let projectTags: string[];
+      try {
+        projectTags = await resolveProjectTags(PROJECT_ROOT);
+      } catch (e: any) {
+        await log(
+          "project_tags_resolve_failed",
+          `${formatSurface(surface, "A")} err=${e?.message ?? e}`,
+        );
+        projectTags = ["any"];
+      }
+      const selected = selectToken(tokDb, surface, projectTags);
       if (selected) {
         const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
         exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);

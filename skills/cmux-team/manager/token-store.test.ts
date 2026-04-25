@@ -31,6 +31,7 @@ import {
   deleteToken,
   updateTokenAuth,
   updateTokenPlan,
+  selectToken,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -1050,5 +1051,99 @@ describe("updateTokenPlan (T319)", () => {
     expect(got?.organization_id).toBe("org-sticky");
     expect(got?.tags).toEqual(["any", "kddi"]);
     expect(got?.selectable).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// selectToken (T321: tags フィルタ回帰)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("selectToken (tags フィルタ)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h = 0.1, util7d = 0.1): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  test("project_tags=['any'] (default) で any token が選ばれる", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@anytok", organization_id: "org-anytok", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id);
+    const sel = selectToken(db, "holder-1");
+    expect(sel?.token.handle).toBe("@anytok");
+  });
+
+  test("project_tags=['org:kddi'] で tags=['org:kddi'] token が選ばれる", () => {
+    const t = insertToken(
+      db,
+      makeToken({
+        handle: "@kddi",
+        organization_id: "org-kddi",
+        tags: ["org:kddi"],
+      }),
+    );
+    seedFreshSnapshot(t.id);
+    const sel = selectToken(db, "holder-1", ["org:kddi"]);
+    expect(sel?.token.handle).toBe("@kddi");
+  });
+
+  test("project_tags=['org:kddi'] で tags=['any'] token もマッチ (any は wildcard)", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@anytok", organization_id: "org-anytok", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id);
+    const sel = selectToken(db, "holder-1", ["org:kddi"]);
+    expect(sel?.token.handle).toBe("@anytok");
+  });
+
+  test("project_tags=['org:kddi'] で tags=['org:other'] token は除外される", () => {
+    insertToken(
+      db,
+      makeToken({
+        handle: "@other",
+        organization_id: "org-other",
+        tags: ["org:other"],
+      }),
+    );
+    // 候補は他に無い → null
+    const sel = selectToken(db, "holder-1", ["org:kddi"]);
+    expect(sel).toBeNull();
+  });
+
+  test("any token と org:kddi token が混在 → score 最小が選ばれる (tags フィルタは両方通る)", () => {
+    const tAny = insertToken(
+      db,
+      makeToken({ handle: "@any", organization_id: "org-any-mix", tags: ["any"] }),
+    );
+    const tKddi = insertToken(
+      db,
+      makeToken({ handle: "@kddi", organization_id: "org-kddi-mix", tags: ["org:kddi"] }),
+    );
+    seedFreshSnapshot(tAny.id, 0.5, 0.5); // score = 0.5
+    seedFreshSnapshot(tKddi.id, 0.1, 0.1); // score = 0.1
+    const sel = selectToken(db, "holder-1", ["org:kddi"]);
+    expect(sel?.token.handle).toBe("@kddi");
+  });
+
+  test("project_tags=['any'] のとき org:kddi token もマッチする (project 側 any は全許可)", () => {
+    const t = insertToken(
+      db,
+      makeToken({
+        handle: "@kddi",
+        organization_id: "org-kddi-only",
+        tags: ["org:kddi"],
+      }),
+    );
+    seedFreshSnapshot(t.id);
+    const sel = selectToken(db, "holder-1", ["any"]);
+    expect(sel?.token.handle).toBe("@kddi");
   });
 });
