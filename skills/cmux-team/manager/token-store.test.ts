@@ -15,6 +15,7 @@ import {
   insertToken,
   getTokenByHandle,
   getTokenByOrganizationId,
+  getTokenByAuthHash,
   listTokens,
   upsertUsageSnapshot,
   getLatestUsageSnapshot,
@@ -27,6 +28,9 @@ import {
   retrieveTokenFromKeychain,
   deleteTokenFromKeychain,
   computePoolCapacity,
+  deleteToken,
+  updateTokenAuth,
+  updateTokenPlan,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -885,5 +889,166 @@ describe("computePoolCapacity", () => {
     expect(result.capacity_pct).toBeCloseTo(100, 2);
     // per_token.cap_pct は finite
     expect(Number.isFinite(result.per_token[0]?.cap_pct ?? 0)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deleteToken / updateTokenAuth / updateTokenPlan (T319)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("deleteToken (T319)", () => {
+  test("tokens / usage_snapshots / leases から全て削除される", () => {
+    const token = insertToken(db, makeToken({ handle: "@del" }));
+    upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.1,
+      util_7d: 0.2,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    acquireLease(db, token.id, "h1", 60);
+
+    deleteToken(db, token.id);
+
+    expect(getTokenByHandle(db, "@del")).toBeNull();
+    const snap = db
+      .prepare("SELECT COUNT(*) AS c FROM usage_snapshots WHERE token_id=?")
+      .get(token.id) as { c: number };
+    expect(snap.c).toBe(0);
+    const lease = db
+      .prepare("SELECT COUNT(*) AS c FROM leases WHERE token_id=?")
+      .get(token.id) as { c: number };
+    expect(lease.c).toBe(0);
+  });
+
+  test("存在しない id でも例外が出ない（冪等。補償トランザクションで再呼び出し可能）", () => {
+    expect(() => deleteToken(db, 99999)).not.toThrow();
+  });
+
+  test("複数 token のうち 1 件削除しても他 token は影響を受けない", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    upsertUsageSnapshot(db, {
+      token_id: a.id,
+      util_5h: 0.1,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    upsertUsageSnapshot(db, {
+      token_id: b.id,
+      util_5h: 0.5,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    deleteToken(db, a.id);
+
+    expect(getTokenByHandle(db, "@a")).toBeNull();
+    expect(getTokenByHandle(db, "@b")).not.toBeNull();
+    const snap = getLatestUsageSnapshot(db, b.id);
+    expect(snap?.util_5h).toBe(0.5);
+  });
+
+  // 補強 1 (plan §1.1 候補 1): leases / usage_snapshots の片方が空でも tokens 行は削除される
+  test("usage_snapshots / leases 片方が空でも tokens 行は削除される (部分状態の冪等性)", () => {
+    const onlySnap = insertToken(db, makeToken({ handle: "@only-snap", organization_id: "org-snap" }));
+    upsertUsageSnapshot(db, {
+      token_id: onlySnap.id,
+      util_5h: 0.3,
+      util_7d: null,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+    deleteToken(db, onlySnap.id);
+    expect(getTokenByHandle(db, "@only-snap")).toBeNull();
+
+    const onlyLease = insertToken(db, makeToken({ handle: "@only-lease", organization_id: "org-lease" }));
+    acquireLease(db, onlyLease.id, "h2", 60);
+    deleteToken(db, onlyLease.id);
+    expect(getTokenByHandle(db, "@only-lease")).toBeNull();
+    const lease = db
+      .prepare("SELECT COUNT(*) AS c FROM leases WHERE token_id=?")
+      .get(onlyLease.id) as { c: number };
+    expect(lease.c).toBe(0);
+  });
+});
+
+describe("updateTokenAuth (T319)", () => {
+  test("auth_hash が新しい値で上書きされる", () => {
+    const token = insertToken(db, makeToken({ handle: "@auth", auth_hash: "oldoldoldold" }));
+    const newHash = "newnewnewnew";
+    updateTokenAuth(db, token.id, newHash);
+    const got = getTokenByHandle(db, "@auth");
+    expect(got?.auth_hash).toBe(newHash);
+  });
+
+  test("存在しない id への呼び出しは no-op (例外なし)", () => {
+    expect(() => updateTokenAuth(db, 99999, "xxxxxxxxxxxx")).not.toThrow();
+  });
+
+  test("他 token の auth_hash には影響しない", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a", auth_hash: "aaaaaaaaaaaa" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b", auth_hash: "bbbbbbbbbbbb" }));
+    updateTokenAuth(db, a.id, "cccccccccccc");
+    expect(getTokenByHandle(db, "@a")?.auth_hash).toBe("cccccccccccc");
+    expect(getTokenByHandle(db, "@b")?.auth_hash).toBe("bbbbbbbbbbbb");
+  });
+
+  // 補強 2 (plan §1.1 候補 2): updateTokenAuth + getTokenByAuthHash の整合性
+  test("updateTokenAuth で書いた値は getTokenByAuthHash で検索できる (往復整合性)", () => {
+    const token = insertToken(db, makeToken({ handle: "@auth-roundtrip", auth_hash: "before000000" }));
+    expect(getTokenByAuthHash(db, "before000000")?.id).toBe(token.id);
+
+    updateTokenAuth(db, token.id, "after0000000");
+
+    expect(getTokenByAuthHash(db, "before000000")).toBeNull();
+    expect(getTokenByAuthHash(db, "after0000000")?.id).toBe(token.id);
+    expect(getTokenByAuthHash(db, "after0000000")?.handle).toBe("@auth-roundtrip");
+  });
+});
+
+describe("updateTokenPlan (T319)", () => {
+  test("plan / plan_ratio が更新される", () => {
+    const token = insertToken(
+      db,
+      makeToken({ handle: "@plan", plan: "unknown", plan_ratio: null }),
+    );
+    updateTokenPlan(db, token.id, "max-x20", 20.0);
+    const got = getTokenByHandle(db, "@plan");
+    expect(got?.plan).toBe("max-x20");
+    expect(got?.plan_ratio).toBe(20.0);
+  });
+
+  test("plan_ratio に null を保存できる (unknown plan へ戻す経路)", () => {
+    const token = insertToken(db, makeToken({ handle: "@p2" }));
+    updateTokenPlan(db, token.id, "unknown", null);
+    const got = getTokenByHandle(db, "@p2");
+    expect(got?.plan).toBe("unknown");
+    expect(got?.plan_ratio).toBeNull();
+  });
+
+  test("selectable / handle / organization_id / tags は不変", () => {
+    const token = insertToken(
+      db,
+      makeToken({
+        handle: "@sticky",
+        organization_id: "org-sticky",
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["any", "kddi"],
+        selectable: false,
+      }),
+    );
+    updateTokenPlan(db, token.id, "max-x20", 20.0);
+    const got = getTokenByHandle(db, "@sticky");
+    expect(got?.handle).toBe("@sticky");
+    expect(got?.organization_id).toBe("org-sticky");
+    expect(got?.tags).toEqual(["any", "kddi"]);
+    expect(got?.selectable).toBe(false);
   });
 });

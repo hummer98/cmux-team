@@ -340,6 +340,51 @@ export function listTokens(
   return rows.map(rowToToken);
 }
 
+/**
+ * tokens / usage_snapshots / leases から token_id に紐付く全レコードを削除する。
+ *
+ * - 1 つの transaction で 3 テーブルを明示削除（既存 schema は ON DELETE CASCADE 未設定）
+ * - 存在しない id でも例外を出さない（冪等。補償トランザクションでの再実行に必要）
+ * - Keychain は別系統。呼び出し側で `deleteTokenFromKeychain(handle)` を実行すること
+ */
+export function deleteToken(db: Database, token_id: number): void {
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM leases WHERE token_id = ?").run(token_id);
+    db.prepare("DELETE FROM usage_snapshots WHERE token_id = ?").run(token_id);
+    db.prepare("DELETE FROM tokens WHERE id = ?").run(token_id);
+  });
+  tx();
+}
+
+/** auth_hash 列だけを更新する。rotate の補償トランザクション両方向で利用する。 */
+export function updateTokenAuth(
+  db: Database,
+  token_id: number,
+  new_auth_hash: string,
+): void {
+  db.prepare("UPDATE tokens SET auth_hash = ? WHERE id = ?").run(
+    new_auth_hash,
+    token_id,
+  );
+}
+
+/**
+ * plan / plan_ratio のみ更新する（`set-plan` 用）。
+ * selectable / tags / handle / organization_id / auth_hash は維持。
+ */
+export function updateTokenPlan(
+  db: Database,
+  token_id: number,
+  plan: TokenPlan,
+  plan_ratio: number | null,
+): void {
+  db.prepare("UPDATE tokens SET plan = ?, plan_ratio = ? WHERE id = ?").run(
+    plan,
+    plan_ratio,
+    token_id,
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // usage_snapshots
 // ─────────────────────────────────────────────────────────────────────────────
