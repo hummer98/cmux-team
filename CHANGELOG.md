@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-04-26
+
+### Added
+
+- **Global token pool 機能（T318/T319/T320/T321/T322/T323/T325, A019）**。複数の Claude OAuth token を `~/.cmux-team/tokens.db` で管理し、5h / 7d 利用率に応じてエージェントに割り当てる仕組み。
+  - `cmux-team token add|list|remove|rotate|set-plan` CLI（T319）。credential ファイルまたは手動入力からトークンを登録し、`/v1/models` probe で organization_id と plan を取得、macOS Keychain に保存する
+  - `proxy` が Anthropic API レスポンスを受けるたびに tokens.db の利用率と reset 時刻を throttled UPSERT し、未知トークンは `selectable=0 / tags=[auto]` で auto-discover 登録（T320）
+  - `spawn-agent` 時に tags フィルタ + 5h/7d 利用率 + lease blocker でトークンを選択し、`CLAUDE_CODE_OAUTH_TOKEN` を子プロセスに inject。SESSION_ENDED / PID 死亡 / opencode session_idle で 120s atomic lease を release（T321/T325）
+  - `project_tags` resolver: `.team/config.json` 優先 → git remote origin の host から `["org:<name>"]` を導出 → `["any"]` fallback（T321 拡張）
+  - 機能 ON/OFF は `CMUX_TEAM_TOKEN_POOL` env > `.team/config.json:tokenPool.enabled` > `~/.cmux-team/config.yaml:token_pool.enabled` > default false の 3-tier resolver（T322）
+  - `cmux-team status` ヘッダーに pool capacity・next reset、Master/Conductor/Agent 行に handle / 利用率 / cap 表示。`cmux-team pool status` サブコマンドで全アカウント一覧（T323）
+- **opencode Agent 統合（Issue #37, M1〜M6）**。Claude Code 以外のランタイムバックエンドとして opencode を選択可能に。`agentEnabled` / `agentModel` 設定、opencode-server lifecycle 管理、REST 経由の spawn / kill、UUID 形式（`ses_<英数字>`）の surface ID 対応。`@opencode-ai/sdk` を依存追加
+- **`cmux-team delete-task --force`（T333）**。これまで `assigned` 以外でも `closed` / `aborted` 状態のタスクは CLI 削除できなかったが、`--force` フラグで `closed` / `aborted` を `deleted` に強制遷移できるようにした。`assigned` は force でも禁止（abort-task 経由を強制）、`deleted` への二重削除も拒否。FSM ログには `force=true prev=...` が残る
+- **`/cmux-team:help` と `/cmux-team:retro` スラッシュコマンド**。`help` はプラグインの全コマンド・スキル一覧と起動条件を動的に表示、`retro` は直近 N 件のタスクを分析して繰り返しパターン・設計問題・CLAUDE.md 逸脱を報告する
+
+### Changed
+
+- **CLAUDE.md に「state tracking への構造的対応」サブセクションを追加（PR #40）**。設計 5 原則の上位原理として「transformer が state を内部で維持しなくて済む環境を設計する」を明示し、新規スキル・コマンド・ツール追加時のチェックリスト（state 外部化 / silent state mutation / pull 観測 / statefulness 排除）を提供。重複していた「判断に迷ったとき」の 2 項目を削除
+- **エージェントからの進捗コマンド案内を禁止**。ユーザーは Manager surface（TUI）をリアルタイムに見ているため、タスク作成後に `cmux-team status` 等の案内は不要。CLAUDE.md / templates 双方を同期
+- **Conductor Step 6.5 を厳格化**。Inspector minor+ findings と tsc エラーは「自分が touch したファイル」に関連する限り**同一タスク内で修正必須**。`will file a follow-up` での先送りは禁止し、本当にスコープ外なら実際に `create-task` を呼んでタスク ID を summary.md に記録してから完了する
+- **`bun.lock` を追跡開始 / `node_modules/` を `.gitignore` 追加**。`bun add @opencode-ai/sdk` により bun.lock が生成されたため lockfile を commit 対象に変更
+
+### Fixed
+
+- **SESSION_ENDED race で assignTask 中にプロンプトが届かない問題を修正（T302）**。`/clear` 送信後の sleep 中に `SESSION_ENDED` race で `conductor.status` が `disconnected` になった場合、`AssignTaskError("conductor")` を投げて送信をブロック。タスクは `ready` のまま残り次の idle Conductor に再割り当てされる。`disconnected → idle` 復帰時に `requestWakeup` を呼び出し、`ready` で待機中のタスクを即座に再割り当てできるようにする
+- **dashboard のタブボタンに `focusable: false` を追加**。マウスクリック後にフォーカス枠 `[ ]` が残る問題を修正。R/B/O キーの判定を `focusedArea` → `activeTab` に変更し、Issues タブが表示中なら T でタスクにフォーカスしていてもアクションキーが動作するようにした
+- **dashboard Tasks セパレータのハイライト条件を修正**。`focusedArea === tasks` のときだけセパレータがハイライトされるよう改修
+
+### Tests
+
+- **SESSION_ASK 経路の回帰防止テスト（T326）**。Conductor `SESSION_ASK` 統合テスト（status=asking / askQuestion / disconnectedAt クリア / lastHookAt 更新 / `conductor_asking` ログ / cmux.notify が呼ばれない）と Agent `SESSION_ASK` で `cmux.notify` が `title="Agent asking"` で 1 回呼ばれることを検証。dashboard 側は `buildConductorRow` を export し `formatConductorsSectionLabel` を純関数化、Conductor / Agent asking 描画と truncate のテストを追加
+
+### Docs (artifacts)
+
+- **A020 — `CLAUDE_CODE_OAUTH_TOKEN` probe findings（T317）**。Subscription token は `Authorization: Bearer sk-ant-oat01-...` + `anthropic-beta: oauth-2025-04-20` で配信され、レスポンスには `anthropic-ratelimit-unified-5h|7d-utilization` と `anthropic-organization-id` のみ含まれる（TPM 系ヘッダーは無し）。token pool の burnout スコアが unified utilisation 軸を使う根拠を実機検証で確定
+- **A021 — `bun test` 全体実行ハングの原因調査と回避策（T327）**
+
 ## [4.8.0] - 2026-04-25
 
 ### Added
