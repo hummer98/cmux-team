@@ -20,3 +20,6 @@
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 .envrc
+
+# Dependencies
+node_modules/
