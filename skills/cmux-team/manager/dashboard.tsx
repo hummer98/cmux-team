@@ -1318,7 +1318,7 @@ export async function startDashboard(
           id: "section-tasks",
           label: `─ Tasks ${daemon.openTasks} open ${HR_FILL}`,
           px: 0,
-          style: { dim: true },
+          style: state.focusedArea === "tasks" ? { bold: true } : { dim: true },
           focusable: false,
           onPress: () => { try { app.update((s) => ({ ...s, focusedArea: "tasks" })); } catch {} },
         }),
