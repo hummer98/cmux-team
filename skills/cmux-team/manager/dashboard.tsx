@@ -1329,6 +1329,7 @@ export async function startDashboard(
             id: "tab-journal",
             label: "Journal",
             px: 1,
+            focusable: false,
             style: state.activeTab === "journal" ? { bold: true } : { dim: true },
             onPress: () => switchTab("journal"),
           }),
@@ -1336,6 +1337,7 @@ export async function startDashboard(
             id: "tab-artifacts",
             label: "Artifacts",
             px: 1,
+            focusable: false,
             style: state.activeTab === "artifacts" ? { bold: true } : { dim: true },
             onPress: () => switchTab("artifacts"),
           }),
@@ -1343,6 +1345,7 @@ export async function startDashboard(
             id: "tab-log",
             label: "Log",
             px: 1,
+            focusable: false,
             style: state.activeTab === "log" ? { bold: true } : { dim: true },
             onPress: () => switchTab("log"),
           }),
@@ -1350,6 +1353,7 @@ export async function startDashboard(
             id: "tab-settings",
             label: "Settings",
             px: 1,
+            focusable: false,
             style: state.activeTab === "settings" ? { bold: true } : { dim: true },
             onPress: () => switchTab("settings"),
           }),
@@ -1357,6 +1361,7 @@ export async function startDashboard(
             id: "tab-issues",
             label: t("gh_tui_tab_title"),
             px: 1,
+            focusable: false,
             style: state.activeTab === "issues" ? { bold: true } : { dim: true },
             onPress: () => switchTab("issues"),
           }),
@@ -1364,6 +1369,7 @@ export async function startDashboard(
             id: "tab-metrics",
             label: t("metrics_tab_title"),
             px: 1,
+            focusable: false,
             style: state.activeTab === "metrics" ? { bold: true } : { dim: true },
             onPress: () => switchTab("metrics"),
           }),
@@ -1458,7 +1464,7 @@ export async function startDashboard(
               ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
             ]
-          : state.focusedArea === "issues"
+          : state.activeTab === "issues"
           ? [
               ui.kbd("↑/↓"), ui.text("select"),
               ui.kbd("Enter/O"), ui.text("view"),
@@ -1617,13 +1623,13 @@ export async function startDashboard(
     I: () => switchTab("issues"),
     M: () => switchTab("metrics"),
     R: (ctx) => {
-      if (ctx.state.focusedArea !== "issues") return;
+      if (ctx.state.activeTab !== "issues") return;
       syncIssuesFromGh().catch((e: any) => {
         log("issues_sync_error", e?.message ?? String(e)).catch(() => {});
       });
     },
     B: (ctx) => {
-      if (ctx.state.focusedArea !== "issues") return;
+      if (ctx.state.activeTab !== "issues") return;
       const item = ctx.state.issueItems[ctx.state.issueCursor];
       if (!item?.issue.html_url) return;
       try {
@@ -1633,7 +1639,7 @@ export async function startDashboard(
       }
     },
     O: (ctx) => {
-      if (ctx.state.focusedArea !== "issues") return;
+      if (ctx.state.activeTab !== "issues") return;
       openSelectedIssueInViewer(ctx.state).catch((e: any) => {
         log("viewer_error", e?.message ?? String(e)).catch(() => {});
       });
