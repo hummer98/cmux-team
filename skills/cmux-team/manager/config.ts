@@ -8,6 +8,7 @@
 
 import { join } from "path";
 import { readFile } from "fs/promises";
+import { homedir } from "os";
 import type { LayoutMode, AutoUpdateMode } from "./schema";
 import { normalizeAutoUpdate } from "./schema";
 
@@ -57,6 +58,19 @@ export interface TeamConfig {
    * `git symbolic-ref refs/remotes/origin/HEAD` で自動検出して書き込まれる。T213 で追加。
    */
   mainBranch?: string;
+  /**
+   * token pool の有効/無効。T322 で追加。未指定時は global config / default(false) にフォールバック。
+   * env CMUX_TEAM_TOKEN_POOL が最優先。詳細は resolveTokenPoolEnabled を参照。
+   */
+  tokenPool?: { enabled?: boolean };
+}
+
+/**
+ * `~/.cmux-team/config.yaml` のスキーマ。T322 で追加。
+ * yaml 慣習に従い snake_case (`token_pool`) で受け、内部表現は camelCase (`tokenPool`) に正規化する。
+ */
+export interface GlobalConfig {
+  tokenPool?: { enabled?: boolean };
 }
 
 /**
@@ -152,4 +166,98 @@ export function resolveFetchBeforeWorktree(
   throw new Error(
     `unknown CMUX_TEAM_FETCH_BEFORE_WORKTREE=${JSON.stringify(raw)} (expected 0|1|true|false|on|off)`,
   );
+}
+
+/**
+ * token pool の有効/無効を 3 階層で解決する純粋関数。T322 で追加。
+ *
+ * 優先順位: env > project > global > default(false / opt-in)
+ *
+ * env `CMUX_TEAM_TOKEN_POOL` の解釈:
+ * - "0" / "false" / "off" → false (source=env)
+ * - "1" / "true" / "on"   → true  (source=env)
+ * - 未定義 / 空文字       → 次の層にフォールバック
+ * - それ以外              → throw（既存 resolveAutoUpdateMode 等と同じ fail-fast 流儀）
+ *
+ * project / global の解釈:
+ * - フィールド未指定 / undefined / null → 次の層にフォールバック
+ * - boolean 以外（string / number 等）  → 型違反として未指定扱い（zod 未導入なので runtime check は最小限）
+ */
+export function resolveTokenPoolEnabled(
+  projectConfig: Pick<TeamConfig, "tokenPool">,
+  globalConfig: Pick<GlobalConfig, "tokenPool"> | null,
+  env: NodeJS.ProcessEnv = process.env,
+): { enabled: boolean; source: "env" | "project" | "global" | "default" } {
+  const raw = env.CMUX_TEAM_TOKEN_POOL;
+  if (raw !== undefined && raw !== "") {
+    const v = raw.trim().toLowerCase();
+    if (v === "0" || v === "false" || v === "off") return { enabled: false, source: "env" };
+    if (v === "1" || v === "true" || v === "on") return { enabled: true, source: "env" };
+    throw new Error(
+      `unknown CMUX_TEAM_TOKEN_POOL=${JSON.stringify(raw)} (expected 0|1|true|false|on|off)`,
+    );
+  }
+  const projectVal = projectConfig.tokenPool?.enabled;
+  if (typeof projectVal === "boolean") {
+    return { enabled: projectVal, source: "project" };
+  }
+  const globalVal = globalConfig?.tokenPool?.enabled;
+  if (typeof globalVal === "boolean") {
+    return { enabled: globalVal, source: "global" };
+  }
+  return { enabled: false, source: "default" };
+}
+
+/**
+ * `~/.cmux-team/config.yaml` を読み込んで GlobalConfig に正規化する。T322 で追加。
+ *
+ * - ファイル不在 → null（next-layer フォールバック扱い）
+ * - parse 失敗 → console.warn のみ出して null を返す（best-effort、daemon は停止しない）
+ * - yaml 慣習の `token_pool.enabled` を camelCase の `tokenPool.enabled` に詰め替える
+ *
+ * yaml ライブラリは `yaml` (eemeli/yaml)。bun runtime で動作確認済み。
+ */
+export async function loadGlobalConfig(): Promise<GlobalConfig | null> {
+  // Bun の os.homedir() は HOME 環境変数を尊重しない実装のため、env を優先する。
+  // env 未設定時のみ homedir() に fallback する（token-store と同じ流儀）。
+  const home = process.env.HOME ?? homedir();
+  const path = join(home, ".cmux-team/config.yaml");
+  let text: string;
+  try {
+    text = await readFile(path, "utf-8");
+  } catch {
+    return null;
+  }
+  try {
+    const yaml = await import("yaml");
+    const parsed = yaml.parse(text);
+    if (parsed === null || typeof parsed !== "object") return {};
+    const tp = (parsed as Record<string, unknown>).token_pool;
+    if (tp && typeof tp === "object") {
+      const enabled = (tp as Record<string, unknown>).enabled;
+      if (typeof enabled === "boolean") {
+        return { tokenPool: { enabled } };
+      }
+      return { tokenPool: {} };
+    }
+    return {};
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`cmux-team: failed to parse ~/.cmux-team/config.yaml: ${msg}`);
+    return null;
+  }
+}
+
+/**
+ * project / global / env の 3 階層を読み込んで boolean に解決する高レベル wrapper。T322 で追加。
+ * cmdSpawnAgent / cmdStart はこれを呼ぶだけで運用ログ用の source も取れる。
+ */
+export async function isTokenPoolEnabled(
+  projectRoot: string,
+): Promise<{ enabled: boolean; source: "env" | "project" | "global" | "default" }> {
+  const [projectConfig, globalConfig] = await Promise.all([
+    loadConfig(projectRoot),
+    loadGlobalConfig(),
+  ]);
+  return resolveTokenPoolEnabled(projectConfig, globalConfig);
 }

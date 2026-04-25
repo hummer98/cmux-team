@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
 import { join } from "path";
 import { spawn } from "child_process";
 import {
@@ -17,7 +18,12 @@ import {
   parseCloseTaskArgs,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
-import { resolveLayout, resolveAutoUpdateMode } from "./config";
+import {
+  resolveLayout,
+  resolveAutoUpdateMode,
+  resolveTokenPoolEnabled,
+  isTokenPoolEnabled,
+} from "./config";
 import * as cmux from "./cmux";
 import { normalizeAutoUpdate } from "./schema";
 import { createDummyProject, type DummyProject } from "./test-project";
@@ -359,6 +365,216 @@ describe("resolveAutoUpdateMode (T187/T294)", () => {
   test("不正な config 値は throw（normalizeAutoUpdate 内）", () => {
     expect(() => resolveAutoUpdateMode({ autoUpdate: "task-now" as any }, {}))
       .toThrow(/unknown autoUpdate/);
+  });
+});
+
+describe("resolveTokenPoolEnabled (T322)", () => {
+  // 優先順位: env > project > global > default(false)
+  // env キー: CMUX_TEAM_TOKEN_POOL
+  // - "0" / "false" / "off" → false (source=env)
+  // - "1" / "true" / "on"   → true  (source=env)
+  // - 未定義 / 空文字       → 次の層
+  // - それ以外              → throw
+
+  test("#1 env=0 で env を優先 (project=true, global=true でも false)", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: true } },
+        { tokenPool: { enabled: true } },
+        { CMUX_TEAM_TOKEN_POOL: "0" },
+      ),
+    ).toEqual({ enabled: false, source: "env" });
+  });
+
+  test("#2 env=false で env を優先", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: true } },
+        { tokenPool: { enabled: true } },
+        { CMUX_TEAM_TOKEN_POOL: "false" },
+      ),
+    ).toEqual({ enabled: false, source: "env" });
+  });
+
+  test("#3 env=off で env を優先", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: true } },
+        { tokenPool: { enabled: true } },
+        { CMUX_TEAM_TOKEN_POOL: "off" },
+      ),
+    ).toEqual({ enabled: false, source: "env" });
+  });
+
+  test("#4 env=1 で env を優先 (project=false, global=false でも true)", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: false } },
+        { tokenPool: { enabled: false } },
+        { CMUX_TEAM_TOKEN_POOL: "1" },
+      ),
+    ).toEqual({ enabled: true, source: "env" });
+  });
+
+  test("#5 env=true で env を優先", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: false } },
+        { tokenPool: { enabled: false } },
+        { CMUX_TEAM_TOKEN_POOL: "true" },
+      ),
+    ).toEqual({ enabled: true, source: "env" });
+  });
+
+  test("#6 env=on で env を優先", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: false } },
+        { tokenPool: { enabled: false } },
+        { CMUX_TEAM_TOKEN_POOL: "on" },
+      ),
+    ).toEqual({ enabled: true, source: "env" });
+  });
+
+  test("#7 env 未指定 + project=false → false (source=project) / global=true は無視", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: false } },
+        { tokenPool: { enabled: true } },
+        {},
+      ),
+    ).toEqual({ enabled: false, source: "project" });
+  });
+
+  test("#8 env 未指定 + project=true → true (source=project) / global=false は無視", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: true } },
+        { tokenPool: { enabled: false } },
+        {},
+      ),
+    ).toEqual({ enabled: true, source: "project" });
+  });
+
+  test("#9 env 空文字は未指定扱い → project にフォールバック", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: false } },
+        { tokenPool: { enabled: true } },
+        { CMUX_TEAM_TOKEN_POOL: "" },
+      ),
+    ).toEqual({ enabled: false, source: "project" });
+  });
+
+  test("#10 env 未指定 + project 未指定 + global=true → true (source=global)", () => {
+    expect(
+      resolveTokenPoolEnabled({}, { tokenPool: { enabled: true } }, {}),
+    ).toEqual({ enabled: true, source: "global" });
+  });
+
+  test("#11 env 未指定 + project 未指定 + global=false → false (source=global)", () => {
+    expect(
+      resolveTokenPoolEnabled({}, { tokenPool: { enabled: false } }, {}),
+    ).toEqual({ enabled: false, source: "global" });
+  });
+
+  test("#12 全て未指定 → false (source=default)", () => {
+    expect(resolveTokenPoolEnabled({}, {}, {})).toEqual({
+      enabled: false,
+      source: "default",
+    });
+  });
+
+  test("#13 env 未指定 + project=null + global=null → false (source=default)", () => {
+    expect(resolveTokenPoolEnabled({}, null, {})).toEqual({
+      enabled: false,
+      source: "default",
+    });
+  });
+
+  test("#14 env=yes → throw", () => {
+    expect(() =>
+      resolveTokenPoolEnabled({}, null, { CMUX_TEAM_TOKEN_POOL: "yes" }),
+    ).toThrow(/unknown CMUX_TEAM_TOKEN_POOL/);
+  });
+
+  test("#15 env=2 → throw", () => {
+    expect(() =>
+      resolveTokenPoolEnabled({}, null, { CMUX_TEAM_TOKEN_POOL: "2" }),
+    ).toThrow(/unknown CMUX_TEAM_TOKEN_POOL/);
+  });
+
+  test("project の tokenPool.enabled が boolean 以外 → 未指定扱い", () => {
+    expect(
+      resolveTokenPoolEnabled(
+        { tokenPool: { enabled: "true" as any } },
+        { tokenPool: { enabled: true } },
+        {},
+      ),
+    ).toEqual({ enabled: true, source: "global" });
+  });
+});
+
+describe("isTokenPoolEnabled (T322) smoke", () => {
+  // mkdtemp で project root と HOME を作って 3 階層解決をエンドツーエンドで確認する。
+  // env > project > global の優先順位は純粋関数側で十分カバーしているので、
+  // ここでは I/O 層（loadConfig + loadGlobalConfig）の合流のみ確認する。
+
+  let originalHome: string | undefined;
+  let originalEnvFlag: string | undefined;
+  let fakeHomes: string[] = [];
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    originalEnvFlag = process.env.CMUX_TEAM_TOKEN_POOL;
+    delete process.env.CMUX_TEAM_TOKEN_POOL;
+    fakeHomes = [];
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalEnvFlag === undefined) delete process.env.CMUX_TEAM_TOKEN_POOL;
+    else process.env.CMUX_TEAM_TOKEN_POOL = originalEnvFlag;
+    for (const h of fakeHomes) {
+      await rm(h, { recursive: true, force: true });
+    }
+  });
+
+  test("project=true (.team/config.json) で enabled=true / source=project", async () => {
+    const fakeHome = await mkdtemp(join(tmpdir(), "cmux-home-"));
+    fakeHomes.push(fakeHome);
+    process.env.HOME = fakeHome;
+    await mkdir(join(testDir, ".team"), { recursive: true });
+    await writeFile(
+      join(testDir, ".team/config.json"),
+      JSON.stringify({ tokenPool: { enabled: true } }),
+      "utf-8",
+    );
+    const r = await isTokenPoolEnabled(testDir);
+    expect(r).toEqual({ enabled: true, source: "project" });
+  });
+
+  test("project 未指定 + global yaml(token_pool.enabled=true) → enabled=true / source=global", async () => {
+    const fakeHome = await mkdtemp(join(tmpdir(), "cmux-home-"));
+    fakeHomes.push(fakeHome);
+    process.env.HOME = fakeHome;
+    await mkdir(join(fakeHome, ".cmux-team"), { recursive: true });
+    await writeFile(
+      join(fakeHome, ".cmux-team/config.yaml"),
+      "token_pool:\n  enabled: true\n",
+      "utf-8",
+    );
+    const r = await isTokenPoolEnabled(testDir);
+    expect(r).toEqual({ enabled: true, source: "global" });
+  });
+
+  test("全層未指定 → enabled=false / source=default", async () => {
+    const fakeHome = await mkdtemp(join(tmpdir(), "cmux-home-"));
+    fakeHomes.push(fakeHome);
+    process.env.HOME = fakeHome;
+    const r = await isTokenPoolEnabled(testDir);
+    expect(r).toEqual({ enabled: false, source: "default" });
   });
 });
 

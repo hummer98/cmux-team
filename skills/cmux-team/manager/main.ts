@@ -73,6 +73,7 @@ import {
   resolveLayout,
   resolveAutoUpdateMode,
   resolveFetchBeforeWorktree,
+  isTokenPoolEnabled,
 } from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
@@ -652,6 +653,19 @@ async function cmdStart(): Promise<void> {
     "fetch_before_worktree",
     `enabled=${fetchPolicy.enabled ? "on" : "off"} source=${fetchPolicy.source}`,
   );
+
+  // T322: token pool の有効/無効を 3 階層解決して 1 行ログに出す。
+  // env 値が不正なら resolveTokenPoolEnabled が throw → exit 1（fail-fast）。
+  try {
+    const poolDecision = await isTokenPoolEnabled(PROJECT_ROOT);
+    await log(
+      "token_pool_config",
+      `enabled=${poolDecision.enabled ? "on" : "off"} source=${poolDecision.source}`,
+    );
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
   let previousProxyPort: string | undefined;
@@ -2518,19 +2532,32 @@ async function cmdSpawnAgent(): Promise<void> {
   if (proxyPort) {
     exportVars.push(`ANTHROPIC_BASE_URL=http://127.0.0.1:${proxyPort}`);
   }
-  // T321: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
+  // T322: token pool は env/project/global の 3 階層で opt-in 制御する。
+  // 無効時は selection 自体をスキップし `token_pool_skipped` ログのみ残す。
+  let poolDecision: { enabled: boolean; source: "env" | "project" | "global" | "default" };
   try {
-    const tokDb = initTokenDB();
-    const selected = selectToken(tokDb, surface);
-    if (selected) {
-      const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
-      exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
-      await log("token_pool_assigned", `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id}`);
-    } else {
-      await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=no_candidate`);
-    }
+    poolDecision = await isTokenPoolEnabled(PROJECT_ROOT);
   } catch (e: any) {
-    await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=error err=${e?.message ?? e}`);
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+  if (!poolDecision.enabled) {
+    await log("token_pool_skipped", `${formatSurface(surface, "A")} source=${poolDecision.source}`);
+  } else {
+    // T321: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
+    try {
+      const tokDb = initTokenDB();
+      const selected = selectToken(tokDb, surface);
+      if (selected) {
+        const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
+        exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
+        await log("token_pool_assigned", `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`);
+      } else {
+        await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=no_candidate`);
+      }
+    } catch (e: any) {
+      await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=error err=${e?.message ?? e}`);
+    }
   }
   await cmux.send(surface, `export ${exportVars.join(" ")}\n`);
   await sleep(500);
