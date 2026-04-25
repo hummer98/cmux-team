@@ -19,7 +19,7 @@
  *   ./main.ts await-task --task-id <id> [--timeout <sec>]  # タスク完了待ち
  *   ./main.ts abort-task --task-id <id>
  *   ./main.ts restart-task --task-id <id> [--journal <text>]
- *   ./main.ts delete-task --task-id <id> [--journal <text>]
+ *   ./main.ts delete-task --task-id <id> [--journal <text>] [--force]
  *   ./main.ts trace-hooks [--type <T>] [--surface <s>] [--task-run <id>] [--role <r>] [--task-id <id>] [--limit <N>] [--json]
  */
 
@@ -4312,6 +4312,7 @@ async function cmdDeleteTask(): Promise<void> {
   }
   const taskId = canonical;
   const journalArg = getArg("journal");
+  const forceFlag = hasFlag("force");
 
   const taskFile = await findTaskFile(taskId);
   if (!taskFile) {
@@ -4321,12 +4322,21 @@ async function cmdDeleteTask(): Promise<void> {
 
   const taskState = await loadTaskState(PROJECT_ROOT);
   const currentStatus = taskState[taskId]?.status;
+  // assigned は force でも禁止（abort-task で止めてから restart / delete）。
   if (currentStatus === "assigned") {
     console.error(`Error: task ${taskId} is assigned (running). Use abort-task to stop a running task.`);
     process.exit(1);
   }
-  if (currentStatus === "closed" || currentStatus === "aborted" || currentStatus === "deleted") {
-    console.error(`Error: task ${taskId} is already ${currentStatus}.`);
+  // deleted は二重削除禁止（terminal state の冪等性は CLI レイヤで明示エラーにする）。
+  if (currentStatus === "deleted") {
+    console.error(`Error: task ${taskId} is already deleted.`);
+    process.exit(1);
+  }
+  // closed / aborted は --force でのみ削除可。
+  if ((currentStatus === "closed" || currentStatus === "aborted") && !forceFlag) {
+    console.error(
+      `Error: task ${taskId} is already ${currentStatus}. Use --force to delete a ${currentStatus} task.`,
+    );
     process.exit(1);
   }
 
@@ -4336,12 +4346,12 @@ async function cmdDeleteTask(): Promise<void> {
 
   const journal = journalArg ?? t("delete_journal_default", { id: taskId, title }).replace(/\s+$/, "");
 
-  // T303: applyTaskEvent(DELETE) 経由。reducer は draft/ready のみ deleted に遷移し
-  //       cascade_children action で子 (ready) を draft に戻す。子 shadow も store 内で呼ばれる。
+  // T303: applyTaskEvent(DELETE) 経由。reducer は draft/ready / (force&&closed/aborted) のみ
+  //       deleted に遷移し、draft/ready 起点では cascade_children action で子 (ready) を draft に戻す。
   const deletedAt = new Date().toISOString();
   const result = await applyTaskEvent(PROJECT_ROOT, {
     taskId,
-    event: { type: "DELETE" },
+    event: { type: "DELETE", force: forceFlag },
     ctx: { hasConductor: false, parentAborted: false },
     patch: (_p, next) =>
       next === "deleted"
@@ -4352,7 +4362,13 @@ async function cmdDeleteTask(): Promise<void> {
   });
   await refreshTaskStateFromDisk(PROJECT_ROOT, taskState);
 
-  await log("task_deleted", `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}`);
+  // R1: log / OK 出力の force マーカは reducer 側 detail と semantics を一致させ、
+  //     closed / aborted 起点のみ付ける（draft/ready + --force では付けない）。
+  const usedForce = forceFlag && (currentStatus === "closed" || currentStatus === "aborted");
+  await log(
+    "task_deleted",
+    `task_id=${taskId}${title ? ` title=${title}` : ""} journal_summary=${journal}${usedForce ? ` force=true prev=${currentStatus}` : ""}`,
+  );
   for (const childId of result.revertedChildren) {
     await log(
       "child_reverted_to_draft",
@@ -4368,7 +4384,7 @@ async function cmdDeleteTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  console.log(`OK deleted ${taskId}`);
+  console.log(`OK deleted ${taskId}${usedForce ? ` (force, prev=${currentStatus})` : ""}`);
 }
 
 async function cmdTraceTask(): Promise<void> {

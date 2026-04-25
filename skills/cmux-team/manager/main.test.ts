@@ -800,6 +800,60 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     expect(receivedMessages[0].taskId).toBe("503");
   });
 
+  // T333: delete-task --force 統合テスト
+  test("delete-task: closed タスクは --force なしで reject される", async () => {
+    await setupTeamDir("570", "t-closed", "closed");
+    const r = await runCli(["delete-task", "--task-id", "570"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("already closed");
+    expect(r.stderr).toContain("--force");
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["570"].status).toBe("closed");
+  });
+
+  test("delete-task --force: closed タスクが deleted に遷移する", async () => {
+    await setupTeamDir("571", "t-closed-force", "closed");
+    const r = await runCli(["delete-task", "--task-id", "571", "--force"]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["571"].status).toBe("deleted");
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+  });
+
+  test("delete-task --force: aborted タスクが deleted に遷移する", async () => {
+    await setupTeamDir("572", "t-aborted-force", "aborted");
+    const r = await runCli(["delete-task", "--task-id", "572", "--force"]);
+    expect(r.code).toBe(0);
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["572"].status).toBe("deleted");
+  });
+
+  test("delete-task --force: assigned タスクは依然 reject される", async () => {
+    await setupTeamDir("573", "t-assigned", "assigned");
+    const r = await runCli(["delete-task", "--task-id", "573", "--force"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("is assigned");
+    expect(r.stderr).not.toContain("Use --force");
+    const state = JSON.parse(
+      await readFile(join(testDir, ".team/task-state.json"), "utf-8"),
+    );
+    expect(state["573"].status).toBe("assigned");
+  });
+
+  test("delete-task --force: deleted タスクは依然 reject される", async () => {
+    await setupTeamDir("574", "t-deleted", "deleted");
+    const r = await runCli(["delete-task", "--task-id", "574", "--force"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("already deleted");
+    expect(r.stderr).not.toContain("Use --force");
+  });
+
   test("close-task: conductor 不在時に TASK_UPDATED が送信される", async () => {
     await setupTeamDir("504", "t4", "draft");
     // team.json を置かない（または conductors なし） → conductor 不在パス

@@ -722,6 +722,105 @@ describe("Task FSM — DELETE (A017 §2.2)", () => {
     const { next } = taskReduce("assigned", { type: "DELETE" }, tctx());
     expect(next).toBe("assigned");
   });
+
+  // T333: --force による closed / aborted → deleted 遷移
+  test("closed + DELETE (force=false) → closed (noop)", () => {
+    const { next, actions } = taskReduce(
+      "closed",
+      { type: "DELETE" },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("closed");
+    expect(actions).toEqual([]);
+  });
+
+  test("closed + DELETE (force=true) → deleted + log(force=true)", () => {
+    const { next, actions } = taskReduce(
+      "closed",
+      { type: "DELETE", force: true },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("deleted");
+    const log = actions.find((a) => a.type === "log" && a.event === "task_deleted");
+    expect(log).toBeDefined();
+    if (log && log.type === "log") {
+      expect(log.detail).toContain("force=true");
+      expect(log.detail).toContain("prev=closed");
+    }
+    // closed → deleted では cascade_children を emit しない
+    expect(actions.find((a) => a.type === "cascade_children")).toBeUndefined();
+  });
+
+  test("aborted + DELETE (force=false) → aborted (noop)", () => {
+    const { next, actions } = taskReduce(
+      "aborted",
+      { type: "DELETE" },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("aborted");
+    expect(actions).toEqual([]);
+  });
+
+  test("aborted + DELETE (force=true) → deleted + log(force=true)", () => {
+    const { next, actions } = taskReduce(
+      "aborted",
+      { type: "DELETE", force: true },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("deleted");
+    const log = actions.find((a) => a.type === "log" && a.event === "task_deleted");
+    expect(log).toBeDefined();
+    if (log && log.type === "log") {
+      expect(log.detail).toContain("force=true");
+      expect(log.detail).toContain("prev=aborted");
+    }
+    expect(actions.find((a) => a.type === "cascade_children")).toBeUndefined();
+  });
+
+  test("assigned + DELETE (force=true) → assigned (force でも禁止)", () => {
+    const { next, actions } = taskReduce(
+      "assigned",
+      { type: "DELETE", force: true },
+      tctx(),
+    );
+    expect(next).toBe("assigned");
+    expect(actions).toEqual([]);
+  });
+
+  test("deleted + DELETE (force=true) → deleted (terminal state guard)", () => {
+    // 既存「deleted は終端 state」ブロックの events 配列に force=true を追加すると
+    // test name が `deleted + DELETE` で衝突するため、独立 test として追加する。
+    const { next, actions } = taskReduce(
+      "deleted",
+      { type: "DELETE", force: true },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("deleted");
+    expect(actions).toEqual([]);
+  });
+
+  // R2: draft / ready は --force 指定でも通常経路（cascade あり、detail なし）
+  test("draft + DELETE (force=true) → deleted (force は無視され通常経路 + cascade あり)", () => {
+    const { next, actions } = taskReduce(
+      "draft",
+      { type: "DELETE", force: true },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("deleted");
+    expect(actions.find((a) => a.type === "cascade_children")).toBeDefined();
+    const log = actions.find((a) => a.type === "log" && a.event === "task_deleted");
+    expect(log && log.type === "log" ? log.detail : undefined).toBeUndefined();
+  });
+
+  test("ready + DELETE (force=true) → deleted (同上)", () => {
+    const { next, actions } = taskReduce(
+      "ready",
+      { type: "DELETE", force: true },
+      tctx({ hasConductor: false }),
+    );
+    expect(next).toBe("deleted");
+    expect(actions.find((a) => a.type === "cascade_children")).toBeDefined();
+  });
 });
 
 describe("Task FSM — RESTART (A017 §2.2, T303 expanded)", () => {

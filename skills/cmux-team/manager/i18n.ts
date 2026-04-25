@@ -472,13 +472,18 @@ Usage:
 Options:
   --task-id <id>          task ID (required)
   --journal <text>        deletion journal (optional, default: "Deleted: T{id} {title}")
+  --force                 force-delete a closed or aborted task (assigned still requires abort-task)
 
 Examples:
   cmux-team delete-task --task-id 035
   cmux-team delete-task --task-id 035 --journal "No longer needed"
+  cmux-team delete-task --task-id 035 --force                 # delete a closed/aborted task
 
 Notes:
-  - Only draft/ready tasks can be deleted (use abort-task for assigned tasks)
+  - draft / ready tasks can be deleted without --force
+  - closed / aborted tasks require --force (assigned must use abort-task first)
+  - assigned tasks cannot be deleted with --force; use abort-task / restart-task
+  - deleted tasks are terminal; re-deletion is a no-op (rejected with exit 1)
   - Sets status to deleted in task-state.json
   - A record remains in the journal
 `,
@@ -1260,13 +1265,18 @@ Usage:
 Options:
   --task-id <id>          タスク ID（必須）
   --journal <text>        削除ジャーナル（任意、デフォルト: "削除: T{id} {title}"）
+  --force                 closed / aborted のタスクを強制削除する（assigned は依然 abort-task が必要）
 
 Examples:
   cmux-team delete-task --task-id 035
   cmux-team delete-task --task-id 035 --journal "不要になったため削除"
+  cmux-team delete-task --task-id 035 --force                  # closed / aborted を強制削除
 
 Notes:
-  - draft/ready のタスクのみ削除できます（assigned は abort-task を使用）
+  - draft / ready のタスクは --force なしで削除できます
+  - closed / aborted のタスクは --force が必要です（assigned はまず abort-task で止めてください）
+  - assigned のタスクは --force でも削除できません（abort-task / restart-task を使用）
+  - deleted は終端状態で、再削除は exit 1 になります
   - task-state.json の status が deleted に設定されます
   - Journal タブに記録が残ります
 `,

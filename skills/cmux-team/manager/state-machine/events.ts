@@ -105,7 +105,7 @@ export type TaskFsmEvent =
   | { type: "ASSIGN_FAIL"; errorKind: "task" | "conductor" }
   | { type: "CLOSE"; autoClosed?: boolean }
   | { type: "ABORT"; reason: string }
-  | { type: "DELETE" }
+  | { type: "DELETE"; force?: boolean }
   | { type: "RESTART" }
   | { type: "PARENT_ABORTED" }
   // T303: assigned 救済経路（worktree 消失 / launch 失敗 / unmatched resume /

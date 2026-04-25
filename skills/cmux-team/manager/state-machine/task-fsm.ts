@@ -109,11 +109,18 @@ export function taskReduce(
     }
 
     case "DELETE": {
-      // delete-task CLI。draft / ready のみ許可 (assigned は禁止)。
+      // delete-task CLI。draft / ready は通常削除（cascade あり）。
+      // T333: closed / aborted は --force 指定時のみ削除（cascade なし、log に prev= を残す）。
+      // assigned は force でも禁止（abort-task / restart-task 経由）。
       if (state === "draft" || state === "ready") {
         return withActions("deleted", [
           { type: "log", event: "task_deleted" },
           { type: "cascade_children" },
+        ]);
+      }
+      if (event.force && (state === "closed" || state === "aborted")) {
+        return withActions("deleted", [
+          { type: "log", event: "task_deleted", detail: `force=true prev=${state}` },
         ]);
       }
       return noop(state);
