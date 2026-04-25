@@ -48,7 +48,7 @@ afterEach(async () => {
 describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   test("PreToolUse hook が Bash matcher で追加される", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
@@ -61,7 +61,7 @@ describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   });
 
   test("hook の command に cmux, send, exit 2 と日本語エラー文が含まれる (R3)", async () => {
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const cmd: string = settings.hooks.PreToolUse[0].hooks[0].command;
     expect(cmd).toContain("cmux");
@@ -73,7 +73,7 @@ describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   });
 
   test("既存の SessionStart / Stop / SessionEnd hook が残存している (regression)", async () => {
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.hooks.SessionStart.length).toBe(1);
     expect(settings.hooks.Stop.length).toBe(1);
@@ -109,7 +109,7 @@ describe("PreToolUse hook 挙動 (§4.2)", () => {
   let script: string;
 
   beforeEach(async () => {
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     script = extractHookScript(settings);
   });
@@ -1557,7 +1557,7 @@ describe("SessionStart hook generation (T203)", () => {
 
   test("Conductor: matcher === '' で stdin pipe 方式の command を生成、--conductor-id を含まない (m2)", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.hooks.SessionStart.length).toBe(1);
     const entry = settings.hooks.SessionStart[0];
@@ -1571,7 +1571,7 @@ describe("SessionStart hook generation (T203)", () => {
 
   test("T210: Conductor SessionEnd(clear) hook は --conductor-id を含まない", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const clearHook = settings.hooks.SessionEnd.find(
       (h: any) => h.matcher === "clear",
@@ -1584,7 +1584,7 @@ describe("SessionStart hook generation (T203)", () => {
 
   test("T210: Conductor SessionEnd(logout|prompt_input_exit|other) hook は --conductor-id を含まない", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const logoutHook = settings.hooks.SessionEnd.find(
       (h: any) => h.matcher === "logout|prompt_input_exit|other",
@@ -1605,7 +1605,7 @@ describe("SessionStart hook generation (T203)", () => {
 
   test("T216: Conductor SessionEnd(logout|prompt_input_exit|other) hook は --from-stdin 方式で reason ハードコードを含まない", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     const otherHook = settings.hooks.SessionEnd.find(
@@ -1643,7 +1643,7 @@ describe("SessionStart hook generation (T203)", () => {
   // T266: Notification hook の generator テスト
   test("T266: Conductor settings に Notification hook があり role=conductor で送信する", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
-    const settingsPath = generateConductorSettings(testDir);
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.Notification)).toBe(true);
@@ -1689,7 +1689,7 @@ describe("SessionStart hook generation (T203)", () => {
 
 describe("generateMasterSettings (T211)", () => {
   test("settings.json に UserPromptSubmit / Stop hook が含まれる", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.UserPromptSubmit)).toBe(true);
@@ -1729,8 +1729,8 @@ describe("generateMasterSettings (T211)", () => {
   });
 
   test("冪等: 複数回呼び出しても settings が上書きされるだけ", async () => {
-    const path1 = generateMasterSettings(testDir);
-    const path2 = generateMasterSettings(testDir);
+    const path1 = generateMasterSettings(testDir, "surface:100");
+    const path2 = generateMasterSettings(testDir, "surface:100");
     expect(path1).toBe(path2);
     const content = await readFile(path2, "utf-8");
     JSON.parse(content); // parse error にならなければ OK
@@ -1741,7 +1741,7 @@ describe("generateMasterSettings (T211)", () => {
   // これにより daemon は SESSION_STARTED で masterPid を確立し、
   // spawnMasterPidWatcher を起動できるようになる。
   test("T175: settings.hooks.SessionStart が cmux-team send SESSION_STARTED --from-stdin を呼ぶ", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.SessionStart)).toBe(true);
@@ -1756,7 +1756,7 @@ describe("generateMasterSettings (T211)", () => {
   });
 
   test("T175: settings.hooks.SessionEnd が logout|prompt_input_exit|other matcher で SESSION_ENDED を送る", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.SessionEnd)).toBe(true);
@@ -1773,7 +1773,7 @@ describe("generateMasterSettings (T211)", () => {
 
   test("T175: Master は /clear でセッション継続するため SessionEnd matcher に clear を含めない", async () => {
     // Conductor は clear matcher を持つが Master は持たない (D2)
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     const matchers: string[] = (settings.hooks.SessionEnd ?? []).map(
       (h: any) => h.matcher,
@@ -1783,7 +1783,7 @@ describe("generateMasterSettings (T211)", () => {
   });
 
   test("T175: UserPromptSubmit / Stop hook は既存のまま残る（regression guard）", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.UserPromptSubmit)).toBe(true);
@@ -1799,7 +1799,7 @@ describe("generateMasterSettings (T211)", () => {
 
   // T266: Notification hook を daemon に集約・DB 記録する
   test("T266: settings.hooks.Notification が cmux-team send NOTIFICATION --from-stdin を呼ぶ (role=master)", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.Notification)).toBe(true);
@@ -1831,21 +1831,35 @@ describe("T211 Phase 4: CMUX_ROLE 完全削除 regression", () => {
 
 // --- T304: x-cmux-role header injection via settings.env ---
 
-describe("generateMasterSettings (T304: x-cmux-role)", () => {
-  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: master を注入する", async () => {
-    const settingsPath = generateMasterSettings(testDir);
+describe("generateMasterSettings (T304: x-cmux-role / T323: x-cmux-surface)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を注入する", async () => {
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
-    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: master");
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      "x-cmux-role: master, x-cmux-surface: surface:100",
+    );
+  });
+
+  test("T323: settings.json は per-surface パスに保存される", () => {
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
+    expect(settingsPath).toContain("surface:100-master-settings.json");
   });
 });
 
-describe("generateConductorSettings (T304: x-cmux-role)", () => {
-  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: conductor を注入する", async () => {
-    const settingsPath = generateConductorSettings(testDir);
+describe("generateConductorSettings (T304: x-cmux-role / T323: x-cmux-surface)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を注入する", async () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
-    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: conductor");
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      "x-cmux-role: conductor, x-cmux-surface: surface:200",
+    );
+  });
+
+  test("T323: settings.json は per-surface パスに保存される", () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    expect(settingsPath).toContain("surface:200-conductor-settings.json");
   });
 });
 

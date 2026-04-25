@@ -178,6 +178,13 @@ Options:
 Examples:
   cmux-team status
   cmux-team status --log 20
+
+Token Pool (T323):
+  When token pool is enabled (CMUX_TEAM_TOKEN_POOL=1 / config / global yaml),
+  the status output prepends a token pool header (capacity / next reset) and
+  appends per-surface handle / utilization / cap_pct columns. When disabled,
+  the layout is identical to the legacy output.
+  See: cmux-team pool status   for the full per-token dashboard.
 `,
 
   help_spawn_conductor: `
@@ -716,6 +723,7 @@ Usage:
   cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  write overlay
   cmux-team delete-agent-instructions --role <role> remove overlay
   cmux-team list-agent-instructions                 list overlay status per role
+  cmux-team pool status                            show token pool dashboard (T323)
 
 For details on each command: cmux-team <command> --help`,
 
@@ -958,6 +966,12 @@ Options:
 Examples:
   cmux-team status
   cmux-team status --log 20
+
+Token Pool (T323):
+  token pool 機能が有効な場合（CMUX_TEAM_TOKEN_POOL=1 / config / global yaml）、
+  ヘッダー直後に pool 情報（capacity / next reset）を表示し、Master / Conductor /
+  Agent 行に handle / 使用率 / cap_pct を付与します。OFF 時は既存レイアウト維持。
+  全 token 一覧は: cmux-team pool status
 `,
 
   help_spawn_conductor: `
@@ -1498,6 +1512,7 @@ Usage:
   cmux-team set-agent-instructions --role <role> (--body <t> | --from-file <p> | --from-stdin)  overlay を書き込み
   cmux-team delete-agent-instructions --role <role> overlay を削除
   cmux-team list-agent-instructions                 ロールごとの overlay 有無を一覧
+  cmux-team pool status                            token pool ダッシュボード表示 (T323)
 
 各コマンドの詳細: cmux-team <command> --help`,
 

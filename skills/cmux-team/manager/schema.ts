@@ -51,6 +51,16 @@ export const AgentSpawnedMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T323: spawn-agent 経路で selectToken が成功した直後に第 2 メッセージとして POST される。
+// AGENT_SPAWNED 自体は時系列の前段（surface 作成 → AGENT_SPAWNED → Claude 起動）を確定させる
+// 役割に専念し、tokenHandle 紐付けは本メッセージで後追いする（T244 race を破壊しないため分離）。
+export const AgentTokenBoundMessage = z.object({
+  type: z.literal("AGENT_TOKEN_BOUND"),
+  surface: z.string(),
+  tokenHandle: z.string(),
+  timestamp: z.string().datetime(),
+});
+
 export const SessionStartedMessage = z.object({
   type: z.literal("SESSION_STARTED"),
   surface: z.string(),
@@ -153,6 +163,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   ConductorRegisteredMessage,
   MasterRegisteredMessage,
   AgentSpawnedMessage,
+  AgentTokenBoundMessage,
   SessionStartedMessage,
   SessionEndedMessage,
   SessionActiveMessage,
@@ -176,6 +187,7 @@ export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
 export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
 export type NotificationMessage = z.infer<typeof NotificationMessage>;
+export type AgentTokenBoundMessage = z.infer<typeof AgentTokenBoundMessage>;
 
 // --- Deliverable (T295) ---
 
@@ -211,6 +223,9 @@ export interface AgentState {
   // AGENT_SPAWNED で "starting"、SESSION_STARTED で "running"、SESSION_IDLE で "idle"。
   // T238: SESSION_ASK で "asking"。SESSION_STARTED/IDLE で自然上書きにより解除される。
   status: "starting" | "running" | "idle" | "asking";
+  // T323: token pool 機能でこの Agent が使用しているトークンの handle。
+  // spawn-agent 経路で selectToken 成功時に AGENT_TOKEN_BOUND 経由で daemon へ反映される。
+  tokenHandle?: string;
 }
 
 // --- Master 状態 ---
@@ -225,6 +240,9 @@ export const MasterStateSchema = z.object({
   startedAt: z.string().datetime(),
   disconnectedAt: z.string().datetime().optional(),
   prompt: z.string().optional(),
+  // T323: token pool 機能でこの Master が使用しているトークンの handle。
+  // proxy.ts が auth_hash → tokens.db の handle を解決して書き戻す。
+  tokenHandle: z.string().optional(),
 });
 
 export type MasterState = z.infer<typeof MasterStateSchema> & {
@@ -272,6 +290,9 @@ export const ConductorState = z.object({
   promptBytes: z.number().optional(),
   sessionStartedClearAt: z.string().datetime().optional(),
   assigningSetAt: z.string().datetime().optional(),
+  // T323: token pool 機能でこの Conductor が使用しているトークンの handle。
+  // proxy.ts が auth_hash → tokens.db の handle を解決して書き戻す。
+  tokenHandle: z.string().optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {

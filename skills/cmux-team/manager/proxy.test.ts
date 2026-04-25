@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { readFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { start } from "./proxy";
+import { start, __resetTokensDbForTest } from "./proxy";
 import { onStateChanged, __resetBusForTest, __listenerCountForTest } from "./eventBus";
 import { createDummyProject, type DummyProject } from "./test-project";
 import { initDB, getApiUsage } from "./trace-store";
@@ -1105,5 +1105,219 @@ describe("proxy", () => {
         delete process.env.ANTHROPIC_API_URL;
       }
     });
+  });
+});
+
+// ─── T323: proxy → MasterState/ConductorState の tokenHandle 反映 ───
+describe("proxy: tokenHandle apply (T323)", () => {
+  let tokenDbDir: string;
+  let originalTokenDb: string | undefined;
+  let originalKeychain: string | undefined;
+  let originalApi: string | undefined;
+
+  beforeEach(async () => {
+    // 各テストでユニークな DB ファイルを使う（並行テストの handle/org_id 衝突回避）
+    tokenDbDir = join(testDir, "token-store");
+    await mkdir(tokenDbDir, { recursive: true });
+    originalTokenDb = process.env.TOKEN_STORE_DB_PATH;
+    originalKeychain = process.env.KEYCHAIN_TEST_MODE;
+    process.env.TOKEN_STORE_DB_PATH = join(
+      tokenDbDir,
+      `tokens-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    process.env.KEYCHAIN_TEST_MODE = "1";
+    originalApi = process.env.ANTHROPIC_API_URL;
+    // proxy のシングルトン tokens.db を破棄（前テストの DB を参照しないように）
+    __resetTokensDbForTest();
+  });
+
+  afterEach(() => {
+    if (originalTokenDb !== undefined) {
+      process.env.TOKEN_STORE_DB_PATH = originalTokenDb;
+    } else {
+      delete process.env.TOKEN_STORE_DB_PATH;
+    }
+    if (originalKeychain !== undefined) {
+      process.env.KEYCHAIN_TEST_MODE = originalKeychain;
+    } else {
+      delete process.env.KEYCHAIN_TEST_MODE;
+    }
+    if (originalApi !== undefined) {
+      process.env.ANTHROPIC_API_URL = originalApi;
+    } else {
+      delete process.env.ANTHROPIC_API_URL;
+    }
+  });
+
+  function startUpstreamWithRateLimit(): { upstream: ReturnType<typeof Bun.serve> } {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("{}", {
+          headers: {
+            "content-type": "application/json",
+            "anthropic-organization-id": "org-pers",
+            "anthropic-ratelimit-unified-5h-utilization": "0.10",
+            "anthropic-ratelimit-unified-7d-utilization": "0.20",
+            "anthropic-ratelimit-unified-5h-reset": "2099-01-01T00:00:00Z",
+            "anthropic-ratelimit-unified-7d-reset": "2099-01-08T00:00:00Z",
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-tokens-remaining": "1000",
+            "anthropic-ratelimit-tokens-limit": "1000",
+            "anthropic-ratelimit-tokens-reset": "2099-01-01T00:00:00Z",
+            "anthropic-ratelimit-input-tokens-remaining": "100",
+            "anthropic-ratelimit-output-tokens-remaining": "100",
+          },
+        });
+      },
+    });
+    return { upstream };
+  }
+
+  test("既知 token + role=master → state.masters の tokenHandle が更新される", async () => {
+    const { initTokenDB, insertToken } = await import("./token-store");
+    const { createHash } = await import("crypto");
+    const auth = "Bearer test-token-master";
+    const authHash = createHash("sha256").update(auth).digest("hex").slice(0, 12);
+    const db = initTokenDB();
+    insertToken(db, {
+      handle: "@pers",
+      organization_id: "org-pers",
+      auth_hash: authHash,
+      plan: "max-x20",
+      plan_ratio: 1.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db.close();
+
+    const { upstream } = startUpstreamWithRateLimit();
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const fakeState: any = {
+      masters: new Map([
+        ["surface:m1", { surface: "surface:m1", status: "running", tokenHandle: undefined }],
+      ]),
+      conductors: new Map(),
+    };
+    const handle = await start(testDir, { getState: () => fakeState });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fakeState.masters.get("surface:m1").tokenHandle).toBe("@pers");
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("既知 token + role=agent → state は変更されない（spawn-agent 経路で確定済み）", async () => {
+    const { initTokenDB, insertToken } = await import("./token-store");
+    const { createHash } = await import("crypto");
+    const auth = "Bearer test-token-agent";
+    const authHash = createHash("sha256").update(auth).digest("hex").slice(0, 12);
+    const db = initTokenDB();
+    insertToken(db, {
+      handle: "@kddi",
+      organization_id: "org-kddi",
+      auth_hash: authHash,
+      plan: "max-x20",
+      plan_ratio: 1.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db.close();
+
+    const { upstream } = startUpstreamWithRateLimit();
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const fakeState: any = {
+      masters: new Map([
+        ["surface:m1", { surface: "surface:m1", tokenHandle: undefined }],
+      ]),
+      conductors: new Map([
+        ["surface:c1", { surface: "surface:c1", tokenHandle: undefined, agents: [] }],
+      ]),
+    };
+    const handle = await start(testDir, { getState: () => fakeState });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "x-cmux-surface": "surface:agent-x",
+        "x-cmux-role": "agent",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fakeState.masters.get("surface:m1").tokenHandle).toBeUndefined();
+    expect(fakeState.conductors.get("surface:c1").tokenHandle).toBeUndefined();
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("既知 token + role=conductor → state.conductors の tokenHandle が更新される", async () => {
+    const { initTokenDB, insertToken } = await import("./token-store");
+    const { createHash } = await import("crypto");
+    const auth = "Bearer test-token-conductor";
+    const authHash = createHash("sha256").update(auth).digest("hex").slice(0, 12);
+    const db = initTokenDB();
+    insertToken(db, {
+      handle: "@pers",
+      organization_id: "org-pers",
+      auth_hash: authHash,
+      plan: "max-x20",
+      plan_ratio: 1.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db.close();
+
+    const { upstream } = startUpstreamWithRateLimit();
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const fakeState: any = {
+      masters: new Map(),
+      conductors: new Map([
+        ["surface:c1", { surface: "surface:c1", tokenHandle: undefined, agents: [] }],
+      ]),
+    };
+    const handle = await start(testDir, { getState: () => fakeState });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "x-cmux-surface": "surface:c1",
+        "x-cmux-role": "conductor",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fakeState.conductors.get("surface:c1").tokenHandle).toBe("@pers");
+
+    handle.stop();
+    upstream.stop();
   });
 });

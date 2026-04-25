@@ -114,11 +114,19 @@ import {
   cmdTokenRotate,
   cmdTokenSetPlan,
 } from "./token-cli";
+import { cmdPoolStatus, showPoolUsage } from "./pool-cli";
 import {
   initTokenDB,
   selectToken,
   retrieveTokenFromKeychain,
+  listTokens,
+  getLatestUsageSnapshot,
+  computePoolCapacity,
+  type TokenForCapacity,
 } from "./token-store";
+import { buildPoolHeaderLines, type PoolHeaderInput } from "./pool-status-header";
+import { formatSurfaceRow } from "./pool-surface-row";
+import { computeNextReset } from "./pool-next-reset";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -1377,19 +1385,96 @@ async function cmdStatus(): Promise<void> {
   const pid = teamJson.manager?.pid;
   const alive = pid && isProcessAlive(pid);
   // T229: team.json.masters (配列) を読む。旧 team.json.master (オブジェクト) との後方互換も保つ。
-  type MasterRow = { surface: string; status?: string; pid?: number };
+  // T323: tokenHandle 列を追加して per-surface 表示に使う。
+  type MasterRow = { surface: string; status?: string; pid?: number; tokenHandle?: string };
+  type AgentRow = { surface: string; role?: string; status?: string; tokenHandle?: string };
+  type ConductorRow = {
+    taskId: string;
+    taskTitle?: string;
+    surface: string;
+    status?: string;
+    tokenHandle?: string;
+    agents?: AgentRow[];
+  };
   const masters: MasterRow[] = Array.isArray(teamJson.masters)
     ? teamJson.masters as MasterRow[]
     : teamJson.master?.surface
       ? [{ surface: teamJson.master.surface as string, status: teamJson.master.status, pid: teamJson.master.pid }]
       : [];
-  const conductors: Array<{ taskId: string; taskTitle?: string; surface: string; status?: string }> = teamJson.conductors || [];
+  const conductors: ConductorRow[] = teamJson.conductors || [];
   const logLines = getArg("log") || "10";
 
   // --- ヘッダー ---
   const status = alive ? "RUNNING" : "STOPPED";
   const layout = typeof teamJson.layout === "string" ? teamJson.layout : "wide";
   console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
+
+  // T323: pool 機能の有効化を判定。OFF なら以降の pool セクション/handle 表示を全て skip。
+  let poolEnabled = false;
+  let poolHandleData: Map<string, { util5h: number | null; util7d: number | null; capPct: number | null }> | null = null;
+  let poolHeaderInput: PoolHeaderInput | null = null;
+  try {
+    const decision = await isTokenPoolEnabled(PROJECT_ROOT);
+    poolEnabled = decision.enabled;
+  } catch {
+    poolEnabled = false;
+  }
+  if (poolEnabled) {
+    try {
+      const tokDb = initTokenDB();
+      const tokens = listTokens(tokDb);
+      const forCap: TokenForCapacity[] = tokens.map((t) => {
+        const snap = getLatestUsageSnapshot(tokDb, t.id);
+        return {
+          handle: t.handle,
+          plan_ratio: t.plan_ratio,
+          util_5h: snap?.util_5h ?? null,
+          util_7d: snap?.util_7d ?? null,
+          reset_5h_at: snap?.reset_5h_at ?? null,
+          reset_7d_at: snap?.reset_7d_at ?? null,
+        };
+      });
+      const cap = computePoolCapacity(forCap);
+      const capByHandle = new Map(cap.per_token.map((p) => [p.handle, p.cap_pct]));
+      poolHandleData = new Map();
+      for (const t of tokens) {
+        const snap = getLatestUsageSnapshot(tokDb, t.id);
+        poolHandleData.set(t.handle, {
+          util5h: snap?.util_5h ?? null,
+          util7d: snap?.util_7d ?? null,
+          capPct: capByHandle.get(t.handle) ?? null,
+        });
+      }
+      const nextReset = computeNextReset({
+        tokens: tokens.map((t) => {
+          const snap = getLatestUsageSnapshot(tokDb, t.id);
+          return {
+            handle: t.handle,
+            plan_ratio: t.plan_ratio,
+            util_5h: snap?.util_5h ?? null,
+            util_7d: snap?.util_7d ?? null,
+            reset_5h_at: snap?.reset_5h_at ?? null,
+            reset_7d_at: snap?.reset_7d_at ?? null,
+            selectable: t.selectable,
+          };
+        }),
+      });
+      poolHeaderInput = { capacityPct: cap.capacity_pct, nextReset };
+      for (const line of buildPoolHeaderLines(poolHeaderInput)) {
+        console.log(line);
+      }
+    } catch (e: any) {
+      console.log(`  (token pool read failed: ${e?.message ?? e})`);
+      // 失敗時は handle 装飾も skip（既存レイアウトと同じ）
+      poolHandleData = null;
+    }
+  }
+
+  // T323: handle に対応する pool 情報をルックアップする。OFF / 失敗時は undefined を返す
+  const lookupPool = (handle: string | undefined) => {
+    if (!handle || !poolHandleData) return null;
+    return poolHandleData.get(handle) ?? null;
+  };
 
   // --- Master ---
   const mastersHeader = masters.length <= 1 ? "Master" : `Masters ${masters.length}`;
@@ -1400,7 +1485,19 @@ async function cmdStatus(): Promise<void> {
     for (const m of masters) {
       const st = m.status === "disconnected" ? "⚠" : m.status === "running" ? "◐" : "●";
       const statusLabel = m.status ? ` ${m.status}` : "";
-      console.log(`  ${st} [${m.surface.replace("surface:", "")}]${statusLabel}`);
+      let line = `  ${st} [${m.surface.replace("surface:", "")}]${statusLabel}`;
+      if (poolEnabled) {
+        const data = lookupPool(m.tokenHandle);
+        const suffix = formatSurfaceRow({
+          surface: m.surface,
+          handle: m.tokenHandle,
+          util5h: data?.util5h ?? null,
+          util7d: data?.util7d ?? null,
+          capPct: data?.capPct ?? null,
+        });
+        line = `  ${st} ${suffix}${statusLabel}`;
+      }
+      console.log(line);
     }
   }
 
@@ -1414,7 +1511,35 @@ async function cmdStatus(): Promise<void> {
       const statusLabel = c.status === "broken" ? " BROKEN" : "";
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
       const tid = c.taskId && c.taskId !== "undefined" ? `T${c.taskId}` : "---";
-      console.log(`  ${icon} [${c.surface.replace("surface:", "")}]${statusLabel}  ${tid}${title}`);
+      let cline = `  ${icon} [${c.surface.replace("surface:", "")}]${statusLabel}  ${tid}${title}`;
+      if (poolEnabled) {
+        const data = lookupPool(c.tokenHandle);
+        const suffix = formatSurfaceRow({
+          surface: c.surface,
+          handle: c.tokenHandle,
+          util5h: data?.util5h ?? null,
+          util7d: data?.util7d ?? null,
+          capPct: data?.capPct ?? null,
+        });
+        cline = `  ${icon} ${suffix}${statusLabel}  ${tid}${title}`;
+      }
+      console.log(cline);
+
+      // D5: agents は Conductor 行配下に indent 表示（pool 有効時のみ）
+      if (poolEnabled && c.agents && c.agents.length > 0) {
+        for (const a of c.agents) {
+          const data = lookupPool(a.tokenHandle);
+          const suffix = formatSurfaceRow({
+            surface: a.surface,
+            handle: a.tokenHandle,
+            util5h: data?.util5h ?? null,
+            util7d: data?.util7d ?? null,
+            capPct: data?.capPct ?? null,
+          });
+          const roleLabel = a.role ? ` (${a.role})` : "";
+          console.log(`      └ ${suffix}${roleLabel}`);
+        }
+      }
     }
   }
 
@@ -1840,14 +1965,15 @@ export function ensureMasterHookScripts(projectRoot: string): { busy: string; st
  * Agent/Conductor セッションにも適用されてしまう問題があったため、
  * Master 専用の settings.json に移設して起動経路で明示的に差し込む。
  */
-export function generateMasterSettings(projectRoot: string): string {
-  const settingsPath = join(projectRoot, ".team/prompts/master-settings.json");
+export function generateMasterSettings(projectRoot: string, surface: string): string {
+  // T323: per-surface settings.json（複数 Master が異なる surface 値を持てるように）
+  const settingsPath = join(projectRoot, `.team/prompts/${surface}-master-settings.json`);
   const { busy, stop } = ensureMasterHookScripts(projectRoot);
   const settings: Record<string, any> = {
-    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
-    // proxy 側を触らず Anthropic API リクエストに x-cmux-role ヘッダーが付く。
+    // T304/T323: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別 + surface 識別。
+    // proxy 側は x-cmux-surface 優先で MasterState/ConductorState の tokenHandle を解決する。
     env: {
-      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: master",
+      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: master, x-cmux-surface: ${surface}`,
     },
     hooks: {
       // T175: SessionStart hook で daemon に masterPid を渡し spawnMasterPidWatcher を起動する。
@@ -1994,13 +2120,17 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
   return settingsPath;
 }
 
-export function generateConductorSettings(projectRoot: string): string {
-  const conductorSettingsPath = join(projectRoot, ".team/prompts/conductor-settings.json");
+export function generateConductorSettings(projectRoot: string, surface: string): string {
+  // T323: per-surface settings.json（複数 Conductor が異なる surface 値を持てるように）
+  const conductorSettingsPath = join(
+    projectRoot,
+    `.team/prompts/${surface}-conductor-settings.json`,
+  );
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const conductorSettings: Record<string, any> = {
-    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
+    // T304/T323: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール + surface 識別。
     env: {
-      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: conductor",
+      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: conductor, x-cmux-surface: ${surface}`,
     },
     hooks: {
       PreToolUse: [
@@ -2159,7 +2289,8 @@ async function cmdConductor(): Promise<void> {
   const taskPromptFile = getArg("task-prompt");
 
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT);
+  // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
   // claude コマンド引数を組み立て
   const claudeArgs = [
@@ -2245,7 +2376,8 @@ async function cmdResume(): Promise<void> {
   const model = getModelForRole(config, "conductor", getArg("model"));
 
   // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT);
+  // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
+  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
   // claude --resume で再開
   const { execFileSync } = require("child_process");
@@ -2297,7 +2429,8 @@ async function cmdLaunchMaster(): Promise<void> {
   await log("master_spawn_proxy", `port=${proxyPort ?? "none"}`);
 
   // Master 用 settings.json 生成 (T211: UserPromptSubmit/Stop hook を同梱)
-  const masterSettingsPath = generateMasterSettings(PROJECT_ROOT);
+  // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
+  const masterSettingsPath = generateMasterSettings(PROJECT_ROOT, surface);
 
   // モデル解決
   const config = await loadConfig(PROJECT_ROOT);
@@ -2552,6 +2685,21 @@ async function cmdSpawnAgent(): Promise<void> {
         const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
         exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
         await log("token_pool_assigned", `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`);
+        // T323: spawn-agent で確定した tokenHandle を AGENT_TOKEN_BOUND メッセージで daemon に通知。
+        // AGENT_SPAWNED は触らず（T244 race 保護）、第 2 メッセージで agent.tokenHandle を後追い更新する。
+        try {
+          await postMessage({
+            type: "AGENT_TOKEN_BOUND",
+            surface,
+            tokenHandle: selected.token.handle,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (e: any) {
+          await log(
+            "agent_token_bound_post_failed",
+            `${formatSurface(surface, "A")} err=${e?.message ?? e}`,
+          );
+        }
       } else {
         await log("token_pool_fallback", `${formatSurface(surface, "A")} reason=no_candidate`);
       }
@@ -5110,6 +5258,22 @@ switch (command) {
       default:
         console.error(`Unknown token subcommand: ${tokenSub ?? "(none)"}`);
         console.error("Usage: cmux-team token add|list|remove|rotate|set-plan");
+        process.exit(1);
+    }
+    break;
+  }
+  case "pool": {
+    // T323: pool status サブコマンド（全 token の運用ダッシュボード）
+    const poolSub = process.argv[3];
+    if (!poolSub || hasHelpFlag()) {
+      showPoolUsage();
+      break;
+    }
+    switch (poolSub) {
+      case "status": await cmdPoolStatus(PROJECT_ROOT); break;
+      default:
+        console.error(`Unknown pool subcommand: ${poolSub}`);
+        showPoolUsage();
         process.exit(1);
     }
     break;

@@ -1,5 +1,11 @@
 import { describe, test, expect } from "bun:test";
-import { NotificationMessage, QueueMessage } from "./schema";
+import {
+  AgentTokenBoundMessage,
+  ConductorState,
+  MasterStateSchema,
+  NotificationMessage,
+  QueueMessage,
+} from "./schema";
 
 describe("NotificationMessage", () => {
   const base = {
@@ -70,5 +76,93 @@ describe("QueueMessage discriminated union", () => {
       timestamp: "2026-04-19T10:00:00.000Z",
     });
     expect(parsed.success).toBe(true);
+  });
+
+  // T323: AGENT_TOKEN_BOUND（spawn-agent 経路で selectToken 成功直後に POST される第 2 メッセージ）
+  test("AGENT_TOKEN_BOUND は QueueMessage にも含まれる", () => {
+    const parsed = QueueMessage.safeParse({
+      type: "AGENT_TOKEN_BOUND",
+      surface: "surface:201",
+      tokenHandle: "@kddi",
+      timestamp: "2026-04-25T10:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("AgentTokenBoundMessage", () => {
+  const base = {
+    type: "AGENT_TOKEN_BOUND" as const,
+    surface: "surface:201",
+    tokenHandle: "@kddi",
+    timestamp: "2026-04-25T10:00:00.000Z",
+  };
+
+  test("正常系: 必須フィールドでパース成功", () => {
+    const parsed = AgentTokenBoundMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("異常系: surface 欠落は reject", () => {
+    const { surface: _surface, ...withoutSurface } = base;
+    const parsed = AgentTokenBoundMessage.safeParse(withoutSurface);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: tokenHandle 欠落は reject", () => {
+    const { tokenHandle: _h, ...withoutHandle } = base;
+    const parsed = AgentTokenBoundMessage.safeParse(withoutHandle);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: type 不一致は reject", () => {
+    const parsed = AgentTokenBoundMessage.safeParse({ ...base, type: "AGENT_SPAWNED" });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("MasterStateSchema tokenHandle", () => {
+  test("正常系: tokenHandle なしでパース可能（後方互換）", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "idle",
+      startedAt: "2026-04-25T09:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: tokenHandle ありでパース可能", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "running",
+      startedAt: "2026-04-25T09:00:00.000Z",
+      tokenHandle: "@pers",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tokenHandle).toBe("@pers");
+    }
+  });
+});
+
+describe("ConductorState tokenHandle", () => {
+  test("正常系: tokenHandle なしでパース可能（後方互換）", () => {
+    const parsed = ConductorState.safeParse({
+      surface: "surface:123",
+      startedAt: "2026-04-25T09:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: tokenHandle ありでパース可能", () => {
+    const parsed = ConductorState.safeParse({
+      surface: "surface:123",
+      startedAt: "2026-04-25T09:00:00.000Z",
+      tokenHandle: "@kddi",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tokenHandle).toBe("@kddi");
+    }
   });
 });

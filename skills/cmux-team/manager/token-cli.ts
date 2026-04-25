@@ -23,9 +23,9 @@ import {
   isKeychainSupported,
   KeychainUnsupportedError,
   type TokenPlan,
-  type Token,
-  type UsageSnapshot,
 } from "./token-store";
+// T323: 共有フォーマッタを token-format.ts に切り出し（pool-cli.ts と再利用）
+import { formatUtil, formatReset, formatSelectable } from "./token-format";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ユーティリティ
@@ -85,30 +85,7 @@ async function probeOrganizationId(accessToken: string): Promise<string | null> 
   }
 }
 
-/** UTIL_5H / UTIL_7D / NEXT_RESET を人間向け文字列に整形 */
-function formatUtil(val: number | null): string {
-  if (val == null) return "--";
-  return `${(val * 100).toFixed(0)}%`;
-}
-
-function formatReset(isoStr: string | null): string {
-  if (!isoStr) return "--";
-  const d = new Date(isoStr);
-  if (Number.isNaN(d.getTime())) return "--";
-  const now = Date.now();
-  const diffMs = d.getTime() - now;
-  if (diffMs <= 0) return "now";
-  const diffH = diffMs / 3_600_000;
-  if (diffH < 24) return `${diffH.toFixed(1)}h`;
-  return `${(diffH / 24).toFixed(1)}d`;
-}
-
-function formatSelectable(tok: Token, snap: UsageSnapshot | null): string {
-  if (!tok.selectable) return "no";
-  const util5h = snap?.util_5h ?? null;
-  if (util5h != null && util5h > 0.95) return "blocked";
-  return "yes";
-}
+// T323: formatUtil / formatReset / formatSelectable は token-format.ts に移管
 
 // ─────────────────────────────────────────────────────────────────────────────
 // token add

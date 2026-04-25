@@ -5254,3 +5254,108 @@ describe("initInfra: .team/.gitignore (T315)", () => {
   });
 });
 
+// --- T323: AGENT_TOKEN_BOUND ハンドラと updateTeamJson の tokenHandle 出力 ---
+
+describe("handleMessage: AGENT_TOKEN_BOUND case (T323)", () => {
+  test("agent.tokenHandle が更新され notifyStateChanged 経由で永続化される", async () => {
+    const { createDaemon, handleMessage, updateTeamJson } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    const conductorSurface = "surface:323a";
+    const agentSurface = "surface:323a-agent";
+    state.conductors.set(conductorSurface, {
+      surface: conductorSurface,
+      startedAt: new Date().toISOString(),
+      agents: [
+        {
+          surface: agentSurface,
+          spawnedAt: new Date().toISOString(),
+          status: "starting",
+        },
+      ],
+      status: "running",
+    });
+
+    await handleMessage(state, {
+      type: "AGENT_TOKEN_BOUND",
+      surface: agentSurface,
+      tokenHandle: "@kddi",
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get(conductorSurface);
+    const a = c?.agents.find((x) => x.surface === agentSurface);
+    expect(a?.tokenHandle).toBe("@kddi");
+
+    // updateTeamJson 経由で永続化される
+    await updateTeamJson(state);
+    const teamJson = JSON.parse(
+      await readFile(join(testDir, ".team/team.json"), "utf-8"),
+    );
+    const sc = teamJson.conductors.find((x: any) => x.surface === conductorSurface);
+    const sa = sc?.agents.find((x: any) => x.surface === agentSurface);
+    expect(sa?.tokenHandle).toBe("@kddi");
+  });
+
+  test("対象 agent が見つからなければ orphan ログ + state 変更なし", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    await handleMessage(state, {
+      type: "AGENT_TOKEN_BOUND",
+      surface: "surface:nonexistent",
+      tokenHandle: "@kddi",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(state.conductors.size).toBe(0);
+    const logContent = await readFile(
+      join(testDir, ".team/logs/manager.log"),
+      "utf-8",
+    );
+    expect(logContent).toContain("agent_token_bound_orphan");
+  });
+});
+
+describe("updateTeamJson: tokenHandle シリアライズ (T323)", () => {
+  test("master / conductor / agent の tokenHandle が team.json に出力される", async () => {
+    const { createDaemon, updateTeamJson } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.masters.set("surface:m1", {
+      surface: "surface:m1",
+      pid: 11111,
+      status: "idle",
+      startedAt: new Date().toISOString(),
+      tokenHandle: "@pers",
+    });
+
+    state.conductors.set("surface:c1", {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "running",
+          tokenHandle: "@kddi",
+        },
+      ],
+      status: "running",
+      tokenHandle: "@pers",
+    });
+
+    await updateTeamJson(state);
+
+    const teamJson = JSON.parse(
+      await readFile(join(testDir, ".team/team.json"), "utf-8"),
+    );
+    const m = teamJson.masters.find((x: any) => x.surface === "surface:m1");
+    expect(m?.tokenHandle).toBe("@pers");
+    const c = teamJson.conductors.find((x: any) => x.surface === "surface:c1");
+    expect(c?.tokenHandle).toBe("@pers");
+    const a = c?.agents.find((x: any) => x.surface === "surface:a1");
+    expect(a?.tokenHandle).toBe("@kddi");
+  });
+});
+

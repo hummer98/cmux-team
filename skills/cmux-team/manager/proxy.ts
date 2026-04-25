@@ -43,6 +43,16 @@ function getTokensDB(): ReturnType<typeof initTokenDB> {
   return _tokensDb;
 }
 
+/** テスト専用: tokens.db のシングルトンを破棄して次の getTokensDB で再初期化させる。 */
+export function __resetTokensDbForTest(): void {
+  try {
+    _tokensDb?.close?.();
+  } catch {
+    // close 失敗は無視（既に閉じている可能性）
+  }
+  _tokensDb = null;
+}
+
 /** Authorization header の値全体を sha256 して 12 文字 prefix を返す（T320/A020）。 */
 function computeProxyAuthHash(authHeader: string | null): string | null {
   if (!authHeader) return null;
@@ -70,12 +80,21 @@ function genAutoDiscoverHandle(
  * - auth_hash が既知: utilization 変化時のみ throttled UPSERT
  * - auth_hash 未知: organization_id が取れれば auto-discover 登録（selectable=0）
  *
+ * T323: 既知 token ヒット時に role が `master` / `conductor` の場合、
+ *   `getState().masters.get(surface)?.tokenHandle` / `findConductor(state, surface)?.tokenHandle`
+ *   を tok.handle で書き戻す（変更時のみ notifyStateChanged）。
+ *   `role === "agent"` は spawn-agent 経路で AGENT_TOKEN_BOUND が確定するためここでは触らない。
+ *   surface / role が空 / 未知の場合は handle 反映を skip（safety guard）。
+ *
  * エラーは全て fire-and-forget（既存 traces.db 書き込みに影響させない）。
  */
 function updateTokensDB(
   authHash: string | null,
   rl: RateLimitInfo | null,
   organizationId: string | null,
+  surface: string | null,
+  role: string | null,
+  getState?: () => any,
 ): void {
   if (!authHash) return;
   const db = getTokensDB();
@@ -110,6 +129,18 @@ function updateTokensDB(
           unified_status: rl.unifiedStatus ?? null,
         });
       }
+
+      // T323: surface ↔ tokenHandle 反映（master/conductor のみ。agent は AGENT_TOKEN_BOUND 経路）
+      if (surface && role && getState) {
+        try {
+          maybeApplyTokenHandle(getState(), surface, role, tok.handle);
+        } catch (e: any) {
+          log(
+            "token_handle_apply_failed",
+            `surface=${surface} role=${role} err=${e?.message ?? e}`,
+          ).catch(() => {});
+        }
+      }
     } else if (organizationId) {
       // auto-discover: 未知アカウントを selectable=0 で登録
       const handle = genAutoDiscoverHandle(db, organizationId);
@@ -128,6 +159,43 @@ function updateTokensDB(
   } catch (e: any) {
     log("token_db_update_failed", `auth_hash=${authHash} err=${e?.message ?? e}`).catch(() => {});
   }
+}
+
+/**
+ * T323: master/conductor の `tokenHandle` を proxy が観測した値で書き戻す。
+ * 変更時のみ `notifyStateChanged("proxy:token-handle-resolved")` を発火する。
+ * agent role は spawn-agent 経路で確定するためここでは何もしない。
+ */
+function maybeApplyTokenHandle(
+  state: any,
+  surface: string,
+  role: string,
+  handle: string,
+): void {
+  if (role === "master") {
+    const m = state.masters?.get?.(surface);
+    if (m && m.tokenHandle !== handle) {
+      m.tokenHandle = handle;
+      notifyStateChanged("proxy:token-handle-resolved");
+    }
+    return;
+  }
+  if (role === "conductor") {
+    // findConductor は daemon.ts に export されている（循環参照を避けるため動的 import 不要）
+    // proxy.ts は daemon.ts から呼ばれる構造なので state を直接探索する
+    let target: any = null;
+    if (state.conductors instanceof Map) {
+      target = state.conductors.get(surface);
+    } else if (state.conductors && typeof state.conductors === "object") {
+      target = state.conductors[surface];
+    }
+    if (target && target.tokenHandle !== handle) {
+      target.tokenHandle = handle;
+      notifyStateChanged("proxy:token-handle-resolved");
+    }
+    return;
+  }
+  // role === "agent" or unknown role: 何もしない
 }
 
 // epoch 秒（10桁数値）または ISO 8601 文字列を受けて unix epoch 秒に正規化
@@ -531,7 +599,12 @@ export async function start(
 
       // リクエストヘッダーからメタデータを動的抽出（opts はフォールバック）
       const taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
-      const conductorSurface = req.headers.get("x-cmux-conductor-id") || opts?.conductorSurface;
+      // T323: x-cmux-surface ヘッダー優先（master/conductor/agent の per-surface 識別）。
+      // x-cmux-conductor-id は legacy fallback として残す（旧 daemon / 旧 settings.json 経路）。
+      const conductorSurface =
+        req.headers.get("x-cmux-surface")
+        || req.headers.get("x-cmux-conductor-id")
+        || opts?.conductorSurface;
       const role = req.headers.get("x-cmux-role") || opts?.role;
 
       // リクエストボディを読み取り（転送用 + サイズ計測用）
@@ -575,11 +648,15 @@ export async function start(
           }
         }
 
-        // T320: tokens.db を fire-and-forget で更新（streaming path）
+        // T320/T323: tokens.db を fire-and-forget で更新（streaming path）。
+        // surface / role / getState を渡して master/conductor の tokenHandle を反映する。
         updateTokensDB(
           authHash,
           extractRateLimit(upstreamRes.headers),
           upstreamRes.headers.get("anthropic-organization-id"),
+          conductorSurface ?? null,
+          role ?? null,
+          opts?.getState,
         );
 
         // streaming: tee して片方をログに使う
@@ -641,11 +718,14 @@ export async function start(
         }
       }
 
-      // T320: tokens.db を fire-and-forget で更新（非 streaming path）
+      // T320/T323: tokens.db を fire-and-forget で更新（非 streaming path）。
       updateTokensDB(
         authHash,
         extractRateLimit(upstreamRes.headers),
         upstreamRes.headers.get("anthropic-organization-id"),
+        conductorSurface ?? null,
+        role ?? null,
+        opts?.getState,
       );
 
       const entry: TraceEntry = {

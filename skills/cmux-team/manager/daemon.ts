@@ -205,7 +205,7 @@ function readTranscriptTail(path: string, bytes: number): string | null {
 }
 
 /** surface または taskRunId で Conductor を検索 */
-function findConductor(state: DaemonState, surface: string): ConductorState | undefined {
+export function findConductor(state: DaemonState, surface: string): ConductorState | undefined {
   const direct = state.conductors.get(surface);
   if (direct) return direct;
   // taskRunId で検索（フォールバック）
@@ -947,6 +947,8 @@ function restoreConductorState(c: any): ConductorState {
     pid: (typeof a.pid === "number" && cmux.isAlive(a.pid)) ? a.pid : undefined,
     // T236: 旧 team.json に status が無ければ "idle" にフォールバック。
     status: (a.status as AgentState["status"]) ?? "idle",
+    // T323: token pool 用 handle（永続化されていれば復元）
+    tokenHandle: typeof a.tokenHandle === "string" ? a.tokenHandle : undefined,
   }));
   return {
     surface: c.surface,
@@ -966,6 +968,8 @@ function restoreConductorState(c: any): ConductorState {
     //       sessionStartedClearAt）はランタイム限定で、
     //       team.json に書き出していないため復元時も undefined に戻る（意図通り）。
     clearSentAt: c.clearSentAt,
+    // T323: token pool 用 handle（永続化されていれば復元）
+    tokenHandle: typeof c.tokenHandle === "string" ? c.tokenHandle : undefined,
     // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
     status:
       c.status === "running" ? "running"
@@ -1469,6 +1473,39 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       }, ccBackend(state.backend));
       // 即時 tick を発火し、次の scanTasks で新タスクを拾えるようにする
       requestWakeup(state);
+      break;
+    }
+
+    case "AGENT_TOKEN_BOUND": {
+      // T323: spawn-agent の selectToken 成功直後に POST される第 2 メッセージ。
+      // AGENT_SPAWNED で先に登録された agent.tokenHandle を後追い更新する。
+      // race で agent が消えていた場合は warning ログのみ（state 変更なし）。
+      const agentSurface = message.surface;
+      let target: AgentState | undefined;
+      let parentSurface: string | undefined;
+      for (const [parent, c] of state.conductors) {
+        const ag = c.agents.find((a) => a.surface === agentSurface);
+        if (ag) {
+          target = ag;
+          parentSurface = parent;
+          break;
+        }
+      }
+      if (target) {
+        if (target.tokenHandle !== message.tokenHandle) {
+          target.tokenHandle = message.tokenHandle;
+          notifyStateChanged("daemon.ts:handleMessage:agent_token_bound");
+        }
+        await log(
+          "agent_token_bound",
+          `${parentSurface ? formatPair(parentSurface, agentSurface, "C", "A") : formatSurface(agentSurface, "A")} handle=${message.tokenHandle}`,
+        );
+      } else {
+        await log(
+          "agent_token_bound_orphan",
+          `${formatSurface(agentSurface, "A")} handle=${message.tokenHandle} reason=agent_not_found`,
+        );
+      }
       break;
     }
 
@@ -3545,6 +3582,8 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       status: m.status,
       pid: m.pid,
       startedAt: m.startedAt,
+      // T323: token pool 用 handle（proxy が auth_hash 解決時に書き戻す）
+      tokenHandle: m.tokenHandle,
     }));
     delete teamJson.master;
     teamJson.manager = {
@@ -3573,12 +3612,16 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
       clearSentAt: c.clearSentAt,
       sessionId: c.sessionId,
       pid: c.pid,
+      // T323: token pool 用 handle（proxy が auth_hash 解決時に書き戻す）
+      tokenHandle: c.tokenHandle,
       agents: c.agents.map((a) => ({
         surface: a.surface,
         role: a.role,
         sessionId: a.sessionId,
         pid: a.pid,
         status: a.status,
+        // T323: token pool 用 handle（spawn-agent 経路で AGENT_TOKEN_BOUND が反映）
+        tokenHandle: a.tokenHandle,
       })),
     }));
     // アトミック書き込み: tmp → rename で中途半端な書き込みを防止
