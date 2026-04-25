@@ -24,6 +24,23 @@ Master（ユーザー対話）→ Manager（イベント駆動監視）→ Condu
 | **逸脱を防ぐより、逸脱しても安全な構造にする** | worktree 隔離 + 事後レビュー |
 | **構造的正しさを優先** | 状態遷移・責務分担・データフローが明示的に正しいこと。必要な抽象化（state machine、型で列挙された状態、専用ライブラリ等）は積極的に導入し、繰り返し発生するクラスのバグを構造で絶つ。局所的な if/else の継ぎ足しでモグラ叩きを続けない |
 
+### 設計原則の背景: state tracking 弱さへの構造的対応
+
+上記 5 原則は独立に並んでいるように見えて、**「transformer が state を内部で維持しなくて済む環境を設計する」** という 1 つの上位原理に収束する。
+
+現在の transformer は inherently sequential な state tracking を苦手とする（depth exhaustion）。長時間スコープ・複数セッションをまたぐ agent オーケストレーションでは、この弱さが必ず顕在化するため、環境側で構造的に補完する。
+
+新規スキル・コマンド・テンプレート・ツール追加時は以下を確認する：
+
+| 確認項目 | 既存実装の対応例 |
+|---|---|
+| **state を外部化しているか** — agent memory に頼らず FSM・artifact・DB に置く | `task-state.json` + Task FSM、`.team/artifacts/`、trace DB |
+| **silent state mutation を作っていないか** — 状態変更は必ず観測可能にする | CLI 強制（直接ファイル書き禁止 hook）、hook→daemon の決定論的経路 |
+| **observer が pull で観測できるか** — agent の自己申告を信用しない | Manager の pull 型監視、PID watcher、done マーカーファイル |
+| **statefulness を排除できないか** — 状態追跡を要求しない設計を優先 | worktree-per-task 隔離、絶対パス強制、stateless CLI |
+
+「agent が前回の state を覚えている前提」が必要になったら設計の sign of trouble。state を外部化するか、状態追跡を要求しない protocol に再設計する。
+
 ## 判断基準と優先順位
 
 ### タスクの優先順位（高→低）
