@@ -1,0 +1,22 @@
+// AUTO-GENERATED — many20-37
+import { test, expect } from "bun:test";
+test("many20-37-1", () => { expect(1).toBe(1); });
+test("many20-37-2", () => { expect(1).toBe(1); });
+test("many20-37-3", () => { expect(1).toBe(1); });
+test("many20-37-4", () => { expect(1).toBe(1); });
+test("many20-37-5", () => { expect(1).toBe(1); });
+test("many20-37-6", () => { expect(1).toBe(1); });
+test("many20-37-7", () => { expect(1).toBe(1); });
+test("many20-37-8", () => { expect(1).toBe(1); });
+test("many20-37-9", () => { expect(1).toBe(1); });
+test("many20-37-10", () => { expect(1).toBe(1); });
+test("many20-37-11", () => { expect(1).toBe(1); });
+test("many20-37-12", () => { expect(1).toBe(1); });
+test("many20-37-13", () => { expect(1).toBe(1); });
+test("many20-37-14", () => { expect(1).toBe(1); });
+test("many20-37-15", () => { expect(1).toBe(1); });
+test("many20-37-16", () => { expect(1).toBe(1); });
+test("many20-37-17", () => { expect(1).toBe(1); });
+test("many20-37-18", () => { expect(1).toBe(1); });
+test("many20-37-19", () => { expect(1).toBe(1); });
+test("many20-37-20", () => { expect(1).toBe(1); });
