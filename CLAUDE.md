@@ -72,6 +72,7 @@ cmux-team/
 
 | ファイル | 内容 |
 |---------|------|
+| `docs/spec/glossary.md` | 用語集（用語 → 一次定義場所のインデックス） |
 | `docs/spec/00-project-overview.md` | プロジェクト概要・4層アーキテクチャ |
 | `docs/spec/01-skill-cmux-team.md` | cmux-team スキルの仕様 |
 | `docs/spec/04-templates.md` | テンプレート変数仕様（`{{VARIABLE}}` 全一覧） |

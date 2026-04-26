@@ -130,3 +130,4 @@ npm install -g @hummer98/cmux-team
 | 05 | 05-install-and-infrastructure.md | インストール・インフラ構成 |
 | 06 | 06-implementation-tasks.md | 実装タスク定義 |
 | 07 | 07-state-machine.md | Conductor / Task FSM 仕様（T279、shadow observability 配線） |
+| -- | glossary.md | 用語集（一次定義のインデックス、二次資料） |
