@@ -863,10 +863,11 @@ async function cmdStart(): Promise<void> {
 
       // 4. 閉じた surface を state から除去してから team.json を永続化する。
       //    これをやらないと次回起動の initializeLayout が存在しない surface を
-      //    team.json から読んで全件 discard し、R7 方針で pane を新規作成しない
-      //    ため Conductor ゼロ台で着地する（Full Quit のセマンティクスは
+      //    team.json から読んで全件 discard し、fallback 経路 → topup により
+      //    maxConductors 個の pane が新規作成される（T346: R7 廃止 + 事後条件
+      //    保証後）。pane 台数は最終的に揃うが、Full Quit のセマンティクスは
       //    「全部終了して次回はゼロから」なので、truth である team.json にも
-      //    その事実を反映する）。
+      //    その事実を反映する。
       state.conductors.clear();
       state.masters.clear();
 
