@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [4.12.0] - 2026-04-26
+
+### Added
+
+- **`{{PROJECT_INSTRUCTIONS}}` overlay を Master / Conductor にも適用（T342）**。これまで Agent 8 ロール専用だった agent-instructions overlay 機構を 10 ロール（Agent 8 + Master + Conductor）対応に拡張。`OverlayRole` enum と `normalizeOverlayRole` を新設して `AgentRole` と分離し、`generateMasterPrompt` / `generateConductorRolePrompt` で project 固有の overlay を展開できるようにした。`cmux-team set-agent-instructions --role master` / `--role conductor` で project 固有指示を上書きできる
+- **Token pool に auto-discover gate と `cmux-team token promote` を追加（T341）**。token pool が OFF の状態では auto-discover で未知 token を `tokens.db` に INSERT しないゲートを proxy に導入し、opt-in 原則を回復。auto-discover で登録された匿名 token を正規 handle に migration するための `cmux-team token promote` を新規追加した（`token add` と同形の UI で source 選択 → organization_id 検証 → Keychain 先 / DB 後の順序で atomic migration）
+
+### Fixed
+
+- **`findProjectRoot` が削除済み tmpdir を無視するよう修正**。`process.env.PROJECT_ROOT` が存在しないディレクトリを指している場合、`process.chdir()` が ENOENT でクラッシュしていた問題を修正。`existsSync` チェックを追加して消滅した tmpdir は無視し cwd フォールバックへ、`process.chdir()` 失敗時は明示メッセージで `exit(1)` するようにした
+- **`ClaudeCodeBackend.send` / `reset` に `cmux send-key return` の呼び出しを再導入（T343）**。リファクタ commit `09492cf` で抜けていた enter 確定処理を復活させ、Claude Code TUI で長文プロンプトが確定されない不具合を修正。`send()` は `cmux.send(raw) → cmux.sendKey("return")` の 2 段呼び出し、`reset()` は `/clear → return → 500ms wait → prompt → return` の 4 ステップに変更
+
+### Changed
+
+- **token pool 仕様を `docs/spec/09-token-pool.md` に新設**。`cmux-team token` CLI（`add` / `list` / `remove` / `rotate` / `set-plan`）・DB スキーマ・`selectToken` アルゴリズム・`pool_capacity` 計算・設定モデルの仕様をひとまとめにし、CLAUDE.md の docs/spec 参照テーブルから辿れるようにした
+
 ## [4.11.0] - 2026-04-26
 
 ### Added
