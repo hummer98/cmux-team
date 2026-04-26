@@ -47,6 +47,10 @@ import {
   getBurnRateWindow,
 } from "./trace-store";
 import { buildMetricsRows, type MetricsData } from "./dashboard-metrics";
+// T351: pool capacity / per-surface handle 表示
+import { buildPoolHeaderLines } from "./pool-status-header";
+import { buildSurfaceRowSuffix } from "./pool-surface-row";
+import type { PoolSummary, PerHandleSummary } from "./pool-summary";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
@@ -452,7 +456,42 @@ function sectionTitle(label: string) {
 
 // --- ビュー構築 ---
 
-function buildMasterSection(state: DaemonState) {
+/**
+ * T351: pool capacity ヘッダー（dashboard 用）。
+ *
+ * - summary=null（pool OFF / 失敗）→ `[]`（呼び出し側で何も挿入されない）
+ * - summary=有効 → `pool capacity: NN%` 行 + `next reset: ...` 行を含む node 配列
+ *
+ * `buildPoolHeaderLines`（CLI 用文字列 API）と同じ枠線テキストを使い、capacity 行のみ
+ * 数値部分の閾値色分けを適用する。閾値は docs/spec/09-token-pool.md に従う:
+ *   - capacity_pct >= 100% → GREEN
+ *   - 40% 〜 100%       → YELLOW
+ *   - < 40%             → RED
+ */
+export function buildPoolHeader(summary: PoolSummary | null): ReturnType<typeof ui.text>[] {
+  if (summary == null) return [];
+  const lines = buildPoolHeaderLines(summary.header);
+  if (lines.length === 0) return [];
+
+  const capPct = summary.header.capacityPct;
+  const capColor = capPct >= 100 ? GREEN : capPct >= 40 ? YELLOW : RED;
+
+  return lines.map((line) => {
+    // capacity 行（"pool capacity: NN%" を含む）は数値色を反映するため再構築する。
+    // 罫線・next reset・空白行は dim でそのまま表示。
+    const capIdx = line.indexOf("pool capacity:");
+    if (capIdx >= 0) {
+      // line 全体を 1 つの ui.text にして fg 色を当てる（数値だけ抜く UI 分割は枠幅が崩れるので避ける）。
+      return ui.text(line, { style: { fg: capColor } });
+    }
+    return ui.text(line, { dim: true });
+  });
+}
+
+function buildMasterSection(
+  state: DaemonState,
+  perHandle: Map<string, PerHandleSummary> | null,
+) {
   const masters = [...state.masters.values()];
   if (masters.length === 0) {
     return ui.row({ gap: 1 }, [
@@ -465,12 +504,14 @@ function buildMasterSection(state: DaemonState) {
   const rows = masters.map((m) => {
     const surfaceLabel = `[${m.surface.replace("surface:", "")}]`;
     const status = m.status ?? "idle";
+    const suffix = buildPoolSuffixForSurface(perHandle, m.surface, m.tokenHandle);
 
     if (status === "disconnected") {
       return ui.row({ gap: 1 }, [
         ui.text("⚠", { style: { fg: YELLOW } }),
         ui.text(surfaceLabel),
         ui.text("disconnected", { style: { fg: YELLOW } }),
+        ...suffix,
       ]);
     }
 
@@ -483,6 +524,7 @@ function buildMasterSection(state: DaemonState) {
       if (m.prompt) {
         children.push(ui.text(m.prompt, { style: { fg: GRAY } }));
       }
+      children.push(...suffix);
       return ui.row({ gap: 1 }, children);
     }
 
@@ -490,6 +532,7 @@ function buildMasterSection(state: DaemonState) {
     return ui.row({ gap: 1 }, [
       ui.text("●", { style: { fg: GREEN } }),
       ui.text(surfaceLabel),
+      ...suffix,
     ]);
   });
   if (masters.some((m) => m.status === "running")) spinnerTick++;
@@ -497,10 +540,60 @@ function buildMasterSection(state: DaemonState) {
 }
 
 /**
- * T326: テスト用に export。Conductor 1 行 + 配下 Agent サブツリーを ui ノードとして組み立てる。
- * 内部実装は変えない（純粋追加の export）。
+ * T351: per-surface pool suffix を組み立てる共通ヘルパー。
+ *
+ * - perHandle=null（pool OFF / 失敗）→ `[]`（既存レイアウト維持）
+ * - tokenHandle あり → buildSurfaceRowSuffix の結果（@handle / util / cap / ⚠）
+ * - tokenHandle なし → buildSurfaceRowSuffix が `(no token)` を返す
+ *
+ * `surface` パラメータは現状未使用だが、`SurfaceRowInput` の必須キーなので渡す。
+ * surface ラベル本体は dashboard 側が独立 node として描画する（API 案 X）。
  */
-export function buildConductorRow(c: ConductorState & { agents: AgentState[]; status: string }, repoUrl: string | null, spinnerFrame: number = 0) {
+function buildPoolSuffixForSurface(
+  perHandle: Map<string, PerHandleSummary> | null,
+  surface: string,
+  tokenHandle: string | undefined,
+): ReturnType<typeof ui.text>[] {
+  if (perHandle == null) return [];
+  const data = tokenHandle ? perHandle.get(tokenHandle) ?? null : null;
+  return buildSurfaceRowSuffix({
+    surface,
+    handle: tokenHandle,
+    util5h: data?.util5h ?? null,
+    util7d: data?.util7d ?? null,
+    capPct: data?.capPct ?? null,
+  });
+}
+
+/**
+ * T326: テスト用に export。Conductor 1 行 + 配下 Agent サブツリーを ui ノードとして組み立てる。
+ *
+ * T351: pool capacity / per-surface handle 表示を追加するにあたり、第 4 引数 `perHandle` を
+ * 取る `buildConductorRowWithPool` を新たに export する。既存の `buildConductorRow` は
+ * `perHandle=null` を渡す薄いシムとし、既存テスト（dashboard-conductor.test.tsx 等）の
+ * 引数 3 個版呼び出しの互換を保つ。
+ */
+export function buildConductorRow(
+  c: ConductorState & { agents: AgentState[]; status: string },
+  repoUrl: string | null,
+  spinnerFrame: number = 0,
+) {
+  return buildConductorRowWithPool(c, repoUrl, spinnerFrame, null);
+}
+
+/**
+ * T351: pool capacity / per-surface handle 表示対応版。
+ *
+ * - `perHandle=null` のとき pool 装飾は何も挿入されず、既存 `buildConductorRow` と完全一致する。
+ * - `perHandle` が Map の場合、Conductor 行と Agent 行の末尾に `buildSurfaceRowSuffix` の
+ *   結果を spread で append する（`[surface]` ラベルは dashboard 側のまま、API 案 X）。
+ */
+export function buildConductorRowWithPool(
+  c: ConductorState & { agents: AgentState[]; status: string },
+  repoUrl: string | null,
+  spinnerFrame: number,
+  perHandle: Map<string, PerHandleSummary> | null,
+) {
   const isStarting = c.status === "starting";
   const isAssigning = c.status === "assigning";
   const isIdle = c.status === "idle";
@@ -509,6 +602,9 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
   const isAsking = c.status === "asking";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
+
+  // T351: Conductor 行末尾に追加する pool suffix（perHandle=null なら空）
+  const poolSuffix = buildPoolSuffixForSurface(perHandle, c.surface, c.tokenHandle);
 
   const children = [];
 
@@ -521,6 +617,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text(spinChar, { style: { fg: CYAN } }),
         ui.text(`[${surface}]`, { style: { fg: CYAN } }),
         ui.text("starting…", { style: { fg: CYAN } }),
+        ...poolSuffix,
       ])
     );
   } else if (isAssigning) {
@@ -540,6 +637,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text(`[${surface}]`, { style: { fg: CYAN } }),
         ...taskParts,
         ui.text("assigning…", { style: { fg: CYAN } }),
+        ...poolSuffix,
       ])
     );
   } else if (isIdle) {
@@ -548,6 +646,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text("○", dimStyle),
         ui.text(`[${surface}]`, dimStyle),
         ui.text("idle", { dim: true }),
+        ...poolSuffix,
       ])
     );
   } else if (isAsking) {
@@ -565,6 +664,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ...taskParts,
         ui.text("asking", { style: { fg: YELLOW } }),
         ui.text(elapsed, { dim: true }),
+        ...poolSuffix,
       ])
     );
     const q = (c.askQuestion ?? "").replace(/\s+/g, " ").trim();
@@ -592,6 +692,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text(`[${surface}]`),
         ...taskParts,
         ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
+        ...poolSuffix,
       ])
     );
   } else if (isBroken) {
@@ -604,6 +705,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text(`[${surface}]`),
         ui.text(`broken ${brokenElapsed}`, { style: { fg: RED } }),
         ui.text("use clear-conductor", { dim: true }),
+        ...poolSuffix,
       ])
     );
   } else {
@@ -616,6 +718,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
         ui.text(taskId, { bold: true }),
         c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
         ui.text(elapsed, { dim: true }),
+        ...poolSuffix,
       ])
     );
   }
@@ -640,6 +743,8 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
     // T238: status === "asking" のときは YELLOW + ? マーク + ラベル YELLOW で強調。
     const isAgentAsking = a.status === "asking";
     const isAgentRunning = a.status === "running" || a.status === "starting";
+    // T351: Agent 行末尾 pool suffix（perHandle=null なら空）
+    const agentSuffix = buildPoolSuffixForSurface(perHandle, a.surface, a.tokenHandle);
     if (isAgentAsking) {
       children.push(
         ui.row({ gap: 1 }, [
@@ -647,6 +752,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: YELLOW } }),
           ui.text("?", { style: { fg: YELLOW } }),
           ui.text(`${roleIcon} ${label}`, { style: { fg: YELLOW } }),
+          ...agentSuffix,
         ])
       );
     } else if (isAgentRunning) {
@@ -657,6 +763,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
           ui.text(spinChar, { style: { fg: CYAN } }),
           ui.text(label),
+          ...agentSuffix,
         ])
       );
     } else {
@@ -665,6 +772,7 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
           ui.text(`   ${prefix}`, { dim: true }),
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
           ui.text(`${roleIcon} ${label}`, { dim: true }),
+          ...agentSuffix,
         ])
       );
     }
@@ -673,12 +781,20 @@ export function buildConductorRow(c: ConductorState & { agents: AgentState[]; st
   return ui.column({ gap: 0 }, children);
 }
 
-function buildConductorsSection(state: DaemonState, repoUrl: string | null, spinnerFrame: number = 0) {
+function buildConductorsSection(
+  state: DaemonState,
+  repoUrl: string | null,
+  spinnerFrame: number = 0,
+  perHandle: Map<string, PerHandleSummary> | null = null,
+) {
   const conductors = [...state.conductors.values()];
   if (conductors.length === 0) {
     return ui.text("idle — waiting for tasks", { dim: true });
   }
-  return ui.column({ gap: 0 }, conductors.map((c) => buildConductorRow(c as any, repoUrl, spinnerFrame)));
+  return ui.column(
+    { gap: 0 },
+    conductors.map((c) => buildConductorRowWithPool(c as any, repoUrl, spinnerFrame, perHandle)),
+  );
 }
 
 /**
@@ -1329,12 +1445,14 @@ export async function startDashboard(
               );
             })()]
           : []),
+        // T351: pool capacity ヘッダー（pool ON のみ。pool OFF / 失敗時は空配列で何も挿入しない）
+        ...buildPoolHeader(daemon.pool),
         // Master セクション
         sectionTitle("Master"),
-        buildMasterSection(daemon),
+        buildMasterSection(daemon, daemon.pool?.perHandle ?? null),
         // Conductors セクション
         sectionTitle(conductorsSectionLabel),
-        buildConductorsSection(daemon, repoUrl, state.spinnerFrame),
+        buildConductorsSection(daemon, repoUrl, state.spinnerFrame, daemon.pool?.perHandle ?? null),
         // Tasks セクション（クリックでフォーカス）
         ui.button({
           id: "section-tasks",
