@@ -68,11 +68,13 @@ import {
   cmdTokenRemove,
   cmdTokenRotate,
   cmdTokenSetPlan,
+  cmdTokenPromote,
 } from "./token-cli";
 import {
   initTokenDB,
   insertToken,
   getTokenByHandle,
+  getLatestUsageSnapshot,
   retrieveTokenFromKeychain,
   storeTokenInKeychain,
   upsertUsageSnapshot,
@@ -663,5 +665,308 @@ describe("cmdTokenSetPlan (integration)", () => {
     expect(caught).toBeInstanceOf(TestExitError);
     expect(caught?.code).toBe(1);
     expect(consoleErrors.join("\n")).toContain("@missing");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// cmdTokenPromote (T341)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("cmdTokenPromote (integration)", () => {
+  function seedAutoDiscover(opts: {
+    handle?: string;
+    organization_id?: string;
+    auth_hash?: string;
+  } = {}): { id: number; organization_id: string } {
+    const db = initTokenDB();
+    try {
+      const tok = insertToken(db, {
+        handle: opts.handle ?? "@cd8d",
+        organization_id: opts.organization_id ?? "cd8db5e8-aaaa-bbbb-cccc-000000000000",
+        auth_hash: opts.auth_hash ?? "auto00000000",
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["auto"],
+        credential_source: "auto-discover",
+        selectable: false,
+      });
+      return { id: tok.id, organization_id: tok.organization_id };
+    } finally {
+      db.close();
+    }
+  }
+
+  test("R-promote-1: 正常系 credential 経路で promote 成功", async () => {
+    const { id, organization_id } = seedAutoDiscover();
+    writeClaudeCredentials({
+      accessToken: "new-cred-token-XYZ",
+      rateLimitTier: "default_claude_max_20x",
+    });
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers(
+      "1", // source = credential
+      "any", // tags
+    );
+    await withMockedFetch(organization_id, async () => {
+      await cmdTokenPromote();
+    });
+
+    const db = initTokenDB();
+    try {
+      expect(getTokenByHandle(db, "@cd8d")).toBeNull();
+      const tok = getTokenByHandle(db, "@kddi");
+      expect(tok).not.toBeNull();
+      expect(tok?.id).toBe(id);
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+      expect(tok?.selectable).toBe(true);
+      expect(tok?.credential_source).toBe("claude-credentials");
+      expect(tok?.tags).toEqual(["any"]);
+      expect(retrieveTokenFromKeychain("@kddi")).toBe("new-cred-token-XYZ");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-2: 正常系 manual 経路で promote 成功 (tags 入力あり)", async () => {
+    const { organization_id } = seedAutoDiscover();
+    setArgv("promote", "@cd8d", "kddi-dev");
+    setReadlineAnswers(
+      "2",                  // source = manual
+      "manual-token-AAA",   // token
+      "any,kddi",           // tags
+    );
+    await withMockedFetch(organization_id, async () => {
+      await cmdTokenPromote();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@kddi");
+      expect(tok).not.toBeNull();
+      expect(tok?.credential_source).toBe("manual");
+      expect(tok?.plan).toBe("unknown");
+      expect(tok?.plan_ratio).toBeNull();
+      expect(tok?.tags).toEqual(["any", "kddi"]);
+      expect(tok?.selectable).toBe(true);
+      expect(retrieveTokenFromKeychain("@kddi")).toBe("manual-token-AAA");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-3: organization_id 不一致 → exit 1, DB 変更なし", async () => {
+    const { id, organization_id } = seedAutoDiscover();
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers("2", "different-account-token", "any");
+
+    let caught: TestExitError | null = null;
+    try {
+      await withMockedFetch("DIFFERENT-ORG-ID", async () => {
+        await cmdTokenPromote();
+      });
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toMatch(/別アカウント|別の/);
+
+    const db = initTokenDB();
+    try {
+      expect(getTokenByHandle(db, "@kddi")).toBeNull();
+      const orig = getTokenByHandle(db, "@cd8d");
+      expect(orig?.id).toBe(id);
+      expect(orig?.organization_id).toBe(organization_id);
+      expect(orig?.credential_source).toBe("auto-discover");
+      expect(orig?.selectable).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-4: 旧 handle が存在しない → exit 1", async () => {
+    setArgv("promote", "@missing", "foo");
+    setReadlineAnswers("1", "any");
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenPromote();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("@missing");
+  });
+
+  test("R-promote-5: 新 handle が既存と衝突 → exit 1", async () => {
+    seedAutoDiscover({ handle: "@cd8d", organization_id: "org-cd8d" });
+    {
+      const db = initTokenDB();
+      try {
+        insertToken(
+          db,
+          makeToken({ handle: "@kddi", organization_id: "org-kddi-existing" }),
+        );
+      } finally {
+        db.close();
+      }
+    }
+
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers("2", "tok", "any");
+    let caught: TestExitError | null = null;
+    try {
+      await withMockedFetch("org-cd8d", async () => {
+        await cmdTokenPromote();
+      });
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("@kddi");
+  });
+
+  test("R-promote-6: 旧 handle が auto-discover ではない → exit 1", async () => {
+    {
+      const db = initTokenDB();
+      try {
+        insertToken(
+          db,
+          makeToken({
+            handle: "@pers",
+            organization_id: "org-pers-manual",
+            credential_source: "manual",
+            selectable: true,
+          }),
+        );
+      } finally {
+        db.close();
+      }
+    }
+    setArgv("promote", "@pers", "personal-renamed");
+    setReadlineAnswers("1", "any");
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenPromote();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("auto-discover");
+  });
+
+  test("R-promote-7: probe 失敗 → exit 1, DB / Keychain 変更なし", async () => {
+    seedAutoDiscover();
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers("2", "tok-no-probe", "any");
+    let caught: TestExitError | null = null;
+    try {
+      await withMockedFetch(null, async () => {
+        await cmdTokenPromote();
+      });
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+
+    const db = initTokenDB();
+    try {
+      expect(getTokenByHandle(db, "@kddi")).toBeNull();
+      const orig = getTokenByHandle(db, "@cd8d");
+      expect(orig).not.toBeNull();
+      expect(orig?.credential_source).toBe("auto-discover");
+      expect(orig?.selectable).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-8: usage_snapshots は token_id 維持で壊れない", async () => {
+    const { id, organization_id } = seedAutoDiscover();
+    {
+      const db = initTokenDB();
+      try {
+        upsertUsageSnapshot(db, {
+          token_id: id,
+          util_5h: 0.55,
+          util_7d: 0.33,
+          reset_5h_at: null,
+          reset_7d_at: null,
+          unified_status: null,
+        });
+      } finally {
+        db.close();
+      }
+    }
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers("2", "manual-tok", "any");
+    await withMockedFetch(organization_id, async () => {
+      await cmdTokenPromote();
+    });
+
+    const db = initTokenDB();
+    try {
+      const snap = getLatestUsageSnapshot(db, id);
+      expect(snap).not.toBeNull();
+      expect(snap?.util_5h).toBeCloseTo(0.55, 5);
+      expect(snap?.util_7d).toBeCloseTo(0.33, 5);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-9: newHandle === oldHandle のときは info ログを出して続行する", async () => {
+    seedAutoDiscover({ handle: "@cd8d", organization_id: "org-same-handle" });
+    setArgv("promote", "@cd8d", "cd8d-extra"); // slug → "cd8d" → @cd8d
+    setReadlineAnswers("2", "tok-same", "any");
+    await withMockedFetch("org-same-handle", async () => {
+      await cmdTokenPromote();
+    });
+
+    // info ログが出ていること
+    const out = consoleLogs.join("\n");
+    expect(out).toContain("@cd8d");
+    expect(out).toMatch(/handle は変わりません|handle.*unchanged/);
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@cd8d");
+      expect(tok).not.toBeNull();
+      expect(tok?.credential_source).toBe("manual");
+      expect(tok?.selectable).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("R-promote-10: plan='unknown' のとき set-plan ヒントを表示する (M2)", async () => {
+    const { organization_id } = seedAutoDiscover();
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers("2", "manual-tok", "any");
+    await withMockedFetch(organization_id, async () => {
+      await cmdTokenPromote();
+    });
+
+    const out = consoleLogs.join("\n");
+    expect(out).toContain("set-plan");
+    expect(out).toContain("@kddi");
+  });
+
+  test("R-promote-11: new display name が引数不足 → exit 1", async () => {
+    seedAutoDiscover();
+    setArgv("promote", "@cd8d");
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenPromote();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("Usage");
   });
 });

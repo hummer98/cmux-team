@@ -22,6 +22,7 @@ import {
   getLatestUsageSnapshot,
   upsertUsageSnapshot,
 } from "./token-store";
+import { isTokenPoolEnabled } from "./config";
 import { createHash } from "crypto";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -94,12 +95,14 @@ function updateTokensDB(
   organizationId: string | null,
   surface: string | null,
   role: string | null,
-  getState?: () => any,
+  opts: { tokenPoolEnabled: boolean; getState?: () => any },
 ): void {
   if (!authHash) return;
   const db = getTokensDB();
   if (!db) return;
   if (!rl) return;
+
+  const { tokenPoolEnabled, getState } = opts;
 
   try {
     const tok = getTokenByAuthHash(db, authHash);
@@ -142,6 +145,11 @@ function updateTokensDB(
         }
       }
     } else if (organizationId) {
+      if (!tokenPoolEnabled) {
+        // T341: pool 機能 OFF では auto-discover INSERT を skip。
+        // 既知 token の usage_snapshots UPSERT は影響しない（上の if 分岐内）。
+        return;
+      }
       // auto-discover: 未知アカウントを selectable=0 で登録
       const handle = genAutoDiscoverHandle(db, organizationId);
       insertToken(db, {
@@ -360,6 +368,13 @@ export async function start(
   await mkdir(tracesDir, { recursive: true });
 
   const traceFile = join(tracesDir, "api-trace.jsonl");
+
+  // T341: token pool 機能の有効/無効を proxy 起動時に 1 度だけ評価して
+  // クロージャに束縛する。リクエスト毎の I/O を避ける目的。設定変更は
+  // daemon 再起動を伴う前提で運用するため、proxy プロセス生存期間で固定する。
+  const tokenPoolDecision = await isTokenPoolEnabled(projectRoot);
+  const tokenPoolEnabled = tokenPoolDecision.enabled;
+  log("proxy_token_pool_resolved", `enabled=${tokenPoolEnabled} source=${tokenPoolDecision.source}`).catch(() => {});
 
   // 前回ポートの読み取り（daemon リロード時に同じポートを再利用）
   let preferredPort = 0;
@@ -650,13 +665,14 @@ export async function start(
 
         // T320/T323: tokens.db を fire-and-forget で更新（streaming path）。
         // surface / role / getState を渡して master/conductor の tokenHandle を反映する。
+        // T341: tokenPoolEnabled で auto-discover INSERT を gate する。
         updateTokensDB(
           authHash,
           extractRateLimit(upstreamRes.headers),
           upstreamRes.headers.get("anthropic-organization-id"),
           conductorSurface ?? null,
           role ?? null,
-          opts?.getState,
+          { tokenPoolEnabled, getState: opts?.getState },
         );
 
         // streaming: tee して片方をログに使う
@@ -719,13 +735,14 @@ export async function start(
       }
 
       // T320/T323: tokens.db を fire-and-forget で更新（非 streaming path）。
+      // T341: tokenPoolEnabled で auto-discover INSERT を gate する。
       updateTokensDB(
         authHash,
         extractRateLimit(upstreamRes.headers),
         upstreamRes.headers.get("anthropic-organization-id"),
         conductorSurface ?? null,
         role ?? null,
-        opts?.getState,
+        { tokenPoolEnabled, getState: opts?.getState },
       );
 
       const entry: TraceEntry = {

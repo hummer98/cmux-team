@@ -1321,3 +1321,218 @@ describe("proxy: tokenHandle apply (T323)", () => {
     upstream.stop();
   });
 });
+
+// ─── T341: auto-discover gate (token pool OFF では未知 token を INSERT しない) ───
+describe("proxy: auto-discover gate (T341)", () => {
+  let tokenDbDir: string;
+  let originalTokenDb: string | undefined;
+  let originalKeychain: string | undefined;
+  let originalApi: string | undefined;
+  let originalPool: string | undefined;
+
+  beforeEach(async () => {
+    tokenDbDir = join(testDir, "token-store-gate");
+    await mkdir(tokenDbDir, { recursive: true });
+    originalTokenDb = process.env.TOKEN_STORE_DB_PATH;
+    originalKeychain = process.env.KEYCHAIN_TEST_MODE;
+    originalApi = process.env.ANTHROPIC_API_URL;
+    originalPool = process.env.CMUX_TEAM_TOKEN_POOL;
+    process.env.TOKEN_STORE_DB_PATH = join(
+      tokenDbDir,
+      `tokens-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    process.env.KEYCHAIN_TEST_MODE = "1";
+    __resetTokensDbForTest();
+  });
+
+  afterEach(() => {
+    if (originalTokenDb !== undefined) process.env.TOKEN_STORE_DB_PATH = originalTokenDb;
+    else delete process.env.TOKEN_STORE_DB_PATH;
+    if (originalKeychain !== undefined) process.env.KEYCHAIN_TEST_MODE = originalKeychain;
+    else delete process.env.KEYCHAIN_TEST_MODE;
+    if (originalApi !== undefined) process.env.ANTHROPIC_API_URL = originalApi;
+    else delete process.env.ANTHROPIC_API_URL;
+    if (originalPool !== undefined) process.env.CMUX_TEAM_TOKEN_POOL = originalPool;
+    else delete process.env.CMUX_TEAM_TOKEN_POOL;
+    __resetTokensDbForTest();
+  });
+
+  function startUpstreamWithOrgHeader(orgId: string): { upstream: ReturnType<typeof Bun.serve> } {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("{}", {
+          headers: {
+            "content-type": "application/json",
+            "anthropic-organization-id": orgId,
+            "anthropic-ratelimit-unified-5h-utilization": "0.10",
+            "anthropic-ratelimit-unified-7d-utilization": "0.20",
+            "anthropic-ratelimit-unified-5h-reset": "2099-01-01T00:00:00Z",
+            "anthropic-ratelimit-unified-7d-reset": "2099-01-08T00:00:00Z",
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-tokens-remaining": "1000",
+            "anthropic-ratelimit-tokens-limit": "1000",
+            "anthropic-ratelimit-tokens-reset": "2099-01-01T00:00:00Z",
+            "anthropic-ratelimit-input-tokens-remaining": "100",
+            "anthropic-ratelimit-output-tokens-remaining": "100",
+          },
+        });
+      },
+    });
+    return { upstream };
+  }
+
+  test("T341-P1: pool OFF — 未知 token は tokens.db に INSERT されない", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const { upstream } = startUpstreamWithOrgHeader("org-unknown-pool-off");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer unknown-token-pool-off",
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const { initTokenDB, listTokens } = await import("./token-store");
+    const db = initTokenDB();
+    try {
+      expect(listTokens(db).length).toBe(0);
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T341-P2: pool ON — 未知 token が auto-discover として INSERT される (selectable=0, source=auto-discover)", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    const { upstream } = startUpstreamWithOrgHeader("org-unknown-pool-on");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer unknown-token-pool-on",
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const { initTokenDB, listTokens } = await import("./token-store");
+    const db = initTokenDB();
+    try {
+      const tokens = listTokens(db);
+      expect(tokens.length).toBe(1);
+      expect(tokens[0]?.organization_id).toBe("org-unknown-pool-on");
+      expect(tokens[0]?.credential_source).toBe("auto-discover");
+      expect(tokens[0]?.selectable).toBe(false);
+      expect(tokens[0]?.plan).toBe("unknown");
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T341-P3: pool OFF でも既知 token の usage_snapshots UPSERT は維持される", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const { initTokenDB, insertToken, getLatestUsageSnapshot } = await import("./token-store");
+    const { createHash } = await import("crypto");
+    const auth = "Bearer known-token-pool-off";
+    const authHash = createHash("sha256").update(auth).digest("hex").slice(0, 12);
+    const db = initTokenDB();
+    const inserted = insertToken(db, {
+      handle: "@known",
+      organization_id: "org-known-pool-off",
+      auth_hash: authHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db.close();
+
+    const { upstream } = startUpstreamWithOrgHeader("org-known-pool-off");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db2 = initTokenDB();
+    try {
+      const snap = getLatestUsageSnapshot(db2, inserted.id);
+      expect(snap).not.toBeNull();
+      expect(snap?.util_5h).toBeCloseTo(0.10, 5);
+      expect(snap?.util_7d).toBeCloseTo(0.20, 5);
+    } finally {
+      db2.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T341-P4: gate 判定は proxy 起動時 1 回キャッシュ（起動後の env 変更に追随しない）", async () => {
+    // 起動時は pool OFF
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const { upstream } = startUpstreamWithOrgHeader("org-cache-test");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+
+    // 起動後に env を ON に変更しても、proxy は OFF のままキャッシュを使うはず
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer cached-token",
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const { initTokenDB, listTokens } = await import("./token-store");
+    const db = initTokenDB();
+    try {
+      // env=1 になっていても起動時 OFF のキャッシュが効くので INSERT されない
+      expect(listTokens(db).length).toBe(0);
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+});

@@ -21,6 +21,7 @@ import {
   retrieveTokenFromKeychain,
   deleteTokenFromKeychain,
   isKeychainSupported,
+  updateTokenPromoteFields,
   KeychainUnsupportedError,
   type TokenPlan,
 } from "./token-store";
@@ -410,6 +411,152 @@ export async function cmdTokenSetPlan(): Promise<void> {
   db.close();
 
   console.log(`${handle} の plan を ${planArg} (ratio ${ratio.toFixed(1)}) に設定しました。`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token promote (T341)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * auto-discover 経由で登録された token を正規 handle に昇格させる migration コマンド。
+ *
+ * - source 選択 UI は `cmdTokenAdd` と同形（claude credential / 手動入力）
+ * - probe で取れた `organization_id` が DB の既存値と一致することを検証する
+ * - Keychain 先 → DB 後の順で更新（既存 add と同じ順序）
+ * - 旧 token_id を維持するため `usage_snapshots` は壊れない
+ */
+export async function cmdTokenPromote(): Promise<void> {
+  const oldHandle = getHandleArg();
+  const newDisplayName = process.argv[5];
+  if (!newDisplayName) {
+    console.error("Usage: cmux-team token promote @<auto-handle> <new-display-name>");
+    process.exit(1);
+  }
+
+  if (process.platform !== "darwin" && process.env.KEYCHAIN_TEST_MODE !== "1") {
+    console.error("Error: token pool は macOS Keychain が必要です（macOS 以外は未対応）");
+    process.exit(1);
+  }
+
+  const db = initTokenDB();
+  try {
+    const existing = getTokenByHandle(db, oldHandle);
+    if (!existing) {
+      console.error(`Error: ${oldHandle} は登録されていません`);
+      process.exit(1);
+    }
+    if (existing.credential_source !== "auto-discover") {
+      console.error(
+        `Error: ${oldHandle} は auto-discover で登録された token ではありません`
+        + ` (credential_source=${existing.credential_source})。`
+        + ` promote は auto-discover token の正規昇格専用です。`,
+      );
+      process.exit(1);
+    }
+
+    // 新 handle 採番（cmdTokenAdd と同じロジック: 小文字英数 4 文字 → @xxxx）
+    const slug = newDisplayName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4);
+    if (!slug) {
+      console.error("Error: display name に使える英数字が含まれていません");
+      process.exit(1);
+    }
+    const newHandle = `@${slug}`;
+    if (newHandle !== oldHandle) {
+      const collision = getTokenByHandle(db, newHandle);
+      if (collision) {
+        console.error(`Error: handle ${newHandle} は既に使用されています`);
+        process.exit(1);
+      }
+    } else {
+      console.log(
+        `情報: handle は変わりません（display name=${newDisplayName} → ${newHandle}）。`
+        + ` credential / plan / tags のみ更新します。`,
+      );
+    }
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let accessToken: string;
+    let rateLimitTier: string | undefined;
+    let credentialSource: "claude-credentials" | "manual";
+    let tags: string[];
+    try {
+      console.log("source:");
+      console.log("  [1] Claude Code credential (~/.claude/.credentials.json)");
+      console.log("  [2] 手動入力（token を貼り付け）");
+      const source = (await prompt(rl, "> ")).trim();
+      if (source === "1") {
+        const cred = await readClaudeCredentials();
+        if (!cred) {
+          console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+          process.exit(1);
+        }
+        accessToken = cred.accessToken;
+        rateLimitTier = cred.rateLimitTier;
+        credentialSource = "claude-credentials";
+      } else if (source === "2") {
+        accessToken = (await prompt(rl, "token を貼り付け: ")).trim();
+        if (!accessToken) {
+          console.error("Error: token が空です");
+          process.exit(1);
+        }
+        rateLimitTier = undefined;
+        credentialSource = "manual";
+      } else {
+        console.error("Error: 1 または 2 を選択してください");
+        process.exit(1);
+      }
+
+      process.stdout.write("organization_id を取得中...");
+      const probedOrgId = await probeOrganizationId(accessToken);
+      process.stdout.write("\r");
+      if (!probedOrgId) {
+        console.error("Error: organization_id を取得できませんでした（token が無効または期限切れの可能性があります）");
+        process.exit(1);
+      }
+      if (probedOrgId !== existing.organization_id) {
+        console.error(
+          `Error: 取得した token は ${oldHandle} とは別アカウントです`
+          + ` (existing=${existing.organization_id.slice(0, 8)}... probed=${probedOrgId.slice(0, 8)}...)`,
+        );
+        process.exit(1);
+      }
+
+      const tagsRaw = (await prompt(rl, "tags (comma-separated, default: any): ")).trim();
+      tags = tagsRaw
+        ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
+        : ["any"];
+    } finally {
+      rl.close();
+    }
+
+    const planEntry = rateLimitTier ? PLAN_MAP[rateLimitTier] : undefined;
+    const plan = planEntry?.plan ?? "unknown";
+    const planRatio = planEntry?.ratio ?? null;
+    const newAuthHash = computeAuthHash(accessToken);
+
+    // Keychain 先 → DB 後の順序（cmdTokenAdd と同じ）
+    storeTokenInKeychain(newHandle, accessToken);
+    updateTokenPromoteFields(db, existing.id, {
+      handle: newHandle,
+      auth_hash: newAuthHash,
+      plan,
+      plan_ratio: planRatio,
+      tags,
+      credential_source: credentialSource,
+    });
+
+    console.log(
+      `\nPromoted: ${oldHandle} → ${newHandle}  ${plan}  tags:[${tags.join(", ")}]  ✓`,
+    );
+    if (plan === "unknown") {
+      console.log(
+        `Hint: plan が unknown です。capacity 計算を有効にするには`
+        + ` \`cmux-team token set-plan ${newHandle} <pro|max-x5|max-x20>\` で訂正してください。`,
+      );
+    }
+  } finally {
+    db.close();
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

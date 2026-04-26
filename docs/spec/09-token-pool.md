@@ -85,6 +85,33 @@ cmux-team token set-plan @pers max-x20
 # plan: pro | max-x5 | max-x20
 ```
 
+### `cmux-team token promote @<auto-handle> <new-display-name>`
+
+auto-discover で登録された token (`selectable=0` / `credential_source=auto-discover` / `tags=["auto"]`)
+を正規 handle に昇格させる migration コマンド (T341)。
+
+```text
+$ cmux-team token promote @cd8d kddi-dev
+source:
+  [1] Claude Code credential (~/.claude/.credentials.json)
+  [2] 手動入力（token を貼り付け）
+> 1
+organization_id を取得中...
+tags (comma-separated, default: any): any
+
+Promoted: @cd8d → @kddi  max-x20  tags:[any]  ✓
+```
+
+- token 取得は `add` と同じ source 選択 UI（claude credential / 手動入力）を提供する
+- 取得した token の `organization_id` が DB の既存値と一致することを検証する（不一致なら error）
+- 旧 token_id を維持するため `usage_snapshots` は壊れない
+- 新 handle が既存と衝突する場合は error（`newHandle === oldHandle` のときは info ログを出して続行）
+- 元の token が auto-discover ではない（`credential_source !== "auto-discover"`）場合も error
+- `plan` は `rateLimitTier` 由来で決定する（manual 経路や rateLimitTier 取得不能時は `unknown` に
+  なるので、その場合は完了メッセージに表示される `set-plan` ヒントで訂正する）
+- `selectable=1` token の handle 改名は本コマンドの scope 外。将来 `cmux-team token rename`
+  を別コマンドとして追加する余地を残す
+
 ---
 
 ## DB スキーマ（`~/.cmux-team/tokens.db`）
@@ -251,6 +278,18 @@ proxy が未知 token（`auth_hash` 不一致）を検出した場合に自動�
 - `organization_id` を取得して tokens.db に INSERT
 - `selectable=0` / `tags=["auto"]` / Keychain 未登録
 - spawn-agent では使われない（`tokenPool.default` で明示参照された場合のみ runtime 昇格）
+
+**pool 機能 OFF では走らない (T341)**
+
+`isTokenPoolEnabled` が false の場合、proxy は未知 `auth_hash` を観測しても tokens.db に
+INSERT しない。
+
+- 既知 token の `usage_snapshots` 更新（throttled UPSERT）は引き続き動作する
+- これにより pool 機能を使わない project では tokens.db が空のまま維持される
+- 判定は **proxy 起動時に 1 回だけ評価**してクロージャに束縛するため、稼働中に
+  `CMUX_TEAM_TOKEN_POOL` を変更しても挙動は変わらない（設定変更は daemon 再起動を伴う前提）
+
+正規昇格は `cmux-team token promote @<auto-handle> <new-display-name>` で行う（CLI セクション参照）。
 
 ---
 

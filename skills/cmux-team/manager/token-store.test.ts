@@ -31,6 +31,7 @@ import {
   deleteToken,
   updateTokenAuth,
   updateTokenPlan,
+  updateTokenPromoteFields,
   selectToken,
   KeychainUnsupportedError,
   KeychainNotFoundError,
@@ -1051,6 +1052,110 @@ describe("updateTokenPlan (T319)", () => {
     expect(got?.organization_id).toBe("org-sticky");
     expect(got?.tags).toEqual(["any", "kddi"]);
     expect(got?.selectable).toBe(false);
+  });
+});
+
+describe("updateTokenPromoteFields (T341)", () => {
+  test("auto-discover token を正規 token に変換する (handle / auth_hash / plan / tags / source / selectable=1)", () => {
+    const token = insertToken(
+      db,
+      makeToken({
+        handle: "@cd8d",
+        organization_id: "cd8db5e8-aaaa-bbbb-cccc-000000000000",
+        auth_hash: "auto00000000",
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["auto"],
+        credential_source: "auto-discover",
+        selectable: false,
+      }),
+    );
+
+    updateTokenPromoteFields(db, token.id, {
+      handle: "@kddi",
+      auth_hash: "promoted0000",
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any", "kddi"],
+      credential_source: "claude-credentials",
+    });
+
+    expect(getTokenByHandle(db, "@cd8d")).toBeNull();
+    const got = getTokenByHandle(db, "@kddi");
+    expect(got).not.toBeNull();
+    expect(got?.id).toBe(token.id);
+    expect(got?.organization_id).toBe("cd8db5e8-aaaa-bbbb-cccc-000000000000");
+    expect(got?.auth_hash).toBe("promoted0000");
+    expect(got?.plan).toBe("max-x20");
+    expect(got?.plan_ratio).toBe(20.0);
+    expect(got?.tags).toEqual(["any", "kddi"]);
+    expect(got?.credential_source).toBe("claude-credentials");
+    expect(got?.selectable).toBe(true);
+  });
+
+  test("既存 token_id を保持するので usage_snapshots は壊れない", () => {
+    const token = insertToken(
+      db,
+      makeToken({
+        handle: "@cd8d",
+        organization_id: "org-snap-keeper",
+        auth_hash: "auto-snap-aa",
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["auto"],
+        credential_source: "auto-discover",
+        selectable: false,
+      }),
+    );
+    upsertUsageSnapshot(db, {
+      token_id: token.id,
+      util_5h: 0.42,
+      util_7d: 0.21,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+
+    updateTokenPromoteFields(db, token.id, {
+      handle: "@kddi",
+      auth_hash: "promoted-snap",
+      plan: "max-x5",
+      plan_ratio: 5.0,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+
+    const snap = getLatestUsageSnapshot(db, token.id);
+    expect(snap).not.toBeNull();
+    expect(snap?.util_5h).toBeCloseTo(0.42, 5);
+    expect(snap?.util_7d).toBeCloseTo(0.21, 5);
+  });
+
+  test("plan_ratio に null を保存できる (unknown plan のまま昇格する経路)", () => {
+    const token = insertToken(
+      db,
+      makeToken({
+        handle: "@auto",
+        organization_id: "org-unknown-plan",
+        plan: "unknown",
+        plan_ratio: null,
+        tags: ["auto"],
+        credential_source: "auto-discover",
+        selectable: false,
+      }),
+    );
+    updateTokenPromoteFields(db, token.id, {
+      handle: "@new",
+      auth_hash: "newauth00000",
+      plan: "unknown",
+      plan_ratio: null,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+    const got = getTokenByHandle(db, "@new");
+    expect(got?.plan).toBe("unknown");
+    expect(got?.plan_ratio).toBeNull();
+    expect(got?.selectable).toBe(true);
   });
 });
 

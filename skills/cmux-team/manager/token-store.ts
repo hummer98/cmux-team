@@ -385,6 +385,41 @@ export function updateTokenPlan(
   );
 }
 
+/**
+ * auto-discover token を正規 token に昇格させる（T341 `cmux-team token promote`）。
+ *
+ * `handle / auth_hash / plan / plan_ratio / tags / credential_source` を atomic に
+ * UPDATE し、`selectable=1` に切り替える。`organization_id` と `id` は維持するため
+ * `usage_snapshots.token_id` 経由の関連レコードは壊れない。
+ */
+export function updateTokenPromoteFields(
+  db: Database,
+  token_id: number,
+  fields: {
+    handle: string;
+    auth_hash: string;
+    plan: TokenPlan;
+    plan_ratio: number | null;
+    tags: string[];
+    credential_source: CredentialSource;
+  },
+): void {
+  db.prepare(
+    `UPDATE tokens SET
+       handle = ?, auth_hash = ?, plan = ?, plan_ratio = ?,
+       tags = ?, credential_source = ?, selectable = 1
+     WHERE id = ?`,
+  ).run(
+    fields.handle,
+    fields.auth_hash,
+    fields.plan,
+    fields.plan_ratio,
+    JSON.stringify(fields.tags),
+    fields.credential_source,
+    token_id,
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // usage_snapshots
 // ─────────────────────────────────────────────────────────────────────────────

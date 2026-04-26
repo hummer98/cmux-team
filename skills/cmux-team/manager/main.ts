@@ -116,6 +116,7 @@ import {
   cmdTokenRemove,
   cmdTokenRotate,
   cmdTokenSetPlan,
+  cmdTokenPromote,
 } from "./token-cli";
 import { cmdPoolStatus, showPoolUsage } from "./pool-cli";
 import {
@@ -5437,9 +5438,10 @@ switch (command) {
       case "remove": await cmdTokenRemove();  break;
       case "rotate": await cmdTokenRotate();  break;
       case "set-plan": await cmdTokenSetPlan(); break;
+      case "promote": await cmdTokenPromote(); break;
       default:
         console.error(`Unknown token subcommand: ${tokenSub ?? "(none)"}`);
-        console.error("Usage: cmux-team token add|list|remove|rotate|set-plan");
+        console.error("Usage: cmux-team token add|list|remove|rotate|set-plan|promote");
         process.exit(1);
     }
     break;
