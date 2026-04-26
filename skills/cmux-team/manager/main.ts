@@ -74,6 +74,9 @@ import {
   resolveAutoUpdateMode,
   resolveFetchBeforeWorktree,
   isTokenPoolEnabled,
+  loadGlobalConfig,
+  resolveProjectTokenPool,
+  resolveGlobalTokenPool,
 } from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
@@ -119,6 +122,7 @@ import {
   initTokenDB,
   selectToken,
   retrieveTokenFromKeychain,
+  KeychainNotFoundError,
   listTokens,
   getLatestUsageSnapshot,
   computePoolCapacity,
@@ -127,7 +131,7 @@ import {
 import { buildPoolHeaderLines, type PoolHeaderInput } from "./pool-status-header";
 import { formatSurfaceRow } from "./pool-surface-row";
 import { computeNextReset } from "./pool-next-reset";
-import { resolveProjectTags } from "./project-tags";
+import { resolveProjectContext } from "./project-tags";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -2678,25 +2682,71 @@ async function cmdSpawnAgent(): Promise<void> {
   if (!poolDecision.enabled) {
     await log("token_pool_skipped", `${formatSurface(surface, "A")} source=${poolDecision.source}`);
   } else {
-    // T321: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
+    // T321/T335: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
     try {
       const tokDb = initTokenDB();
+
+      // T335: project / global 両 policy を読む
+      const [projectConfig, globalConfig] = await Promise.all([
+        loadConfig(PROJECT_ROOT),
+        loadGlobalConfig(),
+      ]);
+      const projectPolicy = resolveProjectTokenPool(projectConfig);
+      const globalPolicy = resolveGlobalTokenPool(globalConfig);
+
+      // project_tags + isOss を解決
       let projectTags: string[];
+      let isOss: boolean;
       try {
-        projectTags = await resolveProjectTags(PROJECT_ROOT);
+        const ctx = await resolveProjectContext(PROJECT_ROOT, globalPolicy.primaryOrgs);
+        projectTags = ctx.projectTags;
+        isOss = ctx.isOss;
       } catch (e: any) {
         await log(
           "project_tags_resolve_failed",
           `${formatSurface(surface, "A")} err=${e?.message ?? e}`,
         );
         projectTags = ["any"];
+        isOss = false;
       }
-      const selected = selectToken(tokDb, surface, projectTags);
+
+      const selected = selectToken(tokDb, surface, {
+        projectTags,
+        projectDefault: projectPolicy.default,
+        include: projectPolicy.include,
+        exclude: projectPolicy.exclude,
+        isOss,
+        ossDefault: globalPolicy.ossDefault,
+      });
+
       if (selected) {
-        const tokenStr = retrieveTokenFromKeychain(selected.token.handle);
-        exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
-        await log("token_pool_assigned", `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`);
-        // T323: spawn-agent で確定した tokenHandle を AGENT_TOKEN_BOUND メッセージで daemon に通知。
+        // T335 M3: Keychain から実 token を取得。不在なら env 注入のみスキップ
+        let tokenStr: string | null = null;
+        try {
+          tokenStr = retrieveTokenFromKeychain(selected.token.handle);
+        } catch (e: any) {
+          if (e instanceof KeychainNotFoundError) {
+            tokenStr = null;
+          } else {
+            throw e;
+          }
+        }
+
+        if (tokenStr) {
+          exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
+          await log(
+            "token_pool_assigned",
+            `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source} is_oss=${isOss}`,
+          );
+        } else {
+          // M3 確定動作: env 注入は skip、AGENT_TOKEN_BOUND は post、lease は維持、warn ログ
+          await log(
+            "token_pool_fallback",
+            `${formatSurface(surface, "A")} reason=keychain_missing handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`,
+          );
+        }
+
+        // T323/T335: tokenStr 有無に関わらず AGENT_TOKEN_BOUND を post（dashboard が handle を表示するため）。
         // AGENT_SPAWNED は触らず（T244 race 保護）、第 2 メッセージで agent.tokenHandle を後追い更新する。
         try {
           await postMessage({

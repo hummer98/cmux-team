@@ -59,18 +59,179 @@ export interface TeamConfig {
    */
   mainBranch?: string;
   /**
-   * token pool の有効/無効。T322 で追加。未指定時は global config / default(false) にフォールバック。
-   * env CMUX_TEAM_TOKEN_POOL が最優先。詳細は resolveTokenPoolEnabled を参照。
+   * token pool の有効/無効と policy。T322 で `enabled` のみ追加、T335 で
+   * `default` / `include` / `exclude` を拡張。
+   *
+   * - `enabled`: 未指定時は global config / default(false) にフォールバック。
+   *   env CMUX_TEAM_TOKEN_POOL が最優先。詳細は resolveTokenPoolEnabled を参照。
+   * - `default`: spawn-agent 時に最優先で候補化される handle（runtime 昇格・DB 不変）
+   * - `include`: tags 不一致でも候補化を強制する handle 配列
+   * - `exclude`: 最優先で候補から除外する handle 配列
+   *
+   * policy 整形は resolveProjectTokenPool を参照。
    */
-  tokenPool?: { enabled?: boolean };
+  tokenPool?: {
+    enabled?: boolean;
+    default?: string;
+    include?: string[];
+    exclude?: string[];
+  };
 }
 
 /**
- * `~/.cmux-team/config.yaml` のスキーマ。T322 で追加。
+ * `~/.cmux-team/config.yaml` のスキーマ。T322 で追加、T335 で拡張。
  * yaml 慣習に従い snake_case (`token_pool`) で受け、内部表現は camelCase (`tokenPool`) に正規化する。
+ *
+ * - `enabled`: T322 既存（pool 全体の有効/無効）
+ * - `ossDefault`: T335。OSS project の default fallback handle（yaml: `oss_default`）
+ * - `primaryOrgs`: T335。自社 org 名配列。OSS 判定に使う（yaml: `primary_orgs`）
+ *
+ * **廃止**: `oss_pool_tags`（旧 A019 案）は T335 で廃止。OSS project では
+ * `selectable=1` の全 token を候補化するシンプルなルールに置き換えた。
  */
 export interface GlobalConfig {
-  tokenPool?: { enabled?: boolean };
+  tokenPool?: {
+    enabled?: boolean;
+    ossDefault?: string;
+    primaryOrgs?: string[];
+  };
+}
+
+/**
+ * Project tokenPool の整形済み policy。T335 で追加。
+ *
+ * - `default`: project 設定の `tokenPool.default`。null=未指定
+ * - `include`: 重複 / 型違反を除いた string 配列
+ * - `exclude`: default と重複する handle を除いた string 配列
+ *
+ * **enabled は含めない**: 別経路の `resolveTokenPoolEnabled` が 3 階層で解決する。
+ */
+export interface ProjectTokenPoolPolicy {
+  default: string | null;
+  include: string[];
+  exclude: string[];
+}
+
+/**
+ * Global tokenPool の整形済み policy。T335 で追加。
+ *
+ * - `ossDefault`: OSS project の default fallback handle。null=未指定
+ * - `primaryOrgs`: 自社 org 名配列（小文字英数推奨）
+ *
+ * **enabled は含めない**: 別経路の `resolveTokenPoolEnabled` が解決する。
+ */
+export interface GlobalTokenPoolPolicy {
+  ossDefault: string | null;
+  primaryOrgs: string[];
+}
+
+/**
+ * 大文字を含む handle に対して 1 回だけ warn する純粋ヘルパ（副作用は console.warn のみ）。
+ *
+ * tokens.db 上の handle は CLI 経由で小文字英数のみが許容されるため、config に
+ * 大文字混じり handle を書くと結果として「マッチしない」状態になる。利用者が
+ * 気付けるよう警告するが、自動 lowercase 化や reject はしない（plan §4 決定方針）。
+ */
+function warnIfUppercaseHandle(handle: string, field: string): void {
+  if (/[A-Z]/.test(handle)) {
+    console.warn(
+      `[token-pool] config_warning: handle '${handle}' (${field}) contains uppercase letters; ` +
+        `tokens are matched as-is and likely won't match (handles are lowercase by convention)`,
+    );
+  }
+}
+
+/**
+ * `tokenPool` の string[] フィールドを安全に正規化する。
+ *
+ * - 配列でない → 空配列を返す（呼び出し側で feature 自体を無効化）
+ * - string でない要素 → console.warn で報告して捨てる
+ * - 重複は維持（dedup は default との関係で個別に行う）
+ */
+function normalizeStringList(
+  raw: unknown,
+  field: string,
+): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v === "string") {
+      out.push(v);
+    } else {
+      console.warn(
+        `[token-pool] config_warning: ${field} contains non-string entry ${JSON.stringify(v)}; ignoring`,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Project の tokenPool 設定を整形済み policy に変換する（T335）。
+ *
+ * 仕様:
+ * - `default` が string でない → null
+ * - `default` ∈ `include` → include 側を黙って dedup（default 優先）
+ * - `default` ∈ `exclude` → console.warn + exclude 側から default を除外（default 候補化を維持）
+ * - `include` / `exclude` の文字列以外要素は warn して捨てる
+ * - 大文字を含む handle は warn のみ（reject も lowercase 化もしない）
+ */
+export function resolveProjectTokenPool(
+  projectConfig: Pick<TeamConfig, "tokenPool">,
+): ProjectTokenPoolPolicy {
+  const tp = projectConfig.tokenPool;
+  if (!tp) {
+    return { default: null, include: [], exclude: [] };
+  }
+
+  const defaultHandle: string | null =
+    typeof tp.default === "string" ? tp.default : null;
+  if (defaultHandle !== null) warnIfUppercaseHandle(defaultHandle, "default");
+
+  const include = normalizeStringList(tp.include, "tokenPool.include");
+  const exclude = normalizeStringList(tp.exclude, "tokenPool.exclude");
+
+  // include / exclude の各 handle に対しても uppercase warn
+  for (const h of include) warnIfUppercaseHandle(h, "include");
+  for (const h of exclude) warnIfUppercaseHandle(h, "exclude");
+
+  // default ∩ include → include 側を dedup（静かに）
+  const dedupedInclude =
+    defaultHandle === null ? include : include.filter((h) => h !== defaultHandle);
+
+  // default ∩ exclude → warn + exclude 側から除外（default 候補化を維持）
+  let dedupedExclude = exclude;
+  if (defaultHandle !== null && exclude.includes(defaultHandle)) {
+    console.warn(
+      `[token-pool] config_warning: default '${defaultHandle}' is also in exclude — ignoring exclude entry`,
+    );
+    dedupedExclude = exclude.filter((h) => h !== defaultHandle);
+  }
+
+  return { default: defaultHandle, include: dedupedInclude, exclude: dedupedExclude };
+}
+
+/**
+ * Global の tokenPool 設定を整形済み policy に変換する（T335）。
+ *
+ * - null → 空 policy
+ * - `ossDefault` が string でない → null
+ * - `primaryOrgs` の文字列以外要素は normalizeStringList が warn して捨てる
+ */
+export function resolveGlobalTokenPool(
+  globalConfig: GlobalConfig | null,
+): GlobalTokenPoolPolicy {
+  if (!globalConfig || !globalConfig.tokenPool) {
+    return { ossDefault: null, primaryOrgs: [] };
+  }
+  const tp = globalConfig.tokenPool;
+  const ossDefault: string | null =
+    typeof tp.ossDefault === "string" ? tp.ossDefault : null;
+  if (ossDefault !== null) warnIfUppercaseHandle(ossDefault, "ossDefault");
+
+  const primaryOrgs = normalizeStringList(tp.primaryOrgs, "tokenPool.primary_orgs");
+
+  return { ossDefault, primaryOrgs };
 }
 
 /**
@@ -234,11 +395,40 @@ export async function loadGlobalConfig(): Promise<GlobalConfig | null> {
     if (parsed === null || typeof parsed !== "object") return {};
     const tp = (parsed as Record<string, unknown>).token_pool;
     if (tp && typeof tp === "object") {
-      const enabled = (tp as Record<string, unknown>).enabled;
+      const tpObj = tp as Record<string, unknown>;
+      const tokenPool: GlobalConfig["tokenPool"] = {};
+      const enabled = tpObj.enabled;
       if (typeof enabled === "boolean") {
-        return { tokenPool: { enabled } };
+        tokenPool.enabled = enabled;
       }
-      return { tokenPool: {} };
+      // T335: oss_default → ossDefault に詰め替え
+      const ossDefault = tpObj.oss_default;
+      if (typeof ossDefault === "string") {
+        tokenPool.ossDefault = ossDefault;
+      }
+      // T335: primary_orgs → primaryOrgs に詰め替え（型違反は warn + 捨てる）
+      const primaryOrgs = tpObj.primary_orgs;
+      if (Array.isArray(primaryOrgs)) {
+        const normalized: string[] = [];
+        for (const v of primaryOrgs) {
+          if (typeof v === "string") {
+            normalized.push(v);
+          } else {
+            console.warn(
+              `[token-pool] config_warning: token_pool.primary_orgs contains non-string entry ${JSON.stringify(v)}; ignoring`,
+            );
+          }
+        }
+        tokenPool.primaryOrgs = normalized;
+      }
+      // T335: oss_pool_tags は廃止 — 残っていたら一度だけ warn
+      if (tpObj.oss_pool_tags !== undefined) {
+        console.warn(
+          `[token-pool] config_warning: 'oss_pool_tags' is deprecated and ignored (T335); ` +
+            `OSS projects now admit all selectable=1 tokens (exclude only). Remove this key from ~/.cmux-team/config.yaml`,
+        );
+      }
+      return { tokenPool };
     }
     return {};
   } catch (e: unknown) {

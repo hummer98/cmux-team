@@ -1147,3 +1147,419 @@ describe("selectToken (tags フィルタ)", () => {
     expect(sel?.token.handle).toBe("@kddi");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// selectToken (T335: project policy / OSS / default 昇格)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("selectToken (T335: project policy / OSS / default 昇格)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h = 0.1, util7d = 0.1): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  /** plan §3.4 の検証シナリオ K1/K2/K3 を seed する。util は呼び出し側で上書き */
+  function seedThreeKeys() {
+    const k1 = insertToken(
+      db,
+      makeToken({ handle: "@personal", organization_id: "org-personal", tags: ["any"] }),
+    );
+    const k2 = insertToken(
+      db,
+      makeToken({ handle: "@a-corp", organization_id: "org-a-corp", tags: ["org:A"] }),
+    );
+    const k3 = insertToken(
+      db,
+      makeToken({ handle: "@b-corp", organization_id: "org-b-corp", tags: ["org:B"] }),
+    );
+    return { k1, k2, k3 };
+  }
+
+  // ── exclude / include / default の優先順位 ─────────────────────────────────
+
+  test("exclude 最優先: include に同じ handle が含まれていても候補外", () => {
+    // 単独で K1 のみ seed する（他 token の干渉を排除）
+    const k1 = insertToken(
+      db,
+      makeToken({ handle: "@personal", organization_id: "org-personal", tags: ["any"] }),
+    );
+    seedFreshSnapshot(k1.id, 0.05, 0.05);
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: null,
+      include: ["@personal"], // include に入れていても
+      exclude: ["@personal"], // exclude が勝つ
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel).toBeNull();
+  });
+
+  test("default は selectable=0 でも runtime 候補化される（DB 不変）", () => {
+    const k = insertToken(
+      db,
+      makeToken({
+        handle: "@discovered",
+        organization_id: "org-discovered",
+        tags: ["any"],
+        credential_source: "auto-discover",
+        selectable: false, // selectable=0
+      }),
+    );
+    seedFreshSnapshot(k.id, 0.05, 0.05);
+
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: "@discovered", // default に明示
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@discovered");
+
+    // DB 上の selectable は変更されない
+    const reloaded = getTokenByHandle(db, "@discovered");
+    expect(reloaded?.selectable).toBe(false);
+  });
+
+  test("default 以外の selectable=0 は候補外（runtime 昇格は default だけ）", () => {
+    const k = insertToken(
+      db,
+      makeToken({
+        handle: "@discovered",
+        organization_id: "org-discovered",
+        tags: ["any"],
+        selectable: false,
+      }),
+    );
+    seedFreshSnapshot(k.id, 0.05, 0.05);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel).toBeNull();
+  });
+
+  test("include は tags 不一致でも候補化される", () => {
+    const { k1 } = seedThreeKeys(); // @personal tags=["any"], score 0.1
+    seedFreshSnapshot(k1.id, 0.05, 0.05);
+    // K2 は projectTags=["org:Z"] と一致しない、@personal は any なので元々マッチするので
+    // 純粋に include の効果を見るために K2 を include に入れる
+    const { k2 } = { k2: getTokenByHandle(db, "@a-corp")! };
+    seedFreshSnapshot(k2.id, 0.01, 0.01); // K2 を最低 score にする
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:Z"], // K2 (org:A) に不一致
+      projectDefault: null,
+      include: ["@a-corp"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@a-corp"); // include 経由で admit + 最低 score
+  });
+
+  test("include 指定でも score 最小は他にあれば他が選ばれる", () => {
+    seedThreeKeys();
+    const k1 = getTokenByHandle(db, "@personal")!;
+    const k2 = getTokenByHandle(db, "@a-corp")!;
+    seedFreshSnapshot(k1.id, 0.01, 0.01); // K1 が最低
+    seedFreshSnapshot(k2.id, 0.5, 0.5); // K2 高
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"], // K2 は tag 一致、K1 は any
+      projectDefault: null,
+      include: ["@a-corp"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@personal");
+  });
+
+  // ── effectiveDefault の合成 ───────────────────────────────────────────────
+
+  test("projectDefault は OSS でも projectDefault が優先（ossDefault を上書き）", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    // OSS では K3 も admit されるので、@a-corp を最低 score にして勝てるようにする
+    seedFreshSnapshot(k1.id, 0.5, 0.5);
+    seedFreshSnapshot(k2.id, 0.01, 0.01);
+    seedFreshSnapshot(k3.id, 0.5, 0.5);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: "@a-corp", // 明示優先 (effectiveDefault=@a-corp、ossDefault は無視)
+      include: [],
+      exclude: [],
+      isOss: true,
+      ossDefault: "@personal",
+    });
+    expect(sel?.token.handle).toBe("@a-corp");
+  });
+
+  test("projectDefault=null + isOss=true → ossDefault が effectiveDefault", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    // OSS で全 token admit されるので、@personal を最低 score にして effectiveDefault が
+    // ossDefault に解決されていることを確認
+    seedFreshSnapshot(k1.id, 0.01, 0.01);
+    seedFreshSnapshot(k2.id, 0.5, 0.5);
+    seedFreshSnapshot(k3.id, 0.5, 0.5);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: true,
+      ossDefault: "@personal",
+    });
+    // @personal は ossDefault として無条件 admit + score 最小なので選ばれる
+    expect(sel?.token.handle).toBe("@personal");
+  });
+
+  // ── OSS project の admit ロジック ─────────────────────────────────────────
+
+  test("OSS project は selectable=1 全 token が tag 不問で候補化される (M2)", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    // 順位付け: K3 (0.01) < K2 (0.05) < K1 (0.10)
+    seedFreshSnapshot(k1.id, 0.10, 0.10);
+    seedFreshSnapshot(k2.id, 0.05, 0.05);
+    seedFreshSnapshot(k3.id, 0.01, 0.01);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: true,
+      ossDefault: null, // ossDefault も無し → 純粋に tags 不問 admit を見る
+    });
+    // K3 (org:B) も tag 不問で admit され、最低 score なので選ばれる
+    expect(sel?.token.handle).toBe("@b-corp");
+  });
+
+  test("OSS でも exclude にある handle は候補外", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.10, 0.10);
+    seedFreshSnapshot(k2.id, 0.05, 0.05);
+    seedFreshSnapshot(k3.id, 0.01, 0.01); // 最低 score だが exclude
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: ["@b-corp"],
+      isOss: true,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@a-corp"); // K3 を除いた最低
+  });
+
+  // ── 通常 tag matching（非 OSS） ──────────────────────────────────────────
+
+  test("非 OSS: tags 不一致 + include/default なし → 候補外", () => {
+    seedThreeKeys();
+    const k3 = getTokenByHandle(db, "@b-corp")!;
+    seedFreshSnapshot(k3.id, 0.05, 0.05);
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    // K3 は org:B、include/default 不在 → 候補外
+    // K1 (any) と K2 (org:A) は seed していない（snapshot なしなので util=0 → score=0 で admit）
+    // 実際は K1/K2 も admit されるが snapshot が無いと util 0 → score 0、K1 と K2 同点
+    // ここでは K3 が選ばれないことだけ assert する
+    if (sel) expect(sel.token.handle).not.toBe("@b-corp");
+  });
+
+  test("候補なし → null", () => {
+    seedThreeKeys();
+    // 何も seed しない & projectTags=org:Z & include/default なし → 全部 admit されない
+    const k1 = getTokenByHandle(db, "@personal")!;
+    const k2 = getTokenByHandle(db, "@a-corp")!;
+    const k3 = getTokenByHandle(db, "@b-corp")!;
+    seedFreshSnapshot(k1.id, 0.96, 0.9); // K1 ブロッカー
+    seedFreshSnapshot(k2.id, 0.96, 0.9); // K2 ブロッカー
+    seedFreshSnapshot(k3.id, 0.96, 0.9); // K3 ブロッカー
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:Z"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel).toBeNull();
+  });
+
+  // ── 後方互換 ────────────────────────────────────────────────────────────
+
+  test("後方互換: selectToken(db, holder, ['any']) 形式", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@compat", organization_id: "org-compat", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.05, 0.05);
+    const sel = selectToken(db, "h", ["any"]);
+    expect(sel?.token.handle).toBe("@compat");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// selectToken (T335: 受け入れ条件 — Project A / Project C シナリオ)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("selectToken (T335: 受け入れ条件 Project A/C シナリオ)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h = 0.1, util7d = 0.1): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  function seedThreeKeys() {
+    const k1 = insertToken(
+      db,
+      makeToken({ handle: "@personal", organization_id: "org-personal", tags: ["any"] }),
+    );
+    const k2 = insertToken(
+      db,
+      makeToken({ handle: "@a-corp", organization_id: "org-a-corp", tags: ["org:A"] }),
+    );
+    const k3 = insertToken(
+      db,
+      makeToken({ handle: "@b-corp", organization_id: "org-b-corp", tags: ["org:B"] }),
+    );
+    return { k1, k2, k3 };
+  }
+
+  // ── Project A: default=@a-corp, include=[@personal] ───────────────────────
+
+  test("Project A: default=@a-corp と include=@personal は両方 admit される（最終選択は score）", () => {
+    const { k1, k2 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.01, 0.01);
+    seedFreshSnapshot(k2.id, 0.10, 0.10);
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: "@a-corp",
+      include: ["@personal"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    // default は admit 判定で無条件、最終選択は score 最小で決まる（plan §C-2）。
+    // score が低い @personal が勝つ。default の "最優先" は admit 順位の意味であり、
+    // 同 admit 候補内での score 比較は通常通り行われる。
+    expect(sel?.token.handle).toBe("@personal");
+  });
+
+  test("Project A: default が score 最小なら default が選ばれる", () => {
+    const { k1, k2 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.10, 0.10);
+    seedFreshSnapshot(k2.id, 0.01, 0.01); // default を score 最小に
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: "@a-corp",
+      include: ["@personal"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@a-corp");
+  });
+
+  test("Project A: default が高負荷で blocker → include の @personal が選ばれる", () => {
+    const { k1, k2 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.05, 0.05);
+    seedFreshSnapshot(k2.id, 0.96, 0.9); // K2 ブロッカー（util_5h>0.95）
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: "@a-corp",
+      include: ["@personal"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel?.token.handle).toBe("@personal");
+  });
+
+  test("Project A: K3 (@b-corp) は org:A 不一致 + include 未指定 → 候補外", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.96, 0.9); // K1 ブロッカー
+    seedFreshSnapshot(k2.id, 0.96, 0.9); // K2 ブロッカー
+    seedFreshSnapshot(k3.id, 0.05, 0.05); // K3 は score 最低だが org:B
+    const sel = selectToken(db, "h", {
+      projectTags: ["org:A"],
+      projectDefault: "@a-corp",
+      include: ["@personal"],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    // K3 は admit されない、K1/K2 は blocker → null
+    expect(sel).toBeNull();
+  });
+
+  // ── Project C (OSS): primaryOrgs=["myorg"], ossDefault=@personal ─────────
+
+  test("Project C (OSS): selectable=1 全 token が候補（default=@personal が score 最低なら選ばれる）", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.01, 0.01); // 最低
+    seedFreshSnapshot(k2.id, 0.10, 0.10);
+    seedFreshSnapshot(k3.id, 0.20, 0.20);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: true,
+      ossDefault: "@personal",
+    });
+    expect(sel?.token.handle).toBe("@personal");
+  });
+
+  test("Project C (OSS): @personal を blocker にすると K2/K3 も候補に入る → score 最小が選ばれる", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.96, 0.9); // K1 ブロッカー
+    seedFreshSnapshot(k2.id, 0.05, 0.05);
+    seedFreshSnapshot(k3.id, 0.10, 0.10);
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: true,
+      ossDefault: "@personal",
+    });
+    expect(sel?.token.handle).toBe("@a-corp");
+  });
+
+  test("Project C (OSS): exclude に @b-corp → K1/K2 のみ候補", () => {
+    const { k1, k2, k3 } = seedThreeKeys();
+    seedFreshSnapshot(k1.id, 0.96, 0.9); // K1 ブロッカー
+    seedFreshSnapshot(k2.id, 0.10, 0.10);
+    seedFreshSnapshot(k3.id, 0.01, 0.01); // 最低だが exclude
+    const sel = selectToken(db, "h", {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: ["@b-corp"],
+      isOss: true,
+      ossDefault: "@personal",
+    });
+    expect(sel?.token.handle).toBe("@a-corp");
+  });
+});

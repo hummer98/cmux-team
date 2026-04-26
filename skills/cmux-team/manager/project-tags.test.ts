@@ -2,7 +2,13 @@ import { describe, test, expect } from "bun:test";
 import { mkdtemp, mkdir, writeFile, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { parseRemoteOriginToTags, resolveProjectTags, FALLBACK_TAGS } from "./project-tags";
+import {
+  parseRemoteOriginToTags,
+  parseRemoteOriginToContext,
+  resolveProjectTags,
+  resolveProjectContext,
+  FALLBACK_TAGS,
+} from "./project-tags";
 
 describe("parseRemoteOriginToTags", () => {
   // public GitHub → ["any"]
@@ -170,6 +176,195 @@ describe("resolveProjectTags", () => {
       const tags = await resolveProjectTags(root);
       // git init していないので fallback
       expect(tags).toEqual(["any"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseRemoteOriginToContext (T335: OSS 判定の純粋関数)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("parseRemoteOriginToContext (T335)", () => {
+  test("primaryOrgs=[] → 全パターンで isOss=false（旧動作維持）", () => {
+    expect(parseRemoteOriginToContext("https://github.com/foo/bar", [])).toEqual({
+      tags: ["any"],
+      isOss: false,
+    });
+    expect(parseRemoteOriginToContext("git@github.kddi.com:foo/bar.git", [])).toEqual({
+      tags: ["org:kddi"],
+      isOss: false,
+    });
+    expect(parseRemoteOriginToContext("", [])).toEqual({
+      tags: ["any"],
+      isOss: false,
+    });
+  });
+
+  test("primaryOrgs=['myorg'] + github.com → isOss=true", () => {
+    expect(parseRemoteOriginToContext("https://github.com/foo/bar", ["myorg"])).toEqual({
+      tags: ["any"],
+      isOss: true,
+    });
+  });
+
+  test("primaryOrgs=['myorg'] + github.myorg.com → isOss=false（自社 GHE）", () => {
+    expect(parseRemoteOriginToContext("git@github.myorg.com:foo/bar.git", ["myorg"])).toEqual({
+      tags: ["org:myorg"],
+      isOss: false,
+    });
+  });
+
+  test("primaryOrgs=['myorg'] + github.other.com → isOss=true（他社 GHE）", () => {
+    expect(parseRemoteOriginToContext("git@github.other.com:foo/bar.git", ["myorg"])).toEqual({
+      tags: ["org:other"],
+      isOss: true,
+    });
+  });
+
+  test("primaryOrgs=['myorg'] + 公開 OSS host (gitlab.com) → isOss=true", () => {
+    expect(parseRemoteOriginToContext("https://gitlab.com/foo/bar", ["myorg"])).toEqual({
+      tags: ["any"],
+      isOss: true,
+    });
+  });
+
+  test("primaryOrgs=['myorg'] + カスタム host (org:internal) → isOss=true", () => {
+    // host=git.internal.example.com → org:git, primaryOrgs に含まれないので OSS 扱い
+    expect(parseRemoteOriginToContext("git@git.internal.example.com:foo/bar.git", ["myorg"])).toEqual({
+      tags: ["org:git"],
+      isOss: true,
+    });
+  });
+
+  test("primaryOrgs=['git'] + カスタム host で org が一致 → isOss=false", () => {
+    expect(parseRemoteOriginToContext("git@git.internal.example.com:foo/bar.git", ["git"])).toEqual({
+      tags: ["org:git"],
+      isOss: false,
+    });
+  });
+
+  test("解析不能 URL → tags=['any'], isOss=true (primaryOrgs 非空)", () => {
+    // 空文字 / not-a-url は host 不明 → org 不明 → primaryOrgs と照合不能 → OSS 扱い
+    expect(parseRemoteOriginToContext("", ["myorg"])).toEqual({
+      tags: ["any"],
+      isOss: true,
+    });
+    expect(parseRemoteOriginToContext("not-a-url", ["myorg"])).toEqual({
+      tags: ["any"],
+      isOss: true,
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveProjectContext (T335)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("resolveProjectContext (T335)", () => {
+  async function makeTempProject(): Promise<string> {
+    return await mkdtemp(join(tmpdir(), "project-context-test-"));
+  }
+
+  test(".team/config.json の project_tags=['org:myorg'] + primaryOrgs=['myorg'] → isOss=false", async () => {
+    const root = await makeTempProject();
+    try {
+      await mkdir(join(root, ".team"), { recursive: true });
+      await writeFile(
+        join(root, ".team/config.json"),
+        JSON.stringify({ project_tags: ["org:myorg"] }),
+      );
+      const ctx = await resolveProjectContext(root, ["myorg"]);
+      expect(ctx).toEqual({ projectTags: ["org:myorg"], isOss: false });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(".team/config.json の project_tags=['org:other'] + primaryOrgs=['myorg'] → isOss=true", async () => {
+    const root = await makeTempProject();
+    try {
+      await mkdir(join(root, ".team"), { recursive: true });
+      await writeFile(
+        join(root, ".team/config.json"),
+        JSON.stringify({ project_tags: ["org:other"] }),
+      );
+      const ctx = await resolveProjectContext(root, ["myorg"]);
+      expect(ctx).toEqual({ projectTags: ["org:other"], isOss: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(".team/config.json の project_tags=['any'] + primaryOrgs=[] → isOss=false（旧動作維持）", async () => {
+    const root = await makeTempProject();
+    try {
+      await mkdir(join(root, ".team"), { recursive: true });
+      await writeFile(
+        join(root, ".team/config.json"),
+        JSON.stringify({ project_tags: ["any"] }),
+      );
+      const ctx = await resolveProjectContext(root, []);
+      expect(ctx).toEqual({ projectTags: ["any"], isOss: false });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(".team/config.json の project_tags=['any'] + primaryOrgs=['myorg'] → isOss=true（任意 tag は OSS 扱い）", async () => {
+    const root = await makeTempProject();
+    try {
+      await mkdir(join(root, ".team"), { recursive: true });
+      await writeFile(
+        join(root, ".team/config.json"),
+        JSON.stringify({ project_tags: ["any"] }),
+      );
+      const ctx = await resolveProjectContext(root, ["myorg"]);
+      // tags が "any" のみで primaryOrgs と一致しない → OSS
+      expect(ctx).toEqual({ projectTags: ["any"], isOss: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(".team/config.json なし & 非 git → fail-safe (tags=['any'], isOss=false)", async () => {
+    const root = await makeTempProject();
+    try {
+      const ctx = await resolveProjectContext(root, ["myorg"]);
+      expect(ctx).toEqual({ projectTags: ["any"], isOss: false });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("primaryOrgs=[] + git remote 解決失敗 → isOss=false", async () => {
+    const root = await makeTempProject();
+    try {
+      const ctx = await resolveProjectContext(root, []);
+      expect(ctx).toEqual({ projectTags: ["any"], isOss: false });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveProjectTags は resolveProjectContext の wrapper（既存テストは pass）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("resolveProjectTags (T335: resolveProjectContext の wrapper として)", () => {
+  test("resolveProjectContext と同じ projectTags を返す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wrapper-test-"));
+    try {
+      await mkdir(join(root, ".team"), { recursive: true });
+      await writeFile(
+        join(root, ".team/config.json"),
+        JSON.stringify({ project_tags: ["org:foo"] }),
+      );
+      const tags = await resolveProjectTags(root);
+      const ctx = await resolveProjectContext(root, []);
+      expect(tags).toEqual(ctx.projectTags);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
