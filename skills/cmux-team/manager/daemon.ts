@@ -37,6 +37,8 @@ import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths"
 import { shadowObserveConductor } from "./state-machine/shadow";
 import type { FsmEvent, ConductorCtx, ConductorStatus } from "./state-machine/events";
 import { initTokenDB, releaseLeaseByHolder } from "./token-store";
+// T351: dashboard / CLI で共有する pool snapshot 純関数
+import { buildPoolSummary, type PoolSummary } from "./pool-summary";
 
 export interface TaskSummary {
   id: string;
@@ -117,6 +119,19 @@ export interface DaemonState {
    * null = opencode agent 機能が無効または未起動。
    */
   openCodeServerProcess: import("child_process").ChildProcess | null;
+  /**
+   * T351: token pool DB ハンドル。pool ON ならば cmdStart 起動時に 1 度だけ
+   * `initTokenDB()` で open する。pool OFF / 初期化失敗時は null（refreshPoolSnapshot は
+   * その場合 state.pool を null に保つ）。daemon 稼働中の config 切替には追従しない
+   * （proxy と同じく boot 時 1 回評価で固定）。
+   */
+  tokenDb: Database | null;
+  /**
+   * T351: 周期的に再計算される token pool snapshot（dashboard / 外部読み出し用）。
+   * default は null。pool OFF / DB 失敗 / state.tokenDb=null のときは null のまま。
+   * `refreshPoolSnapshot(state)` がメインループ毎に再計算する。
+   */
+  pool: PoolSummary | null;
 }
 
 /**
@@ -369,10 +384,36 @@ export async function createDaemon(
     traceDb: null,
     backend: backend ?? new ClaudeCodeBackend(),
     openCodeServerProcess: null,
+    tokenDb: null,
+    pool: null,
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
   return state;
+}
+
+/**
+ * T351: token pool snapshot を state.pool に再計算して載せる。
+ *
+ * - state.tokenDb が null（pool OFF / 初期化失敗）→ state.pool を null に固定
+ * - tokenDb が non-null → buildPoolSummary を呼んで state.pool に格納
+ * - 内部で例外が起きたら state.pool=null に倒し、error ログを残す（次 tick で再試行）
+ *
+ * cmdStart のメインループ末尾（updateSidebarStatus の後）で毎 tick 呼ぶ前提。
+ * daemon は long-running なので毎回 initTokenDB を呼ばず、boot 時 1 度だけ open した
+ * ハンドルを使い回す（§7.1 リスク対策）。
+ */
+export async function refreshPoolSnapshot(state: DaemonState): Promise<void> {
+  if (!state.tokenDb) {
+    state.pool = null;
+    return;
+  }
+  try {
+    state.pool = buildPoolSummary(state.tokenDb);
+  } catch (e: any) {
+    state.pool = null;
+    await log("error", `refreshPoolSnapshot failed: ${e?.message ?? e}`);
+  }
 }
 
 /**
