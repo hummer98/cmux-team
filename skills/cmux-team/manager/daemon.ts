@@ -1016,7 +1016,8 @@ async function revertTaskToReady(
  *   - C 経路の残骸 surface を close
  *   - B 経路は launchConductor で resume 起動。失敗時は state rollback + task-state を ready に戻す
  *   - taskId 整合性リコンサイル（A 経路で taskState が assigned でなければ taskId クリア）
- *   - unmatched + D 経路を task-state ready 戻しに合流（pane 新規分割しない方針 R7）
+ *   - unmatched + D 経路を task-state ready 戻しに合流。後段の `initializeLayout` で
+ *     `state.maxConductors` まで topup 補充される（事後条件: state.conductors.size === maxConductors）
  *
  * @returns A/B 経路で確定した resume assignments（呼び出し元で main.ts の状態反映ループに渡す）
  */
@@ -1135,7 +1136,10 @@ async function applyRestorePlan(
   }
 
   // D: resume-new-surface + 未マッチ resume → task-state を ready に戻す
-  //    R7: 復帰時は pane 新規作成しない方針のため、合流先がないので両方とも ready 戻し
+  //    partial restore (A or B あり) 経路では D の resume は ready 戻し。
+  //    後段の事後条件チェック (layout_conductors_topup) で補充された新 slot に
+  //    Manager が次 tick で割り当てる。
+  //    全 discard fallback 経路では initializeLayout 側で D を resumePlan として透過する (T346)。
   const allUnmatched: ResumePlanItem[] = [
     ...plan.unmatchedResumes,
     ...plan.resumeNewSurface
@@ -1266,28 +1270,34 @@ export async function initializeLayout(
     resumePlan ?? [],
   );
 
-  // T286: 全 entry が C/E に倒れた場合（A=0, B=0, D=0）は "team.json 空相当" とみなし、
-  //   C/E 副作用を流してから initializeConductorSlots にフォールバックする。
+  // T286 + T346: A=0 かつ B=0 (keep-alive も既存 pane resume も無い) なら
+  //   "team.json 空相当" とみなし、C/E 副作用を流してから initializeConductorSlots に倒す。
+  //   D 経路 (surface 消失 + running task) の resume は外部 resumePlan と合流させて
+  //   新 slot に透過する (T346: R7 廃止 — 復帰時の pane 新規作成を許可)。
   //   発症条件: cmux セッションを完全終了 → 同 workspace で cmux-team start 再投入したとき、
   //   team.json の conductor entry の surface が cmux に全て存在しないケース（KDG-SSO 再現）。
-  //   resumePlan は team.json 空経路と同一シグネチャで透過する（Decision D14）。
-  if (
-    plan.alive.length === 0 &&
-    plan.resumeExisting.length === 0 &&
-    plan.resumeNewSurface.length === 0
-  ) {
+  if (plan.alive.length === 0 && plan.resumeExisting.length === 0) {
     await log(
       "layout_restore_empty_fallback",
       `kept=0 discarded=${plan.discarded.length} layout=${state.layout}`,
     );
     // C/E 副作用を先に流してから新 slot 作成（pane 数が一時的に過剰になる瞬間を避ける）。
     await applyDiscardOnly(state, plan);
+    // 外部 resumePlan に D 経路の resume を合流させて透過する。
+    // 同一 taskId の重複 (D の resume は resumeByTaskId 経由で外部 resumePlan の同一インスタンス
+    // を参照しうる) は Map で一意化する — 同一 taskId を 2 つの pane に launch しないため。
+    const allResumePlanMap = new Map<string, ResumePlanItem>();
+    for (const r of resumePlan ?? []) allResumePlanMap.set(r.taskId, r);
+    for (const e of plan.resumeNewSurface) {
+      if (e.resume) allResumePlanMap.set(e.resume.taskId, e.resume);
+    }
+    const allResumePlan: ResumePlanItem[] = [...allResumePlanMap.values()];
     return await initializeConductorSlots(
       state.projectRoot,
       state.conductors,
       state.maxConductors,
       daemonSurface,
-      resumePlan,
+      allResumePlan,
       state.layout,
       state.mainBranch,
       ccBackend(state.backend),
@@ -1307,12 +1317,32 @@ export async function initializeLayout(
       `count=${keptSurfaces.length} surfaces=${keptSurfaces.map(s => formatSurface(s, "C")).join(",")}`,
     );
   }
-  // partial restore: 復元 pane 数が maxConductors 未満（R7 の可観測化）
+  // partial restore: 復元 pane 数が maxConductors 未満なら不足分を新規 slot で補充する
+  // (T346: R7 廃止 — initializeLayout 完了時点で
+  //  pane 数 (newSplit + 既存 alive) === maxConductors を保証する事後条件)。
   if (keptSurfaces.length > 0 && keptSurfaces.length < state.maxConductors) {
     await log(
       "layout_kept_partial",
-      `kept=${keptSurfaces.length} max=${state.maxConductors} — pane 補充は行わない（次起動で再構成可能）`,
+      `kept=${keptSurfaces.length} max=${state.maxConductors}`,
     );
+  }
+  const deficit = state.maxConductors - state.conductors.size;
+  if (deficit > 0) {
+    await log(
+      "layout_conductors_topup",
+      `have=${state.conductors.size} max=${state.maxConductors} adding=${deficit}`,
+    );
+    const addl = await initializeConductorSlots(
+      state.projectRoot,
+      state.conductors,
+      deficit,
+      daemonSurface,
+      undefined,
+      state.layout,
+      state.mainBranch,
+      ccBackend(state.backend),
+    );
+    assignments.push(...addl);
   }
 
   return assignments;

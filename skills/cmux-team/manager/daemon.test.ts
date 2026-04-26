@@ -3254,16 +3254,22 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
   /**
    * launchConductor の cmux 副作用を全 stub する（M6/M16 等で使う）。
-   * 実 cmux は呼べないので send / sendKey / closeSurface / renameTab を no-op に置き換える。
+   * 実 cmux は呼べないので send / sendKey / closeSurface / renameTab / newSplit を no-op に置き換える。
+   * (T346: partial restore でも topup → newSplit が動くため newSplit のデフォルトモックを追加)
    */
   async function stubCmuxIO() {
     const cmux = await import("./cmux");
     const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
     return {
       send: spyOn(cmux, "send").mockImplementation(async () => {}),
       sendKey: spyOn(cmux, "sendKey").mockImplementation(async () => {}),
       closeSurface: spyOn(cmux, "closeSurface").mockImplementation(async () => {}),
       renameTab: spyOn(cmux, "renameTab").mockImplementation(async () => {}),
+      newSplit: spyOn(cmux, "newSplit").mockImplementation(async () => {
+        paneIdx += 1;
+        return `surface:stub${paneIdx}`;
+      }),
     };
   }
 
@@ -3314,6 +3320,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3330,6 +3337,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T346: partial restore で topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [{
         taskId: "077", taskRunId: "tr-077",
@@ -3351,6 +3360,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3371,6 +3381,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T346: partial restore で topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       await initializeLayout(state, undefined, []);
 
@@ -3388,6 +3400,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3405,6 +3418,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = null; // workspace 不明
+      // T346: partial restore で topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       await initializeLayout(state, undefined, []);
 
@@ -3421,6 +3436,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3463,6 +3479,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3478,6 +3495,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
       state.layout = "wide";
+      // T346: partial restore で topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       await initializeLayout(state, undefined, []);
 
@@ -3492,6 +3511,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3549,6 +3569,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3565,6 +3586,12 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
     const sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
     const closeSurfaceSpy = spyOn(cmux, "closeSurface").mockImplementation(async () => {});
     const renameTabSpy = spyOn(cmux, "renameTab").mockImplementation(async () => {});
+    // T346: rollback 後に topup → newSplit が呼ばれるため、実 cmux 副作用を遮断する
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:m16stub${paneIdx}`;
+    });
     try {
       await writeTeamJson([
         { surface: "surface:160", pid: 1601, taskId: "160", taskRunId: "tr-160", worktreePath: testDir },
@@ -3576,6 +3603,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T346: rollback 後に topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [{
         taskId: "160", taskRunId: "tr-160",
@@ -3583,9 +3612,9 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       }];
       const assignments = await initializeLayout(state, undefined, resumePlan);
 
-      // assignment は 0 件 (rollback のため)
+      // assignment は 0 件 (rollback のため。topup は非 resume なので addl も空)
       expect(assignments).toHaveLength(0);
-      // state.conductors から削除されている
+      // state.conductors から削除されている (元の B path entry)
       expect(state.conductors.has("surface:160")).toBe(false);
       // task-state が ready に戻されている
       const ts = await loadTaskState(testDir);
@@ -3596,6 +3625,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
     } finally {
       __setIsAliveImpl(null);
       __setTreeImpl(null);
+      newSplitSpy.mockRestore();
       sendSpy.mockRestore();
       sendKeySpy.mockRestore();
       closeSurfaceSpy.mockRestore();
@@ -3603,10 +3633,17 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
     }
   }, 15000);
 
-  test("layout_kept_partial: kept < maxConductors なら part 復元ログを出す", async () => {
+  test("layout_kept_partial: kept < maxConductors なら part 復元ログを出し不足分を補充する (T346)", async () => {
     const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
     __setIsAliveImpl((pid: number) => pid === 9001);
     __setTreeImpl(async () => "surface:900\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:new${paneIdx}`;
+    });
     const stubs = await stubCmuxIO();
     try {
       // 1 件のみ alive — maxConductors=3 (wide のデフォルト) より少ない
@@ -3615,6 +3652,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
       state.maxConductors = 3;
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       await initializeLayout(state, undefined, []);
 
@@ -3622,13 +3660,22 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       expect(logContent).toContain("layout_kept_partial");
       expect(logContent).toMatch(/kept=1/);
       expect(logContent).toMatch(/max=3/);
+      // T346: 事後条件 — 不足分を補充するログ + newSplit 2 回 + alive 1 件は維持
+      // (非 resume の補充 pane は self-register 経由で後から登録されるため、
+      //  initializeLayout 完了直後の state.conductors.size は alive 1 件のみ)
+      expect(logContent).toContain("layout_conductors_topup");
+      expect(logContent).toMatch(/have=1 max=3 adding=2/);
+      expect(newSplitSpy).toHaveBeenCalledTimes(2);
+      expect(state.conductors.has("surface:900")).toBe(true);
     } finally {
       __setIsAliveImpl(null);
       __setTreeImpl(null);
+      newSplitSpy.mockRestore();
       stubs.send.mockRestore();
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3643,6 +3690,8 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
 
       const state = await createDaemon(testDir);
       state.workspace = "ws-test";
+      // T346: partial restore で topup が動くため mainBranch を明示
+      state.mainBranch = "main";
       const { initializeLayout } = await import("./daemon");
       const resumePlan = [{
         taskId: "999", taskRunId: "tr-999",
@@ -3661,6 +3710,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3721,6 +3771,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3781,6 +3832,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3842,6 +3894,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 
@@ -3897,6 +3950,212 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
       stubs.sendKey.mockRestore();
       stubs.closeSurface.mockRestore();
       stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
+    }
+  }, 15000);
+
+  // T346: 事後条件保証 — initializeLayout return 時点で
+  //   pane 数 (newSplit + 既存 alive) = maxConductors を保証する。
+  //   M18a: partial restore (A=1) で不足 2 を補充
+  //   M18b: partial restore (A=1, B=1) で不足 1 を補充
+  //   M18c: 全 discard + D 経路 1 件 → fallback 発動 + D の resume 透過
+  test("M18a: partial restore (A=1) → 不足 2 を topup で補充 (T346)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl((pid: number) => pid === 18001);
+    __setTreeImpl(async () => "surface:180\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:topupA${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([{ surface: "surface:180", pid: 18001 }]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      await initializeLayout(state, undefined, []);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // 事後条件チェックの topup ログが kept_partial の後に出る
+      expect(logContent).toContain("layout_conductors_topup");
+      expect(logContent).toMatch(/layout_conductors_topup .*have=1 max=3 adding=2/);
+      // alive 1 + 新規 pane 2 = maxConductors の pane 数になっている
+      expect(newSplitSpy).toHaveBeenCalledTimes(2);
+      expect(state.conductors.has("surface:180")).toBe(true);
+      // 非 resume の補充 pane が self-register 後に最終的に maxConductors 個の slot になる
+      const { handleMessage } = await import("./daemon");
+      await handleMessage(state, {
+        type: "CONDUCTOR_REGISTERED",
+        surface: "surface:topupA1",
+        timestamp: new Date().toISOString(),
+      });
+      await handleMessage(state, {
+        type: "CONDUCTOR_REGISTERED",
+        surface: "surface:topupA2",
+        timestamp: new Date().toISOString(),
+      });
+      expect(state.conductors.size).toBe(3);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
+    }
+  }, 15000);
+
+  test("M18b: partial restore (A=1, B=1) → 不足 1 を topup で補充 (T346)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    // surface:181 の pid のみ alive (A 経路)、surface:182 は dead → B 経路
+    __setIsAliveImpl((pid: number) => pid === 18101);
+    __setTreeImpl(async () => "surface:181\nsurface:182\n");
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:topupB${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      await writeTeamJson([
+        { surface: "surface:181", pid: 18101 },
+        {
+          surface: "surface:182",
+          pid: 18102,
+          taskId: "500",
+          taskRunId: "tr-500",
+          worktreePath: testDir,
+        },
+      ]);
+      const { saveTaskState } = await import("./task");
+      await saveTaskState(testDir, {
+        "500": {
+          status: "assigned",
+          assignedAt: new Date().toISOString(),
+          sessionId: "sess-500",
+          worktreePath: testDir,
+          taskRunId: "tr-500",
+        },
+      });
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [
+        {
+          taskId: "500",
+          taskRunId: "tr-500",
+          worktreePath: testDir,
+          sessionId: "sess-500",
+        },
+      ];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      expect(logContent).toContain("layout_conductors_topup");
+      expect(logContent).toMatch(/layout_conductors_topup .*have=2 max=3 adding=1/);
+      // newSplit は topup の 1 回のみ (B 経路は既存 pane に resume を流すので分割しない)
+      expect(newSplitSpy).toHaveBeenCalledTimes(1);
+      // assignments に B の 1 件 (taskId=500) が含まれる
+      expect(assignments).toHaveLength(1);
+      expect(assignments[0]?.taskId).toBe("500");
+      // applyRestorePlan 直後の state には alive (A) + B pre-populated の 2 件
+      expect(state.conductors.has("surface:181")).toBe(true);
+      expect(state.conductors.has("surface:182")).toBe(true);
+      expect(state.conductors.get("surface:182")?.taskId).toBe("500");
+      expect(state.conductors.size).toBe(2);
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
+    }
+  }, 15000);
+
+  test("M18c: 全 discard + D 経路 1 件 → fallback 発動 + resumePlan 透過 (T346)", async () => {
+    const { __setIsAliveImpl, __setTreeImpl } = await import("./cmux");
+    __setIsAliveImpl(() => false); // 全 pid 死亡
+    __setTreeImpl(async () => ""); // 全 surface 消失
+    const cmux = await import("./cmux");
+    const { spyOn } = await import("bun:test");
+    let paneIdx = 0;
+    const newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => {
+      paneIdx += 1;
+      return `surface:topupC${paneIdx}`;
+    });
+    const stubs = await stubCmuxIO();
+    try {
+      // 1 entry に taskId="700" を持たせる → D 経路、他 2 件は E 経路
+      await writeTeamJson([
+        {
+          surface: "surface:181c",
+          pid: 18001,
+          taskId: "700",
+          taskRunId: "tr-700",
+          worktreePath: testDir,
+        },
+        { surface: "surface:182c", pid: 18002 },
+        { surface: "surface:183c", pid: 18003 },
+      ]);
+
+      const state = await createDaemon(testDir);
+      state.workspace = "ws-test";
+      state.maxConductors = 3;
+      state.mainBranch = "main";
+      state.layout = "wide";
+
+      const { initializeLayout } = await import("./daemon");
+      const resumePlan = [
+        {
+          taskId: "700",
+          taskRunId: "tr-700",
+          worktreePath: testDir,
+          sessionId: "sess-700",
+        },
+      ];
+      const assignments = await initializeLayout(state, undefined, resumePlan);
+
+      const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+      // 変更 1: D=1 でも fallback が発動する
+      expect(logContent).toContain("layout_restore_empty_fallback");
+      // 変更 2: D の resume が initializeConductorSlots に透過 → 1 件 assignment
+      expect(assignments).toHaveLength(1);
+      expect(assignments[0]?.taskId).toBe("700");
+      // newSplit が maxConductors 回呼ばれる (先頭 1 resume + 末尾 2 非 resume)
+      expect(newSplitSpy).toHaveBeenCalledTimes(3);
+      // resume pre-population で state.conductors に 1 件登録 (D の resume)
+      expect(state.conductors.size).toBe(1);
+      const resumed = [...state.conductors.values()][0];
+      expect(resumed?.taskId).toBe("700");
+    } finally {
+      __setIsAliveImpl(null);
+      __setTreeImpl(null);
+      newSplitSpy.mockRestore();
+      stubs.send.mockRestore();
+      stubs.sendKey.mockRestore();
+      stubs.closeSurface.mockRestore();
+      stubs.renameTab.mockRestore();
+      stubs.newSplit.mockRestore();
     }
   }, 15000);
 });
