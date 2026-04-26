@@ -192,7 +192,7 @@ describe("buildConductorRowWithPool: pool ON で Conductor 行末尾に handle/u
     expect(countSurfaceLabel(json, "100")).toBe(1);
   });
 
-  test("case 8: pool ON / agent.tokenHandle=undefined → (no token)、surface ラベルは 1 度だけ", () => {
+  test("case 8: pool ON / agent.tokenHandle=undefined → Agent 行に (no token) は出ない、surface ラベルは 1 度だけ (T352)", () => {
     const perHandle = new Map<string, PerHandleSummary>([
       ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80 }],
     ]);
@@ -210,12 +210,14 @@ describe("buildConductorRowWithPool: pool ON で Conductor 行末尾に handle/u
           status: "running",
           role: "implementer",
           taskTitle: "fix bug",
-          // tokenHandle 未指定 → (no token) になるはず
+          // tokenHandle 未指定 → T352 仕様で handle 部分は完全省略（(no token) も出さない）
         },
       ],
     };
     const json = stringify(buildConductorRowWithPool(conductor, null, 0, perHandle));
-    expect(json).toContain("(no token)");
+    // T352: Agent 行 unbound では (no token) を出さない
+    expect(json).not.toContain("(no token)");
+    // surface ラベルの重複禁止 invariant は維持
     expect(countSurfaceLabel(json, "200")).toBe(1);
     expect(countSurfaceLabel(json, "100")).toBe(1);
   });
@@ -271,6 +273,29 @@ describe("buildSurfaceRowSuffix API 契約: surface ラベル二重出力禁止"
       expect(json).not.toContain(`[${input.surface}]`);
       expect(json).not.toContain(`[${input.surface.replace("surface:", "")}]`);
       expect(json).not.toContain(input.surface);
+    }
+  });
+
+  // T352: dashboard.tsx の `buildPoolSuffixForSurface(includeHandle:false)` 経路は
+  // `buildSurfaceRowSuffix(...).slice(1)` で先頭の handle ノードを削るため、
+  // 戻り値配列の先頭が必ず `@handle` の text node であることを契約として固定化する。
+  test("case 11 (T352 順序契約): bound 入力で戻り値配列の先頭が必ず @handle の text node", () => {
+    const inputs = [
+      { surface: "surface:100", handle: "@kddi", util5h: 0.10, util7d: 0.30, capPct: 80 },
+      { surface: "surface:300", handle: "@kddi", util5h: 0.85, util7d: 0.95, capPct: 15 },
+      { surface: "raw-id", handle: "@a", util5h: 0.1, util7d: 0.1, capPct: 100 },
+      { surface: "surface:103", handle: "@x", util5h: null, util7d: null, capPct: null },
+    ];
+    for (const input of inputs) {
+      const out = buildSurfaceRowSuffix(input);
+      expect(out.length).toBeGreaterThan(0);
+      const head = out[0]!;
+      const headJson = stringify(head);
+      // 先頭ノードに handle 文字列が "value" として含まれる
+      expect(headJson).toContain(`"text":"${input.handle}"`);
+      // 後続ノードには handle 文字列が含まれない（単独ノード保証）
+      const restJson = stringify(out.slice(1));
+      expect(restJson).not.toContain(`"text":"${input.handle}"`);
     }
   });
 });

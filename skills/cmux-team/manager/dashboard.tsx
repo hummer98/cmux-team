@@ -546,6 +546,13 @@ function buildMasterSection(
  * - tokenHandle あり → buildSurfaceRowSuffix の結果（@handle / util / cap / ⚠）
  * - tokenHandle なし → buildSurfaceRowSuffix が `(no token)` を返す
  *
+ * T352: `includeHandle: false` を渡すと handle ノードを除いた suffix（`util / cap / ⚠`）のみ返す。
+ *   未バインド時 (`tokenHandle == null`) は `(no token)` も省略して `[]` を返す。
+ *   Agent 行は spinner / roleIcon の **直後** に handle を独立ノードとして挿入するため、
+ *   suffix 側に handle が重複しないようこの経路を使う。Master / Conductor は引数省略
+ *   （default `true`）で T351 と同じ末尾配置を維持する。
+ *   先頭が必ず `@handle` text node である契約は `dashboard-pool.test.tsx` の case 11 で固定化済み。
+ *
  * `surface` パラメータは現状未使用だが、`SurfaceRowInput` の必須キーなので渡す。
  * surface ラベル本体は dashboard 側が独立 node として描画する（API 案 X）。
  */
@@ -553,16 +560,19 @@ function buildPoolSuffixForSurface(
   perHandle: Map<string, PerHandleSummary> | null,
   surface: string,
   tokenHandle: string | undefined,
+  includeHandle: boolean = true,
 ): ReturnType<typeof ui.text>[] {
   if (perHandle == null) return [];
+  if (!includeHandle && tokenHandle == null) return [];
   const data = tokenHandle ? perHandle.get(tokenHandle) ?? null : null;
-  return buildSurfaceRowSuffix({
+  const out = buildSurfaceRowSuffix({
     surface,
     handle: tokenHandle,
     util5h: data?.util5h ?? null,
     util7d: data?.util7d ?? null,
     capPct: data?.capPct ?? null,
   });
+  return includeHandle ? out : out.slice(1);
 }
 
 /**
@@ -743,15 +753,21 @@ export function buildConductorRowWithPool(
     // T238: status === "asking" のときは YELLOW + ? マーク + ラベル YELLOW で強調。
     const isAgentAsking = a.status === "asking";
     const isAgentRunning = a.status === "running" || a.status === "starting";
-    // T351: Agent 行末尾 pool suffix（perHandle=null なら空）
-    const agentSuffix = buildPoolSuffixForSurface(perHandle, a.surface, a.tokenHandle);
+    // T351 / T352: Agent 行 suffix。handle は spinner / roleIcon の直後に独立ノードとして
+    //              挿入するため、suffix 側からは handle を除外（util / cap / ⚠ のみ）。
+    const agentSuffix = buildPoolSuffixForSurface(perHandle, a.surface, a.tokenHandle, false);
+    // T352: handle ノードを挿入するのは pool ON かつ Agent が bound の場合のみ。
+    //       pool OFF (perHandle=null) では Conductor 行と同様に handle 装飾を一切出さない。
+    const showAgentHandle = perHandle != null && a.tokenHandle != null;
     if (isAgentAsking) {
       children.push(
         ui.row({ gap: 1 }, [
           ui.text(`   ${prefix}`, { dim: true }),
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: YELLOW } }),
           ui.text("?", { style: { fg: YELLOW } }),
-          ui.text(`${roleIcon} ${label}`, { style: { fg: YELLOW } }),
+          ui.text(roleIcon, { style: { fg: YELLOW } }),
+          showAgentHandle ? ui.text(a.tokenHandle!, { style: { fg: YELLOW } }) : null,
+          ui.text(label, { style: { fg: YELLOW } }),
           ...agentSuffix,
         ])
       );
@@ -762,16 +778,21 @@ export function buildConductorRowWithPool(
           ui.text(`   ${prefix}`, { dim: true }),
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
           ui.text(spinChar, { style: { fg: CYAN } }),
+          showAgentHandle ? ui.text(a.tokenHandle!, { style: { fg: CYAN } }) : null,
           ui.text(label),
           ...agentSuffix,
         ])
       );
     } else {
+      // T352: idle 行は roleIcon を plain（dim 解除）、handle も plain、taskTitle のみ dim を維持。
+      //       pool ON / OFF いずれの経路でも同じ。
       children.push(
         ui.row({ gap: 1 }, [
           ui.text(`   ${prefix}`, { dim: true }),
           ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: CYAN } }),
-          ui.text(`${roleIcon} ${label}`, { dim: true }),
+          ui.text(roleIcon),
+          showAgentHandle ? ui.text(a.tokenHandle!) : null,
+          ui.text(label, { dim: true }),
           ...agentSuffix,
         ])
       );
