@@ -96,7 +96,7 @@ export class ClaudeCodeBackend implements RuntimeBackend {
       await cmux.send(surface, `export ${envStr}\n`);
       await new Promise<void>((r) => setTimeout(r, 500));
     }
-    // 2. CLI を起動
+    // 2. CLI を起動（シェルへのコマンド送信。TUI 経路の send/reset と異なり \n で execute する）
     const cmd = launchCmd.endsWith("\n") ? launchCmd : `${launchCmd}\n`;
     await cmux.send(surface, cmd);
     return toSessionRef(surface);
@@ -113,11 +113,17 @@ export class ClaudeCodeBackend implements RuntimeBackend {
 
   /**
    * 既存セッションにメッセージを送信する（cmux send + send-key return）。
+   *
+   * Claude Code TUI への入力は `cmux send` の raw text の後に `cmux send-key return`
+   * で確定する必要がある（長文プロンプトは末尾 `\n` だけでは確定されない）。
+   * 末尾 `\n` は剥がして送る — 確定は send-key return が担う。
    */
   async send(sessionRef: SessionRef, message: string): Promise<void> {
     if (this.disposed) throw new Error("ClaudeCodeBackend: already disposed");
     const surface = fromSessionRef(sessionRef);
-    await cmux.send(surface, message.endsWith("\n") ? message : `${message}\n`);
+    const body = message.endsWith("\n") ? message.slice(0, -1) : message;
+    await cmux.send(surface, body);
+    await cmux.sendKey(surface, "return");
   }
 
   /**
@@ -129,11 +135,14 @@ export class ClaudeCodeBackend implements RuntimeBackend {
   async reset(sessionRef: SessionRef, prompt: string): Promise<SessionRef> {
     if (this.disposed) throw new Error("ClaudeCodeBackend: already disposed");
     const surface = fromSessionRef(sessionRef);
-    // /clear を送信して SESSION_CLEAR hook が返るのを待つ（現状は fire-and-forget）。
+    // /clear → enter で確定、500ms 待って TUI のクリアを待ってから新プロンプトを投入する。
     // M3 PR-2 で SESSION_CLEAR → session_reset イベントの発火と組み合わせる。
-    await cmux.send(surface, "/clear\n");
+    await cmux.send(surface, "/clear");
+    await cmux.sendKey(surface, "return");
     await new Promise((r) => setTimeout(r, 500));
-    await cmux.send(surface, prompt.endsWith("\n") ? prompt : `${prompt}\n`);
+    const body = prompt.endsWith("\n") ? prompt.slice(0, -1) : prompt;
+    await cmux.send(surface, body);
+    await cmux.sendKey(surface, "return");
     return sessionRef; // surface は変わらない
   }
 

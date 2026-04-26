@@ -173,9 +173,13 @@ describe("assignTask 状態遷移 (T232)", () => {
     expect(updated.worktreePath).toContain(".worktrees");
 
     // cmux.send が /clear と新プロンプト送信の 2 回呼ばれたこと
-    // NOTE: ClaudeCodeBackend.send() は自動的に \n を付加するため "/clear\n" になる（M3-a）
+    // NOTE (T343): ClaudeCodeBackend.reset() は cmux.send(raw) → cmux.sendKey(return) に分離。
+    // /clear は \n 末尾を付けず raw text のみ送り、enter は send-key return が担う。
     expect(sendSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(sendSpy.mock.calls[0]?.[1]).toBe("/clear\n");
+    expect(sendSpy.mock.calls[0]?.[1]).toBe("/clear");
+    // /clear の直後に return が send-key で送られていることを確認
+    expect(sendKeySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendKeySpy.mock.calls[0]?.[1]).toBe("return");
   }, 30000);
 });
 
