@@ -81,7 +81,14 @@ import {
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
 import { buildTasksSectionLines } from "./tasks-status";
-import { AGENT_ROLES, normalizeAgentRole, type AgentRole } from "./schema";
+import {
+  AGENT_ROLES,
+  OVERLAY_ROLES,
+  normalizeAgentRole,
+  normalizeOverlayRole,
+  type AgentRole,
+  type OverlayRole,
+} from "./schema";
 import {
   readProjectInstructions,
   writeProjectInstructions,
@@ -2495,7 +2502,8 @@ async function cmdSpawnAgent(): Promise<void> {
     console.error(`Error: ${e?.message ?? e}`);
     process.exit(1);
   }
-  const role = requireArg("role");
+  // T342: spawn 可能 role のみ受け付ける（master / conductor は overlay 専用）
+  const role = requireSpawnableAgentRole();
   const prompt = getArg("prompt");
   const promptFile = getArg("prompt-file");
   let taskTitle = getArg("task-title");
@@ -4857,24 +4865,54 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// --- agent-instructions サブコマンド (T247) ---
+// --- agent-instructions サブコマンド (T247 / T342) ---
 
-/** --role 引数を `AgentRole` に正規化。未知 → stderr + exit 1 */
-function requireAgentRole(): AgentRole {
+/**
+ * get/set/delete-agent-instructions 用の --role バリデーション (T342)。
+ * `OverlayRole` (Agent 8 ロール + master + conductor + alias) を受け付ける。
+ * 未知 → stderr + exit 1。
+ */
+function requireOverlayRole(): OverlayRole {
   const raw = requireArg("role");
-  const role = normalizeAgentRole(raw);
+  const role = normalizeOverlayRole(raw);
   if (!role) {
     console.error(
-      `Error: unknown role: ${JSON.stringify(raw)} (expected one of ${AGENT_ROLES.join(", ")}; aliases: impl, reviewer)`,
+      `Error: unknown role: ${JSON.stringify(raw)} (expected one of ${OVERLAY_ROLES.join(", ")}; aliases: impl, reviewer)`,
     );
     process.exit(1);
   }
   return role;
 }
 
+/**
+ * spawn-agent 用の --role バリデーション (T342)。
+ * - canonical AgentRole / alias → そのまま
+ * - master / conductor → "reserved" エラーで exit 1
+ *   （overlay 専用ロール: `cmux-team set-agent-instructions --role master/conductor` で設定）
+ * - その他 unknown → "unknown role" エラーで exit 1
+ */
+function requireSpawnableAgentRole(): AgentRole {
+  const raw = requireArg("role");
+  const role = normalizeAgentRole(raw);
+  if (role) return role;
+
+  const overlay = normalizeOverlayRole(raw);
+  if (overlay === "master" || overlay === "conductor") {
+    console.error(
+      `Error: role '${overlay}' is reserved for system prompt overlay and cannot be spawned as agent. ` +
+        `Use --role <agent-role> (one of: ${AGENT_ROLES.join(", ")})`,
+    );
+  } else {
+    console.error(
+      `Error: unknown role: ${JSON.stringify(raw)} (expected one of ${AGENT_ROLES.join(", ")}; aliases: impl, reviewer)`,
+    );
+  }
+  process.exit(1);
+}
+
 async function cmdGetAgentInstructions(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_get_agent_instructions"));
-  const role = requireAgentRole();
+  const role = requireOverlayRole();
   const body = await readProjectInstructions(PROJECT_ROOT, role);
   if (body === null) {
     // ファイル無し — 無出力で exit 0（仕様 §5.2）
@@ -4886,7 +4924,7 @@ async function cmdGetAgentInstructions(): Promise<void> {
 
 async function cmdSetAgentInstructions(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_set_agent_instructions"));
-  const role = requireAgentRole();
+  const role = requireOverlayRole();
 
   const bodyArg = getArg("body");
   const fromFile = getArg("from-file");
@@ -4928,7 +4966,7 @@ async function cmdSetAgentInstructions(): Promise<void> {
 
 async function cmdDeleteAgentInstructions(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_delete_agent_instructions"));
-  const role = requireAgentRole();
+  const role = requireOverlayRole();
   const deleted = await deleteProjectInstructions(PROJECT_ROOT, role);
   console.log(`DELETED=${deleted}`);
   process.exit(0);

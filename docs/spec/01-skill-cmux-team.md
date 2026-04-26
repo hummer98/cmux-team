@@ -87,20 +87,27 @@ description: >
 | `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
 | `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
 | `cmux-team resume` | assigned タスクの Conductor セッション再開（`<task-id>` positional 引数必須）。起動時 resume 経路では Manager が shell 側で直接 `claude --resume` を実行する（Conductor ペインに `cmux-team resume` 文字列を送らないこと）。`cmdConductor` と同様に起動時に自身を daemon に self-register（T228）。既存 state があれば daemon 側で skip されるため、`initializeConductorSlots` が pre-set した taskId/taskRunId/worktreePath は保持される |
-| `cmux-team get-agent-instructions` | Agent ロールの project-local overlay を表示（`--role` 必須。`.team/agent-instructions/<role>.md` に相当。overlay 不在時は何も出力せず exit 0）（T247） |
-| `cmux-team set-agent-instructions` | Agent ロールの overlay を書き込み（`--role` 必須。`--body <text>` / `--from-file <path>` / `--from-stdin` のいずれか必須。100 KB 超で exit 1。未知 role で exit 1）（T247） |
-| `cmux-team delete-agent-instructions` | Agent ロールの overlay を削除（`--role` 必須。存在しなくても exit 0 — 冪等）（T247） |
-| `cmux-team list-agent-instructions` | 8 Agent ロールの overlay 状況を一覧表示（exists → `✓ <n> bytes` / not set → `✗`）（T247） |
+| `cmux-team get-agent-instructions` | overlay ロールの project-local overlay を表示（`--role` 必須。`.team/agent-instructions/<role>.md` に相当。overlay 不在時は何も出力せず exit 0。T342: master / conductor も受け付ける） |
+| `cmux-team set-agent-instructions` | overlay ロールの overlay を書き込み（`--role` 必須。`--body <text>` / `--from-file <path>` / `--from-stdin` のいずれか必須。100 KB 超で exit 1。未知 role で exit 1。T342: master / conductor も受け付ける） |
+| `cmux-team delete-agent-instructions` | overlay ロールの overlay を削除（`--role` 必須。存在しなくても exit 0 — 冪等。T342: master / conductor も受け付ける） |
+| `cmux-team list-agent-instructions` | 10 overlay ロール (Agent 8 + master + conductor) の overlay 状況を一覧表示（exists → `✓ <n> bytes` / not set → `✗`）（T247 / T342） |
 
 > `cmux-team stop` は v4.3.0 で廃止（T286）。cmux セッション終了で daemon が自動停止するため不要。手動停止は `kill <pid>`（`.team/daemon.pid`）で行う。
 
-### 1a. プロジェクト固有の追加指示（agent instructions overlay、T247）
+### 1a. プロジェクト固有の追加指示（agent instructions overlay、T247 / T342）
 
-プロジェクトルート直下に `.team/agent-instructions/<role>.md` を置くと、`cmux-team spawn-agent` 実行時に prompt-file 内の `{{PROJECT_INSTRUCTIONS}}` プレースホルダがその内容で置換される。
+プロジェクトルート直下に `.team/agent-instructions/<role>.md` を置くと、対応する prompt の `{{PROJECT_INSTRUCTIONS}}` プレースホルダがその内容で置換される。
 
-**対象ロール**: `researcher` / `architect` / `planner` / `design-reviewer` / `implementer` / `inspector` / `dockeeper` / `task-manager` の 8 ロール（`AGENT_ROLES` enum）。
+**対象ロール**: Agent 8 ロール（`researcher` / `architect` / `planner` / `design-reviewer` / `implementer` / `inspector` / `dockeeper` / `task-manager`）に加えて `master` / `conductor` の **10 ロール**（`OVERLAY_ROLES` enum）。
 
-**エイリアス**: `--role impl` → `implementer`、`--role reviewer` → `design-reviewer`（conductor-role.md の既存 heredoc サンプルとの互換性のため）。
+| ロール群 | enum | 適用経路 |
+|---|---|---|
+| Agent 8 ロール | `AgentRole` | `cmux-team spawn-agent` 実行時に prompt-file 内の placeholder を展開 |
+| master / conductor (T342) | `OverlayRole` の追加 2 件 | daemon 起動時に `generateMasterPrompt` / `generateConductorRolePrompt` が `.team/prompts/master.md` / `.team/prompts/conductor-role.md` 生成時に冒頭の 1 件のみ展開（追加の `.expanded.md` は作らない） |
+
+**spawn-agent --role には master / conductor を渡せない**: `cmux-team spawn-agent --role master` / `--role conductor` は exit 1（`requireSpawnableAgentRole` が "reserved for system prompt overlay" エラーを返す）。Master / Conductor は agent として spawn できず、overlay 専用ロールとして扱われる。
+
+**エイリアス**: `--role impl` → `implementer`、`--role reviewer` → `design-reviewer`（conductor-role.md の既存 heredoc サンプルとの互換性のため）。`AgentRole` / `OverlayRole` 共通。
 
 **展開仕様** (`expandProjectInstructions` in `template.ts`):
 
@@ -109,15 +116,15 @@ description: >
 - overlay 不在 / 空文字 → 空文字に置換（mode=empty）
 - overlay 有り → 見出し `## <project_instructions_heading>` + 本文のブロックに展開（mode=applied）
 
-置換時、`\n{{PROJECT_INSTRUCTIONS}}\n` 行は置換ブロックで置き換わり（単独行 regex）、それ以外の inline 出現は `replaceAll` で直接置換する。空の場合は改行を挿入しない（`\n\n\n` の累積を防ぐ）。
+置換時、`\n{{PROJECT_INSTRUCTIONS}}\n` 行は **最初の 1 件のみ** 置換ブロックで置き換わる（単独行 regex）。それ以外の inline 出現や 2 件目以降の独立行 placeholder は `replaceAll` フォールバックを通らないため literal として保護される。これは `conductor-role.md` の heredoc サンプル内に存在する Agent 用の `{{PROJECT_INSTRUCTIONS}}` literal を保護するための仕様。空の場合は改行を挿入しない（`\n\n\n` の累積を防ぐ）。
 
 **サイズ上限**: `AGENT_INSTRUCTIONS_MAX_BYTES = 100 * 1024` バイト。超過した状態で `set-agent-instructions` を呼ぶと exit 1。
 
-**展開済みプロンプト**: `cmdSpawnAgent` は `{{PROJECT_INSTRUCTIONS}}` 展開後の内容を `.team/prompts/<basename>.expanded.md` に保存し、その path を `cmux-team spawn-agent` の `--prompt-file` に渡す。元の `<basename>.md` も監査証跡として残る。
+**展開済みプロンプト**: `cmdSpawnAgent` は `{{PROJECT_INSTRUCTIONS}}` 展開後の内容を `.team/prompts/<basename>.expanded.md` に保存し、その path を `cmux-team spawn-agent` の `--prompt-file` に渡す。元の `<basename>.md` も監査証跡として残る。Master/Conductor では `generateMasterPrompt` / `generateConductorRolePrompt` が `.team/prompts/master.md` / `.team/prompts/conductor-role.md` を生成する際に直接展開する（追加の `.expanded.md` は作らない）。
 
-**i18n**: 見出し文字列は `project_instructions_heading` キーで管理（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`tFor(locale, key)` で explicit locale lookup する。
+**i18n**: 見出し文字列は `project_instructions_heading` キーで管理（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`tFor(locale, key)` で explicit locale lookup する。Master / Conductor も同じ見出しを流用する。
 
-**Dashboard Settings タブ**: `4` キーで overlay 8 ロール + config 抜粋を read-only プレビュー表示。Enter で該当 overlay ファイルをビューアで開く。
+**Dashboard Settings タブ**: `4` キーで overlay 10 ロール + config 抜粋を read-only プレビュー表示。Enter で該当 overlay ファイルをビューアで開く。
 
 ### 2. トレーサビリティ
 

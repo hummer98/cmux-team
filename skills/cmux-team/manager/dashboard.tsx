@@ -25,8 +25,7 @@ import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 import { listProjectInstructions, readProjectInstructions } from "./agent-instructions";
 import { loadConfig, type TeamConfig } from "./config";
-import type { AgentRole } from "./schema";
-import { AGENT_ROLES } from "./schema";
+import type { OverlayRole } from "./schema";
 import { resolveOriginRepo } from "./gh-cache-repo";
 import { resolveGithubToken, tokenHash } from "./gh-cache-auth";
 import {
@@ -377,7 +376,7 @@ type SettingsItem =
   | { kind: "section"; label: string }
   | {
       kind: "overlay";
-      role: AgentRole;
+      role: OverlayRole;
       exists: boolean;
       size: number;
       filePath: string;

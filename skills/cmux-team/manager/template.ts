@@ -2,13 +2,13 @@
  * テンプレート検索・変数展開
  */
 import { existsSync } from "fs";
-import { readFile, writeFile, mkdir, cp } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { join, dirname } from "path";
 import { log } from "./logger";
 // R3 (m9): locale は i18n.ts から module-top で import し、
 // `expandProjectInstructions` 内で `formatProjectInstructionsBlock(body, locale)` に渡す。
 import { locale, t } from "./i18n";
-import { normalizeAgentRole } from "./schema";
+import { normalizeOverlayRole } from "./schema";
 import {
   readProjectInstructions,
   formatProjectInstructionsBlock,
@@ -58,8 +58,12 @@ export async function generateMasterPrompt(
     throw new Error(t("template_dir_not_found"));
   }
 
-  await cp(join(templateDir, "master.md"), dst);
-  await log("master_prompt_generated", `path=${dst}`);
+  // T342: master テンプレ冒頭の `{{PROJECT_INSTRUCTIONS}}` を overlay 展開する。
+  // best-effort write — ランタイムプロンプトは再生成可能（cmux-team start）。
+  const raw = await readFile(join(templateDir, "master.md"), "utf-8");
+  const { expanded, mode } = await expandProjectInstructions(projectRoot, "master", raw);
+  await writeFile(dst, expanded);
+  await log("master_prompt_generated", `path=${dst} expand_mode=${mode}`);
 }
 
 export async function generateConductorRolePrompt(
@@ -88,8 +92,15 @@ export async function generateConductorRolePrompt(
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
     .replace(/\{\{MAIN_BRANCH\}\}/g, mainBranch);
 
-  await writeFile(promptFile, content);
-  await log("conductor_role_prompt_generated", `path=${promptFile}`);
+  // T342: 冒頭の単独行 `{{PROJECT_INSTRUCTIONS}}` を overlay 展開する。
+  // expandProjectInstructions 内の lineRe は最初のマッチ 1 件のみ置換するため、
+  // heredoc サンプル内の literal placeholder は保護される。
+  const { expanded, mode } = await expandProjectInstructions(projectRoot, "conductor", content);
+  await writeFile(promptFile, expanded);
+  await log(
+    "conductor_role_prompt_generated",
+    `path=${promptFile} expand_mode=${mode}`,
+  );
   return promptFile;
 }
 
@@ -101,9 +112,11 @@ export async function generateConductorRolePrompt(
  *
  * 返り値の mode:
  * - `noop`: 入力 content にプレースホルダが無い（content を変更せず返す）
- * - `unknown-role`: role が AgentRole に属さない → プレースホルダを `""` で置換
+ * - `unknown-role`: role が OverlayRole に属さない → プレースホルダを `""` で置換
  * - `empty`: overlay ファイルが無い / 空 → プレースホルダを `""` で置換
  * - `applied`: overlay を block に整形して置換
+ *
+ * T342: role は `OverlayRole`（Agent 8 ロール + master + conductor）を受け付ける。
  */
 export async function expandProjectInstructions(
   projectRoot: string,
@@ -117,7 +130,7 @@ export async function expandProjectInstructions(
     return { expanded: content, mode: "noop" };
   }
 
-  const role = normalizeAgentRole(roleRaw);
+  const role = normalizeOverlayRole(roleRaw);
   let block = "";
   let mode: "unknown-role" | "empty" | "applied";
 

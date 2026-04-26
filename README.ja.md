@@ -276,12 +276,17 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 
 ## プロジェクト固有の追加指示
 
-各 Agent ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager）に対して、プロジェクト固有の追加指示を `.team/agent-instructions/<role>.md` に置くと、エージェント起動時に自動的に組み込まれます。
+10 個の overlay 対応ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager / **master / conductor**）に対してプロジェクト固有の追加指示を `.team/agent-instructions/<role>.md` に置くと、対応するプロンプトに自動的に組み込まれます:
+
+- **Agent ロール (8)** — `cmux-team spawn-agent` 実行時に Agent prompt-file 内の `{{PROJECT_INSTRUCTIONS}}` を置換します。
+- **master / conductor (T342)** — daemon 起動時に `generateMasterPrompt` / `generateConductorRolePrompt` が `.team/prompts/master.md` / `.team/prompts/conductor-role.md` 生成時に展開する shared system prompt overlay として機能します。`cmux-team spawn-agent --role master` / `--role conductor` は exit 1（"reserved" エラー）となり、agent としては spawn できません。
 
 ```bash
 # overlay を書き込む
 cmux-team set-agent-instructions --role implementer --from-file ./my-impl-notes.md
 cmux-team set-agent-instructions --role researcher --body "調査対象は 2025 年以降の論文に限る"
+cmux-team set-agent-instructions --role master --body "進捗は常に 3 行でまとめること"
+cmux-team set-agent-instructions --role conductor --from-file ./conductor-overlay.md
 
 # 内容確認 / 一覧
 cmux-team get-agent-instructions --role implementer
@@ -291,7 +296,7 @@ cmux-team list-agent-instructions
 cmux-team delete-agent-instructions --role implementer
 ```
 
-overlay の最大サイズは 100 KB。dashboard TUI の `Settings` タブ（`4` キー）で全ロールの overlay 状況と config をプレビューできます。
+overlay の最大サイズは 100 KB。dashboard TUI の `Settings` タブ（`4` キー）で全 10 ロールの overlay 状況と config をプレビューできます。
 
 ## Hooks 設定（推奨）
 

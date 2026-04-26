@@ -1,10 +1,15 @@
 /**
- * プロジェクト固有の追加指示 (agent instructions overlay) — T247。
+ * プロジェクト固有の追加指示 (agent instructions overlay) — T247 / T342。
  *
- * 各 Agent ロールに対して、プロジェクトルート直下の
+ * 各 overlay 対応ロールに対して、プロジェクトルート直下の
  * `.team/agent-instructions/<role>.md` に overlay 本文を置いておくと、
- * `cmux-team spawn-agent` 実行時に prompt-file 中の `{{PROJECT_INSTRUCTIONS}}`
- * プレースホルダがこの内容で置換される。overlay が無い場合は空文字に置換される。
+ * - Agent 8 ロール: `cmux-team spawn-agent` 実行時に prompt-file 中の
+ *   `{{PROJECT_INSTRUCTIONS}}` プレースホルダが overlay 本文で置換される
+ * - Master / Conductor (T342): `generateMasterPrompt` / `generateConductorRolePrompt`
+ *   が `.team/prompts/master.md` / `.team/prompts/conductor-role.md` 生成時に
+ *   テンプレ冒頭の `{{PROJECT_INSTRUCTIONS}}` を overlay 本文で置換する
+ *
+ * overlay が無い場合はいずれも空文字に置換される。
  *
  * このモジュールは以下の単一責務を持つ：
  * - overlay ファイルの path 解決 (agentInstructionsPath)
@@ -19,8 +24,8 @@
 import { existsSync } from "fs";
 import { readFile, writeFile, mkdir, unlink, stat } from "fs/promises";
 import { join } from "path";
-import type { AgentRole } from "./schema";
-import { AGENT_ROLES } from "./schema";
+import type { OverlayRole } from "./schema";
+import { OVERLAY_ROLES } from "./schema";
 import type { Locale } from "./i18n";
 import { tFor } from "./i18n";
 
@@ -33,7 +38,7 @@ export const AGENT_INSTRUCTIONS_MAX_BYTES = 100 * 1024;
 /**
  * overlay ファイルのフルパス。存在確認はしない。
  */
-export function agentInstructionsPath(projectRoot: string, role: AgentRole): string {
+export function agentInstructionsPath(projectRoot: string, role: OverlayRole): string {
   return join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, `${role}.md`);
 }
 
@@ -42,7 +47,7 @@ export function agentInstructionsPath(projectRoot: string, role: AgentRole): str
  */
 export async function readProjectInstructions(
   projectRoot: string,
-  role: AgentRole,
+  role: OverlayRole,
 ): Promise<string | null> {
   const path = agentInstructionsPath(projectRoot, role);
   if (!existsSync(path)) return null;
@@ -57,7 +62,7 @@ export async function readProjectInstructions(
  */
 export async function writeProjectInstructions(
   projectRoot: string,
-  role: AgentRole,
+  role: OverlayRole,
   body: string,
 ): Promise<void> {
   const bytes = Buffer.byteLength(body, "utf-8");
@@ -78,7 +83,7 @@ export async function writeProjectInstructions(
  */
 export async function deleteProjectInstructions(
   projectRoot: string,
-  role: AgentRole,
+  role: OverlayRole,
 ): Promise<boolean> {
   const path = agentInstructionsPath(projectRoot, role);
   if (!existsSync(path)) return false;
@@ -87,13 +92,14 @@ export async function deleteProjectInstructions(
 }
 
 /**
- * 全ロールについて overlay の有無とサイズを返す。`AGENT_ROLES` 順。
+ * 全ロールについて overlay の有無とサイズを返す。`OVERLAY_ROLES` 順
+ * （Agent 8 ロール → master → conductor）。
  */
 export async function listProjectInstructions(
   projectRoot: string,
-): Promise<Array<{ role: AgentRole; exists: boolean; size: number }>> {
-  const items: Array<{ role: AgentRole; exists: boolean; size: number }> = [];
-  for (const role of AGENT_ROLES) {
+): Promise<Array<{ role: OverlayRole; exists: boolean; size: number }>> {
+  const items: Array<{ role: OverlayRole; exists: boolean; size: number }> = [];
+  for (const role of OVERLAY_ROLES) {
     const path = agentInstructionsPath(projectRoot, role);
     if (existsSync(path)) {
       const s = await stat(path);

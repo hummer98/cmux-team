@@ -1,10 +1,14 @@
 import { describe, test, expect } from "bun:test";
 import {
+  AGENT_ROLES,
   AgentTokenBoundMessage,
   ConductorState,
   MasterStateSchema,
   NotificationMessage,
+  OVERLAY_ROLES,
+  OverlayRole,
   QueueMessage,
+  normalizeOverlayRole,
 } from "./schema";
 
 describe("NotificationMessage", () => {
@@ -164,5 +168,53 @@ describe("ConductorState tokenHandle", () => {
     if (parsed.success) {
       expect(parsed.data.tokenHandle).toBe("@kddi");
     }
+  });
+});
+
+// --- T342: OverlayRole ---
+
+describe("OverlayRole / OVERLAY_ROLES (T342)", () => {
+  test("OVERLAY_ROLES contains all AGENT_ROLES + master + conductor", () => {
+    for (const r of AGENT_ROLES) {
+      expect(OVERLAY_ROLES).toContain(r);
+    }
+    expect(OVERLAY_ROLES).toContain("master");
+    expect(OVERLAY_ROLES).toContain("conductor");
+  });
+
+  test("OVERLAY_ROLES.length === AGENT_ROLES.length + 2", () => {
+    expect(OVERLAY_ROLES.length).toBe(AGENT_ROLES.length + 2);
+  });
+
+  test("OverlayRole.options preserves AgentRole order then appends master, conductor", () => {
+    expect(OverlayRole.options[OverlayRole.options.length - 2]).toBe("master");
+    expect(OverlayRole.options[OverlayRole.options.length - 1]).toBe("conductor");
+  });
+});
+
+describe("normalizeOverlayRole (T342)", () => {
+  test("master → master", () => {
+    expect(normalizeOverlayRole("master")).toBe("master");
+  });
+
+  test("conductor → conductor", () => {
+    expect(normalizeOverlayRole("conductor")).toBe("conductor");
+  });
+
+  test("AgentRole alias inheritance: impl → implementer", () => {
+    expect(normalizeOverlayRole("impl")).toBe("implementer");
+  });
+
+  test("AgentRole alias inheritance: reviewer → design-reviewer", () => {
+    expect(normalizeOverlayRole("reviewer")).toBe("design-reviewer");
+  });
+
+  test("canonical agent role passes through", () => {
+    expect(normalizeOverlayRole("planner")).toBe("planner");
+    expect(normalizeOverlayRole("implementer")).toBe("implementer");
+  });
+
+  test("unknown role → undefined", () => {
+    expect(normalizeOverlayRole("foobar")).toBeUndefined();
   });
 });

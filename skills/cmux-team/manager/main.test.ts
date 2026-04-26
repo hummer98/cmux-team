@@ -2135,6 +2135,121 @@ describe("T264 (T290 改): applyResumeTransitions (cmdStart resume)", () => {
 
 // --- T286 S4/S5: `cmux-team stop` 廃止 ---
 
+// --- T342: agent-instructions CLI が overlay ロール (master/conductor) をサポート ---
+
+describe("agent-instructions CLI overlay roles (T342)", () => {
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["run", MAIN_TS, ...args], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      proc.stdin.end();
+    });
+  }
+
+  test("set/get/delete-agent-instructions --role master", async () => {
+    const setRes = await runCli([
+      "set-agent-instructions", "--role", "master", "--body", "MASTER_X",
+    ]);
+    expect(setRes.code).toBe(0);
+    const file = join(testDir, ".team/agent-instructions/master.md");
+    const raw = await readFile(file, "utf-8");
+    expect(raw).toBe("MASTER_X\n");
+
+    const getRes = await runCli(["get-agent-instructions", "--role", "master"]);
+    expect(getRes.code).toBe(0);
+    expect(getRes.stdout).toBe("MASTER_X\n");
+
+    const delRes = await runCli(["delete-agent-instructions", "--role", "master"]);
+    expect(delRes.code).toBe(0);
+    expect(delRes.stdout).toContain("DELETED=true");
+  }, 20000);
+
+  test("set-agent-instructions --role conductor", async () => {
+    const setRes = await runCli([
+      "set-agent-instructions", "--role", "conductor", "--body", "CONDUCTOR_X",
+    ]);
+    expect(setRes.code).toBe(0);
+    const raw = await readFile(
+      join(testDir, ".team/agent-instructions/conductor.md"),
+      "utf-8",
+    );
+    expect(raw).toBe("CONDUCTOR_X\n");
+  }, 15000);
+
+  test("list-agent-instructions includes master / conductor lines", async () => {
+    const r = await runCli(["list-agent-instructions"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^master /m);
+    expect(r.stdout).toMatch(/^conductor /m);
+  }, 15000);
+});
+
+// --- T342: spawn-agent の role バリデーション ---
+
+describe("cmdSpawnAgent role validation (T342)", () => {
+  const MAIN_TS = join(import.meta.dir, "main.ts");
+
+  async function runSpawn(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return await new Promise((resolve) => {
+      const proc = spawn("bun", ["run", MAIN_TS, ...args], {
+        cwd: testDir,
+        env: { ...process.env, PROJECT_ROOT: testDir },
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+      proc.stdin.end();
+    });
+  }
+
+  test("--role master は exit 1 + stderr に reserved", async () => {
+    const r = await runSpawn([
+      "spawn-agent",
+      "--conductor-surface", "surface:1",
+      "--role", "master",
+      "--prompt", "x",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("reserved");
+    expect(r.stderr).toContain("master");
+  }, 15000);
+
+  test("--role conductor は exit 1 + stderr に reserved", async () => {
+    const r = await runSpawn([
+      "spawn-agent",
+      "--conductor-surface", "surface:1",
+      "--role", "conductor",
+      "--prompt", "x",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("reserved");
+    expect(r.stderr).toContain("conductor");
+  }, 15000);
+
+  test("--role unknown-foo は exit 1 + stderr に unknown role", async () => {
+    const r = await runSpawn([
+      "spawn-agent",
+      "--conductor-surface", "surface:1",
+      "--role", "unknown-foo",
+      "--prompt", "x",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unknown role");
+    expect(r.stderr).toContain("unknown-foo");
+  }, 15000);
+});
+
 describe("cmdStop 廃止 (T286)", () => {
   const MAIN_TS = join(import.meta.dir, "main.ts");
 

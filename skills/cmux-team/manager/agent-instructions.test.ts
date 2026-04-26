@@ -13,7 +13,7 @@ import {
   listProjectInstructions,
   formatProjectInstructionsBlock,
 } from "./agent-instructions";
-import { AGENT_ROLES, normalizeAgentRole } from "./schema";
+import { AGENT_ROLES, OVERLAY_ROLES, normalizeAgentRole } from "./schema";
 import { expandProjectInstructions } from "./template";
 import { createDummyProject, type DummyProject } from "./test-project";
 
@@ -96,11 +96,11 @@ describe("read/write/delete/listProjectInstructions", () => {
     expect(existsSync(agentInstructionsPath(projectRoot, "implementer"))).toBe(false);
   });
 
-  test("(8) list returns all AGENT_ROLES in order", async () => {
+  test("(8) list returns all OVERLAY_ROLES in order (T342)", async () => {
     const items = await listProjectInstructions(projectRoot);
-    expect(items.length).toBe(AGENT_ROLES.length);
+    expect(items.length).toBe(OVERLAY_ROLES.length);
     items.forEach((it, i) => {
-      expect(it.role).toBe(AGENT_ROLES[i]!);
+      expect(it.role).toBe(OVERLAY_ROLES[i]!);
       expect(it.exists).toBe(false);
       expect(it.size).toBe(0);
     });
@@ -201,5 +201,85 @@ describe("expandProjectInstructions (T247 / R1)", () => {
     const { expanded, mode } = await expandProjectInstructions(projectRoot, "impl", input);
     expect(mode).toBe("applied");
     expect(expanded).toContain("ALIAS_OVERLAY");
+  });
+});
+
+// --- T342: master/conductor overlay support ---
+
+describe("master/conductor overlay (T342)", () => {
+  test("(15) write/read round-trip for master overlay", async () => {
+    const body = "MASTER_OVERLAY_BODY\nline2\n";
+    await writeProjectInstructions(projectRoot, "master", body);
+    const got = await readProjectInstructions(projectRoot, "master");
+    expect(got).toBe(body);
+  });
+
+  test("(16) write/read round-trip for conductor overlay", async () => {
+    const body = "CONDUCTOR_OVERLAY_BODY\n";
+    await writeProjectInstructions(projectRoot, "conductor", body);
+    const got = await readProjectInstructions(projectRoot, "conductor");
+    expect(got).toBe(body);
+  });
+
+  test("(17) deleteProjectInstructions(\"master\") works", async () => {
+    await writeProjectInstructions(projectRoot, "master", "to be deleted\n");
+    const deleted = await deleteProjectInstructions(projectRoot, "master");
+    expect(deleted).toBe(true);
+    expect(existsSync(agentInstructionsPath(projectRoot, "master"))).toBe(false);
+  });
+
+  test("(18) listProjectInstructions includes master and conductor at the end", async () => {
+    const items = await listProjectInstructions(projectRoot);
+    const roles = items.map((it) => it.role);
+    expect(roles[roles.length - 2]).toBe("master");
+    expect(roles[roles.length - 1]).toBe("conductor");
+  });
+
+  test("agentInstructionsPath builds correct relative path for master", () => {
+    const p = agentInstructionsPath(projectRoot, "master");
+    expect(p).toBe(join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, "master.md"));
+  });
+
+  test("agentInstructionsPath builds correct relative path for conductor", () => {
+    const p = agentInstructionsPath(projectRoot, "conductor");
+    expect(p).toBe(join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, "conductor.md"));
+  });
+
+  // --- T342 §Step 3: expandProjectInstructions for master/conductor ---
+
+  test("(19) expandProjectInstructions(role=\"master\") with overlay → mode=applied", async () => {
+    await writeProjectInstructions(projectRoot, "master", "MASTER_BODY");
+    const input = "BEFORE\n\n{{PROJECT_INSTRUCTIONS}}\n\nAFTER";
+    const { expanded, mode } = await expandProjectInstructions(projectRoot, "master", input);
+    expect(mode).toBe("applied");
+    expect(expanded).toContain("MASTER_BODY");
+    expect(expanded).not.toContain("{{PROJECT_INSTRUCTIONS}}");
+    expect(/\n\n\n+/.test(expanded)).toBe(false);
+  });
+
+  test("(20) expandProjectInstructions(role=\"conductor\") with overlay → mode=applied", async () => {
+    await writeProjectInstructions(projectRoot, "conductor", "CONDUCTOR_BODY");
+    const input = "BEFORE\n\n{{PROJECT_INSTRUCTIONS}}\n\nAFTER";
+    const { expanded, mode } = await expandProjectInstructions(projectRoot, "conductor", input);
+    expect(mode).toBe("applied");
+    expect(expanded).toContain("CONDUCTOR_BODY");
+    expect(expanded).not.toContain("{{PROJECT_INSTRUCTIONS}}");
+    expect(/\n\n\n+/.test(expanded)).toBe(false);
+  });
+
+  test("(21) expandProjectInstructions(role=\"master\") without overlay → mode=empty", async () => {
+    const input = "BEFORE\n\n{{PROJECT_INSTRUCTIONS}}\n\nAFTER";
+    const { expanded, mode } = await expandProjectInstructions(projectRoot, "master", input);
+    expect(mode).toBe("empty");
+    expect(expanded).not.toContain("{{PROJECT_INSTRUCTIONS}}");
+    expect(/\n\n\n+/.test(expanded)).toBe(false);
+  });
+
+  test("expandProjectInstructions(role=\"conductor\") without overlay → mode=empty", async () => {
+    const input = "BEFORE\n\n{{PROJECT_INSTRUCTIONS}}\n\nAFTER";
+    const { expanded, mode } = await expandProjectInstructions(projectRoot, "conductor", input);
+    expect(mode).toBe("empty");
+    expect(expanded).not.toContain("{{PROJECT_INSTRUCTIONS}}");
+    expect(/\n\n\n+/.test(expanded)).toBe(false);
   });
 });

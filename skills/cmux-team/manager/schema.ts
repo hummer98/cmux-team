@@ -380,6 +380,37 @@ export function normalizeAgentRole(raw: string): AgentRole | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+// --- Overlay 対応ロール (T342) ---
+
+/**
+ * `.team/agent-instructions/<role>.md` overlay の対象ロール列挙。
+ * `AgentRole` 8 件に加えて `master` / `conductor` を含む 10 件のタプル。
+ *
+ * - spawn-agent の `--role` 引数は引き続き `AgentRole` のみ受け付ける
+ *   （`requireSpawnableAgentRole`）。master / conductor は agent として spawn できない
+ * - get/set/delete/list-agent-instructions と
+ *   generateMasterPrompt / generateConductorRolePrompt の overlay 経路は
+ *   `OverlayRole` を受け付ける
+ */
+export const OverlayRole = z.enum([
+  ...AgentRole.options,
+  "master",
+  "conductor",
+] as const);
+export type OverlayRole = z.infer<typeof OverlayRole>;
+export const OVERLAY_ROLES: readonly OverlayRole[] = OverlayRole.options;
+
+/**
+ * `OverlayRole` 用の正規化。`AgentRole` のエイリアス（`impl` / `reviewer`）も継承する。
+ * 未知 role は `undefined` を返す。
+ */
+export function normalizeOverlayRole(raw: string): OverlayRole | undefined {
+  const agent = normalizeAgentRole(raw);
+  if (agent) return agent;
+  const parsed = OverlayRole.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
 // --- レイアウトモード ---
 
 export const LayoutMode = z.enum(["wide", "16x9"]);

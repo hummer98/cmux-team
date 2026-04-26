@@ -51,11 +51,15 @@ Project: {{PROJECT_ROOT}}
 
 ---
 
-## `{{PROJECT_INSTRUCTIONS}}` プレースホルダ（T247）
+## `{{PROJECT_INSTRUCTIONS}}` プレースホルダ（T247 / T342）
 
-全 Agent ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager）のテンプレート冒頭（`{{COMMON_HEADER}}` 直後）に `{{PROJECT_INSTRUCTIONS}}` を 1 行で配置している。
+全 overlay 対応ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager / **master / conductor**）のテンプレート冒頭（Agent ロールは `{{COMMON_HEADER}}` 直後、Master / Conductor はロール導入文の直後）に `{{PROJECT_INSTRUCTIONS}}` を 1 行で配置している。
 
-**役割**: `cmux-team spawn-agent --prompt-file <path>` 実行時に、prompt-file 内のこのプレースホルダが `.team/agent-instructions/<role>.md` の内容で置換される。overlay が無い場合は空文字に置換されるため、テンプレート側には常に残しておく。
+**役割**:
+- **Agent ロール (8 件)**: `cmux-team spawn-agent --prompt-file <path>` 実行時に、prompt-file 内のこのプレースホルダが `.team/agent-instructions/<role>.md` の内容で置換される
+- **Master / Conductor (T342)**: daemon 起動時の `generateMasterPrompt(projectRoot)` / `generateConductorRolePrompt(projectRoot, mainBranch)` が `.team/prompts/master.md` / `.team/prompts/conductor-role.md` を生成する際に直接展開する（spawn-agent 経路は経由しない。`.expanded.md` も作らない — テンプレ → `.team/prompts/` の 1 段だけ）
+
+overlay が無い場合は空文字に置換されるため、テンプレート側には常に残しておく。
 
 **展開仕様**: `skills/cmux-team/manager/template.ts` の `expandProjectInstructions(projectRoot, role, content)` が担当:
 - `{{PROJECT_INSTRUCTIONS}}` を含まない → そのまま返す (mode=noop)
@@ -63,19 +67,33 @@ Project: {{PROJECT_ROOT}}
 - role 不明 → 空文字置換 (mode=unknown-role、warn ログ)
 - overlay 不在 / 空 → 空文字置換 (mode=empty)
 - overlay 有り → `\n## <project_instructions_heading>\n\n<body>\n` ブロックに展開 (mode=applied)
+- 置換は `lineRe = /\n\{\{PROJECT_INSTRUCTIONS\}\}\n/` の **最初の 1 件のみ**。これは `conductor-role.md` の heredoc サンプル内に literal として現れる `{{PROJECT_INSTRUCTIONS}}`（Agent 用 overlay placeholder）を保護するための仕様
 
-**i18n**: 見出しは `project_instructions_heading` キー（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`formatProjectInstructionsBlock(body, locale)` が整形する。
+**i18n**: 見出しは `project_instructions_heading` キー（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`formatProjectInstructionsBlock(body, locale)` が整形する。Master / Conductor も同じ見出しを流用する。
 
-**Conductor 側の注意**: Conductor が heredoc で prompt-file を手組みする際は、quoted heredoc (`'AGENT_PROMPT'`) を使って `{{PROJECT_INSTRUCTIONS}}` を literal として保つ。`conductor-role.md` と `conductor.md` の先頭に全ロール共通の注意書きが追加されている。
+**Conductor 側の注意**: Conductor が heredoc で prompt-file を手組みする際は、quoted heredoc (`'AGENT_PROMPT'`) を使って `{{PROJECT_INSTRUCTIONS}}` を literal として保つ。`conductor-role.md` の先頭にこの注意書きが含まれており、conductor-role.md 自身の冒頭の `{{PROJECT_INSTRUCTIONS}}` だけが daemon 起動時に置換される（heredoc サンプル内のものは Agent 用 literal として保護される）。
 
-**Agent ロール enum** (`skills/cmux-team/manager/schema.ts`):
+**ロール enum** (`skills/cmux-team/manager/schema.ts`):
+
+| 用途 | enum | 含むもの |
+|---|---|---|
+| spawn-agent --role が受け付ける | `AgentRole` | researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager（8 ロール） |
+| overlay 系 CLI と generateMasterPrompt / generateConductorRolePrompt が受け付ける | `OverlayRole` | `AgentRole` 8 件 + master + conductor（10 ロール） |
+
 ```typescript
 export const AgentRole = z.enum([
   "researcher", "architect", "planner", "design-reviewer",
   "implementer", "inspector", "dockeeper", "task-manager",
 ]);
+
+export const OverlayRole = z.enum([
+  ...AgentRole.options,
+  "master", "conductor",
+] as const);
 ```
-エイリアス: `impl` → `implementer`、`reviewer` → `design-reviewer`。
+エイリアス: `impl` → `implementer`、`reviewer` → `design-reviewer`（`AgentRole` / `OverlayRole` で共通）。
+
+**spawn-agent への影響 (T342)**: `cmux-team spawn-agent --role master` / `--role conductor` は exit 1 で reject される（`requireSpawnableAgentRole` が "reserved for system prompt overlay" エラーを出す）。Master / Conductor は agent として spawn できず、overlay 専用ロールとして扱われる。
 
 ---
 
@@ -91,7 +109,7 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 - **やらないこと（デフォルト）**: 実装・テスト・リファクタリング・ファイル直接編集（`.team/tasks/` 以外）・git の**書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）。ユーザーの明示指示があれば Master 自身が実行してよい
 - **明示指示があっても禁止**: `.team/tasks/` 配下の直接編集（CLI 経由必須）・assigned タスクの編集・Conductor/Agent の直接起動・ポーリング・破壊的 git 操作（push, force-push, reset --hard 等）
 
-**テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`
+**テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`, `{{PROJECT_INSTRUCTIONS}}`（T342: Master 用テンプレート冒頭に配置）
 
 ---
 
@@ -100,6 +118,7 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 ### conductor.md（フルプロトコル版・deprecated）
 
 **非推奨** — 現行ランタイムは `conductor-role.md` + `conductor-task.md` を使用する。このファイルは歴史的リファレンスとして残しているが、新しいテンプレート変数（`{{MAIN_BRANCH}}` など）は反映されないため、編集や再参照は避けること。
+※ T342 で `{{PROJECT_INSTRUCTIONS}}` placeholder 機構を Master / Conductor へ拡張した際も、本ファイルは deprecated のため placeholder 追加対象外。Conductor 用 overlay は `conductor-role.md` 経由で適用される。
 
 Conductor のフルワークフロー定義。タスク分解 → Agent spawn → 監視 → 結果統合 → レビュー判断 → テスト → クリーンアップ。
 
@@ -138,7 +157,7 @@ conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報�
 
 **Step 8 semantic resolution（T284）:** rebase conflict 発生時、Conductor は即 abort せず semantic 自解決を試みる。衝突元 commit から task ID（`(TXXX)`）を抽出して両側の仕様を読み、conflict marker のあるファイルのみを Edit / Write で統合する（Conductor が直接編集できる唯一の例外）。検証（scope_violation / `bun test` / `bunx tsc --noEmit`）がすべて pass すれば `runs/<taskRunId>/conflict-resolution.md` を書き出して Step 9 へ。いずれか失敗した場合は `failure_mode`（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）を含む【判断必要】レポートを返し、`rebase-merge` / `rebase-apply` ディレクトリ有無で分岐した rollback（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）を行う。worktree / branch は温存する。
 
-**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`（パス情報はタスク割り当て時に付与）
+**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`, `{{PROJECT_INSTRUCTIONS}}`（T342: 冒頭の 1 件のみ daemon 起動時に展開、heredoc サンプル内のものは Agent 用 literal として保護される）。パス情報はタスク割り当て時に付与。
 
 ### conflict-resolution.md フォーマット（runs/<taskRunId>/ 配下、T284）
 

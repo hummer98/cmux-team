@@ -228,12 +228,17 @@ depends_on: [10, 11, 12]  # waits for all to complete
 
 ## Project-Specific Agent Instructions
 
-You can give each Agent role (researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager) a project-local overlay by writing `.team/agent-instructions/<role>.md`. The overlay content is injected into the Agent's prompt at spawn time.
+You can give each overlay role (10 in total: researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager / **master / conductor**) a project-local overlay by writing `.team/agent-instructions/<role>.md`. The overlay content is injected into the corresponding prompt:
+
+- **Agent roles (8)** — overlay is applied at `cmux-team spawn-agent` time (replaces `{{PROJECT_INSTRUCTIONS}}` in the agent prompt-file).
+- **master / conductor (T342)** — overlay is applied as a shared system-prompt overlay at daemon start: `generateMasterPrompt` / `generateConductorRolePrompt` injects it into `.team/prompts/master.md` / `.team/prompts/conductor-role.md`. They cannot be passed to `cmux-team spawn-agent --role` (it returns exit 1 with a "reserved" error).
 
 ```bash
 # Write an overlay
 cmux-team set-agent-instructions --role implementer --from-file ./my-impl-notes.md
 cmux-team set-agent-instructions --role researcher --body "Limit search to papers from 2025 onward"
+cmux-team set-agent-instructions --role master --body "Always summarise progress in 3 lines"
+cmux-team set-agent-instructions --role conductor --from-file ./conductor-overlay.md
 
 # Inspect / list
 cmux-team get-agent-instructions --role implementer
