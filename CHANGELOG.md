@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-04-26
+
+### Added
+
+- **`cmux-team create-task --status ready` / `update-task --status ready` に auto-pull を導入（T339）**。sync state が `behind-ff`（local が `origin/<mainBranch>` の strict ancestor で fast-forward 可能）でかつ `PROJECT_ROOT` が `mainBranch` を checkout 中のとき、Ready 昇格前に `git pull --ff-only origin <mainBranch>` を自動実行する。失敗時は `ready_auto_pull_failed` で exit 1。`--no-auto-pull` で抑止すれば従来どおり警告のみで昇格続行。`mainBranch` 以外の checkout / detached HEAD / `no-remote` のときは auto-pull せず警告に留める
+
+### Changed
+
+- **per-file `bun test` を回す独立 GitHub Actions workflow を追加（T336, A021/A022）**。`prepublishOnly` から `bun test` 全体実行を外したことで失われていた CI テスト網羅を、`.github/workflows/test.yml` で穴埋め。A021 で記録した「`bun test` 全体実行が O(N²) 級に劣化して 13 分以上 hang する」問題を避けるため、shell ループで per-file に `timeout 90 bun test --timeout 30000 --reporter=dots "$f"` を回す方式を採用。job 15min / step 10min / per-file 90s の 3 重 timeout で暴走を防ぎ、fail は `::error file=...::` で annotation する。根本対策（B5/B6/B7）完了後にループを撤去予定
+
 ## [4.10.0] - 2026-04-26
 
 ### Added
