@@ -49,6 +49,7 @@ import {
 import { buildMetricsRows, type MetricsData } from "./dashboard-metrics";
 // T351: pool capacity / per-surface handle 表示
 import { buildPoolHeaderLines } from "./pool-status-header";
+import { buildPoolHeaderDisplay } from "./pool-header-display";
 import { buildSurfaceRowSuffix } from "./pool-surface-row";
 import type { PoolSummary, PerHandleSummary } from "./pool-summary";
 
@@ -457,6 +458,9 @@ function sectionTitle(label: string) {
 // --- ビュー構築 ---
 
 /**
+ * NOTE (T363): dashboard 描画経路からは外した。export は CLI (main.ts) との
+ *              整合再評価を待つために当面残す。新規利用は禁止。
+ *
  * T351: pool capacity ヘッダー（dashboard 用）。
  *
  * - summary=null（pool OFF / 失敗）→ `[]`（呼び出し側で何も挿入されない）
@@ -1427,7 +1431,9 @@ export async function startDashboard(
       body: ui.column({ gap: 0 }, [
         // ヘッダー行（sectionTitle と同じスタイル）
         (() => {
-          const rl = buildRateLimitDisplay(daemon.rateLimit);
+          const rl = daemon.pool != null
+            ? buildPoolHeaderDisplay(daemon.pool)
+            : buildRateLimitDisplay(daemon.rateLimit);
           const portLabel = daemon.proxyPort ? ` :${daemon.proxyPort}` : "";
           const left = `─ cmux-team ${headerSubtitle}${portLabel}`;
           const rightText = rl.parts.map((p, i) => (i > 0 ? (p.group ? "  " : " ") : "") + p.text).join("");
@@ -1466,8 +1472,6 @@ export async function startDashboard(
               );
             })()]
           : []),
-        // T351: pool capacity ヘッダー（pool ON のみ。pool OFF / 失敗時は空配列で何も挿入しない）
-        ...buildPoolHeader(daemon.pool),
         // Master セクション
         sectionTitle("Master"),
         buildMasterSection(daemon, daemon.pool?.perHandle ?? null),
