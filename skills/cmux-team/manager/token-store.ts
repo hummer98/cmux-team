@@ -107,6 +107,12 @@ export interface InitTokenDBOptions {
 
 const KEYCHAIN_SERVICE = "cmux-team-token";
 
+/**
+ * Claude Code 本体が credential を保管している macOS Keychain サービス名（T345）。
+ * `~/.claude/.credentials.json` と同じ JSON shape（`claudeAiOauth` を含む）を返す。
+ */
+export const CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS tokens (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,9 +567,51 @@ export function listActiveLeases(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const inMemoryKeychain = new Map<string, string>();
+/** T345: Claude Code 用 Keychain (`Claude Code-credentials`) の in-memory モック。 */
+const inMemoryClaudeCodeKeychain = new Map<string, string>();
 
 function useInMemory(): boolean {
   return process.env.KEYCHAIN_TEST_MODE === "1";
+}
+
+/**
+ * macOS Keychain (`Claude Code-credentials` / account=`process.env.USER` 既定) から
+ * Claude Code の credentials JSON 文字列を取得する（T345）。
+ *
+ * - `KEYCHAIN_TEST_MODE === "1"` のときは in-memory map を参照（spawnSync を呼ばない）
+ * - 非 macOS は null
+ * - account が空（`$USER` 未設定）も null
+ * - `security` が exit 44 (errSecItemNotFound) もしくはその他のエラーで失敗した場合は
+ *   全て null を返し、呼び出し側で `~/.claude/.credentials.json` への fallback を委ねる
+ *   （44 を区別しても呼び出し側の挙動は同じであり、Keychain ロック中などの
+ *    fallback したいケースを単純な null で吸収する方が呼び出し側の分岐が減る）
+ * - JSON parse は本関数では行わず、raw 文字列を返す
+ */
+export function readClaudeCodeKeychain(
+  account: string = process.env.USER ?? "",
+): string | null {
+  if (useInMemory()) {
+    return inMemoryClaudeCodeKeychain.get(account) ?? null;
+  }
+  if (process.platform !== "darwin") return null;
+  if (!account) return null;
+
+  const result = spawnSync(
+    "security",
+    [
+      "find-generic-password",
+      "-s",
+      CLAUDE_CODE_KEYCHAIN_SERVICE,
+      "-a",
+      account,
+      "-w",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.error) return null;
+  if (result.status !== 0) return null;
+  const out = (result.stdout?.toString() ?? "").replace(/\n$/, "");
+  return out.length > 0 ? out : null;
 }
 
 export function isKeychainSupported(): boolean {
@@ -888,6 +936,27 @@ export function selectToken(
 /** テスト専用: in-memory Keychain Map をクリアする。本番コードから呼んではならない。 */
 export function __resetInMemoryKeychainForTest(): void {
   inMemoryKeychain.clear();
+}
+
+/**
+ * テスト専用: Claude Code Keychain (`Claude Code-credentials`) の in-memory map を操作する（T345）。
+ * `json === null` で当該 account のエントリを削除。
+ * 本番コードから呼んではならない。
+ */
+export function __setClaudeCodeKeychainForTest(
+  account: string,
+  json: string | null,
+): void {
+  if (json === null) {
+    inMemoryClaudeCodeKeychain.delete(account);
+    return;
+  }
+  inMemoryClaudeCodeKeychain.set(account, json);
+}
+
+/** テスト専用: Claude Code Keychain in-memory map をクリアする（T345）。 */
+export function __resetClaudeCodeKeychainForTest(): void {
+  inMemoryClaudeCodeKeychain.clear();
 }
 
 /** テスト用: dbPath と dirPath の解決結果を観測する。 */

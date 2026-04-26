@@ -79,6 +79,8 @@ import {
   storeTokenInKeychain,
   upsertUsageSnapshot,
   __resetInMemoryKeychainForTest,
+  __setClaudeCodeKeychainForTest,
+  __resetClaudeCodeKeychainForTest,
   type InsertTokenInput,
 } from "./token-store";
 
@@ -121,6 +123,7 @@ beforeAll(() => {
     TOKEN_STORE_DB_PATH: process.env.TOKEN_STORE_DB_PATH,
     KEYCHAIN_TEST_MODE: process.env.KEYCHAIN_TEST_MODE,
     HOME: process.env.HOME,
+    USER: process.env.USER,
   };
 });
 
@@ -144,8 +147,10 @@ beforeEach(() => {
   process.env.KEYCHAIN_TEST_MODE = "1";
   // HOME に加えて os.homedir() の override も設定する（Bun は HOME 動的変更を尊重しないため）
   process.env.HOME = testDir;
+  process.env.USER = "testuser";
   homedirOverride = testDir;
   __resetInMemoryKeychainForTest();
+  __resetClaudeCodeKeychainForTest();
   askAnswers.length = 0;
 
   consoleLogs = [];
@@ -968,5 +973,266 @@ describe("cmdTokenPromote (integration)", () => {
     expect(caught).toBeInstanceOf(TestExitError);
     expect(caught?.code).toBe(1);
     expect(consoleErrors.join("\n")).toContain("Usage");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// readClaudeCredentials priority (T345)
+//
+// macOS Keychain (`Claude Code-credentials` / account=$USER) を優先して
+// `~/.claude/.credentials.json` にフォールバックする優先順位ロジックを検証する。
+// in-memory モード (`KEYCHAIN_TEST_MODE=1`) で `__setClaudeCodeKeychainForTest`
+// により Keychain 値を仕込み、`spawnSync` 自体は mock しない。
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("readClaudeCredentials priority (T345)", () => {
+  function makeKeychainJson(opts: {
+    accessToken: string;
+    rateLimitTier?: string;
+  }): string {
+    return JSON.stringify({
+      claudeAiOauth: {
+        accessToken: opts.accessToken,
+        rateLimitTier: opts.rateLimitTier,
+      },
+    });
+  }
+
+  test("T1: macOS Keychain 成功 → Keychain 値が使われる (file 値は無視)", async () => {
+    __setClaudeCodeKeychainForTest(
+      "testuser",
+      makeKeychainJson({
+        accessToken: "kc-AAA",
+        rateLimitTier: "default_claude_max_5x",
+      }),
+    );
+    writeClaudeCredentials({
+      accessToken: "file-BBB",
+      rateLimitTier: "default_claude_max_20x",
+    });
+
+    setArgv("add");
+    setReadlineAnswers(
+      "1", // source = credential
+      "kchain", // display name → @kcha
+      "any",
+    );
+    await withMockedFetch("org-kc-1", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@kcha");
+      expect(tok).not.toBeNull();
+      expect(tok?.organization_id).toBe("org-kc-1");
+      expect(tok?.plan).toBe("max-x5");
+      expect(tok?.plan_ratio).toBe(5.0);
+      expect(retrieveTokenFromKeychain("@kcha")).toBe("kc-AAA");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T2: Keychain 未登録 → ~/.claude/.credentials.json fallback", async () => {
+    // Keychain は空のまま
+    writeClaudeCredentials({
+      accessToken: "file-BBB",
+      rateLimitTier: "default_claude_pro",
+    });
+
+    setArgv("add");
+    setReadlineAnswers(
+      "1",
+      "filerel", // display name → @file
+      "any",
+    );
+    await withMockedFetch("org-file-1", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@file");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("pro");
+      expect(retrieveTokenFromKeychain("@file")).toBe("file-BBB");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T3: 両方失敗 → exit 1 (新エラー文言)", async () => {
+    // Keychain 空、ファイルも書き出さない
+    setArgv("add");
+    setReadlineAnswers("1", "noavail", "any");
+    let caught: TestExitError | null = null;
+    try {
+      await withMockedFetch("org-noop", async () => {
+        await cmdTokenAdd();
+      });
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    const errs = consoleErrors.join("\n");
+    expect(errs).toContain("Claude Code credential が見つかりません");
+    expect(errs).toContain("macOS Keychain");
+    expect(errs).toContain(".credentials.json");
+  });
+
+  test("T4: Keychain JSON 破損 → file fallback", async () => {
+    __setClaudeCodeKeychainForTest("testuser", "this is not json");
+    writeClaudeCredentials({
+      accessToken: "file-CCC",
+      rateLimitTier: "default_claude_max_20x",
+    });
+
+    setArgv("add");
+    setReadlineAnswers("1", "broken", "any");
+    await withMockedFetch("org-broken-1", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@brok");
+      expect(tok).not.toBeNull();
+      expect(retrieveTokenFromKeychain("@brok")).toBe("file-CCC");
+      expect(tok?.plan).toBe("max-x20");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T5: Keychain JSON は valid だが claudeAiOauth.accessToken 欠損 → file fallback", async () => {
+    __setClaudeCodeKeychainForTest(
+      "testuser",
+      JSON.stringify({ claudeAiOauth: {} }),
+    );
+    writeClaudeCredentials({
+      accessToken: "file-DDD",
+      rateLimitTier: "default_claude_max_5x",
+    });
+
+    setArgv("add");
+    setReadlineAnswers("1", "missing", "any");
+    await withMockedFetch("org-missing-1", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@miss");
+      expect(tok).not.toBeNull();
+      expect(retrieveTokenFromKeychain("@miss")).toBe("file-DDD");
+      expect(tok?.plan).toBe("max-x5");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T7: promote 経路でも同じ優先順位 (Keychain 優先)", async () => {
+    // 既存 auto-discover token を準備
+    const existingOrgId = "promote-org-A";
+    {
+      const db = initTokenDB();
+      try {
+        insertToken(db, {
+          handle: "@auto",
+          organization_id: existingOrgId,
+          auth_hash: "auto00000000",
+          plan: "unknown",
+          plan_ratio: null,
+          tags: ["auto"],
+          credential_source: "auto-discover",
+          selectable: false,
+        });
+      } finally {
+        db.close();
+      }
+    }
+
+    __setClaudeCodeKeychainForTest(
+      "testuser",
+      makeKeychainJson({
+        accessToken: "kc-promote-token",
+        rateLimitTier: "default_claude_max_20x",
+      }),
+    );
+    writeClaudeCredentials({
+      accessToken: "file-promote-token",
+      rateLimitTier: "default_claude_pro",
+    });
+
+    setArgv("promote", "@auto", "kddi");
+    setReadlineAnswers(
+      "1", // source = credential
+      "any", // tags
+    );
+    await withMockedFetch(existingOrgId, async () => {
+      await cmdTokenPromote();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@kddi");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x20");
+      expect(retrieveTokenFromKeychain("@kddi")).toBe("kc-promote-token");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T8: rotate 経路でも同じ優先順位 (Keychain 優先で auth_hash 更新)", async () => {
+    let oldAuthHash: string;
+    {
+      const db = initTokenDB();
+      try {
+        const t = insertToken(
+          db,
+          makeToken({ handle: "@rotk", organization_id: "rot-org" }),
+        );
+        oldAuthHash = t.auth_hash;
+      } finally {
+        db.close();
+      }
+      storeTokenInKeychain("@rotk", "old-token");
+    }
+
+    __setClaudeCodeKeychainForTest(
+      "testuser",
+      makeKeychainJson({
+        accessToken: "kc-rotate-token",
+        rateLimitTier: "default_claude_max_20x",
+      }),
+    );
+    writeClaudeCredentials({
+      accessToken: "file-rotate-token",
+      rateLimitTier: "default_claude_max_5x",
+    });
+
+    setArgv("rotate", "@rotk");
+    setReadlineAnswers("1");
+    await cmdTokenRotate();
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@rotk");
+      expect(tok).not.toBeNull();
+      expect(tok?.auth_hash).not.toBe(oldAuthHash);
+      // Keychain 由来 token の auth_hash であることを別計算で検証
+      const { createHash } = await import("crypto");
+      const expected = createHash("sha256")
+        .update("Bearer kc-rotate-token")
+        .digest("hex")
+        .slice(0, 12);
+      expect(tok?.auth_hash).toBe(expected);
+      expect(retrieveTokenFromKeychain("@rotk")).toBe("kc-rotate-token");
+    } finally {
+      db.close();
+    }
   });
 });

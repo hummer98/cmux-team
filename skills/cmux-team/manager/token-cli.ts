@@ -21,6 +21,7 @@ import {
   retrieveTokenFromKeychain,
   deleteTokenFromKeychain,
   isKeychainSupported,
+  readClaudeCodeKeychain,
   updateTokenPromoteFields,
   KeychainUnsupportedError,
   type TokenPlan,
@@ -48,17 +49,49 @@ async function prompt(rl: ReturnType<typeof createInterface>, question: string):
   });
 }
 
-/** `~/.claude/.credentials.json` を読んで claudeAiOauth を返す。 */
+/**
+ * `claudeAiOauth.accessToken` を抽出する。
+ * raw 文字列が JSON として無効、もしくは `accessToken` が無ければ null。
+ */
+function parseClaudeCredentialJson(raw: string): {
+  accessToken: string;
+  rateLimitTier: string | undefined;
+} | null {
+  try {
+    const obj = JSON.parse(raw);
+    const oauth = obj?.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+    return {
+      accessToken: oauth.accessToken,
+      rateLimitTier: oauth.rateLimitTier,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Claude Code の credential を取得する（T345）。
+ * 優先順位:
+ *   1) macOS Keychain (`Claude Code-credentials` / account=$USER)
+ *   2) `~/.claude/.credentials.json`
+ * いずれも JSON 破損 / `claudeAiOauth.accessToken` 欠損であれば次の経路へ fallback する。
+ */
 async function readClaudeCredentials(): Promise<{
   accessToken: string;
   rateLimitTier: string | undefined;
 } | null> {
+  const keychainJson = readClaudeCodeKeychain();
+  if (keychainJson) {
+    const parsed = parseClaudeCredentialJson(keychainJson);
+    if (parsed) return parsed;
+    // JSON 破損 / accessToken 欠損 → file fallback（warn は出さない: 期待される fallback）
+  }
+
   const credPath = join(homedir(), ".claude", ".credentials.json");
   try {
-    const raw = JSON.parse(await readFile(credPath, "utf-8"));
-    const oauth = raw?.claudeAiOauth;
-    if (!oauth?.accessToken) return null;
-    return { accessToken: oauth.accessToken, rateLimitTier: oauth.rateLimitTier };
+    const raw = await readFile(credPath, "utf-8");
+    return parseClaudeCredentialJson(raw);
   } catch {
     return null;
   }
@@ -103,7 +136,7 @@ export async function cmdTokenAdd(): Promise<void> {
 
   try {
     console.log("source:");
-    console.log("  [1] Claude Code credential (~/.claude/.credentials.json)");
+    console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json)");
     console.log("  [2] 手動入力（token を貼り付け）");
     const source = (await prompt(rl, "> ")).trim();
 
@@ -113,7 +146,7 @@ export async function cmdTokenAdd(): Promise<void> {
     if (source === "1") {
       const cred = await readClaudeCredentials();
       if (!cred) {
-        console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+        console.error("Error: Claude Code credential が見つかりません（macOS Keychain / ~/.claude/.credentials.json のどちらも読めませんでした）");
         process.exit(1);
       }
       accessToken = cred.accessToken;
@@ -340,13 +373,13 @@ export async function cmdTokenRotate(): Promise<void> {
   let newToken: string;
 
   try {
-    console.log(`新しい token を貼り付け（または [1] credential ファイルから再取得）:`);
+    console.log(`新しい token を貼り付け（または [1] credential から再取得 (macOS Keychain / ファイル)）:`);
     const input = (await prompt(rl, "> ")).trim();
 
     if (input === "1") {
       const cred = await readClaudeCredentials();
       if (!cred) {
-        console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+        console.error("Error: Claude Code credential が見つかりません（macOS Keychain / ~/.claude/.credentials.json のどちらも読めませんでした）");
         process.exit(1);
       }
       newToken = cred.accessToken;
@@ -481,13 +514,13 @@ export async function cmdTokenPromote(): Promise<void> {
     let tags: string[];
     try {
       console.log("source:");
-      console.log("  [1] Claude Code credential (~/.claude/.credentials.json)");
+      console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json)");
       console.log("  [2] 手動入力（token を貼り付け）");
       const source = (await prompt(rl, "> ")).trim();
       if (source === "1") {
         const cred = await readClaudeCredentials();
         if (!cred) {
-          console.error("Error: ~/.claude/.credentials.json が見つからないか accessToken がありません");
+          console.error("Error: Claude Code credential が見つかりません（macOS Keychain / ~/.claude/.credentials.json のどちらも読めませんでした）");
           process.exit(1);
         }
         accessToken = cred.accessToken;
