@@ -335,6 +335,7 @@ describe("cmdTokenAdd (integration)", () => {
     setReadlineAnswers(
       "2", // manual
       "new-token",
+      "", // plan prompt = unknown (T349)
       "neww",
       "any",
     );
@@ -367,6 +368,7 @@ describe("cmdTokenAdd (integration)", () => {
     setReadlineAnswers(
       "2", // manual
       "new-token",
+      "", // plan prompt = unknown (T349)
       "personal", // → @pers (重複)
       "any",
     );
@@ -388,6 +390,7 @@ describe("cmdTokenAdd (integration)", () => {
     setReadlineAnswers(
       "2", // source = manual
       "manual-test-token-XYZ", // token
+      "", // plan prompt = unknown (T349)
       "personal", // display name
       "any", // tags
     );
@@ -407,6 +410,149 @@ describe("cmdTokenAdd (integration)", () => {
     } finally {
       db.close();
     }
+  });
+
+  // T349: rateLimitTier 由来で plan が解決できない場合の対話 prompt
+  test("T1: source=2 で plan prompt に max-x20 を入力すると plan/plan_ratio が確定する (T349)", async () => {
+    setArgv("add");
+    setReadlineAnswers(
+      "2", // source = manual
+      "tok-T1", // token
+      "max-x20", // plan prompt
+      "personal", // display name → @pers
+      "any", // tags
+    );
+    await withMockedFetch("org-T1", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@pers");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("T2: source=2 で plan prompt に空 Enter で plan=unknown / plan_ratio=null、organizationId 行と prompt 行の間に空行 (T349)", async () => {
+    setArgv("add");
+    setReadlineAnswers(
+      "2",
+      "tok-T2",
+      "", // plan prompt → unknown
+      "personal",
+      "any",
+    );
+    await withMockedFetch("org-T2", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@pers");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("unknown");
+      expect(tok?.plan_ratio).toBeNull();
+    } finally {
+      db.close();
+    }
+
+    // Found credential: ブロックと plan prompt の間に空行が入っていること
+    const orgIdLineIdx = consoleLogs.findIndex((s) => s.includes("organizationId:"));
+    expect(orgIdLineIdx).toBeGreaterThan(-1);
+    expect(consoleLogs[orgIdLineIdx + 1]).toBe("");
+    // 未知 / 未取得の rateLimitTier では rateLimitTier 行は出ない
+    expect(consoleLogs.join("\n")).not.toContain("rateLimitTier:");
+  });
+
+  test("T3: source=2 で plan prompt に wrong-plan を入力するとエラー後に再入力で max-x5 が確定する (T349)", async () => {
+    setArgv("add");
+    setReadlineAnswers(
+      "2",
+      "tok-T3",
+      "wrong-plan", // 不正値 → 再入力
+      "max-x5",
+      "personal",
+      "any",
+    );
+    await withMockedFetch("org-T3", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@pers");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x5");
+      expect(tok?.plan_ratio).toBe(5.0);
+    } finally {
+      db.close();
+    }
+
+    // エラーメッセージは plan の選択肢を含む（部分一致）
+    expect(consoleErrors.join("\n")).toContain("pro / max-x5 / max-x20");
+  });
+
+  test("T4: source=1 + rateLimitTier=default_claude_max_20x なら plan prompt は出ない (T349)", async () => {
+    setArgv("add");
+    writeClaudeCredentials({
+      accessToken: "cred-token-T4",
+      rateLimitTier: "default_claude_max_20x",
+    });
+    setReadlineAnswers(
+      "1", // source = credential
+      "personal",
+      "any",
+    );
+    await withMockedFetch("org-T4", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@pers");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+    } finally {
+      db.close();
+    }
+
+    // plan prompt が console に出ていないことを explicit に検証
+    expect(consoleLogs.join("\n")).not.toContain("plan (pro / max-x5 / max-x20");
+  });
+
+  test("T6: source=1 + 未知 rateLimitTier では plan prompt が出る、未知 tier ログは出ない (T349)", async () => {
+    setArgv("add");
+    writeClaudeCredentials({
+      accessToken: "cred-token-T6",
+      rateLimitTier: "default_claude_max_50x", // 未知 tier
+    });
+    setReadlineAnswers(
+      "1",
+      "max-x20", // plan prompt
+      "personal",
+      "any",
+    );
+    await withMockedFetch("org-T6", async () => {
+      await cmdTokenAdd();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@pers");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+    } finally {
+      db.close();
+    }
+
+    // 未知 tier をそのままログに出していないこと
+    expect(consoleLogs.join("\n")).not.toContain("default_claude_max_50x");
   });
 
   // skip: tags=auto 警告ロジックは main の cmdTokenAdd に存在しない。
@@ -739,6 +885,7 @@ describe("cmdTokenPromote (integration)", () => {
     setReadlineAnswers(
       "2",                  // source = manual
       "manual-token-AAA",   // token
+      "",                   // plan prompt = unknown (T349)
       "any,kddi",           // tags
     );
     await withMockedFetch(organization_id, async () => {
@@ -908,7 +1055,7 @@ describe("cmdTokenPromote (integration)", () => {
       }
     }
     setArgv("promote", "@cd8d", "kddi");
-    setReadlineAnswers("2", "manual-tok", "any");
+    setReadlineAnswers("2", "manual-tok", "", "any"); // plan prompt = unknown (T349)
     await withMockedFetch(organization_id, async () => {
       await cmdTokenPromote();
     });
@@ -927,7 +1074,7 @@ describe("cmdTokenPromote (integration)", () => {
   test("R-promote-9: newHandle === oldHandle のときは info ログを出して続行する", async () => {
     seedAutoDiscover({ handle: "@cd8d", organization_id: "org-same-handle" });
     setArgv("promote", "@cd8d", "cd8d-extra"); // slug → "cd8d" → @cd8d
-    setReadlineAnswers("2", "tok-same", "any");
+    setReadlineAnswers("2", "tok-same", "", "any"); // plan prompt = unknown (T349)
     await withMockedFetch("org-same-handle", async () => {
       await cmdTokenPromote();
     });
@@ -951,7 +1098,7 @@ describe("cmdTokenPromote (integration)", () => {
   test("R-promote-10: plan='unknown' のとき set-plan ヒントを表示する (M2)", async () => {
     const { organization_id } = seedAutoDiscover();
     setArgv("promote", "@cd8d", "kddi");
-    setReadlineAnswers("2", "manual-tok", "any");
+    setReadlineAnswers("2", "manual-tok", "", "any"); // plan prompt = unknown (T349)
     await withMockedFetch(organization_id, async () => {
       await cmdTokenPromote();
     });
@@ -959,6 +1106,34 @@ describe("cmdTokenPromote (integration)", () => {
     const out = consoleLogs.join("\n");
     expect(out).toContain("set-plan");
     expect(out).toContain("@kddi");
+  });
+
+  test("T5a: promote の source=2 で plan prompt に max-x20 を入力すると plan 確定でヒントが出ない (T349)", async () => {
+    const { organization_id } = seedAutoDiscover();
+    setArgv("promote", "@cd8d", "kddi");
+    setReadlineAnswers(
+      "2",          // source = manual
+      "tok-T5a",    // token
+      "max-x20",    // plan prompt
+      "any",        // tags
+    );
+    await withMockedFetch(organization_id, async () => {
+      await cmdTokenPromote();
+    });
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@kddi");
+      expect(tok).not.toBeNull();
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+    } finally {
+      db.close();
+    }
+
+    const out = consoleLogs.join("\n");
+    expect(out).not.toContain("set-plan");
+    expect(out).not.toContain("Hint:");
   });
 
   test("R-promote-11: new display name が引数不足 → exit 1", async () => {

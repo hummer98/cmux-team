@@ -43,10 +43,62 @@ const PLAN_MAP: Record<string, { plan: TokenPlan; ratio: number }> = {
   default_claude_pro: { plan: "pro", ratio: 1.0 },
 };
 
+// T349: plan 名 → {plan, ratio} の逆引き。手入力された plan の検証に使う。
+// 真実は PLAN_MAP に一本化し、ここでは値を再利用する（キーは静的に存在するので `!` で narrow）。
+const PLAN_BY_NAME: Record<string, { plan: TokenPlan; ratio: number }> = {
+  pro: PLAN_MAP.default_claude_pro!,
+  "max-x5": PLAN_MAP.default_claude_max_5x!,
+  "max-x20": PLAN_MAP.default_claude_max_20x!,
+};
+
 async function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => resolve(answer));
   });
+}
+
+/**
+ * 登録時の plan / plan_ratio を解決する（T349）。
+ *
+ * - rateLimitTier が `PLAN_MAP` に存在すれば即解決し、`rateLimitTier: ... → plan: ...` を
+ *   1 行ログ出力する。
+ * - rateLimitTier が undefined もしくは `PLAN_MAP` に未登録の場合は対話 prompt で
+ *   plan を尋ねる。空 Enter で `unknown`。
+ *
+ * `Found credential:` ブロックと plan prompt の間の空行も helper 内で出力する。
+ * 呼び出し側は `Found credential:` / `organizationId:` を出し、本関数を呼ぶだけ。
+ */
+async function resolvePlanForRegistration(
+  rl: ReturnType<typeof createInterface>,
+  rateLimitTier: string | undefined,
+): Promise<{ plan: TokenPlan; planRatio: number | null }> {
+  const fromTier = rateLimitTier ? PLAN_MAP[rateLimitTier] : undefined;
+  if (fromTier) {
+    console.log(
+      `  rateLimitTier: ${rateLimitTier}  → plan: ${fromTier.plan} (ratio ${fromTier.ratio.toFixed(1)})`,
+    );
+    return { plan: fromTier.plan, planRatio: fromTier.ratio };
+  }
+  console.log("");
+  return promptManualPlan(rl);
+}
+
+/**
+ * plan を手入力で確定させる（T349）。空 Enter で `unknown`。
+ * 不正値は再入力させる。
+ */
+async function promptManualPlan(
+  rl: ReturnType<typeof createInterface>,
+): Promise<{ plan: TokenPlan; planRatio: number | null }> {
+  for (;;) {
+    const ans = (await prompt(rl, "plan (pro / max-x5 / max-x20, Enter で unknown): ")).trim();
+    if (ans === "") return { plan: "unknown", planRatio: null };
+    const entry = PLAN_BY_NAME[ans];
+    if (entry) return { plan: entry.plan, planRatio: entry.ratio };
+    console.error(
+      "Error: pro / max-x5 / max-x20 のいずれかを入力してください（空 Enter で unknown）",
+    );
+  }
 }
 
 /**
@@ -173,16 +225,10 @@ export async function cmdTokenAdd(): Promise<void> {
       process.exit(1);
     }
 
-    const planEntry = rateLimitTier ? PLAN_MAP[rateLimitTier] : undefined;
-    const plan = planEntry?.plan ?? "unknown";
-    const planRatio = planEntry?.ratio ?? null;
-    const planLabel = planEntry ? `${plan} (ratio ${planEntry.ratio.toFixed(1)})` : "unknown (NULL)";
-
     console.log(`\nFound credential:`);
     console.log(`  organizationId: ${organizationId}`);
-    if (rateLimitTier) {
-      console.log(`  rateLimitTier: ${rateLimitTier}  → plan: ${planLabel}`);
-    }
+    // T349: rateLimitTier 由来で plan が解決できない場合は helper 内で対話 prompt
+    const { plan, planRatio } = await resolvePlanForRegistration(rl, rateLimitTier);
 
     // handle
     const handleRaw = (await prompt(rl, "\ndisplay name (例: personal, kddi-dev): ")).trim();
@@ -512,6 +558,8 @@ export async function cmdTokenPromote(): Promise<void> {
     let rateLimitTier: string | undefined;
     let credentialSource: "claude-credentials" | "manual";
     let tags: string[];
+    let plan: TokenPlan;
+    let planRatio: number | null;
     try {
       console.log("source:");
       console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json)");
@@ -554,6 +602,11 @@ export async function cmdTokenPromote(): Promise<void> {
         process.exit(1);
       }
 
+      console.log(`\nFound credential:`);
+      console.log(`  organizationId: ${probedOrgId}`);
+      // T349: rateLimitTier 由来で plan が解決できない場合は helper 内で対話 prompt
+      ({ plan, planRatio } = await resolvePlanForRegistration(rl, rateLimitTier));
+
       const tagsRaw = (await prompt(rl, "tags (comma-separated, default: any): ")).trim();
       tags = tagsRaw
         ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
@@ -562,9 +615,6 @@ export async function cmdTokenPromote(): Promise<void> {
       rl.close();
     }
 
-    const planEntry = rateLimitTier ? PLAN_MAP[rateLimitTier] : undefined;
-    const plan = planEntry?.plan ?? "unknown";
-    const planRatio = planEntry?.ratio ?? null;
     const newAuthHash = computeAuthHash(accessToken);
 
     // Keychain 先 → DB 後の順序（cmdTokenAdd と同じ）

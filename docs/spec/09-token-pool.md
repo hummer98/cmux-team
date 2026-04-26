@@ -64,6 +64,11 @@ Registered: @pers  max-x20  tags:[any]  ✓
 | `default_claude_pro` | pro | 1.0 |
 | 不明 / API key | unknown | NULL |
 
+- `rateLimitTier` 由来で plan が解決できない場合（手動入力経路、または未知 tier の場合）は
+  `Found credential:` ブロックの直後に `plan (pro / max-x5 / max-x20, Enter で unknown):`
+  プロンプトで対話的に plan を尋ねる（T349）。空 Enter で `plan="unknown"` / `plan_ratio=NULL`
+  として登録される。不正値は再入力。これにより `set-plan` での事後訂正が不要になる。
+
 ### `cmux-team token list`
 
 登録済み token の一覧表示（handle / plan / tags / selectable / cap / util_5h / util_7d / next_reset）。
@@ -107,8 +112,10 @@ Promoted: @cd8d → @kddi  max-x20  tags:[any]  ✓
 - 旧 token_id を維持するため `usage_snapshots` は壊れない
 - 新 handle が既存と衝突する場合は error（`newHandle === oldHandle` のときは info ログを出して続行）
 - 元の token が auto-discover ではない（`credential_source !== "auto-discover"`）場合も error
-- `plan` は `rateLimitTier` 由来で決定する（manual 経路や rateLimitTier 取得不能時は `unknown` に
-  なるので、その場合は完了メッセージに表示される `set-plan` ヒントで訂正する）
+- `plan` は `rateLimitTier` 由来で決定する。`rateLimitTier` 由来で解決できない場合
+  （手動入力経路、または未知 tier）は `add` と同じ `plan (pro / max-x5 / max-x20, Enter で unknown):`
+  プロンプトで対話的に plan を尋ねる（T349）。空 Enter で `unknown` 確定の場合のみ完了メッセージに
+  `set-plan` ヒントを表示する
 - `selectable=1` token の handle 改名は本コマンドの scope 外。将来 `cmux-team token rename`
   を別コマンドとして追加する余地を残す
 
