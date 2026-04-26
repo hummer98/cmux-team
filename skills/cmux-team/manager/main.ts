@@ -143,8 +143,10 @@ import { resolveProjectContext } from "./project-tags";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
-  // 環境変数
-  if (process.env.PROJECT_ROOT) return process.env.PROJECT_ROOT;
+  // 環境変数（削除済み tmpdir を指している場合は無視してフォールバック）
+  if (process.env.PROJECT_ROOT && existsSync(process.env.PROJECT_ROOT)) {
+    return process.env.PROJECT_ROOT;
+  }
 
   // .team/ を含むディレクトリを探す
   let dir = process.cwd();
@@ -184,7 +186,12 @@ function findLatestMainTs(): string {
 const PROJECT_ROOT = findProjectRoot();
 process.env.PROJECT_ROOT = PROJECT_ROOT;
 if (import.meta.main) {
-  process.chdir(PROJECT_ROOT);
+  try {
+    process.chdir(PROJECT_ROOT);
+  } catch (e: any) {
+    console.error(`[cmux-team] chdir "${PROJECT_ROOT}" 失敗: ${e.message}`);
+    process.exit(1);
+  }
 }
 
 const execFileAsync = promisify(execFile);
