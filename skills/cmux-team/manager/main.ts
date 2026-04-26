@@ -30,7 +30,7 @@ import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { t } from "./i18n";
-import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon, ccBackend } from "./daemon";
+import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon, ccBackend, refreshPoolSnapshot } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log, formatSurface } from "./logger";
 import { formatExecError } from "./exec-error";
@@ -131,14 +131,10 @@ import {
   selectToken,
   retrieveTokenFromKeychain,
   KeychainNotFoundError,
-  listTokens,
-  getLatestUsageSnapshot,
-  computePoolCapacity,
-  type TokenForCapacity,
 } from "./token-store";
-import { buildPoolHeaderLines, type PoolHeaderInput } from "./pool-status-header";
+import { buildPoolHeaderLines } from "./pool-status-header";
 import { formatSurfaceRow } from "./pool-surface-row";
-import { computeNextReset } from "./pool-next-reset";
+import { loadPoolSummary } from "./pool-summary";
 import { resolveProjectContext } from "./project-tags";
 
 // --- プロジェクトルート検出 ---
@@ -684,12 +680,23 @@ async function cmdStart(): Promise<void> {
 
   // T322: token pool の有効/無効を 3 階層解決して 1 行ログに出す。
   // env 値が不正なら resolveTokenPoolEnabled が throw → exit 1（fail-fast）。
+  // T351: pool ON ならば daemon ハンドル `state.tokenDb` をここで 1 度だけ open し、
+  // refreshPoolSnapshot がそれを再利用する。daemon 稼働中の config 切替には追従しない
+  // （proxy と同じく boot 時 1 回評価で固定）。
   try {
     const poolDecision = await isTokenPoolEnabled(PROJECT_ROOT);
     await log(
       "token_pool_config",
       `enabled=${poolDecision.enabled ? "on" : "off"} source=${poolDecision.source}`,
     );
+    if (poolDecision.enabled) {
+      try {
+        state.tokenDb = initTokenDB();
+      } catch (e: any) {
+        state.tokenDb = null;
+        await log("error", `initTokenDB failed: ${e?.message ?? e}`);
+      }
+    }
   } catch (e: any) {
     console.error(`Error: ${e.message}`);
     process.exit(1);
@@ -1121,6 +1128,9 @@ async function cmdStart(): Promise<void> {
       await tick(state);
       await updateTeamJson(state);
       await updateSidebarStatus(state);
+      // T351: pool snapshot を毎 tick 再計算して dashboard に渡す。
+      // pool OFF / state.tokenDb=null なら state.pool は null のまま維持される。
+      await refreshPoolSnapshot(state);
       scheduleRefresh(); // state 変更を TUI に反映（debounce 付き）
     } catch (e: any) {
       await log("error", `tick: ${e.message}`);
@@ -1430,68 +1440,18 @@ async function cmdStatus(): Promise<void> {
   const layout = typeof teamJson.layout === "string" ? teamJson.layout : "wide";
   console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
 
-  // T323: pool 機能の有効化を判定。OFF なら以降の pool セクション/handle 表示を全て skip。
-  let poolEnabled = false;
-  let poolHandleData: Map<string, { util5h: number | null; util7d: number | null; capPct: number | null }> | null = null;
-  let poolHeaderInput: PoolHeaderInput | null = null;
-  try {
-    const decision = await isTokenPoolEnabled(PROJECT_ROOT);
-    poolEnabled = decision.enabled;
-  } catch {
-    poolEnabled = false;
-  }
-  if (poolEnabled) {
-    try {
-      const tokDb = initTokenDB();
-      const tokens = listTokens(tokDb);
-      const forCap: TokenForCapacity[] = tokens.map((t) => {
-        const snap = getLatestUsageSnapshot(tokDb, t.id);
-        return {
-          handle: t.handle,
-          plan_ratio: t.plan_ratio,
-          util_5h: snap?.util_5h ?? null,
-          util_7d: snap?.util_7d ?? null,
-          reset_5h_at: snap?.reset_5h_at ?? null,
-          reset_7d_at: snap?.reset_7d_at ?? null,
-        };
-      });
-      const cap = computePoolCapacity(forCap);
-      const capByHandle = new Map(cap.per_token.map((p) => [p.handle, p.cap_pct]));
-      poolHandleData = new Map();
-      for (const t of tokens) {
-        const snap = getLatestUsageSnapshot(tokDb, t.id);
-        poolHandleData.set(t.handle, {
-          util5h: snap?.util_5h ?? null,
-          util7d: snap?.util_7d ?? null,
-          capPct: capByHandle.get(t.handle) ?? null,
-        });
-      }
-      const nextReset = computeNextReset({
-        tokens: tokens.map((t) => {
-          const snap = getLatestUsageSnapshot(tokDb, t.id);
-          return {
-            handle: t.handle,
-            plan_ratio: t.plan_ratio,
-            util_5h: snap?.util_5h ?? null,
-            util_7d: snap?.util_7d ?? null,
-            reset_5h_at: snap?.reset_5h_at ?? null,
-            reset_7d_at: snap?.reset_7d_at ?? null,
-            selectable: t.selectable,
-          };
-        }),
-      });
-      poolHeaderInput = { capacityPct: cap.capacity_pct, nextReset };
-      for (const line of buildPoolHeaderLines(poolHeaderInput)) {
-        console.log(line);
-      }
-    } catch (e: any) {
-      console.log(`  (token pool read failed: ${e?.message ?? e})`);
-      // 失敗時は handle 装飾も skip（既存レイアウトと同じ）
-      poolHandleData = null;
+  // T351: pool 機能の有効化判定 + snapshot 構築を loadPoolSummary に集約（pool-summary.ts 経由）。
+  // OFF / 失敗時は summary=null となり以降の pool セクション/handle 装飾を全て skip する。
+  const poolSummary = await loadPoolSummary(PROJECT_ROOT);
+  const poolEnabled = poolSummary != null;
+  const poolHandleData = poolSummary?.perHandle ?? null;
+  if (poolSummary) {
+    for (const line of buildPoolHeaderLines(poolSummary.header)) {
+      console.log(line);
     }
   }
 
-  // T323: handle に対応する pool 情報をルックアップする。OFF / 失敗時は undefined を返す
+  // T323: handle に対応する pool 情報をルックアップする。OFF / 失敗時は null を返す
   const lookupPool = (handle: string | undefined) => {
     if (!handle || !poolHandleData) return null;
     return poolHandleData.get(handle) ?? null;
