@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.12.1] - 2026-04-26
+
+### Fixed
+
+- **`cmux-team token add/promote/rotate` の credential 読み取りを macOS Keychain 優先に変更（T345）**。Claude Code は OAuth refresh 後の token を `~/.claude/.credentials.json` ではなく macOS Keychain（`Claude Code-credentials` / account=$USER）に書き戻すため、source=1（auto-detect from Claude Code credentials）が file 側だけを読んでいると stale token を probe して 401 で失敗していた。`readClaudeCredentials` を「Keychain → file → 両方失敗ならエラー」の順に組み替え、エラー文言と CLI ラベルも Keychain 含む表現に更新。`KEYCHAIN_TEST_MODE=1` の in-memory 経路と T1〜T5/T7/T8 の 7 ケースを `token-cli.test.ts` に追加
+- **`cmux-team resume` 後に Conductor が 0 個のまま throttled が永続するバグを修正（T346）**。R7（復帰時は pane を新規作成しない方針）を廃止し、`initializeLayout` の事後条件として `state.conductors.size === maxConductors`（実質的に pane 数 = maxConductors）を保証する形に書き換え。`layout_restore_empty_fallback` の判定から `resumeNewSurface.length === 0` 条件を外して D 経路を fallback に倒し、`applyRestorePlan` 後に deficit > 0 なら `initializeConductorSlots(deficit, undefined)` で補充する（新ログキー `layout_conductors_topup`）。M18a/M18b/M18c の事後条件回帰テストを追加し、partial restore 系 6 件に `mainBranch` 設定を補完
+
+### Changed
+
+- **`Full Quit` 後の起動挙動コメントを T346 後の実態に整合（T347）**。`main.ts` L866 周辺の「R7 方針で pane を新規作成しないため Conductor ゼロ台で着地する」というコメントが古くなっていたため、T346 で fallback → topup 経路に倒した結果として `maxConductors` 個の pane が作成されるようになった現状に合わせて書き換え（実装ロジックは無変更）
+
 ## [4.12.0] - 2026-04-26
 
 ### Added
