@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-## [4.9.0] - 2026-04-26
+## [4.9.1] - 2026-04-26
+
+### Fixed (release pipeline)
+
+- **`prepublishOnly` から `bun test` 全体実行を削除**。これまでリリースタグを push すると GitHub Actions の `Publish to npm (OIDC Trusted Publishing)` が暗黙に `bun test`（manager 配下全 50 ファイル）を起動していたが、A021（T327）で記録した「`bun test` 全体実行が同一プロセス内で O(N²) 級に劣化して 13 分以上 hang する」問題に常時引っかかる構造になっていた。v4.9.0 のリリースもこの hang により publish に到達できず欠番になった（タグ含めて取り消し済み）。リリース時のテスト実行は CI 側の独立 workflow に切り出して別タスクで整備する
+
+> **Note:** v4.9.0 は npm publish 段階で hang したため欠番。v4.9.1 が v4.8.0 の次の正式リリースになる。下記 Added/Changed/Fixed/Tests/Docs はすべて v4.8.0 → v4.9.1 の差分。
 
 ### Added
 

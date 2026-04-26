@@ -1,6 +1,6 @@
 {
   "name": "@hummer98/cmux-team",
-  "version": "4.9.0",
+  "version": "4.9.1",
   "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
   "type": "module",
   "bin": {
@@ -9,7 +9,6 @@
   "scripts": {
     "dev": "node bin/cmux-team.js start",
     "postinstall": "node bin/postinstall.js",
-    "prepublishOnly": "cd skills/cmux-team/manager && bun test",
     "test:clean": "bash scripts/verify-test-no-pollution.sh"
   },
   "files": [
