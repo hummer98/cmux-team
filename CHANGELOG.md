@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [4.10.0] - 2026-04-26
+
+### Added
+
+- **Token pool に project default / include / exclude 設定モデルを導入（T335, A019 改訂）**。token tag 体系を ACL から hint に緩め、project 側で `tokenPool.default` / `include` / `exclude` を指定できるようにした。token・project 追加時の設定変更が最小化され、OSS リポジトリでは exclude のみ尊重して全 `selectable=1` トークンを admit する挙動になる
+  - config schema 拡張: project の `tokenPool.default/include/exclude`、global の `oss_default` / `primary_orgs` を追加（`oss_pool_tags` は廃止）
+  - `selectToken` アルゴリズム改訂: `SelectTokenPolicy` ベースで exclude 最優先 → effectiveDefault（runtime 昇格・DB 不変）→ include バイパス → OSS admit → 通常 tag matching の優先順に整理
+  - `project-tags.ts` に OSS 判定（`primary_orgs` ベース）を追加。未設定時は旧動作を維持
+  - `cmdSpawnAgent` を新 API に接続。Keychain 不在時は env 注入を skip しつつ `AGENT_TOKEN_BOUND` を post（dashboard 観測性優先）し、`token_pool_fallback` の warn を残す
+  - DB schema / Keychain / proxy / `cmux-team token` CLI には変更なし。受け入れ条件は Project A/B/C シナリオの unit test 20 ケースで担保
+
+### Changed
+
+- **`bun test` の O(N²) 劣化を最小再現する `manager/perf-probe/` 群を追加（T337, A022）**。A021 §仮説7 を 6 軸 × N=10/50/200 + 連結 + ファイル数スケーリングで refute し、`spawn` 軸だけ約 50 倍（3 ms/spawn）で突出することを確認。`.probe.ts` 拡張子で本番テスト群と完全分離して `bun test` の auto-discovery 対象外にした。詳細レポートは `.team/artifacts/A022-research.md`
+
 ## [4.9.1] - 2026-04-26
 
 ### Fixed (release pipeline)

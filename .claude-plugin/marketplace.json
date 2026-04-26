@@ -9,7 +9,7 @@
       "name": "cmux-team",
       "source": "./",
       "description": "Multi-agent development orchestration with Claude Code + cmux",
-      "version": "4.9.1",
+      "version": "4.10.0",
       "author": {
         "name": "hummer98"
       },
