@@ -78,6 +78,7 @@ cmux-team/
 | `docs/spec/05-install-and-infrastructure.md` | インストール・レイアウト・config・worktree 解決 |
 | `docs/spec/07-state-machine.md` | Conductor / Task FSM・cascade・CONDUCTOR_DONE・Ready sync guard |
 | `docs/spec/08-runtime-boundary.md` | Deliverable 型・close-task 仕様 |
+| `docs/spec/09-token-pool.md` | Token pool — `cmux-team token` CLI・DB スキーマ・選択アルゴリズム・設定 |
 
 ## スキル・コマンドの追加・修正方法
 
