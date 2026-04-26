@@ -3161,10 +3161,69 @@ async function cmdSendAgent(): Promise<void> {
  *   タスクを切る UX を殺さないため。Decision Log D11）
  * - reject なら console.error + exit 1、warn なら console.warn + 続行
  */
+/**
+ * T339: auto-pull verdict を受けたときの「副作用なしの決定」を返す pure 関数。
+ * `runSyncCheckOrExit` から切り出して unit-testable にする（design-review M2）。
+ */
+export type AutoPullDecision =
+  | { kind: "skip-warn"; warnMessages: string[] }
+  | { kind: "perform"; mainBranch: string; preMessage: string };
+
+export function decideAutoPullAction(
+  verdict: { kind: "auto-pull"; mainBranch: string; message: string },
+  opts: { noAutoPull: boolean },
+): AutoPullDecision {
+  if (opts.noAutoPull) {
+    return {
+      kind: "skip-warn",
+      warnMessages: [verdict.message, `warning: --no-auto-pull set; auto-pull skipped.`],
+    };
+  }
+  return {
+    kind: "perform",
+    mainBranch: verdict.mainBranch,
+    preMessage: verdict.message,
+  };
+}
+
+/**
+ * T339: `runAutoPull` の結果から表示すべき log / error メッセージを組み立てる pure 関数。
+ * 失敗時のメッセージには `Bypass:` ヒントと `diverged 可能性` ヒント（design-review m3）を含む。
+ */
+export type AutoPullOutcomeFormatted =
+  | { kind: "ok"; summary: string; logMessage: string }
+  | { kind: "fail"; stderrSummary: string; errorMessage: string };
+
+export function formatAutoPullOutcome(
+  pull: { ok: boolean; stdout: string; stderr: string; summary: string },
+  mainBranch: string,
+): AutoPullOutcomeFormatted {
+  if (pull.ok) {
+    return {
+      kind: "ok",
+      summary: pull.summary,
+      logMessage: `[sync-check] auto-pulled origin/${mainBranch} (${pull.summary})`,
+    };
+  }
+  return {
+    kind: "fail",
+    stderrSummary: pull.stderr.trim().replace(/\s+/g, " "),
+    errorMessage:
+      `Error: auto git pull --ff-only origin ${mainBranch} failed.\n` +
+      `  stdout: ${pull.stdout.trim()}\n` +
+      `  stderr: ${pull.stderr.trim()}\n\n` +
+      `  Hint: local ${mainBranch} may have diverged since fetch; ` +
+      `try \`git pull --rebase origin ${mainBranch}\` manually.\n` +
+      `  Bypass: add --no-auto-pull (warn-only) or --force (skip sync check entirely)`,
+  };
+}
+
 async function runSyncCheckOrExit(opts: {
   status: string | undefined;
   forceFlag: boolean;
   skipFetch: boolean;
+  /** T339: true で auto-pull を抑止し warn 扱いにする */
+  noAutoPull: boolean;
   phase: "create" | "update";
   taskId?: string;
 }): Promise<void> {
@@ -3194,26 +3253,68 @@ async function runSyncCheckOrExit(opts: {
     return;
   }
 
-  const { checkSyncState } = await import("./git-sync");
+  const { checkSyncState, runAutoPull } = await import("./git-sync");
   const result = await checkSyncState(PROJECT_ROOT, {
     mainBranch,
     doFetch: !opts.skipFetch,
   });
   const taskIdField = opts.taskId ? ` task_id=${opts.taskId}` : "";
-  if (result.verdict.kind === "reject") {
-    await log(
-      "ready_rejected",
-      `phase=${opts.phase} state=${result.state}${taskIdField}`,
-    );
-    console.error(result.verdict.message);
-    process.exit(1);
-  }
-  if (result.verdict.kind === "warn") {
-    await log(
-      "ready_warning",
-      `phase=${opts.phase} state=${result.state}${taskIdField}`,
-    );
-    console.warn(result.verdict.message);
+  switch (result.verdict.kind) {
+    case "allow":
+      return;
+    case "reject":
+      await log(
+        "ready_rejected",
+        `phase=${opts.phase} state=${result.state}${taskIdField}`,
+      );
+      console.error(result.verdict.message);
+      process.exit(1);
+      return;
+    case "warn":
+      await log(
+        "ready_warning",
+        `phase=${opts.phase} state=${result.state}${taskIdField}`,
+      );
+      console.warn(result.verdict.message);
+      return;
+    case "auto-pull": {
+      // T339: behind-ff + on-main は自動 pull で解消を試みる。
+      // 決定ロジックは pure な decideAutoPullAction / formatAutoPullOutcome に分離。
+      const decision = decideAutoPullAction(result.verdict, {
+        noAutoPull: opts.noAutoPull,
+      });
+      if (decision.kind === "skip-warn") {
+        await log(
+          "ready_warning",
+          `phase=${opts.phase} state=${result.state}${taskIdField} reason=auto_pull_disabled`,
+        );
+        for (const m of decision.warnMessages) console.warn(m);
+        return;
+      }
+      console.log(decision.preMessage);
+      const pull = await runAutoPull(PROJECT_ROOT, { mainBranch: decision.mainBranch });
+      const outcome = formatAutoPullOutcome(pull, decision.mainBranch);
+      if (outcome.kind === "ok") {
+        await log(
+          "ready_auto_pull_succeeded",
+          `phase=${opts.phase} state=${result.state}${taskIdField} summary=${outcome.summary}`,
+        );
+        console.log(outcome.logMessage);
+        return;
+      }
+      await log(
+        "ready_auto_pull_failed",
+        `phase=${opts.phase} state=${result.state}${taskIdField} stderr=${outcome.stderrSummary}`,
+      );
+      console.error(outcome.errorMessage);
+      process.exit(1);
+      return;
+    }
+    default: {
+      const _exhaustive: never = result.verdict;
+      void _exhaustive;
+      return;
+    }
   }
 }
 
@@ -3240,10 +3341,12 @@ async function cmdCreateTask(): Promise<void> {
   }
 
   // T283: ready で作成するなら sync state をチェック。reject なら exit 1
+  // T339: --no-auto-pull で behind-ff の自動 pull を抑止
   await runSyncCheckOrExit({
     status,
     forceFlag: hasFlag("force"),
     skipFetch: hasFlag("skip-fetch"),
+    noAutoPull: hasFlag("no-auto-pull"),
     phase: "create",
   });
 
@@ -3374,10 +3477,12 @@ async function cmdUpdateTask(): Promise<void> {
   let notifiedTaskCreated = false;
   if (newStatus !== undefined) {
     // T283: ready への遷移なら sync state をチェック。reject なら exit 1
+    // T339: --no-auto-pull で behind-ff の自動 pull を抑止
     await runSyncCheckOrExit({
       status: newStatus,
       forceFlag: hasFlag("force"),
       skipFetch: hasFlag("skip-fetch"),
+      noAutoPull: hasFlag("no-auto-pull"),
       phase: "update",
       taskId,
     });

@@ -303,6 +303,8 @@ Options:
                           until this task is closed (implies --run-after-all)
   --force                 bypass the ready sync-state check (use with caution)
   --skip-fetch            skip 'git fetch' before the ready sync-state check
+  --no-auto-pull          on behind-ff while on <mainBranch>, skip the auto
+                          'git pull --ff-only' and warn instead
 
 Examples:
   cmux-team create-task --title "Fix bug" --status ready --body "Login screen error"
@@ -326,6 +328,10 @@ Notes:
   - When status is ready, cmux-team verifies local <mainBranch> vs origin/<mainBranch>
     and rejects create on diverged / uncommitted / detached states. Bypass with
     --force or CMUX_TEAM_SKIP_SYNC_CHECK=1
+  - On behind-ff while <mainBranch> is checked out, cmux-team auto-runs
+    'git pull --ff-only origin <mainBranch>' and rejects create if it fails.
+    Use --no-auto-pull to skip the auto-pull (warn-only). On other branches /
+    detached, behind-ff is already warn-only.
 `,
 
   help_update_task: `
@@ -342,6 +348,8 @@ Options:
   --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
   --force                 bypass the ready sync-state check (use with caution)
   --skip-fetch            skip 'git fetch' before the ready sync-state check
+  --no-auto-pull          on behind-ff while on <mainBranch>, skip the auto
+                          'git pull --ff-only' and warn instead
 
   * At least one of --status, --title, --body, or --depends-on is required
 
@@ -357,6 +365,9 @@ Notes:
   - When transitioning to ready, cmux-team verifies local <mainBranch> vs
     origin/<mainBranch> and rejects on diverged / uncommitted / detached. Bypass
     with --force or CMUX_TEAM_SKIP_SYNC_CHECK=1
+  - On behind-ff while <mainBranch> is checked out, cmux-team auto-runs
+    'git pull --ff-only origin <mainBranch>' and rejects update if it fails.
+    Use --no-auto-pull to skip the auto-pull (warn-only).
 `,
 
   help_close_task: `
@@ -1095,6 +1106,8 @@ Options:
                           （--run-after-all を暗黙に含む。リリースや移行作業向け）
   --force                 ready 昇格時の sync state チェックをバイパス（注意して使用）
   --skip-fetch            sync state チェック前の 'git fetch' を省略
+  --no-auto-pull          behind-ff + <mainBranch> checkout 時の自動 'git pull --ff-only'
+                          を抑止し warn 扱いで続行する
 
 Examples:
   cmux-team create-task --title "バグ修正" --status ready --body "ログイン画面のエラー"
@@ -1119,6 +1132,10 @@ Notes:
   - status=ready で作成するとき、local <mainBranch> と origin/<mainBranch> の整合性を
     検査し、diverged / uncommitted / detached は reject されます。
     バイパスは --force または CMUX_TEAM_SKIP_SYNC_CHECK=1
+  - behind-ff かつ <mainBranch> を checkout 中の場合、cmux-team が
+    'git pull --ff-only origin <mainBranch>' を自動実行し、失敗すると create を reject します。
+    --no-auto-pull で auto-pull を抑止して warn 扱いに切り替えられます
+    （他ブランチ checkout 中 / detached の behind-ff は元から warn のみ）
 `,
 
   help_update_task: `
@@ -1135,6 +1152,8 @@ Options:
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
   --force                 ready 昇格時の sync state チェックをバイパス（注意して使用）
   --skip-fetch            sync state チェック前の 'git fetch' を省略
+  --no-auto-pull          behind-ff + <mainBranch> checkout 時の自動 'git pull --ff-only'
+                          を抑止し warn 扱いで続行する
 
   ※ --status, --title, --body, --depends-on のうち少なくとも1つが必要
 
@@ -1150,6 +1169,9 @@ Notes:
   - ready への遷移時に local <mainBranch> と origin/<mainBranch> の整合性を検査し、
     diverged / uncommitted / detached は reject されます。バイパスは --force
     または CMUX_TEAM_SKIP_SYNC_CHECK=1
+  - behind-ff かつ <mainBranch> を checkout 中の場合、cmux-team が
+    'git pull --ff-only origin <mainBranch>' を自動実行し、失敗すると update を reject します。
+    --no-auto-pull で auto-pull を抑止して warn 扱いに切り替えられます
 `,
 
   help_close_task: `

@@ -54,7 +54,15 @@ export interface SyncFacts {
 export type Verdict =
   | { kind: "allow"; state: SyncState }
   | { kind: "warn"; state: SyncState; message: string }
-  | { kind: "reject"; state: SyncState; message: string };
+  | { kind: "reject"; state: SyncState; message: string }
+  /**
+   * T339: behind-ff + headStatus === "on-main" のときに
+   * `git pull --ff-only origin <mainBranch>` の自動実行を要求する verdict。
+   * 実 pull は副作用なので呼び出し側 (`runSyncCheckOrExit`) が `runAutoPull` で行う。
+   * `--no-auto-pull` 経路では `message` をそのまま warn として表示する想定なので、
+   * message には推奨コマンド (`git pull --ff-only origin <mainBranch>`) を必ず含める。
+   */
+  | { kind: "auto-pull"; state: SyncState; mainBranch: string; message: string };
 
 /** pure: SyncFacts → SyncState */
 export function decideSyncState(facts: SyncFacts): SyncState {
@@ -94,12 +102,24 @@ export function classifyVerdict(state: SyncState, facts: SyncFacts): Verdict {
     case "ahead":
       return { kind: "allow", state };
     case "behind-ff":
+      // T339: on-main のときのみ auto-pull を要求。他ブランチ checkout 中 / detached は
+      // ユーザー作業を破壊しないよう warn にフォールバック（推奨コマンドは含める）。
+      if (facts.headStatus === "on-main") {
+        return {
+          kind: "auto-pull",
+          state,
+          mainBranch: mb,
+          message:
+            `info: local ${mb} is behind-ff origin/${mb}; auto-pulling with --ff-only.\n` +
+            `  Recommended (manual): git pull --ff-only origin ${mb}`,
+        };
+      }
       return {
         kind: "warn",
         state,
         message:
-          `warning: local ${mb} is behind-ff origin/${mb}.\n` +
-          `  Recommended: git fetch origin && git pull --ff-only origin ${mb}`,
+          `warning: local ${mb} is behind-ff origin/${mb} (HEAD is ${facts.headStatus}, auto-pull skipped).\n` +
+          `  Recommended: switch to ${mb} and run git pull --ff-only origin ${mb}`,
       };
     case "no-remote":
       return {
@@ -300,4 +320,88 @@ export async function checkSyncState(
   const state = decideSyncState(facts);
   const verdict = classifyVerdict(state, facts);
   return { state, facts, verdict };
+}
+
+/**
+ * T339: `git pull --ff-only origin <mainBranch>` の実行結果。
+ * `summary` は stdout を粗く判定したラベル（ログ表示用 best-effort）。
+ */
+export interface AutoPullResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  summary: "fast-forward" | "already-up-to-date" | "unknown";
+}
+
+export interface RunAutoPullOptions {
+  mainBranch: string;
+  /**
+   * テスト用 git コマンド注入。戻り値は `{ stdout, stderr }` の構造体。
+   * 失敗時は throw する。`stderr` / `stdout` プロパティを持つ Error 推奨。
+   *
+   * 注意: `collectSyncFacts` の `git: (args) => Promise<string>` とは戻り値型が
+   * 異なる（こちらは `{ stdout, stderr }`）。テスト helper をコピペする場合は要注意。
+   */
+  git?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+}
+
+/**
+ * T339: `git pull --ff-only origin <mainBranch>` を実行し、構造化結果を返す。
+ * - 成功時: stdout に "Fast-forward" を含めば `summary: "fast-forward"`、
+ *   "Already up to date" なら `"already-up-to-date"`、それ以外は `"unknown"`。
+ * - 失敗時: throw せず `{ ok: false, stdout, stderr }` を返す。
+ *   stderr には git の標準エラー出力をそのまま入れる。
+ *
+ * ロケール固定: stdout の英文字列マッチ安定化のため `LANG=C / LC_ALL=C` を渡す（m1 取り込み）。
+ */
+export async function runAutoPull(
+  projectRoot: string,
+  opts: RunAutoPullOptions,
+): Promise<AutoPullResult> {
+  const args = ["pull", "--ff-only", "origin", opts.mainBranch];
+  const git =
+    opts.git ??
+    (async (a: string[]) => {
+      const { stdout, stderr } = await execFile("git", a, {
+        cwd: projectRoot,
+        timeout: 30000,
+        env: { ...process.env, LANG: "C", LC_ALL: "C" },
+      });
+      return { stdout, stderr };
+    });
+
+  try {
+    const { stdout, stderr } = await git(args);
+    return {
+      ok: true,
+      stdout,
+      stderr,
+      summary: classifyPullSummary(stdout),
+    };
+  } catch (e: any) {
+    const stderr =
+      typeof e?.stderr === "string"
+        ? e.stderr
+        : e?.stderr != null
+          ? String(e.stderr)
+          : "";
+    const stdout =
+      typeof e?.stdout === "string"
+        ? e.stdout
+        : e?.stdout != null
+          ? String(e.stdout)
+          : "";
+    return {
+      ok: false,
+      stdout,
+      stderr: stderr || (e?.message ?? "unknown error"),
+      summary: "unknown",
+    };
+  }
+}
+
+function classifyPullSummary(stdout: string): AutoPullResult["summary"] {
+  if (stdout.includes("Fast-forward")) return "fast-forward";
+  if (stdout.includes("Already up to date")) return "already-up-to-date";
+  return "unknown";
 }

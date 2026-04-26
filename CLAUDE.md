@@ -198,8 +198,9 @@ cmux-team update-task --task-id 112 --status ready
 `cmux-team create-task --status ready` / `update-task --status ready` は昇格前に local と `origin/<mainBranch>` の sync state を判定する。
 
 - `diverged` / `uncommitted` / `detached` → exit 1（`ready_rejected`）
-- `behind-ff` / `no-remote` → 警告のみ、昇格続行
-- bypass: `--force`（一回限り）/ `CMUX_TEAM_SKIP_SYNC_CHECK=1`（Conductor/Agent 環境に自動注入）
+- `behind-ff` + `mainBranch` checkout 中 → **自動 `git pull --ff-only origin <mainBranch>`**。失敗したら exit 1（`ready_auto_pull_failed`）
+- `behind-ff` + 他ブランチ checkout 中 / `no-remote` → 警告のみ、昇格続行
+- bypass: `--force`（一回限り、sync check 全体 skip）/ `--no-auto-pull`（auto-pull のみ抑止して warn 扱いに）/ `CMUX_TEAM_SKIP_SYNC_CHECK=1`（Conductor/Agent 環境に自動注入）
 
 詳細は `docs/spec/07-state-machine.md` および `docs/spec/05-install-and-infrastructure.md` を参照。
 

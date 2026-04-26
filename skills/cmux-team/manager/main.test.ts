@@ -16,6 +16,8 @@ import {
   applyResumeTransitions,
   resolveCanonicalTaskId,
   parseCloseTaskArgs,
+  decideAutoPullAction,
+  formatAutoPullOutcome,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
 import {
@@ -2266,3 +2268,103 @@ describe("parseCloseTaskArgs (T295)", () => {
     }
   });
 });
+
+// --- T339: runSyncCheckOrExit の auto-pull 分岐 (M2) ---
+
+describe("decideAutoPullAction (T339)", () => {
+  const verdict = {
+    kind: "auto-pull" as const,
+    mainBranch: "main",
+    message:
+      "info: local main is behind-ff origin/main; auto-pulling with --ff-only.\n" +
+      "  Recommended (manual): git pull --ff-only origin main",
+  };
+
+  test("noAutoPull=true → skip-warn + verdict.message と --no-auto-pull の警告を含む", () => {
+    const d = decideAutoPullAction(verdict, { noAutoPull: true });
+    expect(d.kind).toBe("skip-warn");
+    if (d.kind === "skip-warn") {
+      expect(d.warnMessages.length).toBe(2);
+      // verdict.message（推奨コマンド込み）が含まれる (M1)
+      expect(d.warnMessages[0]).toContain("git pull --ff-only origin main");
+      expect(d.warnMessages[1]).toMatch(/--no-auto-pull/);
+    }
+  });
+
+  test("noAutoPull=false → perform + mainBranch 引き継ぎ + 事前メッセージ", () => {
+    const d = decideAutoPullAction(verdict, { noAutoPull: false });
+    expect(d.kind).toBe("perform");
+    if (d.kind === "perform") {
+      expect(d.mainBranch).toBe("main");
+      expect(d.preMessage).toContain("auto-pulling with --ff-only");
+    }
+  });
+
+  test("mainBranch=develop の verdict は perform.mainBranch=develop", () => {
+    const v = { ...verdict, mainBranch: "develop" };
+    const d = decideAutoPullAction(v, { noAutoPull: false });
+    if (d.kind === "perform") {
+      expect(d.mainBranch).toBe("develop");
+    } else {
+      throw new Error("expected perform");
+    }
+  });
+});
+
+describe("formatAutoPullOutcome (T339)", () => {
+  test("ok=true → ok + summary + logMessage に origin/<main> + summary 含む", () => {
+    const o = formatAutoPullOutcome(
+      { ok: true, stdout: "Fast-forward...", stderr: "", summary: "fast-forward" },
+      "main",
+    );
+    expect(o.kind).toBe("ok");
+    if (o.kind === "ok") {
+      expect(o.summary).toBe("fast-forward");
+      expect(o.logMessage).toContain("origin/main");
+      expect(o.logMessage).toContain("fast-forward");
+    }
+  });
+
+  test("ok=false → fail + errorMessage に Bypass: と diverged ヒント (M1, m3)", () => {
+    const o = formatAutoPullOutcome(
+      {
+        ok: false,
+        stdout: "",
+        stderr: "fatal: refusing to merge unrelated histories",
+        summary: "unknown",
+      },
+      "main",
+    );
+    expect(o.kind).toBe("fail");
+    if (o.kind === "fail") {
+      expect(o.errorMessage).toMatch(/Bypass:/);
+      expect(o.errorMessage).toMatch(/--no-auto-pull/);
+      expect(o.errorMessage).toMatch(/--force/);
+      expect(o.errorMessage).toMatch(/diverged/);
+      expect(o.errorMessage).toContain("git pull --rebase origin main");
+      expect(o.errorMessage).toContain("fatal: refusing to merge");
+      // stderrSummary は改行を空白に潰す
+      expect(o.stderrSummary).not.toMatch(/\n/);
+    }
+  });
+
+  test("ok=false + 改行混じり stderr → stderrSummary は単一行", () => {
+    const o = formatAutoPullOutcome(
+      {
+        ok: false,
+        stdout: "",
+        stderr: "line1\nline2\n  line3",
+        summary: "unknown",
+      },
+      "develop",
+    );
+    if (o.kind === "fail") {
+      expect(o.stderrSummary).toBe("line1 line2 line3");
+      expect(o.errorMessage).toContain("origin develop");
+    } else {
+      throw new Error("expected fail");
+    }
+  });
+});
+
+

@@ -15,6 +15,7 @@ import {
   classifyVerdict,
   collectSyncFacts,
   checkSyncState,
+  runAutoPull,
   type SyncFacts,
   type SyncState,
 } from "./git-sync";
@@ -176,12 +177,41 @@ describe("classifyVerdict", () => {
     expect(v.kind).toBe("allow");
   });
 
-  test("behind-ff → warn + 推奨 git pull --ff-only + mainBranch 埋め込み", () => {
+  // T339: behind-ff の verdict は headStatus で出し分ける
+  test("behind-ff + on-main → auto-pull + mainBranch === 'main' + 推奨コマンド埋め込み", () => {
     const v = classifyVerdict("behind-ff", facts);
+    expect(v.kind).toBe("auto-pull");
+    if (v.kind === "auto-pull") {
+      expect(v.mainBranch).toBe("main");
+      expect(v.message).toMatch(/behind-ff/);
+      expect(v.message).toContain("git pull --ff-only origin main");
+    }
+  });
+
+  test("behind-ff + on-other-branch → warn + auto-pull skipped + 推奨コマンド", () => {
+    const f: SyncFacts = { ...facts, headStatus: "on-other-branch" };
+    const v = classifyVerdict("behind-ff", f);
     expect(v.kind).toBe("warn");
     if (v.kind === "warn") {
       expect(v.message).toMatch(/behind-ff/);
+      expect(v.message).toMatch(/auto-pull skipped|skipped/);
       expect(v.message).toContain("git pull --ff-only origin main");
+    }
+  });
+
+  test("behind-ff + detached → warn (防御)", () => {
+    const f: SyncFacts = { ...facts, headStatus: "detached" };
+    const v = classifyVerdict("behind-ff", f);
+    expect(v.kind).toBe("warn");
+  });
+
+  test("behind-ff + mainBranch=develop → auto-pull + mainBranch === 'develop'", () => {
+    const f: SyncFacts = { ...facts, mainBranch: "develop" };
+    const v = classifyVerdict("behind-ff", f);
+    expect(v.kind).toBe("auto-pull");
+    if (v.kind === "auto-pull") {
+      expect(v.mainBranch).toBe("develop");
+      expect(v.message).toContain("develop");
     }
   });
 
@@ -626,3 +656,72 @@ describe("checkSyncState — e2e (collect + decide + classify)", () => {
 // SyncState is a type, but we can type-check the assignable union:
 const _stateExample: SyncState = "clean";
 void _stateExample;
+
+// --- runAutoPull (T339) ---
+
+describe("runAutoPull — stub git", () => {
+  test("成功 + Fast-forward → ok + summary='fast-forward'", async () => {
+    const calls: string[][] = [];
+    const git = async (args: string[]) => {
+      calls.push(args);
+      return {
+        stdout:
+          "From github.com:org/repo\n" +
+          "   abc..def  main -> origin/main\n" +
+          "Updating abc..def\n" +
+          "Fast-forward\n" +
+          " path/to/file | 1 +\n",
+        stderr: "",
+      };
+    };
+    const r = await runAutoPull("/tmp", { mainBranch: "main", git });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toBe("fast-forward");
+    expect(r.stdout).toContain("Fast-forward");
+    expect(r.stderr).toBe("");
+    expect(calls).toEqual([["pull", "--ff-only", "origin", "main"]]);
+  });
+
+  test("成功 + Already up to date → summary='already-up-to-date'", async () => {
+    const git = async (_args: string[]) => ({
+      stdout: "Already up to date.\n",
+      stderr: "",
+    });
+    const r = await runAutoPull("/tmp", { mainBranch: "main", git });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toBe("already-up-to-date");
+  });
+
+  test("成功 + 不明 stdout → summary='unknown'", async () => {
+    const git = async (_args: string[]) => ({
+      stdout: "なんかよくわからない出力\n",
+      stderr: "",
+    });
+    const r = await runAutoPull("/tmp", { mainBranch: "main", git });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toBe("unknown");
+  });
+
+  test("失敗 (git stub が throw) → ok=false + stderr 含む (throw しない)", async () => {
+    const git = async (_args: string[]) => {
+      const e = new Error("exit 1") as Error & { stderr: string; stdout: string };
+      e.stdout = "partial stdout";
+      e.stderr = "fatal: refusing to merge unrelated histories";
+      throw e;
+    };
+    const r = await runAutoPull("/tmp", { mainBranch: "main", git });
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("fatal:");
+    expect(r.stdout).toBe("partial stdout");
+  });
+
+  test("mainBranch=develop が引数に渡る", async () => {
+    const calls: string[][] = [];
+    const git = async (args: string[]) => {
+      calls.push(args);
+      return { stdout: "Already up to date.\n", stderr: "" };
+    };
+    await runAutoPull("/tmp", { mainBranch: "develop", git });
+    expect(calls).toEqual([["pull", "--ff-only", "origin", "develop"]]);
+  });
+});
