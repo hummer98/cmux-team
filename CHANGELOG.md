@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.13.0] - 2026-04-27
+
+### Added
+
+- **dashboard に token pool の capacity ヘッダーと per-surface 表示を追加（T351 / T352）**。`cmux-team status` のヘッダーに pool capacity / next reset を表示し、Master / Conductor / Agent 行に @handle と利用率を出すよう拡張。Agent 行はスピナー直後に @handle を配置して視認性を改善した。daemon state に tokenDb / pool snapshot を保持し、新設した pool-summary 共有モジュール経由で TUI と CLI の両方に同じデータを供給する
+- **未知の `rateLimitTier` に対する plan 入力プロンプト（T349）**。`cmux-team token add` / `promote` / `rotate` で probe したレスポンスの plan tier がカタログ未知（`pro` / `max5` / `max20` 以外）だった場合に CLI 上で plan を選ばせるインタラクティブプロンプトを追加し、誤って unlimited 扱いになるのを防ぐ
+
+### Changed
+
+- **`docs/spec/glossary.md` を新設して用語集を一元化（T350）**。これまで個別 spec ファイルや CLAUDE.md に散在していた cmux-team の用語定義を 1 ファイルに集約し、CLAUDE.md の docs/spec 参照テーブルから辿れるようにした
+
 ## [4.12.1] - 2026-04-26
 
 ### Fixed
