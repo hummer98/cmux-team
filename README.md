@@ -284,6 +284,23 @@ claude --resume abc-123
 - **Pane width**: Too many panes can break cmux commands.
 - **Trust prompts**: New directories trigger trust confirmation. Conductor auto-approves but may need manual intervention.
 
+## Testing
+
+> **⚠️ Do NOT run `bun test` against the whole manager directory.**
+> The full-suite invocation suffers O(N²) slowdown and may hang for 30+ minutes
+> (see `.team/artifacts/A021-research.md`). Use the per-file loop:
+>
+> ```bash
+> cd skills/cmux-team/manager
+> for f in *.test.ts state-machine/*.test.ts dashboard-*.test.tsx; do
+>   bun test --timeout 30000 "$f" || echo "FAIL: $f"
+> done
+> ```
+>
+> CI (`.github/workflows/test.yml`) runs the same per-file loop on every PR
+> and on `push` to `main`. The aggregate-mode invocation will be restored once
+> the root cause (module-level singleton accumulation) is fixed.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for testing, repository structure, and coding conventions.

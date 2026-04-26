@@ -51,16 +51,31 @@ bun install
 
 ### ユニットテスト
 
+> **⚠️ `bun test` を引数なしで叩いてはいけません。**
+> 全件実行は O(N²) 級に劣化し、ローカルで 13 分以上 / CI で 30 分以上ハングします
+> （詳細は `.team/artifacts/A021-research.md`）。
+
+個別ファイル iteration を使ってください:
+
 ```bash
 cd skills/cmux-team/manager
-bun test
+for f in *.test.ts state-machine/*.test.ts dashboard-*.test.tsx; do
+  echo "==> $f"
+  bun test --timeout 30000 "$f" || echo "FAIL: $f"
+done
 ```
 
-39 テスト:
-- タスクパース、依存解決、優先度ソート
-- キュー送受信、バリデーション、処理済み移動
-- ユースケースシナリオ（順序実行、並列→統合、割り込み TODO）
-- エラーハンドリング（循環依存、不正 YAML、存在しない依存先）
+ローカル（macOS arm64, bun 1.3.12）で約 68 秒、CI（ubuntu-latest）で約 5 分を目安にしてください。
+
+特定ファイルだけ:
+
+```bash
+bun test --timeout 30000 daemon.test.ts
+# ⚠️ bun test の引数は substring match。`conductor.test.ts` は `dashboard-conductor.test.tsx` も拾う。
+```
+
+CI (`.github/workflows/test.yml`) は PR と main push 時に同じループを自動実行します。
+根本原因（module-level singleton の累積、A021 §推奨修正 §B）が解消されたら通常実行に戻す予定です。
 
 ### E2E テスト
 

@@ -1,0 +1,82 @@
+name: Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - '!.github/workflows/test.yml'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - '!.github/workflows/test.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: bun test (per-file iteration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CMUX_TEAM_LOGGER_STRICT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install manager dependencies
+        working-directory: skills/cmux-team/manager
+        run: bun install --frozen-lockfile
+
+      # ⚠️ Do NOT change this step to a bare `bun test` invocation.
+      # The aggregate-mode `bun test` against the manager directory suffers
+      # O(N²) slowdown driven by module-level singleton accumulation
+      # (eventBus EventEmitter, bun:sqlite Database handles, store caches)
+      # and reliably hangs for 30+ minutes without completing.
+      # See `.team/artifacts/A021-research.md` for the full investigation.
+      #
+      # The per-file iteration below is the only confirmed-completing pattern.
+      # Once the root cause is fixed (eventBus reset per test, sqlite Database
+      # lifecycle, main.test.ts spawn replacement), collapse this loop back to
+      # a single `bun test --reporter=dots` invocation.
+      - name: Run tests (per-file iteration; A021 workaround)
+        working-directory: skills/cmux-team/manager
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set +e
+          fails=()
+          shopt -s nullglob
+          files=( *.test.ts state-machine/*.test.ts dashboard-*.test.tsx )
+          shopt -u nullglob
+          echo "Discovered ${#files[@]} test files"
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            timeout --kill-after=10 90 bun test --timeout 30000 --reporter=dots "$f"
+            ec=$?
+            echo "::endgroup::"
+            if [ "$ec" -ne 0 ]; then
+              fails+=("$f (exit=$ec)")
+              echo "::error file=skills/cmux-team/manager/$f::FAIL: $f (exit=$ec)"
+            fi
+          done
+          if [ ${#fails[@]} -gt 0 ]; then
+            printf '\n::error::Failed test files (%d):\n' "${#fails[@]}"
+            printf '  - %s\n' "${fails[@]}"
+            exit 1
+          fi
+          echo "All ${#files[@]} test files passed."

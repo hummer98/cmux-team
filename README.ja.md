@@ -364,6 +364,22 @@ claude --resume abc-123
 - **ペイン幅**: ペイン数が多すぎると cmux コマンドが失敗する。
 - **初回 Trust 確認**: 新しいディレクトリで Claude を起動すると信頼確認が表示される。Conductor が自動承認を試みるが、失敗する場合は手動承認が必要。
 
+## テスト
+
+> **⚠️ manager ディレクトリ全体への `bun test` は実行しないでください。**
+> 全件実行は O(N²) 級に劣化し、30 分以上ハングします
+> （詳細は `.team/artifacts/A021-research.md`）。代わりに個別ファイル iteration を使ってください:
+>
+> ```bash
+> cd skills/cmux-team/manager
+> for f in *.test.ts state-machine/*.test.ts dashboard-*.test.tsx; do
+>   bun test --timeout 30000 "$f" || echo "FAIL: $f"
+> done
+> ```
+>
+> CI (`.github/workflows/test.yml`) は PR と main push 時に同じループを実行します。
+> 根本原因（module-level singleton の累積）が修正されたら通常実行に戻す予定です。
+
 ## 開発への貢献
 
 テスト方法、リポジトリ構造、コーディング規約については [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
