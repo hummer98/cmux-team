@@ -156,6 +156,8 @@ glossary には要約と一次リンクのみを置く方針を取る。
 | 用語 | 定義 | 一次リンク | 関連 |
 |------|------|-----------|------|
 | Trace DB | `.team/traces/traces.db`（SQLite + FTS5）。Anthropic API リクエスト/レスポンス・hook signal・api_usage を記録。検索は `cmux-team trace` / `trace-task` / `trace-hooks`。 | [`05-install-and-infrastructure.md#プロキシサーバー`](05-install-and-infrastructure.md#プロキシサーバー), [`../../CLAUDE.md#通信プロトコル`](../../CLAUDE.md#通信プロトコル) | proxy / hook_signals |
+| events stream | 外向け event channel。Manager daemon が `.team/logs/events.jsonl` に JSONL で append し、Master watch mode や `cmux-team events` CLI が購読する。schema v2、16 event 種、append-only（rotate なし）。 | [`10-events-stream.md`](10-events-stream.md) | event channel / EventBus / Trace DB |
+| event channel | Manager daemon が外向けに公開する event の論理チャネル。`.team/logs/events.jsonl`（events stream）として実装される。daemon プロセス内 EventBus（`notifyStateChanged`）とは別レイヤー。 | [`10-events-stream.md#1-概要`](10-events-stream.md#1-概要) | events stream / EventBus |
 | hook | Claude Code が発行する SessionStart / Stop / Notification / PreToolUse / PostToolUse / SessionEnd 等のイベント。hook shell には分岐ロジックを持たせず、全イベントを daemon に転送する。 | [`../../CLAUDE.md#実装ルールガードレール`](../../CLAUDE.md#実装ルールガードレール), [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | hook_signals / Trace DB |
 | EventBus | daemon プロセス内の **実 state mutation** → TUI refresh を疎結合に接続する EventEmitter ラッパー（`eventBus.ts`）。`notifyStateChanged` / `onStateChanged` のみ使用可（`bus.emit` / `bus.on` 直接呼び出しは禁止）。 | [`05-install-and-infrastructure.md#event-catalogeventbusts`](05-install-and-infrastructure.md#event-catalogeventbusts), [`../../CLAUDE.md#実装ルールガードレール`](../../CLAUDE.md#実装ルールガードレール) | state mutation |
 | queue | daemon の HTTP プロキシが受け口を兼ねるメッセージキュー。CLI（`cmux-team send <TYPE>`）から POST されたメッセージを受信。旧ファイルベース `queue.ts` は廃止済み。 | [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | proxy |
@@ -163,4 +165,4 @@ glossary には要約と一次リンクのみを置く方針を取る。
 | journal | `task-state.json` 内に記録される状態遷移の監査ログ（`task_aborted` / `task_completed` / `parent_aborted: <id>` 等）。 | [`07-state-machine.md#24-cascade-ルール-t241`](07-state-machine.md#24-cascade-ルール-t241), [`../../CLAUDE.md#エラーリカバリ`](../../CLAUDE.md#エラーリカバリ) | cascade |
 | CONDUCTOR_DONE | Conductor から daemon に送る完了メッセージ。`success: true` で正常 close、`unresolved: true` で `aborted` + cascade（preserveWorktree）。 | [`07-state-machine.md#3-conductor--task-の同時遷移`](07-state-machine.md#3-conductor--task-の同時遷移), [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | DONE / Task FSM |
 
-**関連 spec**: [`05-install-and-infrastructure.md`](05-install-and-infrastructure.md) / [`07-state-machine.md`](07-state-machine.md) / [`../../CLAUDE.md`](../../CLAUDE.md)
+**関連 spec**: [`05-install-and-infrastructure.md`](05-install-and-infrastructure.md) / [`07-state-machine.md`](07-state-machine.md) / [`10-events-stream.md`](10-events-stream.md) / [`../../CLAUDE.md`](../../CLAUDE.md)
