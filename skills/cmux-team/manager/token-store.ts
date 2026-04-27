@@ -851,14 +851,18 @@ function normalizePolicy(policy: SelectTokenPolicy | string[] | undefined): Sele
  *     と一致する handle は **`selectable=0` でも runtime で候補化**（DB 不変。spawn-agent ごとに in-memory 判定）。
  *     副作用ゼロ・auto-discover 経路と相互汚染しない。複数 spawn の競合は 120 秒 lease で吸収する
  *  3. **selectable=0 の他 token は候補外**（default 以外の non-selectable は素通し）
- *  4. **lease / stale / util_5h>0.95 ブロッカー**は従来通り除外
- *  5. **admit 判定**:
+ *  4. **lease 中**は除外
+ *  5. **stale snapshot の reset 反映 (T369)**: recorded_at が 30 分超前のとき、
+ *     `reset_5h_at` / `reset_7d_at` を過ぎた軸は実 util がリセット済みと見なし `effUtil*=0` で評価する。
+ *     両軸とも未確定（null / 未来）なら候補外。以降の判定はすべて `effUtil5h` / `effUtil7d` を使う。
+ *  6. **ブロッカー除外**: `effUtil5h > 0.95` は候補外
+ *  7. **admit 判定**:
  *     - `effectiveDefault` 一致 → 無条件 admit
  *     - `policy.include` に含まれる → tags 不問で admit
  *     - `policy.isOss=true` → admit（exclude のみ尊重、tag 不問）
  *     - 通常 tag マッチ（`token.tags` が "any" を含む / `projectTags` が "any" / 交集合あり）→ admit
- *  6. **score 最小**: `0.3 * util_5h + 0.7 * util_7d`（null は 0 扱い）
- *  7. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL
+ *  8. **score 最小**: `0.3 * effUtil5h + 0.7 * effUtil7d`（null は 0 扱い）
+ *  9. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL
  *
  * **後方互換**: 第 3 引数に `string[]` を渡すと旧 T321 シグネチャとして解釈される
  * （`{ projectTags, projectDefault: null, include: [], exclude: [], isOss: false, ossDefault: null }`）。
@@ -904,17 +908,31 @@ export function selectToken(
 
     const snap = getLatestUsageSnapshot(db, tok.id);
 
-    // 4) stale 除外（30 分以上未更新）
+    // 4) stale 判定 + reset 反映による util 上書き（T369）
+    //    snapshot が 30 分以上前でも、reset_*_at を過ぎている軸は
+    //    実 util がリセット済み（=0）と扱う。両軸とも未確定（null/未来）なら除外。
+    let effUtil5h = snap?.util_5h ?? 0;
+    let effUtil7d = snap?.util_7d ?? 0;
+
     if (snap) {
       const recAt = new Date(snap.recorded_at).getTime();
-      if (now - recAt > staleThresholdMs) continue;
+      const isStale = now - recAt > staleThresholdMs;
+
+      if (isStale) {
+        const reset5hPast =
+          snap.reset_5h_at != null && new Date(snap.reset_5h_at).getTime() <= now;
+        const reset7dPast =
+          snap.reset_7d_at != null && new Date(snap.reset_7d_at).getTime() <= now;
+
+        if (!reset5hPast && !reset7dPast) continue;
+
+        if (reset5hPast) effUtil5h = 0;
+        if (reset7dPast) effUtil7d = 0;
+      }
     }
 
-    const util5h = snap?.util_5h ?? 0;
-    const util7d = snap?.util_7d ?? 0;
-
     // 5) ブロッカー除外: 5h > 95%
-    if (util5h > 0.95) continue;
+    if (effUtil5h > 0.95) continue;
 
     // 6) admit 判定（順序: default → include → OSS → tag マッチ）
     let admitted = false;
@@ -935,7 +953,7 @@ export function selectToken(
     }
     if (!admitted) continue;
 
-    const score = 0.3 * util5h + 0.7 * util7d;
+    const score = 0.3 * effUtil5h + 0.7 * effUtil7d;
     candidates.push({ token: tok, score });
   }
 

@@ -1683,3 +1683,191 @@ describe("selectToken (T335: 受け入れ条件 Project A/C シナリオ)", () =
     expect(sel?.token.handle).toBe("@a-corp");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// selectToken (T369: stale snapshot の util リセット時刻反映)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("selectToken (T369: stale snapshot の util リセット時刻反映)", () => {
+  /** stale snapshot を seed する。recorded_at を強制的に巻き戻す */
+  function seedStaleSnapshot(args: {
+    tokenId: number;
+    util5h: number | null;
+    util7d: number | null;
+    reset5hAt: string | null;
+    reset7dAt: string | null;
+    recordedMinutesAgo: number;
+  }): void {
+    upsertUsageSnapshot(db, {
+      token_id: args.tokenId,
+      util_5h: args.util5h,
+      util_7d: args.util7d,
+      reset_5h_at: args.reset5hAt,
+      reset_7d_at: args.reset7dAt,
+      unified_status: null,
+    });
+    const recordedAt = new Date(Date.now() - args.recordedMinutesAgo * 60_000).toISOString();
+    db.prepare("UPDATE usage_snapshots SET recorded_at = ? WHERE token_id = ?")
+      .run(recordedAt, args.tokenId);
+  }
+
+  function seedFreshSnapshot(tokenId: number, util5h = 0.1, util7d = 0.1): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  function pastIso(minutesAgo: number): string {
+    return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  }
+  function futureIso(minutesAhead: number): string {
+    return new Date(Date.now() + minutesAhead * 60_000).toISOString();
+  }
+
+  test("TC1: stale + reset_5h_at 過去 + reset_7d_at 未来 → 候補化、util_5h=0 で評価", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@kami", organization_id: "org-kami-tc1", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: pastIso(5),
+      reset7dAt: futureIso(60),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-tc1");
+    expect(sel?.token.handle).toBe("@kami");
+  });
+
+  test("TC2: stale + 両軸 reset 過去 → 候補化、score=0 で fresh 競合より優先される", () => {
+    const stale = insertToken(
+      db,
+      makeToken({ handle: "@kami", organization_id: "org-kami-tc2", tags: ["any"] }),
+    );
+    const fresh = insertToken(
+      db,
+      makeToken({ handle: "@fresh", organization_id: "org-fresh-tc2", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: stale.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: pastIso(5),
+      reset7dAt: pastIso(5),
+      recordedMinutesAgo: 50,
+    });
+    seedFreshSnapshot(fresh.id, 0.05, 0.05);
+    const sel = selectToken(db, "h-tc2");
+    expect(sel?.token.handle).toBe("@kami");
+  });
+
+  test("TC3: stale + reset_5h_at 未来 + reset_7d_at 過去 → util_7d=0 上書き、util_5h は snapshot 値", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@k3", organization_id: "org-k3-tc3", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: futureIso(60),
+      reset7dAt: pastIso(5),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-tc3");
+    expect(sel?.token.handle).toBe("@k3");
+  });
+
+  test("TC4: stale + 両軸未来 → 既存挙動 (候補外)", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@k4", organization_id: "org-k4-tc4", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: futureIso(60),
+      reset7dAt: futureIso(120),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-tc4");
+    expect(sel).toBeNull();
+  });
+
+  test("TC5: stale + reset_5h_at=null + reset_7d_at=null → 候補外（リセット情報無し）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@k5", organization_id: "org-k5-tc5", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: null,
+      reset7dAt: null,
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-tc5");
+    expect(sel).toBeNull();
+  });
+
+  test("TC6: fresh snapshot は util 上書きされない（回帰）", () => {
+    // 高 util の fresh token: reset_*_at が過去でも上書きされず score=0.62 のまま
+    const tHigh = insertToken(
+      db,
+      makeToken({ handle: "@high", organization_id: "org-high-tc6", tags: ["any"] }),
+    );
+    upsertUsageSnapshot(db, {
+      token_id: tHigh.id,
+      util_5h: 0.9,
+      util_7d: 0.5,
+      reset_5h_at: pastIso(5),
+      reset_7d_at: pastIso(5),
+      unified_status: null,
+    });
+    // 競合: fresh, score=0.5
+    const tCompetitor = insertToken(
+      db,
+      makeToken({ handle: "@competitor", organization_id: "org-comp-tc6", tags: ["any"] }),
+    );
+    seedFreshSnapshot(tCompetitor.id, 0.5, 0.5); // score=0.5
+    // 上書きされていれば @high の score は 0 で勝つはず。されなければ 0.62 で @competitor が勝つ
+    const sel = selectToken(db, "h-tc6");
+    expect(sel?.token.handle).toBe("@competitor");
+  });
+
+  test("TC7: snapshot 無し token は stale 判定の影響を受けない（回帰）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@k7", organization_id: "org-k7-tc7", tags: ["any"] }),
+    );
+    // snapshot なし
+    const sel = selectToken(db, "h-tc7");
+    expect(sel?.token.handle).toBe("@k7");
+  });
+
+  test("TC8: stale + reset_5h_at 過去 で元 util_5h=0.99 → ブロッカー回避し候補化される", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@k8", organization_id: "org-k8-tc8", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.99,
+      util7d: 0.1,
+      reset5hAt: pastIso(5),
+      reset7dAt: futureIso(120),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-tc8");
+    expect(sel?.token.handle).toBe("@k8");
+  });
+});
