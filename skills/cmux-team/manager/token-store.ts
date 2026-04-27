@@ -720,11 +720,13 @@ export const REFERENCE_FLOW = 20.0 / 168;
 const FULL_WEEK_HOURS = 168;
 const MIN_HOURS = 1 / 60; // 1 分未満は 1 分として扱う (clamp)
 
-function hoursUntil(iso: string | null, nowMs: number): number | null {
-  if (!iso) return null;
-  const target = new Date(iso).getTime();
-  if (Number.isNaN(target)) return null;
-  const deltaH = (target - nowMs) / 3_600_000;
+function hoursUntil(raw: string | null, nowMs: number): number | null {
+  if (!raw) return null;
+  // Anthropic API は ISO 文字列と Unix epoch 秒文字列の両形式で返す
+  const asNum = Number(raw);
+  const targetMs = !isNaN(asNum) && asNum > 1e9 ? asNum * 1000 : new Date(raw).getTime();
+  if (Number.isNaN(targetMs)) return null;
+  const deltaH = (targetMs - nowMs) / 3_600_000;
   if (deltaH <= 0) return null; // reset 過ぎ
   return Math.max(deltaH, MIN_HOURS);
 }
