@@ -1560,6 +1560,145 @@ describe("proxy: auto-discover gate (T341)", () => {
     upstream.stop();
   });
 
+  test("T367: /rate-limit pool 無効 + util 0.95 → throttled=true, pool=null", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const handle = await start(testDir, {
+      getState: () => ({
+        running: true,
+        bootPhase: "ready",
+        rateLimit: {
+          tokensRemaining: 0,
+          tokensLimit: 0,
+          tokensReset: "2030-01-01T00:00:00Z",
+          inputTokensRemaining: 0,
+          outputTokensRemaining: 0,
+          unified5hUtilization: 0.95,
+          unified7dUtilization: null,
+          unified5hReset: "2030-01-01T00:00:00Z",
+          unified7dReset: null,
+          unifiedStatus: null,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rate-limit`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.throttled).toBe(true);
+    expect(body.pool).toBeNull();
+
+    handle.stop();
+  });
+
+  test("T367: /rate-limit pool 有効 + 余裕あり → throttled=false, pool=non-null", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    const { initTokenDB, insertToken, upsertUsageSnapshot } = await import("./token-store");
+    const db = initTokenDB();
+    const t = insertToken(db, {
+      handle: "@a",
+      organization_id: "org-rate-limit-pool-1",
+      auth_hash: "hash",
+      plan: "max-x20",
+      plan_ratio: 20,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+    upsertUsageSnapshot(db, {
+      token_id: t.id,
+      util_5h: 0.5,
+      util_7d: 0.5,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+
+    const handle = await start(testDir, {
+      getState: () => ({
+        running: true,
+        bootPhase: "ready",
+        rateLimit: {
+          tokensRemaining: 0,
+          tokensLimit: 0,
+          tokensReset: "2030-01-01T00:00:00Z",
+          inputTokensRemaining: 0,
+          outputTokensRemaining: 0,
+          // 単一アカウント観測値が 95% でも、pool 経路は SQLite を見て throttled=false
+          unified5hUtilization: 0.95,
+          unified7dUtilization: null,
+          unified5hReset: "2030-01-01T00:00:00Z",
+          unified7dReset: null,
+          unifiedStatus: null,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rate-limit`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.throttled).toBe(false);
+    expect(body.pool).not.toBeNull();
+    expect(body.pool.enabled).toBe(true);
+    expect(body.pool.total).toBe(1);
+    expect(body.pool.selectable).toBe(1);
+    expect(body.pool.available).toBe(1);
+    expect(body.pool.stale).toBe(0);
+
+    handle.stop();
+  });
+
+  test("T367: /rate-limit pool 有効 + 全 token util=0.96 → throttled=true, pool.available=0", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    const { initTokenDB, insertToken, upsertUsageSnapshot } = await import("./token-store");
+    const db = initTokenDB();
+    const t = insertToken(db, {
+      handle: "@a",
+      organization_id: "org-rate-limit-pool-2",
+      auth_hash: "hash",
+      plan: "max-x20",
+      plan_ratio: 20,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+    upsertUsageSnapshot(db, {
+      token_id: t.id,
+      util_5h: 0.96,
+      util_7d: 0.5,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+
+    const handle = await start(testDir, {
+      getState: () => ({
+        running: true,
+        bootPhase: "ready",
+        rateLimit: null,
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rate-limit`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.throttled).toBe(true);
+    expect(body.pool.available).toBe(0);
+    expect(body.pool.total).toBe(1);
+
+    handle.stop();
+  });
+
+  test("T367: /rate-limit 独立モード（getState なし） → throttled=false, pool=null", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rate-limit`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.throttled).toBe(false);
+    expect(body.pool).toBeNull();
+    handle.stop();
+  });
+
   test("T341-P4: gate 判定は proxy 起動時 1 回キャッシュ（起動後の env 変更に追随しない）", async () => {
     // 起動時は pool OFF
     process.env.CMUX_TEAM_TOKEN_POOL = "0";

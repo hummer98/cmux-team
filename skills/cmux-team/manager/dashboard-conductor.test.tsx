@@ -129,8 +129,8 @@ describe("buildConductorRowWithPool: T352 Agent 行 handle 表示", () => {
 
   function makePerHandle(): Map<string, PerHandleSummary> {
     return new Map<string, PerHandleSummary>([
-      ["@conductor", { util5h: 0.10, util7d: 0.30, capPct: 80 }],
-      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80 }],
+      ["@conductor", { util5h: 0.10, util7d: 0.30, capPct: 80, selectable: true }],
+      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80, selectable: true }],
     ]);
   }
 

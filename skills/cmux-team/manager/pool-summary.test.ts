@@ -213,6 +213,9 @@ describe("buildPoolSummary", () => {
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@active")).toBeDefined();
     expect(summary.perHandle.get("@frozen")).toBeDefined();
+    // T367: perHandle.selectable が listTokens の selectable と一致する
+    expect(summary.perHandle.get("@active")?.selectable).toBe(true);
+    expect(summary.perHandle.get("@frozen")?.selectable).toBe(false);
     // nextReset は selectable=true の @active からのみ取られる（computeNextReset の filter）
     expect(summary.header.nextReset?.handle).toBe("@active");
   });

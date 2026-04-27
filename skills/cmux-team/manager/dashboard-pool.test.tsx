@@ -181,7 +181,7 @@ describe("buildSurfaceRowSuffix (T351 dashboard 用 UiNode API)", () => {
 describe("buildConductorRowWithPool: pool ON で Conductor 行末尾に handle/util を append", () => {
   test("case 6: pool ON / tokenHandle=@kddi で Conductor 行に @kddi と <5h: が含まれ surface ラベル [100] は 1 度だけ出現", () => {
     const perHandle = new Map<string, PerHandleSummary>([
-      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80 }],
+      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80, selectable: true }],
     ]);
     const conductor: ConductorState & { agents: AgentState[]; status: string } = {
       surface: "surface:100",
@@ -219,7 +219,7 @@ describe("buildConductorRowWithPool: pool ON で Conductor 行末尾に handle/u
 
   test("case 8: pool ON / agent.tokenHandle=undefined → Agent 行に (no token) は出ない、surface ラベルは 1 度だけ (T352)", () => {
     const perHandle = new Map<string, PerHandleSummary>([
-      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80 }],
+      ["@kddi", { util5h: 0.10, util7d: 0.30, capPct: 80, selectable: true }],
     ]);
     const conductor: ConductorState & { agents: AgentState[]; status: string } = {
       surface: "surface:100",
@@ -249,7 +249,7 @@ describe("buildConductorRowWithPool: pool ON で Conductor 行末尾に handle/u
 
   test("case 9: util_5h=0.85（警告閾値超過）で Conductor 行に ⚠ + YELLOW が含まれる", () => {
     const perHandle = new Map<string, PerHandleSummary>([
-      ["@kddi", { util5h: 0.85, util7d: 0.30, capPct: 80 }],
+      ["@kddi", { util5h: 0.85, util7d: 0.30, capPct: 80, selectable: true }],
     ]);
     const conductor: ConductorState & { agents: AgentState[]; status: string } = {
       surface: "surface:100",

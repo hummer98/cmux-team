@@ -251,6 +251,98 @@ race で他に先に取られた場合は null を返す（フォールバック
 
 ---
 
+## pool-aware THROTTLE 判定（T367）
+
+`THROTTLED` 判定（spawn-agent ブロック・dashboard `⏸` 表示・scanTasks の assignment 抑止）は、
+**pool ON/OFF で判定軸を切り替える**。
+
+| 判定箇所 | pool 有効性ソース | 判定ロジック |
+|---|---|---|
+| `daemon.ts: scanTasks` | `state.tokenDb !== null` | pool 有効: `canSelectAnyToken` / pool 無効: `unified5hUtilization >= THROTTLE_5H_THRESHOLD (=0.90)` |
+| `daemon.ts: computeSidebarStatus` | `state.tokenDb !== null` | 同上（pool 無効時は `unifiedStatus === "rate_limited"` も OR） |
+| `proxy.ts: /rate-limit` | proxy 起動時にクロージャ束縛した `tokenPoolEnabled` | 同上 |
+| `dashboard.tsx: isThrottled` | `daemon.tokenDb !== null && daemon.pool !== null` | pool 有効: `hasPoolHeadroomFromSummary(perHandle)` / pool 無効: 従来 |
+| `main.ts: spawn-agent` | `/rate-limit` の `throttled` フィールド | proxy が一括判定するため自動追従 |
+
+すべての判定箇所は `pool-throttle.ts: isThrottled5h(db, rl, opts)` 単一エントリ helper を経由する
+（dashboard だけは Ink 再描画で SQLite を叩かない設計のため pure variant `hasPoolHeadroomFromSummary` を使う）。
+
+### 構造的整合性の保証
+
+pool 有効経路は `selectToken` の admit 判定と完全に同じロジックを共有する。
+
+`token-store.ts` 内で `selectToken` から admit ループ部分を `admitCandidates` に extract し、
+`canSelectAnyToken` がその結果の `length > 0` を返す。`selectToken` は `admitCandidates` の出力を
+sort して `acquireLease` するだけ。
+
+これにより以下が **規約レベルではなく実装レベルで一意** になる:
+
+- exclude / lease / stale / blocker (`util_5h > 0.95`) の除外条件
+- `effectiveDefault = projectDefault ?? (isOss ? ossDefault : null)` の解決
+- selectable=0 の default 昇格（DB 書き換えなし）
+- include / OSS / tag マッチの admit 判定
+
+「pool throttled なのに spawn できる / pool 余裕なのに止まる」という乖離は構造的に発生しない。
+
+### policy 構築の一元化（`buildSelectTokenPolicy`）
+
+`spawn-agent` と daemon の両方が `config.ts: buildSelectTokenPolicy(projectRoot)` を呼ぶ。
+内部で `resolveProjectTokenPool` / `resolveGlobalTokenPool` / `resolveProjectContext` を合成して
+`SelectTokenPolicy` を返す。daemon は起動時に 1 度だけ評価して `state.poolPolicy` にキャッシュする
+（runtime config 切替には追従しない。`tokenDb` も同方針）。
+
+### 閾値
+
+- pool 有効経路: `selectToken` の `> 0.95` ブロッカーを唯一の閾値として共有する。
+  `THROTTLE_5H_THRESHOLD (=0.90)` は **参照しない**
+- pool 無効経路: `THROTTLE_5H_THRESHOLD (=0.90)` を引き続き使う（後方互換）
+
+### `/rate-limit` レスポンスの `pool` フィールド
+
+```ts
+// pool 有効時
+{
+  throttled: boolean,
+  threshold: 0.9,           // 後方互換のため残す（pool 無効時の閾値）
+  unified5hUtilization: number | null,
+  unified5hReset: number | null,
+  ...
+  pool: {
+    enabled: true,           // 常に true（pool 有効時のみ non-null）
+    total: number,           // listTokens 全件
+    selectable: number,      // selectable=1 の件数
+    available: number,       // policy 適用後 admit 候補数（default 昇格込み）
+    stale: number            // recorded_at が 30 分以上前の件数
+  }
+}
+
+// pool 無効時 / 独立 proxy モード
+{
+  throttled: boolean,
+  ...
+  pool: null
+}
+```
+
+### `tokenDbInitFailed` 時の挙動
+
+`initTokenDB()` が起動時に失敗した場合（permission / disk full / corrupted）:
+
+- `state.tokenDb = null`、`state.tokenDbInitFailed = true`
+- 起動ログに `[POOL_DISABLED] tokens.db init failed; pool ON config but running as pool OFF: <reason>` を残す
+- `scanTasks` が throttle ガードに入ったとき、ログに
+  `mode=single (pool_intended=on pool_active=off reason=db_init_failed) ...` を付加する
+  （`tail -f .team/logs/manager.log | grep POOL_DISABLED` で発見できる）
+
+### 独立 proxy モード
+
+`cmux-team proxy --port` のように daemon 不在で proxy を単独起動した場合:
+
+- `running=false` 相当として扱い、`/rate-limit` は常に `{ throttled: false, pool: null }` を返す
+- 安全側挙動（throttling しない）。daemon を伴わない使い方は将来要望が出れば別タスクで扱う
+
+---
+
 ## pool_capacity 指標
 
 **「Max x20 を 100% とした持続可能流量の比率」**。100% 超あり（複数 x20 持ちなら 200%+）。

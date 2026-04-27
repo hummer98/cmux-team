@@ -74,9 +74,7 @@ import {
   resolveAutoUpdateMode,
   resolveFetchBeforeWorktree,
   isTokenPoolEnabled,
-  loadGlobalConfig,
-  resolveProjectTokenPool,
-  resolveGlobalTokenPool,
+  buildSelectTokenPolicy,
 } from "./config";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
@@ -135,7 +133,6 @@ import {
 import { buildPoolHeaderLines } from "./pool-status-header";
 import { formatSurfaceRow } from "./pool-surface-row";
 import { loadPoolSummary } from "./pool-summary";
-import { resolveProjectContext } from "./project-tags";
 
 // --- プロジェクトルート検出 ---
 function findProjectRoot(): string {
@@ -694,7 +691,24 @@ async function cmdStart(): Promise<void> {
         state.tokenDb = initTokenDB();
       } catch (e: any) {
         state.tokenDb = null;
+        state.tokenDbInitFailed = true;
         await log("error", `initTokenDB failed: ${e?.message ?? e}`);
+        // T367: pool ON config だが pool OFF として動く乖離を tail -f で気付けるよう [POOL_DISABLED] を残す
+        await log(
+          "warn",
+          `[POOL_DISABLED] tokens.db init failed; pool ON config but running as pool OFF: ${e?.message ?? e}`,
+        );
+      }
+      // T367: pool ON のとき selectToken / canSelectAnyToken に渡す合成 policy を 1 度だけ構築。
+      // tokenDb の open 成否に関わらず policy 構築は試みる（admit 判定で使うためキャッシュしておく）。
+      try {
+        state.poolPolicy = await buildSelectTokenPolicy(PROJECT_ROOT);
+      } catch (e: any) {
+        state.poolPolicy = null;
+        await log(
+          "warn",
+          `[POOL_DISABLED] buildSelectTokenPolicy failed; pool throttle uses default policy: ${e?.message ?? e}`,
+        );
       }
     }
   } catch (e: any) {
@@ -2521,6 +2535,13 @@ async function cmdSpawnAgent(): Promise<void> {
           unified5hReset: number | null;
           unified5hUtilization: number | null;
           resetRemaining: string | null;
+          pool?: {
+            enabled: boolean;
+            selectable: number;
+            available: number;
+            total: number;
+            stale: number;
+          } | null;
         };
         if (rl.throttled) {
           const util = rl.unified5hUtilization ?? 0;
@@ -2530,8 +2551,12 @@ async function cmdSpawnAgent(): Promise<void> {
           console.log(`UTILIZATION=${(util * 100).toFixed(1)}%`);
           console.log(`THRESHOLD=${(THROTTLE_5H_THRESHOLD * 100).toFixed(0)}%`);
           console.log(`MESSAGE=Rate limit exceeded. Wait until RESET_EPOCH before retrying spawn-agent.`);
+          // T367: pool ON/OFF を log に明示。pool ON ではさらに pool=available/total を出す。
+          const poolStr = rl.pool
+            ? `mode=pool pool=${rl.pool.available}/${rl.pool.total}`
+            : `mode=single`;
           await log("spawn_agent_throttled",
-            `conductor=${conductorSurface} role=${role} task_id=${taskId ?? "-"} util=${(util * 100).toFixed(1)}% unified5hReset=${rl.unified5hReset ?? "null"}`);
+            `conductor=${conductorSurface} role=${role} task_id=${taskId ?? "-"} ${poolStr} util=${(util * 100).toFixed(1)}% unified5hReset=${rl.unified5hReset ?? "null"}`);
           process.exit(75);
         }
       } else {
@@ -2661,42 +2686,14 @@ async function cmdSpawnAgent(): Promise<void> {
   if (!poolDecision.enabled) {
     await log("token_pool_skipped", `${formatSurface(surface, "A")} source=${poolDecision.source}`);
   } else {
-    // T321/T335: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入
+    // T321/T335/T367: token pool からトークンを選択して CLAUDE_CODE_OAUTH_TOKEN を注入。
+    // policy 構築は config.ts の buildSelectTokenPolicy に集約（T367 N1）。
+    // daemon (pool-throttle) も同じ関数を呼ぶことで admit 判定の構造的整合を保つ。
     try {
       const tokDb = initTokenDB();
-
-      // T335: project / global 両 policy を読む
-      const [projectConfig, globalConfig] = await Promise.all([
-        loadConfig(PROJECT_ROOT),
-        loadGlobalConfig(),
-      ]);
-      const projectPolicy = resolveProjectTokenPool(projectConfig);
-      const globalPolicy = resolveGlobalTokenPool(globalConfig);
-
-      // project_tags + isOss を解決
-      let projectTags: string[];
-      let isOss: boolean;
-      try {
-        const ctx = await resolveProjectContext(PROJECT_ROOT, globalPolicy.primaryOrgs);
-        projectTags = ctx.projectTags;
-        isOss = ctx.isOss;
-      } catch (e: any) {
-        await log(
-          "project_tags_resolve_failed",
-          `${formatSurface(surface, "A")} err=${e?.message ?? e}`,
-        );
-        projectTags = ["any"];
-        isOss = false;
-      }
-
-      const selected = selectToken(tokDb, surface, {
-        projectTags,
-        projectDefault: projectPolicy.default,
-        include: projectPolicy.include,
-        exclude: projectPolicy.exclude,
-        isOss,
-        ossDefault: globalPolicy.ossDefault,
-      });
+      const policy = await buildSelectTokenPolicy(PROJECT_ROOT);
+      const isOss = policy.isOss;
+      const selected = selectToken(tokDb, surface, policy);
 
       if (selected) {
         // T335 M3: Keychain から実 token を取得。不在なら env 注入のみスキップ

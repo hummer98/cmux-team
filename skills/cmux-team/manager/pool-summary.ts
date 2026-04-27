@@ -28,6 +28,13 @@ export interface PerHandleSummary {
   util5h: number | null;
   util7d: number | null;
   capPct: number | null;
+  /**
+   * tokens.selectable=1 か否か（T367）。
+   * `hasPoolHeadroomFromSummary` が default 昇格を考慮しない近似で
+   * Ink dashboard の throttle 表示に使う。daemon 側 (scanTasks /
+   * computeSidebarStatus) は SQLite を直接見るため正確な判定。
+   */
+  selectable: boolean;
 }
 
 export interface PoolSummary {
@@ -74,6 +81,7 @@ export function buildPoolSummary(
       util5h: snap?.util_5h ?? null,
       util7d: snap?.util_7d ?? null,
       capPct: capByHandle.get(t.handle) ?? null,
+      selectable: t.selectable,
     });
   }
 

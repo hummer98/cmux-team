@@ -63,6 +63,7 @@ import { buildPoolHeaderLines } from "./pool-status-header";
 import { buildPoolHeaderDisplay } from "./pool-header-display";
 import { buildSurfaceRowSuffix } from "./pool-surface-row";
 import type { PoolSummary, PerHandleSummary } from "./pool-summary";
+import { hasPoolHeadroomFromSummary } from "./pool-throttle";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
@@ -1445,10 +1446,18 @@ export async function startDashboard(
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
 
     // レスポンシブヘッダー
-    // スロットリング判定（stale な観測値はガードで除外する）。5h 軸のみを参照する（T281）。
+    // T367: pool-aware スロットリング判定。
+    // - boot/running ガードを最上位に置く（headerSubtitle 優先度と整合）
+    // - pool 有効 + pool snapshot 有り → 純粋関数 hasPoolHeadroomFromSummary 経由（SQLite 触らない）
+    // - pool 有効だが pool=null（refreshPoolSnapshot 失敗 fallback）→ rate-limit 経路にフォールバック
+    // - pool 無効 → 従来 5h 軸 + THROTTLE_5H_THRESHOLD
     const isThrottled =
-      !isStale5h(daemon.rateLimit) &&
-      (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+      !daemon.running || daemon.bootPhase !== "ready"
+        ? false
+        : daemon.tokenDb !== null && daemon.pool !== null
+          ? !hasPoolHeadroomFromSummary(Array.from(daemon.pool.perHandle.values()))
+          : !isStale5h(daemon.rateLimit) &&
+            (daemon.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
 
     const headerParts = [
       !daemon.running ? "STOPPED"

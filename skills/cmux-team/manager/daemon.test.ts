@@ -5703,6 +5703,212 @@ describe("handleMessage: AGENT_TOKEN_BOUND case (T323)", () => {
   });
 });
 
+describe("scanTasks: pool-aware throttle ガード (T367)", () => {
+  async function readManagerLog(): Promise<string> {
+    return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+  }
+
+  test("pool 無効 + rateLimit 0.95 → throttled_rate_limit (mode=single)", async () => {
+    await createTask("201", "pending-task");
+    const state = await createDaemon(testDir);
+    state.mainBranch = "main";
+    state.bootPhase = "ready";
+
+    // idle Conductor を登録（throttle なら assignTask が呼ばれないことを確認するため）
+    state.conductors.set("surface:c1", {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    });
+
+    state.rateLimit = {
+      tokensRemaining: 0,
+      tokensLimit: 0,
+      tokensReset: new Date().toISOString(),
+      inputTokensRemaining: 0,
+      outputTokensRemaining: 0,
+      unified5hUtilization: 0.95,
+      unified7dUtilization: null,
+      unified5hReset: "2030-01-01T00:00:00Z",
+      unified7dReset: null,
+      unifiedStatus: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await scanTasks(state);
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("throttled_rate_limit");
+    expect(logContent).toContain("mode=single");
+    expect(logContent).toContain("threshold=90%");
+
+    // タスクは ready のまま（assignTask が呼ばれていない）
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    expect(ts["201"]?.status).toBe("ready");
+  });
+
+  test("tokenDbInitFailed=true + pool 無効 → log に pool_intended=on pool_active=off が含まれる", async () => {
+    await createTask("202", "pending-task");
+    const state = await createDaemon(testDir);
+    state.mainBranch = "main";
+    state.bootPhase = "ready";
+    state.tokenDbInitFailed = true;
+
+    state.conductors.set("surface:c1", {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    });
+
+    state.rateLimit = {
+      tokensRemaining: 0,
+      tokensLimit: 0,
+      tokensReset: new Date().toISOString(),
+      inputTokensRemaining: 0,
+      outputTokensRemaining: 0,
+      unified5hUtilization: 0.95,
+      unified7dUtilization: null,
+      unified5hReset: "2030-01-01T00:00:00Z",
+      unified7dReset: null,
+      unifiedStatus: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await scanTasks(state);
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("mode=single (pool_intended=on pool_active=off reason=db_init_failed)");
+  });
+
+  test("pool 有効 + 余裕あり token (util_5h=0.5) → throttled にならず assignTask 試行される", async () => {
+    const { initTokenDB, insertToken, upsertUsageSnapshot } = await import("./token-store");
+    const tokDb = initTokenDB({
+      dirPath: testDir,
+      dbPath: join(testDir, "tokens.db"),
+    });
+    const t = insertToken(tokDb, {
+      handle: "@a",
+      organization_id: "org-a",
+      auth_hash: "hash",
+      plan: "max-x20",
+      plan_ratio: 20,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+    upsertUsageSnapshot(tokDb, {
+      token_id: t.id,
+      util_5h: 0.5,
+      util_7d: 0.5,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+
+    await createTask("203", "pending-task");
+    const state = await createDaemon(testDir);
+    state.mainBranch = "main";
+    state.bootPhase = "ready";
+    state.tokenDb = tokDb;
+    state.poolPolicy = {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    };
+
+    // rateLimit は単一アカウント観測値が 95% でも、pool 経路は SQLite を見るので throttled=false
+    state.rateLimit = {
+      tokensRemaining: 0,
+      tokensLimit: 0,
+      tokensReset: new Date().toISOString(),
+      inputTokensRemaining: 0,
+      outputTokensRemaining: 0,
+      unified5hUtilization: 0.95,
+      unified7dUtilization: null,
+      unified5hReset: "2030-01-01T00:00:00Z",
+      unified7dReset: null,
+      unifiedStatus: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    state.conductors.set("surface:c1", {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    });
+
+    await scanTasks(state);
+
+    const logContent = await readManagerLog();
+    // throttle log は出ない（pool 余裕があるので）
+    expect(logContent).not.toContain("throttled_rate_limit");
+  });
+
+  test("pool 有効 + 全 token 0.96 → mode=pool ログが出て assignTask が呼ばれない", async () => {
+    const { initTokenDB, insertToken, upsertUsageSnapshot } = await import("./token-store");
+    const tokDb = initTokenDB({
+      dirPath: testDir,
+      dbPath: join(testDir, "tokens.db"),
+    });
+    const t = insertToken(tokDb, {
+      handle: "@a",
+      organization_id: "org-a",
+      auth_hash: "hash",
+      plan: "max-x20",
+      plan_ratio: 20,
+      tags: ["any"],
+      credential_source: "manual",
+    });
+    upsertUsageSnapshot(tokDb, {
+      token_id: t.id,
+      util_5h: 0.96,
+      util_7d: 0.5,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+
+    await createTask("204", "pending-task");
+    const state = await createDaemon(testDir);
+    state.mainBranch = "main";
+    state.bootPhase = "ready";
+    state.tokenDb = tokDb;
+    state.poolPolicy = {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    };
+    state.rateLimit = null;
+
+    state.conductors.set("surface:c1", {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+    });
+
+    await scanTasks(state);
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("throttled_rate_limit");
+    expect(logContent).toContain("mode=pool");
+    expect(logContent).toContain("pool=0/1");
+    expect(logContent).toContain("threshold=95%");
+
+    const { loadTaskState } = await import("./task");
+    const ts = await loadTaskState(testDir);
+    expect(ts["204"]?.status).toBe("ready");
+  });
+});
+
 describe("updateTeamJson: tokenHandle シリアライズ (T323)", () => {
   test("master / conductor / agent の tokenHandle が team.json に出力される", async () => {
     const { createDaemon, updateTeamJson } = await import("./daemon");

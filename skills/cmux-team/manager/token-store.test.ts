@@ -33,6 +33,7 @@ import {
   updateTokenPlan,
   updateTokenPromoteFields,
   selectToken,
+  canSelectAnyToken,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -1684,7 +1685,6 @@ describe("selectToken (T335: 受け入れ条件 Project A/C シナリオ)", () =
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // selectToken (T369: stale snapshot の util リセット時刻反映)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1869,5 +1869,94 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     });
     const sel = selectToken(db, "h-tc8");
     expect(sel?.token.handle).toBe("@k8");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// canSelectAnyToken (T367: pool admit peek)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("canSelectAnyToken (T367)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h = 0.1, util7d = 0.1): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  test("admit 候補が 1 つ以上ある → true", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@a", organization_id: "org-a", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.5, 0.5);
+    expect(canSelectAnyToken(db, "h", ["any"])).toBe(true);
+  });
+
+  test("全 token が exclude → false", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@a", organization_id: "org-a", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.5, 0.5);
+    expect(
+      canSelectAnyToken(db, "h", {
+        projectTags: ["any"],
+        projectDefault: null,
+        include: [],
+        exclude: ["@a"],
+        isOss: false,
+        ossDefault: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("lease 取得しない（複数回呼んでも同じ結果）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@a", organization_id: "org-a", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.5, 0.5);
+    expect(canSelectAnyToken(db, "h", ["any"])).toBe(true);
+    expect(canSelectAnyToken(db, "h", ["any"])).toBe(true);
+    // lease テーブルに行が残っていないことを確認
+    const rows = db.prepare("SELECT COUNT(*) AS n FROM leases").get() as { n: number };
+    expect(rows.n).toBe(0);
+  });
+
+  test("default 昇格: selectable=0 でも default 一致なら admit", () => {
+    const t = insertToken(
+      db,
+      makeToken({
+        handle: "@discovered",
+        organization_id: "org-d",
+        selectable: false,
+        credential_source: "auto-discover",
+      }),
+    );
+    seedFreshSnapshot(t.id, 0.5, 0.5);
+    expect(
+      canSelectAnyToken(db, "h", {
+        projectTags: ["any"],
+        projectDefault: "@discovered",
+        include: [],
+        exclude: [],
+        isOss: false,
+        ossDefault: null,
+      }),
+    ).toBe(true);
+  });
+
+  test("util_5h=0.96 のみ → false", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@a", organization_id: "org-a", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.96, 0.5);
+    expect(canSelectAnyToken(db, "h", ["any"])).toBe(false);
   });
 });

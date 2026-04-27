@@ -843,7 +843,11 @@ function normalizePolicy(policy: SelectTokenPolicy | string[] | undefined): Sele
 }
 
 /**
- * tokens.db から最適トークンを選択して 120 秒の lease を取得する（T321 / T335）。
+ * admit 判定の純粋抽出（T367）。
+ *
+ * `selectToken` から lease 取得・スコア計算・候補ソートを除いた admit ループと同一ロジックで
+ * candidates 配列を返す。`canSelectAnyToken` と `selectToken` の両方が同じこの関数を呼ぶことで、
+ * pool-throttle と spawn-agent の admit 整合性が構造的に保証される（T367）。
  *
  * 選択ロジック（T335 改訂、優先順位）:
  *  1. **exclude**: handle が `policy.exclude` に含まれる token は最優先で除外
@@ -862,24 +866,17 @@ function normalizePolicy(policy: SelectTokenPolicy | string[] | undefined): Sele
  *     - `policy.isOss=true` → admit（exclude のみ尊重、tag 不問）
  *     - 通常 tag マッチ（`token.tags` が "any" を含む / `projectTags` が "any" / 交集合あり）→ admit
  *  8. **score 最小**: `0.3 * effUtil5h + 0.7 * effUtil7d`（null は 0 扱い）
- *  9. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL
+ *  9. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL（`selectToken` のみ。`canSelectAnyToken` は peek）
  *
- * **後方互換**: 第 3 引数に `string[]` を渡すと旧 T321 シグネチャとして解釈される
- * （`{ projectTags, projectDefault: null, include: [], exclude: [], isOss: false, ossDefault: null }`）。
- *
- * @returns 選択結果 or null（候補なし / lease 取得失敗）
+ * 副作用なし。`expireLeases` を呼ばない（呼び出し側の責務）。
  */
-export function selectToken(
+function admitCandidates(
   db: Database,
-  holder: string,
-  policy: SelectTokenPolicy | string[] = ["any"],
-  nowIso: string = new Date().toISOString(),
-): SelectedToken | null {
-  const p = normalizePolicy(policy);
+  policy: SelectTokenPolicy,
+  nowIso: string,
+): Array<{ token: Token; score: number }> {
   const effectiveDefault: string | null =
-    p.projectDefault !== null ? p.projectDefault : p.isOss ? p.ossDefault : null;
-
-  expireLeases(db, nowIso);
+    policy.projectDefault !== null ? policy.projectDefault : policy.isOss ? policy.ossDefault : null;
 
   const now = new Date(nowIso).getTime();
   const staleThresholdMs = 30 * 60 * 1000;
@@ -891,9 +888,9 @@ export function selectToken(
       .map((r) => r.token_id),
   );
 
-  const projectTagSet = new Set(p.projectTags);
-  const includeSet = new Set(p.include);
-  const excludeSet = new Set(p.exclude);
+  const projectTagSet = new Set(policy.projectTags);
+  const includeSet = new Set(policy.include);
+  const excludeSet = new Set(policy.exclude);
   const candidates: Array<{ token: Token; score: number }> = [];
 
   for (const tok of tokens) {
@@ -940,7 +937,7 @@ export function selectToken(
       admitted = true;
     } else if (includeSet.has(tok.handle)) {
       admitted = true;
-    } else if (p.isOss) {
+    } else if (policy.isOss) {
       // OSS は selectable=1 なら tags 不問で admit（M2 確定）
       admitted = true;
     } else {
@@ -957,6 +954,66 @@ export function selectToken(
     candidates.push({ token: tok, score });
   }
 
+  return candidates;
+}
+
+/**
+ * pool に admit 可能な token が 1 つでもあるかを判定する peek 関数（T367）。
+ *
+ * `selectToken` の admit ロジック（exclude / lease / stale / blocker > 0.95 / default 昇格 /
+ * include / OSS / tag マッチ）を共有する。lease は取得しない。
+ *
+ * 副作用: `expireLeases` のみ（既存の selectToken と同じ。pool DB 一貫性維持に必要）。
+ *
+ * `holder` は admit 判定では使わないが API 一貫性のため取る（将来の holder-aware policy 追加余地）。
+ *
+ * @returns true = admit 候補が 1 つ以上ある（throttled=false）
+ */
+export function canSelectAnyToken(
+  db: Database,
+  _holder: string,
+  policy: SelectTokenPolicy | string[] = ["any"],
+  nowIso: string = new Date().toISOString(),
+): boolean {
+  const p = normalizePolicy(policy);
+  expireLeases(db, nowIso);
+  return admitCandidates(db, p, nowIso).length > 0;
+}
+
+/**
+ * tokens.db から最適トークンを選択して 120 秒の lease を取得する（T321 / T335）。
+ *
+ * 選択ロジック（T335 改訂、優先順位）:
+ *  1. **exclude**: handle が `policy.exclude` に含まれる token は最優先で除外
+ *  2. **default の runtime 昇格**: `effectiveDefault = projectDefault ?? (isOss ? ossDefault : null)`
+ *     と一致する handle は **`selectable=0` でも runtime で候補化**（DB 不変。spawn-agent ごとに in-memory 判定）。
+ *     副作用ゼロ・auto-discover 経路と相互汚染しない。複数 spawn の競合は 120 秒 lease で吸収する
+ *  3. **selectable=0 の他 token は候補外**（default 以外の non-selectable は素通し）
+ *  4. **lease / stale / util_5h>0.95 ブロッカー**は従来通り除外
+ *  5. **admit 判定**:
+ *     - `effectiveDefault` 一致 → 無条件 admit
+ *     - `policy.include` に含まれる → tags 不問で admit
+ *     - `policy.isOss=true` → admit（exclude のみ尊重、tag 不問）
+ *     - 通常 tag マッチ（`token.tags` が "any" を含む / `projectTags` が "any" / 交集合あり）→ admit
+ *  6. **score 最小**: `0.3 * util_5h + 0.7 * util_7d`（null は 0 扱い）
+ *  7. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL
+ *
+ * **後方互換**: 第 3 引数に `string[]` を渡すと旧 T321 シグネチャとして解釈される
+ * （`{ projectTags, projectDefault: null, include: [], exclude: [], isOss: false, ossDefault: null }`）。
+ *
+ * @returns 選択結果 or null（候補なし / lease 取得失敗）
+ */
+export function selectToken(
+  db: Database,
+  holder: string,
+  policy: SelectTokenPolicy | string[] = ["any"],
+  nowIso: string = new Date().toISOString(),
+): SelectedToken | null {
+  const p = normalizePolicy(policy);
+
+  expireLeases(db, nowIso);
+
+  const candidates = admitCandidates(db, p, nowIso);
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => a.score - b.score);

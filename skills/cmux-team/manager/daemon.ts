@@ -39,6 +39,7 @@ import type { FsmEvent, ConductorCtx, ConductorStatus } from "./state-machine/ev
 import { initTokenDB, releaseLeaseByHolder } from "./token-store";
 // T351: dashboard / CLI で共有する pool snapshot 純関数
 import { buildPoolSummary, type PoolSummary } from "./pool-summary";
+import { isThrottled5h, countPoolTokens } from "./pool-throttle";
 
 export interface TaskSummary {
   id: string;
@@ -132,6 +133,17 @@ export interface DaemonState {
    * `refreshPoolSnapshot(state)` がメインループ毎に再計算する。
    */
   pool: PoolSummary | null;
+  /**
+   * T367: pool ON で `selectToken` / `canSelectAnyToken` に渡す合成 policy。
+   * cmdStart で `buildSelectTokenPolicy(PROJECT_ROOT)` を 1 度実行してキャッシュする。
+   * pool OFF / 構築失敗時は null。runtime config 切替には追従しない（起動時 1 回固定 + diagnostic）。
+   */
+  poolPolicy: import("./token-store").SelectTokenPolicy | null;
+  /**
+   * T367: pool ON config だが `initTokenDB()` が失敗して `tokenDb=null` のまま運用中であることを示すフラグ。
+   * scanTasks の throttle ログに `pool_intended=on pool_active=off reason=db_init_failed` を付加する。
+   */
+  tokenDbInitFailed: boolean;
 }
 
 /**
@@ -386,6 +398,8 @@ export async function createDaemon(
     openCodeServerProcess: null,
     tokenDb: null,
     pool: null,
+    poolPolicy: null,
+    tokenDbInitFailed: false,
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
@@ -2727,17 +2741,34 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     notifyStateChanged("daemon.ts:scanTasks:task-list-changed");
   }
 
-  // === スロットリングガード ===
-  // stale（リセット時刻を過ぎた復元値）はガードしない。次の API 応答を待つ。
-  const throttled5h =
-    !isStale5h(state.rateLimit) &&
-    (state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD;
+  // === スロットリングガード（T367 pool-aware）===
+  // pool 有効時は canSelectAnyToken 経由で admit 候補ゼロを throttled とする。
+  // pool 無効時は従来通り `unified5hUtilization >= THROTTLE_5H_THRESHOLD` を見る。
+  // stale（リセット時刻を過ぎた復元値）は pool 無効経路でのみガード対象（pool 有効経路は SQLite が真実）。
+  const throttled5h = isThrottled5h(state.tokenDb, state.rateLimit, {
+    running: state.running,
+    bootReady: state.bootPhase === "ready",
+    policy: state.poolPolicy ?? undefined,
+  });
   if (throttled5h && allExecutable.length > 0) {
-    const util = state.rateLimit!.unified5hUtilization!;
-    const reset = state.rateLimit!.unified5hReset;
-    await log("throttled_rate_limit",
-      `5h_utilization=${(util * 100).toFixed(1)}% threshold=${THROTTLE_5H_THRESHOLD * 100}% reset=${reset ?? "unknown"} skipped_tasks=${allExecutable.length}`
-    );
+    const util = state.rateLimit?.unified5hUtilization ?? null;
+    const reset = state.rateLimit?.unified5hReset ?? null;
+    const utilStr = util != null ? `${(util * 100).toFixed(1)}%` : "n/a";
+    if (state.tokenDb !== null && state.poolPolicy) {
+      const c = countPoolTokens(state.tokenDb, state.poolPolicy);
+      await log(
+        "throttled_rate_limit",
+        `mode=pool pool=${c.available}/${c.total} selectable=${c.selectable} stale=${c.stale} 5h_utilization=${utilStr} threshold=95% reset=${reset ?? "unknown"} skipped_tasks=${allExecutable.length}`,
+      );
+    } else {
+      const intended = state.tokenDbInitFailed
+        ? " (pool_intended=on pool_active=off reason=db_init_failed)"
+        : "";
+      await log(
+        "throttled_rate_limit",
+        `mode=single${intended} 5h_utilization=${utilStr} threshold=${THROTTLE_5H_THRESHOLD * 100}% reset=${reset ?? "unknown"} skipped_tasks=${allExecutable.length}`,
+      );
+    }
     return;
   }
 
@@ -3738,7 +3769,17 @@ function formatResetRemaining(resetIso: string | null): string {
 }
 
 function computeSidebarStatus(
-  state: Pick<DaemonState, "conductors" | "rateLimit" | "pendingTasks" | "openTasks">,
+  state: Pick<
+    DaemonState,
+    | "conductors"
+    | "rateLimit"
+    | "pendingTasks"
+    | "openTasks"
+    | "tokenDb"
+    | "running"
+    | "bootPhase"
+    | "poolPolicy"
+  >,
   prevCategory: string | null,
 ): SidebarStatus {
   const conductors = [...state.conductors.values()];
@@ -3755,12 +3796,22 @@ function computeSidebarStatus(
     };
   }
 
-  // 2. スロットリング
-  // stale な復元値では throttle 判定を行わない（§2-4）。5h 軸のみを参照する（T281）。
+  // 2. スロットリング（T367 pool-aware）
+  // pool 有効時は canSelectAnyToken の真偽が真実。pool 無効時は従来挙動を完全保持。
+  // `unifiedStatus === "rate_limited"` の OR は **pool 無効経路でのみ** 上乗せする
+  // （pool 有効時は SQLite の状態が単一アカウントの観測値より優先される）。
+  const baseThrottled = isThrottled5h(state.tokenDb, state.rateLimit, {
+    running: state.running,
+    bootReady: state.bootPhase === "ready",
+    policy: state.poolPolicy ?? undefined,
+  });
   const throttled =
-    !isStale5h(state.rateLimit) &&
-    ((state.rateLimit?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
-      || state.rateLimit?.unifiedStatus === "rate_limited");
+    baseThrottled ||
+    (state.tokenDb === null &&
+      state.running &&
+      state.bootPhase === "ready" &&
+      !isStale5h(state.rateLimit) &&
+      state.rateLimit?.unifiedStatus === "rate_limited");
   if (throttled) {
     const remaining = formatResetRemaining(state.rateLimit?.unified5hReset ?? null);
     return {

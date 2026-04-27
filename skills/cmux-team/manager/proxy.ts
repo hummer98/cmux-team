@@ -13,7 +13,7 @@ import { notifyStateChanged } from "./eventBus";
 import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
-import { persistRateLimit, isStale5h } from "./rate-limit-persistence";
+import { persistRateLimit } from "./rate-limit-persistence";
 import {
   insertApiUsage,
   insertRateLimitSnapshot,
@@ -26,7 +26,9 @@ import {
   getLatestUsageSnapshot,
   upsertUsageSnapshot,
 } from "./token-store";
-import { isTokenPoolEnabled } from "./config";
+import { isTokenPoolEnabled, buildSelectTokenPolicy } from "./config";
+import { isThrottled5h, countPoolTokens } from "./pool-throttle";
+import type { SelectTokenPolicy } from "./token-store";
 import { createHash } from "crypto";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -408,6 +410,17 @@ export async function start(
   const tokenPoolEnabled = tokenPoolDecision.enabled;
   log("proxy_token_pool_resolved", `enabled=${tokenPoolEnabled} source=${tokenPoolDecision.source}`).catch(() => {});
 
+  // T367: pool-aware throttle 判定用の policy を proxy 起動時にクロージャ束縛する。
+  // /rate-limit ハンドラから呼ぶ canSelectAnyToken に渡す。pool OFF / 構築失敗時は null。
+  let cachedPoolPolicy: SelectTokenPolicy | null = null;
+  if (tokenPoolEnabled) {
+    try {
+      cachedPoolPolicy = await buildSelectTokenPolicy(projectRoot);
+    } catch (e: any) {
+      log("proxy_pool_policy_failed", `err=${e?.message ?? e}`).catch(() => {});
+    }
+  }
+
   // 前回ポートの読み取り（daemon リロード時に同じポートを再利用）
   let preferredPort = 0;
   try {
@@ -481,17 +494,21 @@ export async function start(
               unified7dReset: null,
               unifiedStatus: null,
               resetRemaining: null,
+              pool: null,
             }), { headers: jsonHeaders });
           }
           const state = opts.getState();
           const rl = state.rateLimit;
-          // dashboard.tsx 準拠: utilization >= threshold && running && bootPhase === "ready"
-          // stale な復元値ではスロットル判定を無効化する（§2-4）。5h 軸のみを参照する（T281）。
-          const throttled =
-            !isStale5h(rl)
-            && (rl?.unified5hUtilization ?? 0) >= THROTTLE_5H_THRESHOLD
-            && !!state.running
-            && state.bootPhase === "ready";
+          // T367: pool-aware throttle 判定。pool 有効時は canSelectAnyToken の真偽が真実、
+          // pool 無効時は従来挙動（unified5hUtilization >= THROTTLE_5H_THRESHOLD）を完全保持。
+          const db = tokenPoolEnabled ? getTokensDB() : null;
+          const throttled = isThrottled5h(db, rl, {
+            running: !!state.running,
+            bootReady: state.bootPhase === "ready",
+            policy: cachedPoolPolicy ?? undefined,
+          });
+          const poolInfo =
+            db !== null && cachedPoolPolicy !== null ? countPoolTokens(db, cachedPoolPolicy) : null;
           const rawReset5h = rl?.unified5hReset ?? null;
           const rawReset7d = rl?.unified7dReset ?? null;
           const remaining = formatResetRemaining(rawReset5h);
@@ -505,6 +522,7 @@ export async function start(
             unified7dReset: toEpochSec(rawReset7d),
             unifiedStatus: rl?.unifiedStatus ?? null,
             resetRemaining,
+            pool: poolInfo,
           }), { headers: jsonHeaders });
         }
       }

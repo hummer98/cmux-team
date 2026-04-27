@@ -244,6 +244,54 @@ export function resolveGlobalTokenPool(
 }
 
 /**
+ * `.team/config.json` + global config + project context (git remote / OSS 判定) を合成して
+ * `SelectTokenPolicy` を構築する（T367）。
+ *
+ * `selectToken` / `canSelectAnyToken` の policy 引数として直接渡せる形で返す。
+ * spawn-agent と daemon (pool-throttle) の両方が同じ関数を呼ぶことで、
+ * admit 判定の構造的整合性を保証する（design-review-r2 Major #N1 対応）。
+ *
+ * - 失敗時は `["any"]` / `isOss=false` の安全 fallback（resolveProjectContext と同方針）
+ * - resolveProjectContext は git/network を参照するため、daemon 起動時の cache では
+ *   network 復旧に追従しない（plan §0.1 確定: 起動時 1 回固定 + diagnostic ログ）
+ *
+ * @returns daemon 起動時 / spawn-agent ごとに同じシグネチャで取得可能な policy。失敗しても throw しない。
+ */
+export async function buildSelectTokenPolicy(
+  projectRoot: string,
+): Promise<import("./token-store").SelectTokenPolicy> {
+  // 動的 import で循環依存を避ける（config.ts → token-store.ts は許容、逆は禁止）
+  const { resolveProjectContext } = await import("./project-tags");
+
+  const [projectConfig, globalConfig] = await Promise.all([
+    loadConfig(projectRoot),
+    loadGlobalConfig(),
+  ]);
+  const projectPolicy = resolveProjectTokenPool(projectConfig);
+  const globalPolicy = resolveGlobalTokenPool(globalConfig);
+
+  let projectTags: string[];
+  let isOss: boolean;
+  try {
+    const ctx = await resolveProjectContext(projectRoot, globalPolicy.primaryOrgs);
+    projectTags = ctx.projectTags;
+    isOss = ctx.isOss;
+  } catch {
+    projectTags = ["any"];
+    isOss = false;
+  }
+
+  return {
+    projectTags,
+    projectDefault: projectPolicy.default,
+    include: projectPolicy.include,
+    exclude: projectPolicy.exclude,
+    isOss,
+    ossDefault: globalPolicy.ossDefault,
+  };
+}
+
+/**
  * `.team/config.json` を読み込む。存在しない / 壊れている時は空オブジェクトを返す。
  */
 export async function loadConfig(projectRoot: string): Promise<TeamConfig> {
