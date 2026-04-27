@@ -11,6 +11,10 @@ Multi-agent development orchestration with Claude Code + cmux.
 
 **[日本語版 README はこちら](README.ja.md)**
 
+## Demo
+
+https://github.com/user-attachments/assets/1d402a69-f48c-4a43-b52d-9c80f0f90ea1
+
 ## Why cmux-team?
 
 Claude Code's built-in sub-agents (the Agent tool) are useful, but **you can't see what they're doing**. You only get the final result — the process is a black box.

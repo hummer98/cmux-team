@@ -11,6 +11,10 @@ Claude Code + cmux によるマルチエージェント開発オーケストレ�
 
 **[English README](README.md)**
 
+## デモ
+
+https://github.com/user-attachments/assets/1d402a69-f48c-4a43-b52d-9c80f0f90ea1
+
 ## なぜ cmux-team?
 
 Claude Code の組み込みサブエージェント（Agent ツール）は便利ですが、**中で何をしているか見えません**。結果だけが返ってきて、途中経過はブラックボックスです。
