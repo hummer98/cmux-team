@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-04-27
+
+### Changed
+
+- **TUI ヘッダー右上の 5h/7d 利用率インジケータを token pool capacity に置換（T363）**。dashboard ヘッダー右側に表示していた直近 5 時間 / 7 日の API 使用率を廃し、現在の token pool 利用可能数 / 全体 / 次回 reset 時刻の表示に差し替えた。pool capacity が運用上の一次メトリクスになったため、ヘッダーの一等地を pool 表示に統一する
+
 ## [4.13.0] - 2026-04-27
 
 ### Added
