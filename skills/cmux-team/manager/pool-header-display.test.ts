@@ -5,7 +5,7 @@
  *
  * - case 1-7: capacityPct と色閾値（>= 100 green / >= 40 yellow / < 40 red）
  * - case 8-10: nextReset の整形（remainingMs / deltaPct 符号 / <1m）
- * - case 11: parts[0].group === true（rate-limit-display と整合）
+ * - case 11: parts[0]?.group === true（rate-limit-display と整合）
  */
 import { describe, test, expect } from "bun:test";
 import { buildPoolHeaderDisplay } from "./pool-header-display";
@@ -30,33 +30,33 @@ describe("buildPoolHeaderDisplay (T363)", () => {
   test("case 2: capacityPct=173, nextReset=null → green", () => {
     const out = buildPoolHeaderDisplay(makeSummary(173));
     expect(out.parts).toHaveLength(1);
-    expect(out.parts[0].text).toContain("pool capacity: 173%");
-    expect(out.parts[0].color).toBe("green");
+    expect(out.parts[0]?.text).toContain("pool capacity: 173%");
+    expect(out.parts[0]?.color).toBe("green");
   });
 
   test("case 3: capacityPct=60 → yellow", () => {
     const out = buildPoolHeaderDisplay(makeSummary(60));
-    expect(out.parts[0].color).toBe("yellow");
+    expect(out.parts[0]?.color).toBe("yellow");
   });
 
   test("case 4: capacityPct=30 → red", () => {
     const out = buildPoolHeaderDisplay(makeSummary(30));
-    expect(out.parts[0].color).toBe("red");
+    expect(out.parts[0]?.color).toBe("red");
   });
 
   test("case 5: capacityPct=100 境界 → green (>= 100%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(100));
-    expect(out.parts[0].color).toBe("green");
+    expect(out.parts[0]?.color).toBe("green");
   });
 
   test("case 6: capacityPct=40 境界 → yellow (40-100%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(40));
-    expect(out.parts[0].color).toBe("yellow");
+    expect(out.parts[0]?.color).toBe("yellow");
   });
 
   test("case 7: capacityPct=39.9 → red (< 40%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(39.9));
-    expect(out.parts[0].color).toBe("red");
+    expect(out.parts[0]?.color).toBe("red");
   });
 
   test("case 8: nextReset 有 → next reset part が追加される (gray)", () => {
@@ -68,12 +68,12 @@ describe("buildPoolHeaderDisplay (T363)", () => {
     });
     const out = buildPoolHeaderDisplay(summary);
     expect(out.parts).toHaveLength(2);
-    expect(out.parts[1].text).toContain("next reset:");
-    expect(out.parts[1].text).toContain("@kddi");
-    expect(out.parts[1].text).toContain("5h");
-    expect(out.parts[1].text).toContain("in 30m");
-    expect(out.parts[1].text).toContain("(+20 pts)");
-    expect(out.parts[1].color).toBe("gray");
+    expect(out.parts[1]?.text).toContain("next reset:");
+    expect(out.parts[1]?.text).toContain("@kddi");
+    expect(out.parts[1]?.text).toContain("5h");
+    expect(out.parts[1]?.text).toContain("in 30m");
+    expect(out.parts[1]?.text).toContain("(+20 pts)");
+    expect(out.parts[1]?.color).toBe("gray");
   });
 
   test("case 9: deltaPct < 0 → '(-N pts)', deltaPct === 0 → '(+0 pts)'", () => {
@@ -85,7 +85,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
         deltaPct: -5,
       }),
     );
-    expect(negative.parts[1].text).toContain("(-5 pts)");
+    expect(negative.parts[1]?.text).toContain("(-5 pts)");
 
     const zero = buildPoolHeaderDisplay(
       makeSummary(80, {
@@ -95,7 +95,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
         deltaPct: 0,
       }),
     );
-    expect(zero.parts[1].text).toContain("(+0 pts)");
+    expect(zero.parts[1]?.text).toContain("(+0 pts)");
   });
 
   test("case 10: remainingMs < 60_000 → '<1m'", () => {
@@ -107,12 +107,12 @@ describe("buildPoolHeaderDisplay (T363)", () => {
         deltaPct: 10,
       }),
     );
-    expect(out.parts[1].text).toContain("in <1m");
+    expect(out.parts[1]?.text).toContain("in <1m");
   });
 
-  test("case 11: parts[0].group === true (dashboard 側の間隔挿入が rate-limit と整合)", () => {
+  test("case 11: parts[0]?.group === true (dashboard 側の間隔挿入が rate-limit と整合)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(50));
-    expect(out.parts[0].group).toBe(true);
+    expect(out.parts[0]?.group).toBe(true);
   });
 
   // 追加: formatRelativeDuration の cross-validate（pool-status-header.ts と等価）
@@ -132,7 +132,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
           deltaPct: 0,
         }),
       );
-      expect(out.parts[1].text).toContain(`in ${expected}`);
+      expect(out.parts[1]?.text).toContain(`in ${expected}`);
     }
   });
 });
