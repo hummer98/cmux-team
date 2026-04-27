@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.14.1] - 2026-04-27
+
+### Fixed
+
+- **`hoursUntil` が Unix epoch 秒文字列形式の reset 時刻を parse できず、token pool capacity の表示が膨大化していたバグを修正**。Anthropic API のレート制限ヘッダーは ISO 文字列と Unix epoch 秒文字列の両形式で reset を返すが、`hoursUntil` が ISO のみ前提だったため epoch 秒（例 `"1777233000"`）が `Invalid Date` になり常に null を返していた。結果として全トークンの reset が null 扱いとなり fallback `(1.0 * plan_ratio) / FULL_WEEK_HOURS` が適用され、plan_ratio=20 のトークンが 3 本あると pool capacity が 300% と表示されていた。`proxy.ts` の `toEpochSec` / `formatResetRemaining` と同じ両形式対応に修正
+- **`ANTHROPIC_CUSTOM_HEADERS` の区切り文字を改行に修正して role/surface ヘッダー汚染を停止（T355）**。公式仕様（[code.claude.com/docs/en/llm-gateway](https://code.claude.com/docs/en/llm-gateway)）では `ANTHROPIC_CUSTOM_HEADERS` は改行 (`\n`) 区切りの `Key: Value` ペアだが、Master / Conductor 起動時にカンマ + 半角スペースで連結していたため SDK が全体を 1 ヘッダー値として送信し、proxy 側で `x-cmux-role` が `"master, x-cmux-surface: surface:N"` のような汚染値を拾い、`api_usage.role` 列に汚染データが蓄積されていた。Master / Conductor 起動時の `ANTHROPIC_CUSTOM_HEADERS` 指定を改行区切りに直し、main.test.ts / proxy.test.ts に regression テストを追加した（既存の DB 汚染データの物理 migration は別タスクの正規化 SQL 側で吸収）
+
+### Changed
+
+- **events stream の schema を `docs/spec/10-events-stream.md` として確定（T357）**。Task lifecycle 8 種・Conductor lifecycle 8 種の計 16 イベントを schema v2 として整理し、共通フィールド（`ts` / `event` / `schema_version`）・schema versioning rule・無制限 append + 別タスク GC の retention policy・reader の forward-compatible ガイドラインを定義。`docs/spec/glossary.md` §10 と `docs/spec/00-project-overview.md` 索引表にも追記
+
 ## [4.14.0] - 2026-04-27
 
 ### Changed
