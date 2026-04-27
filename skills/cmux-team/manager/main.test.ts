@@ -1887,13 +1887,13 @@ describe("T211 Phase 4: CMUX_ROLE 完全削除 regression", () => {
 
 // --- T304: x-cmux-role header injection via settings.env ---
 
-describe("generateMasterSettings (T304: x-cmux-role / T323: x-cmux-surface)", () => {
-  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を注入する", async () => {
+describe("generateMasterSettings (T304: x-cmux-role / T323: x-cmux-surface / T355: 改行区切り)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を改行区切りで注入する", async () => {
     const settingsPath = generateMasterSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
-      "x-cmux-role: master, x-cmux-surface: surface:100",
+      "x-cmux-role: master\nx-cmux-surface: surface:100",
     );
   });
 
@@ -1903,13 +1903,13 @@ describe("generateMasterSettings (T304: x-cmux-role / T323: x-cmux-surface)", ()
   });
 });
 
-describe("generateConductorSettings (T304: x-cmux-role / T323: x-cmux-surface)", () => {
-  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を注入する", async () => {
+describe("generateConductorSettings (T304: x-cmux-role / T323: x-cmux-surface / T355: 改行区切り)", () => {
+  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role と x-cmux-surface を改行区切りで注入する", async () => {
     const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
-      "x-cmux-role: conductor, x-cmux-surface: surface:200",
+      "x-cmux-role: conductor\nx-cmux-surface: surface:200",
     );
   });
 
@@ -1925,6 +1925,23 @@ describe("generateAgentSettings (T304: x-cmux-role)", () => {
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: agent");
+  });
+});
+
+// T355 regression: ANTHROPIC_CUSTOM_HEADERS にカンマ区切りが混入していないこと（公式仕様は改行区切り）。
+// カンマ区切りで連結すると Claude Code SDK が全体を 1 ヘッダー値として送信し、
+// proxy 側の `req.headers.get("x-cmux-role")` が "master, x-cmux-surface: surface:N"
+// のような汚染値を拾うため、api_usage.role 列が壊れる。
+describe("T355: ANTHROPIC_CUSTOM_HEADERS は改行区切り（カンマ混入禁止）", () => {
+  test("master / conductor の ANTHROPIC_CUSTOM_HEADERS にカンマ区切りが含まれない", async () => {
+    const masterPath = generateMasterSettings(testDir, "surface:100");
+    const conductorPath = generateConductorSettings(testDir, "surface:200");
+    const master = JSON.parse(await readFile(masterPath, "utf-8"));
+    const conductor = JSON.parse(await readFile(conductorPath, "utf-8"));
+    expect(master.env.ANTHROPIC_CUSTOM_HEADERS).not.toContain(", x-cmux-surface");
+    expect(conductor.env.ANTHROPIC_CUSTOM_HEADERS).not.toContain(", x-cmux-surface");
+    expect(master.env.ANTHROPIC_CUSTOM_HEADERS).toContain("\n");
+    expect(conductor.env.ANTHROPIC_CUSTOM_HEADERS).toContain("\n");
   });
 });
 

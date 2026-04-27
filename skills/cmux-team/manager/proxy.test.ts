@@ -1105,6 +1105,67 @@ describe("proxy", () => {
         delete process.env.ANTHROPIC_API_URL;
       }
     });
+
+    // T355: ANTHROPIC_CUSTOM_HEADERS が改行区切りで送信された場合、
+    // SDK は x-cmux-role と x-cmux-surface を別々のヘッダーとして送る。
+    // proxy はそれらを別々に拾って DB の role / surface 列に分離保存する。
+    // カンマ区切りで連結された場合の汚染値（"master, x-cmux-surface: surface:N"）が
+    // role 列に入り込まないことを保証する regression テスト。
+    test("T355: 分離ヘッダー (x-cmux-role + x-cmux-surface) 送信で DB の role/surface が分離保存される", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_t355",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const handle = await start(testDir, {
+        taskId: "T355",
+        db,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test",
+          "x-cmux-role": "master",
+          "x-cmux-surface": "surface:123",
+        },
+        body: JSON.stringify({ model: "claude-opus-4-7", messages: [] }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T355" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.role).toBe("master");
+      expect(row.surface).toBe("surface:123");
+      // 汚染値（カンマ区切り連結値）が role 列に入っていないことを明示。
+      expect(row.role).not.toContain("x-cmux-surface");
+      expect(row.role).not.toContain(",");
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
   });
 });
 

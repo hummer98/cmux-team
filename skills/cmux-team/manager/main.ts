@@ -1951,10 +1951,11 @@ export function generateMasterSettings(projectRoot: string, surface: string): st
   const settingsPath = join(projectRoot, `.team/prompts/${surface}-master-settings.json`);
   const { busy, stop } = ensureMasterHookScripts(projectRoot);
   const settings: Record<string, any> = {
-    // T304/T323: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別 + surface 識別。
-    // proxy 側は x-cmux-surface 優先で MasterState/ConductorState の tokenHandle を解決する。
+    // T304/T323/T355: ANTHROPIC_CUSTOM_HEADERS は改行区切り（公式仕様 https://code.claude.com/docs/en/llm-gateway）。
+    // カンマ区切りで連結すると SDK が全体を 1 ヘッダー値として送り、proxy が role 列に
+    // "master, x-cmux-surface: surface:N" のような汚染値を保存してしまうため `\n` で分離する。
     env: {
-      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: master, x-cmux-surface: ${surface}`,
+      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: master\nx-cmux-surface: ${surface}`,
     },
     hooks: {
       // T175: SessionStart hook で daemon に masterPid を渡し spawnMasterPidWatcher を起動する。
@@ -2109,9 +2110,10 @@ export function generateConductorSettings(projectRoot: string, surface: string):
   );
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
   const conductorSettings: Record<string, any> = {
-    // T304/T323: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール + surface 識別。
+    // T304/T323/T355: ANTHROPIC_CUSTOM_HEADERS は改行区切り（公式仕様）。
+    // カンマ区切りで連結すると SDK が全体を 1 ヘッダー値として送り role 列が汚染されるため `\n` で分離する。
     env: {
-      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: conductor, x-cmux-surface: ${surface}`,
+      ANTHROPIC_CUSTOM_HEADERS: `x-cmux-role: conductor\nx-cmux-surface: ${surface}`,
     },
     hooks: {
       PreToolUse: [
