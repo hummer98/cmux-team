@@ -63,6 +63,26 @@ export interface NotificationEnrichment {
   notificationType?: string | null;
 }
 
+// T354: unified utilization (5h / 7d) の時系列を記録する。
+// proxy.ts が extractRateLimit 直後に non-null 行で 1 リクエスト 1 レコードで INSERT する。
+// 取得できなかったフィールドは NULL のまま（projection 計算側で null フィルタ）。
+//
+// T354 S3: getProjection5h / getProjection7d はこのテーブルの直近 1 件と
+// 「直近 reset 以降の最古 snapshot」を起点に projection 秒数を算出する。
+export interface RateLimitSnapshotRecord {
+  id?: number;
+  /** snapshot 取得時刻（ISO 8601 UTC、`new Date().toISOString()` を期待） */
+  timestamp: string;
+  /** unified-5h-utilization (0-1)。null は未取得 */
+  unified_5h_utilization?: number | null;
+  /** unified-5h-reset (ISO 8601 文字列もしくは epoch 秒文字列)。null は未取得 */
+  unified_5h_reset?: string | null;
+  /** unified-7d-utilization (0-1)。null は未取得 */
+  unified_7d_utilization?: number | null;
+  /** unified-7d-reset (ISO 8601 文字列もしくは epoch 秒文字列)。null は未取得 */
+  unified_7d_reset?: string | null;
+}
+
 // T305: Anthropic API 呼び出しごとの usage / rate limit を記録する。
 // proxy.ts が /v1/messages（完全一致）のレスポンスから 1 リクエスト 1 レコードで INSERT する。
 // 取得できなかったフィールドは NULL のまま（SUM/AVG 集計で無視される）。
@@ -168,6 +188,15 @@ CREATE TABLE IF NOT EXISTS api_usage (
   ratelimit_requests_reset TEXT,
   error TEXT
 );
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL,
+  unified_5h_utilization REAL,
+  unified_5h_reset TEXT,
+  unified_7d_utilization REAL,
+  unified_7d_reset TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_ts ON rate_limit_snapshots(timestamp);
 `;
 
 const HOOK_SIGNAL_PAYLOAD_LIMIT = 64 * 1024;
@@ -192,6 +221,7 @@ export function initDB(projectRoot: string): Database {
   ensureTaskSessionsColumns(db);
   ensureHookSignalsColumns(db);
   ensureApiUsageColumns(db);
+  ensureRateLimitSnapshotsColumns(db);
   return db;
 }
 
@@ -274,6 +304,35 @@ function ensureApiUsageColumns(db: Database): void {
   );
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_api_usage_surface ON api_usage(surface)",
+  );
+}
+
+/**
+ * T354: 既存 DB の `rate_limit_snapshots` テーブルに列が無ければ ALTER TABLE で追加（冪等）。
+ *
+ * 新規 DB では SCHEMA 内の CREATE TABLE で全列が揃っているため ALTER は走らない。
+ * テーブル自体が無い旧 DB でも CREATE TABLE IF NOT EXISTS が SCHEMA 内で走るため安全。
+ */
+function ensureRateLimitSnapshotsColumns(db: Database): void {
+  const rows = db
+    .prepare("PRAGMA table_info(rate_limit_snapshots)")
+    .all() as Array<{ name: string }>;
+  const existing = new Set(rows.map((r) => r.name));
+  const required: Array<[string, "TEXT" | "REAL"]> = [
+    ["timestamp", "TEXT"],
+    ["unified_5h_utilization", "REAL"],
+    ["unified_5h_reset", "TEXT"],
+    ["unified_7d_utilization", "REAL"],
+    ["unified_7d_reset", "TEXT"],
+  ];
+  for (const [col, type] of required) {
+    if (!existing.has(col)) {
+      db.exec(`ALTER TABLE rate_limit_snapshots ADD COLUMN ${col} ${type}`);
+      console.warn(`[trace-store] rate_limit_snapshots_migrated col=${col}`);
+    }
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_ts ON rate_limit_snapshots(timestamp)",
   );
 }
 
@@ -565,6 +624,212 @@ export function insertApiUsage(db: Database, record: ApiUsageRecord): number {
   return Number(result.lastInsertRowid);
 }
 
+/**
+ * T354 (F1): role 文字列を `master / conductor / agent / unknown` の 4 値に正規化する。
+ * SQL の `aggregateApiUsageByRole` の CASE と完全に同じルールに従う:
+ * - "master" / "master, x-cmux-surface: ..." → "master"
+ * - "conductor" / "conductor:auto-..." → "conductor"
+ * - "agent" / "agent-impl-1234" → "agent"
+ * - その他（NULL / "" / "system" 等） → "unknown"
+ *
+ * caption 表示や JS 側のロール判定で SQL と同じ結果を得たいときに使う（DRY 担保）。
+ * テストで SQL のグルーピング結果と一致することを検証する。
+ */
+export function normalizeRole(
+  raw: string | null | undefined,
+): "master" | "conductor" | "agent" | "unknown" {
+  if (typeof raw !== "string" || raw.length === 0) return "unknown";
+  if (raw.startsWith("master")) return "master";
+  if (raw.startsWith("conductor")) return "conductor";
+  if (raw.startsWith("agent")) return "agent";
+  return "unknown";
+}
+
+// T354: getProjection5h / getProjection7d の戻り値。
+// `utilization` は最新 snapshot の utilization (0-1)、
+// `resetIso` は最新 snapshot の reset 列をそのまま返す（ISO 8601 / epoch 秒文字列）。
+// projection 秒数は (1 - utilization) / rate。0 で「即時枯渇」、null で「計算不能」を表す。
+// リスク計算は呼び出し側（dashboard-metrics）で `computeRiskLevel` を使う。
+export interface ProjectionResult {
+  /** 最新 snapshot の utilization (0-1) */
+  utilization: number;
+  /** 最新 snapshot の reset 列。null は未取得 */
+  resetIso: string | null;
+  /** 「window 開始（reset - windowSec）」起点の枯渇予測秒数。null は計算不能 */
+  longTermProjectedSec: number | null;
+  /** 「直近 reset 以降 かつ now-15min 以降」の最古 snapshot 起点の枯渇予測秒数。
+   *  1 件しかない / Δutil ≤ 0 / Δsec ≤ 0 のとき null */
+  recentProjectedSec: number | null;
+}
+
+/**
+ * reset 列の値（ISO 8601 文字列または epoch 秒文字列）を ms に正規化する。
+ * proxy.ts:toEpochSec / formatResetRemaining と同じロジック。
+ */
+function parseResetMs(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const asNum = Number(raw);
+  if (!isNaN(asNum) && asNum > 1e9) return Math.floor(asNum * 1000);
+  const ms = new Date(raw).getTime();
+  return isNaN(ms) ? null : ms;
+}
+
+/**
+ * T354: 5h / 7d 共通の projection 計算。windowSec で軸を切り替える。
+ *
+ * - long-term: window_start = reset_ms - windowSec、elapsed = now - window_start。
+ *   rate = utilization / elapsed、projection = (1 - utilization) / rate。
+ *   utilization >= 1 のときは即時枯渇として 0 を返す。
+ *   reset_iso 不明 / elapsed <= 0 / utilization <= 0 のときは null。
+ * - recent 15m: 起点 = max(now - 15min, 直近 reset 以降)。
+ *   起点以降かつ最新 snapshot 未満の最古 snapshot を取り、Δutil/Δsec から rate を出す。
+ *   1 件しかない / Δutil ≤ 0 / Δsec ≤ 0 のとき null。
+ *   utilization >= 1 のときは即時枯渇として 0 を返す。
+ */
+function projection(
+  db: Database,
+  utilCol: "unified_5h_utilization" | "unified_7d_utilization",
+  resetCol: "unified_5h_reset" | "unified_7d_reset",
+  windowSec: number,
+  now: number,
+): ProjectionResult | null {
+  const latest = db
+    .prepare(
+      `SELECT timestamp, ${utilCol} AS util, ${resetCol} AS reset
+       FROM rate_limit_snapshots
+       WHERE ${utilCol} IS NOT NULL
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get() as { timestamp: string; util: number; reset: string | null } | undefined;
+
+  if (!latest) return null;
+
+  const utilization = latest.util;
+  const resetIso = latest.reset;
+  const resetMs = parseResetMs(resetIso);
+
+  // ── long-term projection ────────────────────────────────────────────────
+  let longTermProjectedSec: number | null = null;
+  if (utilization >= 1) {
+    longTermProjectedSec = 0;
+  } else if (resetMs !== null && utilization > 0) {
+    const windowStartMs = resetMs - windowSec * 1000;
+    const elapsedSec = (now - windowStartMs) / 1000;
+    if (elapsedSec > 0) {
+      const rate = utilization / elapsedSec;
+      if (rate > 0) {
+        longTermProjectedSec = (1 - utilization) / rate;
+      }
+    }
+  }
+
+  // ── recent 15m projection ───────────────────────────────────────────────
+  let recentProjectedSec: number | null = null;
+  if (utilization >= 1) {
+    recentProjectedSec = 0;
+  } else {
+    const fifteenMinAgoMs = now - 15 * 60 * 1000;
+    let windowStartMs = fifteenMinAgoMs;
+    if (resetMs !== null) {
+      const lastResetMs = resetMs - windowSec * 1000;
+      if (lastResetMs > windowStartMs) windowStartMs = lastResetMs;
+    }
+    const oldest = db
+      .prepare(
+        `SELECT timestamp, ${utilCol} AS util
+         FROM rate_limit_snapshots
+         WHERE ${utilCol} IS NOT NULL
+           AND timestamp >= $sinceIso
+           AND timestamp < $latestTs
+         ORDER BY id ASC LIMIT 1`,
+      )
+      .get({
+        $sinceIso: new Date(windowStartMs).toISOString(),
+        $latestTs: latest.timestamp,
+      }) as { timestamp: string; util: number } | undefined;
+
+    if (oldest) {
+      const dUtil = utilization - oldest.util;
+      const dSec =
+        (Date.parse(latest.timestamp) - Date.parse(oldest.timestamp)) / 1000;
+      if (dUtil > 0 && dSec > 0) {
+        const rate = dUtil / dSec;
+        recentProjectedSec = (1 - utilization) / rate;
+      }
+    }
+  }
+
+  return {
+    utilization,
+    resetIso,
+    longTermProjectedSec,
+    recentProjectedSec,
+  };
+}
+
+/** T354: 5h projection を返す。snapshot ゼロ件なら null。 */
+export function getProjection5h(
+  db: Database,
+  now: number = Date.now(),
+): ProjectionResult | null {
+  return projection(
+    db,
+    "unified_5h_utilization",
+    "unified_5h_reset",
+    5 * 3600,
+    now,
+  );
+}
+
+/** T354: 7d projection を返す。snapshot ゼロ件なら null。 */
+export function getProjection7d(
+  db: Database,
+  now: number = Date.now(),
+): ProjectionResult | null {
+  return projection(
+    db,
+    "unified_7d_utilization",
+    "unified_7d_reset",
+    7 * 86400,
+    now,
+  );
+}
+
+/**
+ * T354: rate_limit_snapshots へ 1 行 INSERT する。
+ * proxy.ts が extractRateLimit から得た RateLimitInfo を渡す。
+ * 5h / 7d util が両方 null の場合は呼び出し側で skip される想定だが、
+ * INSERT 自体はガードしない（呼び出し側責務）。
+ */
+export function insertRateLimitSnapshot(
+  db: Database,
+  record: RateLimitSnapshotRecord,
+): number {
+  const stmt = db.prepare(`
+    INSERT INTO rate_limit_snapshots (
+      timestamp,
+      unified_5h_utilization,
+      unified_5h_reset,
+      unified_7d_utilization,
+      unified_7d_reset
+    ) VALUES (
+      $timestamp,
+      $unified_5h_utilization,
+      $unified_5h_reset,
+      $unified_7d_utilization,
+      $unified_7d_reset
+    )
+  `);
+  const result = stmt.run({
+    $timestamp: record.timestamp,
+    $unified_5h_utilization: record.unified_5h_utilization ?? null,
+    $unified_5h_reset: record.unified_5h_reset ?? null,
+    $unified_7d_utilization: record.unified_7d_utilization ?? null,
+    $unified_7d_reset: record.unified_7d_reset ?? null,
+  });
+  return Number(result.lastInsertRowid);
+}
+
 export function getApiUsage(
   db: Database,
   opts: {
@@ -780,24 +1045,43 @@ export interface BurnRateResult {
 
 /**
  * ロール別に `[sinceIso, untilIso]` 範囲の api_usage を集計する。
- * role が NULL の行は `"unknown"` に fallback される（D8 の方針）。
+ * T354: `master, x-cmux-surface: ...` のような汚染 role が `master` に集約されるよう
+ * `WITH normalized AS (CASE ...)` で正規化してから GROUP BY する。
+ * 値域は `master / conductor / agent / unknown` の 4 値のみに固定される。
+ * ORDER BY も master → conductor → agent → unknown の固定順 → トークン合計降順の二段。
  */
 export function aggregateApiUsageByRole(
   db: Database,
   opts: { sinceIso: string; untilIso: string },
 ): AggregatedRoleRow[] {
   const stmt = db.prepare(`
+    WITH normalized AS (
+      SELECT
+        CASE
+          WHEN role LIKE 'master%'    THEN 'master'
+          WHEN role LIKE 'conductor%' THEN 'conductor'
+          WHEN role LIKE 'agent%'     THEN 'agent'
+          ELSE 'unknown'
+        END AS role,
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens
+      FROM api_usage
+      WHERE timestamp >= $sinceIso AND timestamp <= $untilIso
+    )
     SELECT
-      COALESCE(role, 'unknown') AS role,
+      role,
       COUNT(*) AS requests,
       COALESCE(SUM(input_tokens), 0) AS input,
       COALESCE(SUM(output_tokens), 0) AS output,
       COALESCE(SUM(cache_creation_input_tokens), 0) + COALESCE(SUM(cache_read_input_tokens), 0) AS cache,
       COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
-    FROM api_usage
-    WHERE timestamp >= $sinceIso AND timestamp <= $untilIso
-    GROUP BY COALESCE(role, 'unknown')
-    ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+    FROM normalized
+    GROUP BY role
+    ORDER BY
+      CASE role WHEN 'master' THEN 1 WHEN 'conductor' THEN 2 WHEN 'agent' THEN 3 ELSE 4 END,
+      (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
   `);
   return stmt.all({
     $sinceIso: opts.sinceIso,

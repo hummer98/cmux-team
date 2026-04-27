@@ -14,7 +14,11 @@ import { QueueMessage, THROTTLE_5H_THRESHOLD } from "./schema";
 import type { RateLimitInfo } from "./schema";
 import { formatStatusline, type StatuslineInput, type StatuslineState } from "./statusline";
 import { persistRateLimit, isStale5h } from "./rate-limit-persistence";
-import { insertApiUsage, type ApiUsageRecord } from "./trace-store";
+import {
+  insertApiUsage,
+  insertRateLimitSnapshot,
+  type ApiUsageRecord,
+} from "./trace-store";
 import {
   initTokenDB,
   getTokenByAuthHash,
@@ -351,6 +355,34 @@ function safeInsertApiUsage(db: Database, record: ApiUsageRecord): void {
   }
 }
 
+/**
+ * T354: rate_limit_snapshots に 1 行 INSERT する。
+ * - opts.db が無ければ skip
+ * - rl が null、または 5h/7d util が両方 null なら skip（OAuth 未対応経路で空行を量産しない）
+ * - 例外は握りつぶしてレスポンス転送を止めない
+ */
+function maybeInsertRateLimitSnapshot(
+  db: Database | undefined,
+  rl: RateLimitInfo | null,
+): void {
+  if (!db || !rl) return;
+  if (rl.unified5hUtilization == null && rl.unified7dUtilization == null) return;
+  try {
+    insertRateLimitSnapshot(db, {
+      timestamp: new Date().toISOString(),
+      unified_5h_utilization: rl.unified5hUtilization,
+      unified_5h_reset: rl.unified5hReset,
+      unified_7d_utilization: rl.unified7dUtilization,
+      unified_7d_reset: rl.unified7dReset,
+    });
+  } catch (e: any) {
+    log(
+      "rate_limit_snapshot_insert_failed",
+      `${e?.message ?? "unknown"}`,
+    ).catch(() => {});
+  }
+}
+
 export async function start(
   projectRoot: string,
   opts?: {
@@ -651,24 +683,28 @@ export async function start(
       const isStreaming = contentType.includes("text/event-stream");
 
       if (isStreaming && upstreamRes.body) {
+        // T354: extractRateLimit を 1 度だけ呼び出し、DaemonState 反映 / snapshot INSERT /
+        // tokens.db 更新で同じ rlStreaming を使い回す（design-review F5）。
+        const rlStreaming = extractRateLimit(upstreamRes.headers);
+
         // レート制限ヘッダーを DaemonState に反映
-        if (opts?.getState) {
-          const rl = extractRateLimit(upstreamRes.headers);
-          if (rl) {
-            opts.getState().rateLimit = rl;
-            // 再起動時の stale 判定に使うため `.team/rate-limit.json` へ非同期永続化
-            persistRateLimit(projectRoot, rl).catch((e: any) =>
-              log("rate_limit_persist_failed", e.message).catch(() => {})
-            );
-          }
+        if (opts?.getState && rlStreaming) {
+          opts.getState().rateLimit = rlStreaming;
+          // 再起動時の stale 判定に使うため `.team/rate-limit.json` へ非同期永続化
+          persistRateLimit(projectRoot, rlStreaming).catch((e: any) =>
+            log("rate_limit_persist_failed", e.message).catch(() => {})
+          );
         }
+
+        // T354: rate_limit_snapshots に 1 行 INSERT（streaming path）。
+        maybeInsertRateLimitSnapshot(opts?.db, rlStreaming);
 
         // T320/T323: tokens.db を fire-and-forget で更新（streaming path）。
         // surface / role / getState を渡して master/conductor の tokenHandle を反映する。
         // T341: tokenPoolEnabled で auto-discover INSERT を gate する。
         updateTokensDB(
           authHash,
-          extractRateLimit(upstreamRes.headers),
+          rlStreaming,
           upstreamRes.headers.get("anthropic-organization-id"),
           conductorSurface ?? null,
           role ?? null,
@@ -723,22 +759,25 @@ export async function start(
       const resBody = await upstreamRes.arrayBuffer();
       const duration = Date.now() - startTime;
 
+      // T354: extractRateLimit を 1 度だけ呼び出し、3 経路で同じ rlNonStreaming を使い回す。
+      const rlNonStreaming = extractRateLimit(upstreamRes.headers);
+
       // レート制限ヘッダーを DaemonState に反映
-      if (opts?.getState) {
-        const rl = extractRateLimit(upstreamRes.headers);
-        if (rl) {
-          opts.getState().rateLimit = rl;
-          persistRateLimit(projectRoot, rl).catch((e: any) =>
-            log("rate_limit_persist_failed", e.message).catch(() => {})
-          );
-        }
+      if (opts?.getState && rlNonStreaming) {
+        opts.getState().rateLimit = rlNonStreaming;
+        persistRateLimit(projectRoot, rlNonStreaming).catch((e: any) =>
+          log("rate_limit_persist_failed", e.message).catch(() => {})
+        );
       }
+
+      // T354: rate_limit_snapshots に 1 行 INSERT（非 streaming path）。
+      maybeInsertRateLimitSnapshot(opts?.db, rlNonStreaming);
 
       // T320/T323: tokens.db を fire-and-forget で更新（非 streaming path）。
       // T341: tokenPoolEnabled で auto-discover INSERT を gate する。
       updateTokensDB(
         authHash,
-        extractRateLimit(upstreamRes.headers),
+        rlNonStreaming,
         upstreamRes.headers.get("anthropic-organization-id"),
         conductorSurface ?? null,
         role ?? null,

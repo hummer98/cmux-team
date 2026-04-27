@@ -13,6 +13,7 @@ import {
   resolveProjectTokenPool,
   resolveGlobalTokenPool,
   resolveTokenPoolEnabled,
+  resolveMetricsRefreshIntervalMs,
   loadGlobalConfig,
   type TeamConfig,
   type GlobalConfig,
@@ -337,5 +338,65 @@ describe("resolveTokenPoolEnabled (既存挙動の非回帰)", () => {
       {},
     );
     expect(r).toEqual({ enabled: true, source: "global" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveMetricsRefreshIntervalMs (T354)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("resolveMetricsRefreshIntervalMs (T354)", () => {
+  test("未指定 → default 10_000", () => {
+    expect(resolveMetricsRefreshIntervalMs({})).toBe(10_000);
+  });
+  test("undefined 明示 → default", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: undefined }),
+    ).toBe(10_000);
+  });
+  test("正常値 5_000 → そのまま", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 5_000 }),
+    ).toBe(5_000);
+  });
+  test("正常値 600_000 (上限) → そのまま", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 600_000 }),
+    ).toBe(600_000);
+  });
+  test("下限 1_000 → そのまま", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 1_000 }),
+    ).toBe(1_000);
+  });
+  test("下限未満 999 → default にフォールバック", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 999 }),
+    ).toBe(10_000);
+  });
+  test("上限超 600_001 → default", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 600_001 }),
+    ).toBe(10_000);
+  });
+  test("0 / 負 → default", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: 0 }),
+    ).toBe(10_000);
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: -1 }),
+    ).toBe(10_000);
+  });
+  test("NaN / Infinity → default", () => {
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: NaN }),
+    ).toBe(10_000);
+    expect(
+      resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: Infinity }),
+    ).toBe(10_000);
+  });
+  test("型違反（string）→ default", () => {
+    // @ts-expect-error: 意図的に型違反
+    expect(resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: "5000" })).toBe(10_000);
   });
 });

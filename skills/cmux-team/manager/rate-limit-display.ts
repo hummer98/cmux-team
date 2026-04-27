@@ -89,8 +89,13 @@ export function buildRateLimitDisplay(
   return { parts: [{ text: `TPM: ${pct}% ${bar}`, color }] };
 }
 
-/** 使用率のプログレスバーを1グループ生成。残り時間は GRAY で別パーツ化する。 */
-function buildUtilizationBar(
+/**
+ * 使用率のプログレスバーを 1 グループ生成。残り時間は GRAY で別パーツ化する。
+ * T354: `${label}:${pct.padStart(3)}% ${bar}` で % 桁を 3 桁固定にする
+ *   （`5h:  1%` / `5h: 14%` / `5h:100%` のいずれでも bar 開始位置を揃える）。
+ *   pool tokens セクションも本関数を再利用する。
+ */
+export function buildUtilizationBar(
   label: string,
   utilization: number,
   resetIso: string | null,
@@ -102,7 +107,7 @@ function buildUtilizationBar(
   const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
   const color: RateLimitColor = pct >= 90 ? "red" : pct >= 70 ? "yellow" : "green";
   const parts: RateLimitPart[] = [
-    { text: `${label}: ${pct}% ${bar}`, color, group: true },
+    { text: `${label}:${pct.toString().padStart(3)}% ${bar}`, color, group: true },
   ];
   const remaining = formatResetRemaining(resetIso, now);
   if (remaining) {

@@ -24,7 +24,13 @@ import { t } from "./i18n";
 import { loadArtifacts } from "./artifact";
 import type { ArtifactMeta } from "./artifact";
 import { listProjectInstructions, readProjectInstructions } from "./agent-instructions";
-import { loadConfig, type TeamConfig } from "./config";
+import {
+  loadConfig,
+  resolveMetricsRefreshIntervalMs,
+  resolveProjectTokenPool,
+  type TeamConfig,
+} from "./config";
+import { listTokens, getLatestUsageSnapshot } from "./token-store";
 import type { OverlayRole } from "./schema";
 import { resolveOriginRepo } from "./gh-cache-repo";
 import { resolveGithubToken, tokenHash } from "./gh-cache-auth";
@@ -44,9 +50,14 @@ import {
   aggregateApiUsageByRole,
   aggregateApiUsageByTask,
   getLatestApiUsageRow,
-  getBurnRateWindow,
+  getProjection5h,
+  getProjection7d,
 } from "./trace-store";
-import { buildMetricsRows, type MetricsData } from "./dashboard-metrics";
+import {
+  buildMetricsRows,
+  type MetricsData,
+  type PoolTokenRow,
+} from "./dashboard-metrics";
 // T351: pool capacity / per-surface handle 表示
 import { buildPoolHeaderLines } from "./pool-status-header";
 import { buildPoolHeaderDisplay } from "./pool-header-display";
@@ -59,7 +70,42 @@ const JOURNAL_VISIBLE_LINES = 30;
 const ARTIFACT_VISIBLE_LINES = 12;
 const ISSUE_VISIBLE_LINES = 20;
 const SETTINGS_PREVIEW_LINES = 20;
-const METRICS_VISIBLE_LINES = 30;
+
+/**
+ * T354 (F2): Metrics タブの表示行数を画面サイズから決める純粋関数。
+ *
+ * RESERVED_LINES = ヘッダー / Master / Conductors / Tasks / footer + 余白の合計（実測 ≈ 12-14）。
+ * 過小に取るとスクロール時に下端が切れ、過大に取ると metrics 行が圧迫される。
+ *
+ * テストから差し替えできるよう (a) `process.stdout.rows` と
+ * (b) 環境変数 `CMUX_TEAM_METRICS_VISIBLE_LINES` を引数で受ける。
+ */
+export const RESERVED_LINES = 14;
+
+export function computeMetricsVisibleLines(
+  stdoutRows: number | undefined,
+  envOverride: string | undefined,
+): number {
+  // 環境変数が最優先（NaN / 0 / 負は無視して通常パスへ落とす）
+  if (envOverride !== undefined && envOverride !== "") {
+    const parsed = parseInt(envOverride, 10);
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      return Math.max(8, Math.min(80, parsed));
+    }
+  }
+  const total = typeof stdoutRows === "number" && Number.isFinite(stdoutRows)
+    ? stdoutRows
+    : 30 + RESERVED_LINES;
+  const candidate = total - RESERVED_LINES;
+  return Math.max(8, Math.min(80, candidate));
+}
+
+function getMetricsVisibleLines(): number {
+  return computeMetricsVisibleLines(
+    process.stdout.rows,
+    process.env.CMUX_TEAM_METRICS_VISIBLE_LINES,
+  );
+}
 
 // --- GitHub リポジトリ URL 解決 ---
 
@@ -364,6 +410,14 @@ async function loadSettingsItems(projectRoot: string): Promise<SettingsItem[]> {
     kind: "config",
     label: "sleepPrevention",
     value: cfg.sleepPrevention === false ? "false" : "true (default)",
+  });
+  // T354: Metrics タブの再描画間隔
+  items.push({
+    kind: "config",
+    label: "metricsRefreshIntervalMs",
+    value: `${resolveMetricsRefreshIntervalMs(cfg)}${
+      cfg.metricsRefreshIntervalMs === undefined ? " (default)" : ""
+    }`,
   });
 
   return items;
@@ -1341,6 +1395,11 @@ export async function startDashboard(
   const daemonState = getState();
   let confirmingFullQuit = false;
 
+  // T354: dashboard 内で参照する config の cache。startDashboard 起動時に 1 回だけ
+  // loadConfig し、Settings タブの reload で更新する（Metrics の interval / poolTokens
+  // フィルタはこのキャッシュを参照する）。daemon 稼働中の config 変更は Manager 再起動時に反映。
+  let cachedConfig: TeamConfig = await loadConfig(daemonState.projectRoot);
+
   // OSC 8 ハイパーリンクを有効化（ターミナル自動検出に依存せず明示的に設定）
   process.env.REZI_TERMINAL_SUPPORTS_OSC8 = "1";
 
@@ -1559,11 +1618,12 @@ export async function startDashboard(
             ? (() => {
                 const rows = buildMetricsRows(state.metricsData, state.metricsError);
                 const total = rows.length;
+                const visible = getMetricsVisibleLines();
                 const startIdx = Math.min(
                   state.metricsScrollOffset,
-                  Math.max(0, total - METRICS_VISIBLE_LINES),
+                  Math.max(0, total - visible),
                 );
-                const endIdx = Math.min(startIdx + METRICS_VISIBLE_LINES, total);
+                const endIdx = Math.min(startIdx + visible, total);
                 return rows.slice(startIdx, endIdx);
               })()
             : (() => {
@@ -1763,7 +1823,14 @@ export async function startDashboard(
           return { ...s, issueCursor: Math.min(s.issueCursor + 1, max) };
         }
         case "metrics": {
-          return { ...s, metricsScrollOffset: s.metricsScrollOffset + 1 };
+          // T354 S11: maxOffset で clamp（buildMetricsRows は dashboard.tsx 側で保持する
+          // metricsData/metricsError から都度組み立てて長さを推定する）。
+          const rows = buildMetricsRows(s.metricsData, s.metricsError);
+          const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
+          return {
+            ...s,
+            metricsScrollOffset: Math.min(s.metricsScrollOffset + 1, maxOffset),
+          };
         }
         default:
           return s;
@@ -1900,7 +1967,7 @@ export async function startDashboard(
       }
       if (s.focusedArea === "metrics") {
         const rows = buildMetricsRows(s.metricsData, s.metricsError);
-        const maxOffset = Math.max(0, rows.length - METRICS_VISIBLE_LINES);
+        const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
         return { ...s, metricsScrollOffset: maxOffset };
       }
       return s;
@@ -2003,27 +2070,74 @@ export async function startDashboard(
   // 同じハンドルで read する（better-sqlite3 / bun:sqlite は同プロセス内の
   // multi-statement 使用が安全）。plan.md Decision D9 の旧根拠「別プロセス想定」は
   // 事実と食い違っていたため Rec #1 に従い reuse 方式に倒した。
-  const METRICS_POLL_INTERVAL_MS = 1000;
-  const METRICS_BURN_WINDOW_SEC = 60;
+  // T354: METRICS_POLL_INTERVAL_MS は config 化された（resolveMetricsRefreshIntervalMs）。
   const METRICS_TASK_TOP_N = 5;
   const METRICS_WINDOW_MS = 60 * 60 * 1000; // 直近 1h
+
+  /**
+   * T354 S10: token pool 有効時の selectable token 一覧を PoolTokenRow[] に組み立てる。
+   * pool 無効 / state.tokenDb=null なら null を返す（dashboard-metrics 側で section 自体を非表示）。
+   */
+  function buildPoolTokenRows(daemon: DaemonState, projectConfig: TeamConfig): PoolTokenRow[] | null {
+    if (!daemon.tokenDb || daemon.pool === null) return null;
+    const policy = resolveProjectTokenPool(projectConfig);
+    try {
+      const tokens = listTokens(daemon.tokenDb, { selectableOnly: true });
+      // include で強制候補化された handle を別途取得（selectableOnly=false で全件 → include だけ抽出）
+      const includeSet = new Set(policy.include);
+      const excludeSet = new Set(policy.exclude);
+      let candidates = tokens.filter((t) => !excludeSet.has(t.handle));
+      if (includeSet.size > 0) {
+        const all = listTokens(daemon.tokenDb, { selectableOnly: false });
+        for (const tok of all) {
+          if (
+            includeSet.has(tok.handle) &&
+            !excludeSet.has(tok.handle) &&
+            !candidates.find((c) => c.handle === tok.handle)
+          ) {
+            candidates.push(tok);
+          }
+        }
+      }
+
+      const rows: PoolTokenRow[] = candidates.map((tok) => {
+        const snap = getLatestUsageSnapshot(daemon.tokenDb!, tok.id);
+        return {
+          handle: tok.handle,
+          util5h: snap?.util_5h ?? null,
+          reset5hIso: snap?.reset_5h_at ?? null,
+          util7d: snap?.util_7d ?? null,
+          reset7dIso: snap?.reset_7d_at ?? null,
+          hasSnapshot:
+            snap !== null &&
+            (snap.util_5h !== null || snap.util_7d !== null),
+        };
+      });
+      // util_5h DESC、同 util は handle ASC（plan §2-5 / S14 確認順）
+      rows.sort((a, b) => {
+        const av = a.util5h ?? -1;
+        const bv = b.util5h ?? -1;
+        if (av !== bv) return bv - av;
+        return a.handle.localeCompare(b.handle);
+      });
+      return rows;
+    } catch (e: any) {
+      log("metrics_pool_load_error", e?.message ?? String(e)).catch(() => {});
+      return [];
+    }
+  }
 
   function loadMetricsData(): void {
     const daemon = getState();
     const db = daemon.traceDb;
     if (!db) {
-      // proxy / trace DB 未起動 — no data 表示に倒す
       app.update((s) => ({
         ...s,
         metricsData: {
           nowMs: Date.now(),
-          tokensRemaining: null,
-          tokensLimit: null,
-          tokensResetIso: null,
-          requestsRemaining: null,
-          requestsLimit: null,
-          requestsResetIso: null,
-          burnTokPerSec: 0,
+          projection5h: null,
+          projection7d: null,
+          poolTokens: null,
           roleRows: [],
           taskRows: [],
           latestRowRole: null,
@@ -2048,21 +2162,20 @@ export async function startDashboard(
         limit: METRICS_TASK_TOP_N,
       });
       const latest = getLatestApiUsageRow(db);
-      const burn = getBurnRateWindow(db, METRICS_BURN_WINDOW_SEC);
+      const projection5h = getProjection5h(db, now);
+      const projection7d = getProjection7d(db, now);
 
       const latestTsMs = latest?.timestamp
         ? Date.parse(latest.timestamp)
         : null;
 
+      const poolTokens = buildPoolTokenRows(daemon, cachedConfig);
+
       const metrics: MetricsData = {
         nowMs: now,
-        tokensRemaining: latest?.ratelimit_tokens_remaining ?? null,
-        tokensLimit: latest?.ratelimit_tokens_limit ?? null,
-        tokensResetIso: latest?.ratelimit_tokens_reset ?? null,
-        requestsRemaining: latest?.ratelimit_requests_remaining ?? null,
-        requestsLimit: latest?.ratelimit_requests_limit ?? null,
-        requestsResetIso: latest?.ratelimit_requests_reset ?? null,
-        burnTokPerSec: burn.tokPerSec,
+        projection5h,
+        projection7d,
+        poolTokens,
         roleRows,
         taskRows,
         latestRowRole: latest?.role ?? null,
@@ -2091,9 +2204,11 @@ export async function startDashboard(
     stopMetricsTimer();
     // 即時 1 回
     try { loadMetricsData(); } catch {}
+    // T354: cachedConfig を使う（Manager 再起動を伴わない config 切替には追従しない）。
+    const intervalMs = resolveMetricsRefreshIntervalMs(cachedConfig);
     metricsInterval = setInterval(() => {
       try { loadMetricsData(); } catch {}
-    }, METRICS_POLL_INTERVAL_MS);
+    }, intervalMs);
   }
 
   function stopMetricsTimer(): void {
@@ -2198,6 +2313,13 @@ export async function startDashboard(
     const settingsItems = currentActiveTab === "settings"
       ? await loadSettingsItems(newDaemon.projectRoot)
       : null;
+    // T354: Settings 表示中は cachedConfig も同期して Metrics の interval / pool token
+    //       フィルタが反映されるようにする。
+    if (currentActiveTab === "settings") {
+      try {
+        cachedConfig = await loadConfig(newDaemon.projectRoot);
+      } catch {}
+    }
 
     try {
       app.update((s) => {

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import type { RateLimitInfo } from "./schema";
-import { buildRateLimitDisplay } from "./rate-limit-display";
+import { buildRateLimitDisplay, buildUtilizationBar } from "./rate-limit-display";
 
 const NOW = 1_700_000_000_000; // 固定時刻（ms）
 const NOW_SEC = Math.floor(NOW / 1000);
@@ -174,5 +174,27 @@ describe("buildRateLimitDisplay", () => {
     expect(parts.length).toBe(1);
     expect(parts[0]?.text).toContain("TPM:");
     expect(parts[0]?.color).toBe("green");
+  });
+});
+
+describe("buildUtilizationBar (T354 % padding)", () => {
+  test("1% は padStart(3) で 2 スペース + 1 になる", () => {
+    const { parts } = buildUtilizationBar("5h", 0.01, null, NOW);
+    expect(parts[0]!.text.startsWith("5h:  1% ")).toBe(true);
+  });
+  test("14% は padStart(3) で 1 スペース + 14 になる", () => {
+    const { parts } = buildUtilizationBar("5h", 0.14, null, NOW);
+    expect(parts[0]!.text.startsWith("5h: 14% ")).toBe(true);
+  });
+  test("100% は padStart(3) で 100 (スペースなし)", () => {
+    const { parts } = buildUtilizationBar("5h", 1.0, null, NOW);
+    expect(parts[0]!.text.startsWith("5h:100% ")).toBe(true);
+  });
+  test("1% / 14% / 100% で bar 開始位置（'%' の位置）が同じ", () => {
+    const a = buildUtilizationBar("5h", 0.01, null, NOW).parts[0]!.text;
+    const b = buildUtilizationBar("5h", 0.14, null, NOW).parts[0]!.text;
+    const c = buildUtilizationBar("5h", 1.0, null, NOW).parts[0]!.text;
+    expect(a.indexOf("%")).toBe(b.indexOf("%"));
+    expect(b.indexOf("%")).toBe(c.indexOf("%"));
   });
 });

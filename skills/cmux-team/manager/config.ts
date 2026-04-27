@@ -59,6 +59,15 @@ export interface TeamConfig {
    */
   mainBranch?: string;
   /**
+   * Metrics タブの再描画間隔（ms）。T354 で追加。
+   * - default: 10_000（10s）
+   * - clamp: [1_000, 600_000]（1s 〜 10min）
+   * - 不正値（型違反 / 範囲外）は default に倒す（fail-fast せず warn のみ）
+   *
+   * 1s 未満は CPU 浪費、10min 超は実質手動 reload と変わらないためレンジを切る。
+   */
+  metricsRefreshIntervalMs?: number;
+  /**
    * token pool の有効/無効と policy。T322 で `enabled` のみ追加、T335 で
    * `default` / `include` / `exclude` を拡張。
    *
@@ -296,6 +305,29 @@ export function resolveAutoUpdateMode(
     return { mode: normalizeAutoUpdate(config.autoUpdate), source: "config" };
   }
   return { mode: "off", source: "default" };
+}
+
+/**
+ * Metrics タブの再描画間隔（ms）を解決する（T354）。
+ *
+ * 優先順位: config.metricsRefreshIntervalMs > default(10_000)
+ *
+ * - 数値以外 / 非有限 / 範囲外（< 1_000 / > 600_000）→ default に倒す
+ * - 範囲内の数値 → そのまま返す
+ *
+ * default を下回る値（極端に短い間隔）は CPU 浪費の温床になるため reject。
+ * default を上回る値（10min 超）は手動 reload と変わらないため reject。
+ */
+export function resolveMetricsRefreshIntervalMs(
+  config: Pick<TeamConfig, "metricsRefreshIntervalMs">,
+): number {
+  const DEFAULT_MS = 10_000;
+  const MIN_MS = 1_000;
+  const MAX_MS = 600_000;
+  const raw = config.metricsRefreshIntervalMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_MS;
+  if (raw < MIN_MS || raw > MAX_MS) return DEFAULT_MS;
+  return raw;
 }
 
 /**
