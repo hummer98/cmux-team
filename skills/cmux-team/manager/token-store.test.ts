@@ -683,7 +683,7 @@ describe("computePoolCapacity", () => {
     return new Date(nowMs + h * 3_600_000).toISOString();
   }
 
-  test("ケース 1: x20 満タン、reset 5h → 式基準では 100% (A019 表の 672% と不整合、plan.md §8.3)", () => {
+  test("ケース 1: x20 満タン、reset 5h → 5h ≒ 3360% / 7d ≒ 100% / per_token min=100%", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -695,14 +695,16 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // flow_7d = 1.0 × 20 / 168 = 0.1190..., flow_5h = 1.0 × 20 / 5 = 4.0
-    // min = 0.1190..., cap = 0.1190/0.1190 × 100 = 100
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    // flow_5h = 1.0 × 20 / 5 = 4.0   → cap_5h = 4.0/(20/168)*100 = 3360
+    // flow_7d = 1.0 × 20 / 168 = 0.119  → cap_7d = 100
+    expect(result.capacity_5h_pct).toBeCloseTo(3360, 1);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
     expect(result.per_token.length).toBe(1);
+    // per_token は従来通り min ベース
     expect(result.per_token[0]?.cap_pct).toBeCloseTo(100, 2);
   });
 
-  test("ケース 2: x20 満タン、reset 7d → 100%", () => {
+  test("ケース 2: x20 満タン、両 reset 7d → 5h=100, 7d=100", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -714,10 +716,11 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_5h_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
   });
 
-  test("ケース 3: x20 10% 残、reset 30min → 式基準で ~50% (A019 表 336% と不整合)", () => {
+  test("ケース 3: x20 10% 残、reset 30min → 5h ≒ 3360% / 7d ≒ 50%", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -729,13 +732,15 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // flow_5h = 0.1 × 20 / 0.5 = 4.0
-    // flow_7d = 0.5 × 20 / 168 = 0.0595...
-    // min = 0.0595..., cap ≒ 50%
-    expect(result.capacity_pct).toBeCloseTo(50, 1);
+    // flow_5h = 0.1 × 20 / 0.5 = 4.0   → cap_5h = 3360
+    // flow_7d = 0.5 × 20 / 168 = 0.0595 → cap_7d ≒ 50
+    expect(result.capacity_5h_pct).toBeCloseTo(3360, 1);
+    expect(result.capacity_7d_pct).toBeCloseTo(50, 1);
+    // per_token (min) ≒ 50
+    expect(result.per_token[0]?.cap_pct).toBeCloseTo(50, 1);
   });
 
-  test("ケース 4: x20 10% 残、reset 3h → 式基準で ~50% (A019 表 112% と不整合)", () => {
+  test("ケース 4: x20 10% 残、reset 3h → 5h ≒ 560% / 7d ≒ 50%", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -747,13 +752,13 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // flow_5h = 0.1 × 20 / 3 = 0.6667
-    // flow_7d = 0.5 × 20 / 168 = 0.0595
-    // min = 0.0595, cap ≒ 50%
-    expect(result.capacity_pct).toBeCloseTo(50, 1);
+    // flow_5h = 0.1 × 20 / 3 = 0.6667 → cap_5h = 0.6667/(20/168)*100 = 560
+    // flow_7d = 0.5 × 20 / 168 = 0.0595 → cap_7d ≒ 50
+    expect(result.capacity_5h_pct).toBeCloseTo(560, 0);
+    expect(result.capacity_7d_pct).toBeCloseTo(50, 1);
   });
 
-  test("ケース 5: Pro 満タン、reset 7d → 5%", () => {
+  test("ケース 5: Pro 満タン、reset 7d → 5h=5, 7d=5", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@pro",
@@ -765,11 +770,11 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // flow = 1.0 × 1 / 168 = 0.00595..., cap = 0.00595 / (20/168) × 100 = 5
-    expect(result.capacity_pct).toBeCloseTo(5, 2);
+    expect(result.capacity_5h_pct).toBeCloseTo(5, 2);
+    expect(result.capacity_7d_pct).toBeCloseTo(5, 2);
   });
 
-  test("ケース 6: x20 + Pro 両方満タン 7d → 105%", () => {
+  test("ケース 6: x20 + Pro 両方満タン 7d → 5h=105, 7d=105", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -789,7 +794,8 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    expect(result.capacity_pct).toBeCloseTo(105, 2);
+    expect(result.capacity_5h_pct).toBeCloseTo(105, 2);
+    expect(result.capacity_7d_pct).toBeCloseTo(105, 2);
     expect(result.per_token.length).toBe(2);
   });
 
@@ -815,7 +821,8 @@ describe("computePoolCapacity", () => {
     const result = computePoolCapacity(tokens, NOW);
     expect(result.per_token.length).toBe(1);
     expect(result.per_token[0]?.handle).toBe("@x20");
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_5h_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
   });
 
   test("util が null なら満タン扱い (残量 1.0)", () => {
@@ -830,10 +837,11 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_5h_pct).toBeCloseTo(100, 2);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
   });
 
-  test("reset_5h_at=null は 5h window を skip、7d のみで計算", () => {
+  test("reset_5h_at=null は 5h 側 0 寄与、7d のみで計算", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -845,11 +853,13 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // 5h は skip、flow_7d = 1.0 × 20 / 168 = 0.1190 → cap = 100
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    // 5h reset null → 5h 側 0 寄与
+    // flow_7d = 1.0 × 20 / 168 = 0.1190 → cap_7d = 100
+    expect(result.capacity_5h_pct).toBe(0);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
   });
 
-  test("両 reset が過去 → フル 7d 扱いで plan_ratio / 168 基準", () => {
+  test("両 reset が過去（両 window null 相当） → 5h 側 0、7d 側はフル 7d 相当", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -861,13 +871,15 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // どちらも過去 → skip → フル 7d: 1.0 × 20 / 168 = 0.1190 → cap = 100
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
+    // どちらも skip → 7d 側に (plan_ratio / FULL_WEEK_HOURS) 寄与 = (20/168)/(20/168)*100 = 100
+    expect(result.capacity_5h_pct).toBe(0);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
   });
 
-  test("空配列 → capacity_pct=0, per_token=[]", () => {
+  test("空配列 → capacity_5h_pct=0, capacity_7d_pct=0, per_token=[]", () => {
     const result = computePoolCapacity([], NOW);
-    expect(result.capacity_pct).toBe(0);
+    expect(result.capacity_5h_pct).toBe(0);
+    expect(result.capacity_7d_pct).toBe(0);
     expect(result.per_token).toEqual([]);
   });
 
@@ -875,7 +887,7 @@ describe("computePoolCapacity", () => {
     expect(REFERENCE_FLOW).toBeCloseTo(20 / 168, 6);
   });
 
-  test("reset が極めて近い (1 秒後) → MIN_HOURS (1分) に clamp されノイズで flow が無限大にならない", () => {
+  test("reset が極めて近い (1 秒後) → MIN_HOURS (1分) に clamp、5h は 巨大値だが finite、7d は通常値", () => {
     const tokens: TokenForCapacity[] = [
       {
         handle: "@x20",
@@ -887,10 +899,13 @@ describe("computePoolCapacity", () => {
       },
     ];
     const result = computePoolCapacity(tokens, NOW);
-    // flow_7d が min になるので結果は ~100
-    expect(result.capacity_pct).toBeCloseTo(100, 2);
-    // per_token.cap_pct は finite
+    // 1 秒は MIN_HOURS=1/60h に clamp される。flow_5h = 1.0 × 20 / (1/60) = 1200 → cap_5h = 1200/(20/168)*100 = 1008000
+    expect(Number.isFinite(result.capacity_5h_pct)).toBe(true);
+    expect(result.capacity_5h_pct).toBeGreaterThan(1000);
+    expect(result.capacity_7d_pct).toBeCloseTo(100, 2);
+    // per_token (min ベース) ≒ 100
     expect(Number.isFinite(result.per_token[0]?.cap_pct ?? 0)).toBe(true);
+    expect(result.per_token[0]?.cap_pct).toBeCloseTo(100, 2);
   });
 });
 

@@ -15,7 +15,10 @@ export interface PoolHeaderNextReset {
 }
 
 export interface PoolHeaderInput {
-  capacityPct: number;
+  /** 全 token の 5h flow 合計を REFERENCE_FLOW で正規化したパーセント */
+  capacity5hPct: number;
+  /** 全 token の 7d flow 合計を REFERENCE_FLOW で正規化したパーセント */
+  capacity7dPct: number;
   nextReset: PoolHeaderNextReset | null;
 }
 
@@ -26,7 +29,11 @@ export function buildPoolHeaderLines(input: PoolHeaderInput | null): string[] {
 
   const lines: string[] = [];
   lines.push(buildTopBorder());
-  lines.push(buildContentLine(`pool capacity: ${Math.round(input.capacityPct)}%`));
+  lines.push(
+    buildContentLine(
+      `pool capacity: 5h ${Math.round(input.capacity5hPct)}% / 7d ${Math.round(input.capacity7dPct)}%`,
+    ),
+  );
   if (input.nextReset) {
     const r = input.nextReset;
     const remain = formatRelativeDuration(r.remainingMs);

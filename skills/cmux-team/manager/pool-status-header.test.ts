@@ -8,22 +8,37 @@ describe("buildPoolHeaderLines", () => {
 
   test("capacity のみ（next reset null）", () => {
     const input: PoolHeaderInput = {
-      capacityPct: 173,
+      capacity5hPct: 173,
+      capacity7dPct: 173,
       nextReset: null,
     };
     const lines = buildPoolHeaderLines(input);
     expect(lines.length).toBe(3);
     expect(lines[0]).toContain("┌");
     expect(lines[0]).toContain("token pool");
-    expect(lines[1]).toContain("pool capacity: 173%");
+    expect(lines[1]).toContain("pool capacity:");
+    expect(lines[1]).toContain("5h 173%");
+    expect(lines[1]).toContain("7d 173%");
     // next reset が null なら capacity 行のみで next reset 行は出さない
     expect(lines[1]).not.toContain("next reset");
     expect(lines[2]).toContain("└");
   });
 
+  test("5h と 7d で値が異なる場合は 2 値ともに表示", () => {
+    const input: PoolHeaderInput = {
+      capacity5hPct: 120,
+      capacity7dPct: 80,
+      nextReset: null,
+    };
+    const lines = buildPoolHeaderLines(input);
+    expect(lines[1]).toContain("5h 120%");
+    expect(lines[1]).toContain("7d 80%");
+  });
+
   test("capacity + next reset 構成（4 行）", () => {
     const input: PoolHeaderInput = {
-      capacityPct: 173,
+      capacity5hPct: 173,
+      capacity7dPct: 173,
       nextReset: {
         handle: "@kddi",
         window: "5h",
@@ -33,7 +48,8 @@ describe("buildPoolHeaderLines", () => {
     };
     const lines = buildPoolHeaderLines(input);
     expect(lines.length).toBe(4);
-    expect(lines[1]).toContain("pool capacity: 173%");
+    expect(lines[1]).toContain("5h 173%");
+    expect(lines[1]).toContain("7d 173%");
     expect(lines[2]).toContain("next reset");
     expect(lines[2]).toContain("@kddi");
     expect(lines[2]).toContain("5h");
@@ -44,7 +60,8 @@ describe("buildPoolHeaderLines", () => {
 
   test("deltaPct < 0 は符号付きで表示", () => {
     const input: PoolHeaderInput = {
-      capacityPct: 100,
+      capacity5hPct: 100,
+      capacity7dPct: 100,
       nextReset: {
         handle: "@kddi",
         window: "7d",
@@ -58,7 +75,8 @@ describe("buildPoolHeaderLines", () => {
 
   test("deltaPct === 0 でも表示する（D4: MVP は 0 でも表示）", () => {
     const input: PoolHeaderInput = {
-      capacityPct: 100,
+      capacity5hPct: 100,
+      capacity7dPct: 100,
       nextReset: {
         handle: "@kddi",
         window: "5h",
@@ -72,7 +90,8 @@ describe("buildPoolHeaderLines", () => {
 
   test("罫線は固定幅 60 文字（D10）", () => {
     const lines = buildPoolHeaderLines({
-      capacityPct: 100,
+      capacity5hPct: 100,
+      capacity7dPct: 100,
       nextReset: null,
     });
     // 上下の罫線は visible 幅 60。罫線行 (┌─...┐ / └─...┘) は ASCII幅 60
@@ -86,7 +105,8 @@ describe("buildPoolHeaderLines", () => {
 
   test("remainingMs < 60s は <1m 表記", () => {
     const lines = buildPoolHeaderLines({
-      capacityPct: 100,
+      capacity5hPct: 100,
+      capacity7dPct: 100,
       nextReset: {
         handle: "@a",
         window: "5h",

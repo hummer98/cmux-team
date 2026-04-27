@@ -105,7 +105,9 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
   }
 
   console.log("");
-  console.log(`pool capacity: ${Math.round(cap.capacity_pct)}%`);
+  console.log(
+    `pool capacity: 5h ${Math.round(cap.capacity_5h_pct)}% / 7d ${Math.round(cap.capacity_7d_pct)}%`,
+  );
 
   db.close();
 }

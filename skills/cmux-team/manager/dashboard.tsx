@@ -522,17 +522,17 @@ function sectionTitle(label: string) {
  *
  * `buildPoolHeaderLines`（CLI 用文字列 API）と同じ枠線テキストを使い、capacity 行のみ
  * 数値部分の閾値色分けを適用する。閾値は docs/spec/09-token-pool.md に従う:
- *   - capacity_pct >= 100% → GREEN
- *   - 40% 〜 100%       → YELLOW
- *   - < 40%             → RED
+ *   - min(capacity_5h_pct, capacity_7d_pct) >= 100% → GREEN
+ *   - 40% 〜 100%                                    → YELLOW
+ *   - < 40%                                          → RED
  */
 export function buildPoolHeader(summary: PoolSummary | null): ReturnType<typeof ui.text>[] {
   if (summary == null) return [];
   const lines = buildPoolHeaderLines(summary.header);
   if (lines.length === 0) return [];
 
-  const capPct = summary.header.capacityPct;
-  const capColor = capPct >= 100 ? GREEN : capPct >= 40 ? YELLOW : RED;
+  const minPct = Math.min(summary.header.capacity5hPct, summary.header.capacity7dPct);
+  const capColor = minPct >= 100 ? GREEN : minPct >= 40 ? YELLOW : RED;
 
   return lines.map((line) => {
     // capacity 行（"pool capacity: NN%" を含む）は数値色を反映するため再構築する。

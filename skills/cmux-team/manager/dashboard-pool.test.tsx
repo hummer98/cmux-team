@@ -35,9 +35,13 @@ function countSurfaceLabel(json: string, surface: string): number {
   return count;
 }
 
-function makeSummary(capacityPct: number, perHandle?: Map<string, PerHandleSummary>): PoolSummary {
+function makeSummary(
+  capacity5hPct: number,
+  capacity7dPct: number = capacity5hPct,
+  perHandle?: Map<string, PerHandleSummary>,
+): PoolSummary {
   return {
-    header: { capacityPct, nextReset: null },
+    header: { capacity5hPct, capacity7dPct, nextReset: null },
     perHandle: perHandle ?? new Map(),
   };
 }
@@ -55,13 +59,16 @@ describe("buildPoolHeader", () => {
     const out = buildPoolHeader(makeSummary(50));
     const json = stringify(out);
     expect(out.length).toBeGreaterThan(0);
-    expect(json).toContain("pool capacity: 50%");
+    expect(json).toContain("pool capacity:");
+    expect(json).toContain("5h 50%");
+    expect(json).toContain("7d 50%");
   });
 
   test("case 3: capacity 173% (>=100%) で GREEN が適用される", () => {
     const out = buildPoolHeader(makeSummary(173));
     const json = stringify(out);
-    expect(json).toContain("pool capacity: 173%");
+    expect(json).toContain("5h 173%");
+    expect(json).toContain("7d 173%");
     expect(json).toContain(`"fg":${GREEN_VALUE}`);
     expect(json).not.toContain(`"fg":${RED_VALUE}`);
   });
@@ -69,14 +76,32 @@ describe("buildPoolHeader", () => {
   test("case 4: capacity 30% (<40%) で RED が適用される", () => {
     const out = buildPoolHeader(makeSummary(30));
     const json = stringify(out);
-    expect(json).toContain("pool capacity: 30%");
+    expect(json).toContain("5h 30%");
+    expect(json).toContain("7d 30%");
     expect(json).toContain(`"fg":${RED_VALUE}`);
   });
 
   test("case 5: capacity 60% (40〜100%) で YELLOW が適用される", () => {
     const out = buildPoolHeader(makeSummary(60));
     const json = stringify(out);
-    expect(json).toContain("pool capacity: 60%");
+    expect(json).toContain("5h 60%");
+    expect(json).toContain("7d 60%");
+    expect(json).toContain(`"fg":${YELLOW_VALUE}`);
+  });
+
+  test("case 5b: 5h=173 / 7d=30 → 二値表示 + min ベースで RED", () => {
+    const out = buildPoolHeader(makeSummary(173, 30));
+    const json = stringify(out);
+    expect(json).toContain("5h 173%");
+    expect(json).toContain("7d 30%");
+    expect(json).toContain(`"fg":${RED_VALUE}`);
+  });
+
+  test("case 5c: 5h=120 / 7d=80 → min=80 で YELLOW", () => {
+    const out = buildPoolHeader(makeSummary(120, 80));
+    const json = stringify(out);
+    expect(json).toContain("5h 120%");
+    expect(json).toContain("7d 80%");
     expect(json).toContain(`"fg":${YELLOW_VALUE}`);
   });
 });
@@ -306,9 +331,11 @@ describe("buildSurfaceRowSuffix API 契約: surface ラベル二重出力禁止"
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("CLI / dashboard cross-validate (case A 共有 fixture)", () => {
-  test("buildPoolHeader を case A 想定の summary (capacityPct=50) で呼ぶと '50%' が出力される", () => {
-    const out = buildPoolHeader(makeSummary(50));
+  test("buildPoolHeader を case A 想定の summary (capacity_7d_pct=50) で呼ぶと '7d 50%' が出力される", () => {
+    // T366 case A: capacity_5h_pct ≒ 1680%, capacity_7d_pct ≒ 50% (7d 律速)
+    const out = buildPoolHeader(makeSummary(1680, 50));
     const json = stringify(out);
-    expect(json).toContain("pool capacity: 50%");
+    expect(json).toContain("5h 1680%");
+    expect(json).toContain("7d 50%");
   });
 });

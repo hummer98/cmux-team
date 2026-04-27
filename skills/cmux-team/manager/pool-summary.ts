@@ -43,7 +43,7 @@ export interface PoolSummary {
  * 動作仕様（現行 main.ts:1444-1483 in-line 実装と等価）:
  * - `listTokens(db)` で全 token を列挙
  * - 各 token の最新 usage_snapshot を取得して `TokenForCapacity[]` を作る
- * - `computePoolCapacity` で `capacity_pct` / `per_token` を算出（plan_ratio=null は除外）
+ * - `computePoolCapacity` で `capacity_5h_pct` / `capacity_7d_pct` / `per_token` を算出（plan_ratio=null は除外）
  * - `perHandle` は **listTokens 全 token** を含み、capPct は per_token Map から拾う（plan_ratio=null は null）
  * - `computeNextReset` には `selectable: t.selectable` を含めて渡す
  */
@@ -94,7 +94,11 @@ export function buildPoolSummary(
   });
 
   return {
-    header: { capacityPct: cap.capacity_pct, nextReset },
+    header: {
+      capacity5hPct: cap.capacity_5h_pct,
+      capacity7dPct: cap.capacity_7d_pct,
+      nextReset,
+    },
     perHandle,
   };
 }

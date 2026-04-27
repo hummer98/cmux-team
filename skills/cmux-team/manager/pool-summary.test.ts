@@ -1,12 +1,18 @@
 /**
- * pool-summary.test.ts (T351)
+ * pool-summary.test.ts (T351 / T366)
  *
  * `buildPoolSummary` / `loadPoolSummary` の純関数テスト。
  *
- * - case A: 単一 token, util_5h=util_7d=0.5, plan_ratio=20 → cap_pct ≒ 50%
- *   - `remaining_5h = Math.max(0, 1 - util_5h) = 0.5`（minor 1 反映: token-store.ts:745）
- * - case B: 2 token を case A と同条件で → capacity_pct ≒ 100%（合算）
- * - case C: 全 token plan_ratio=null → capacity_pct=0、perHandle は全 token (capPct=null)
+ * T366: capacity を 5h / 7d 別合計に変更したため、各 case で
+ *       `capacity_5h_pct` / `capacity_7d_pct` の両方を assert する。
+ *
+ * - case A: 単一 token, util_5h=util_7d=0.5, plan_ratio=20
+ *   - flow_5h = 0.5 × 20 / 5 = 2.0   → cap_5h ≒ 1680%
+ *   - flow_7d = 0.5 × 20 / 168 ≒ 0.0595 → cap_7d ≒ 50%
+ *   - per_token cap (min ベース) ≒ 50%
+ * - case B: 2 token を case A と同条件で合算
+ *   - cap_5h ≒ 3360% / cap_7d ≒ 100%
+ * - case C: 全 token plan_ratio=null → cap_5h_pct=0, cap_7d_pct=0、perHandle は全 token (capPct=null)
  * - case D: selectable=0 を含む fixture で nextReset の入力対象として selectable=0 が残ること
  *           （現行 main.ts:1444-1483 の in-line 実装と等価。`computeNextReset` は内部で
  *           `selectable && plan_ratio != null` でフィルタするため、selectable=0 は実質除外される）
@@ -73,13 +79,11 @@ afterEach(() => {
 });
 
 describe("buildPoolSummary", () => {
-  test("case A: 単一 token util_5h=util_7d=0.5, plan_ratio=20 → cap_pct ≒ 50", () => {
-    // remaining_5h = Math.max(0, 1 - 0.5) = 0.5
-    // remaining_7d = Math.max(0, 1 - 0.5) = 0.5
-    // flow_5h = 0.5 * 20 / 5 = 2.0
-    // flow_7d = 0.5 * 20 / 168 ≒ 0.0595
-    // flow = min(2.0, 0.0595) = 0.0595
-    // cap_pct = 0.0595 / (20/168) * 100 = 50%
+  test("case A: 単一 token util_5h=util_7d=0.5, plan_ratio=20 → 5h ≒ 1680%, 7d ≒ 50%", () => {
+    // remaining_5h = remaining_7d = 0.5
+    // flow_5h = 0.5 * 20 / 5 = 2.0  → cap_5h = 2.0 / (20/168) * 100 = 1680%
+    // flow_7d = 0.5 * 20 / 168 ≒ 0.0595 → cap_7d ≒ 50%
+    // per_token (min ベース) ≒ 50%
     const t = insertToken(db, makeToken({
       handle: "@kddi",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -94,8 +98,10 @@ describe("buildPoolSummary", () => {
     });
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacityPct).toBeGreaterThan(49.9);
-    expect(summary.header.capacityPct).toBeLessThan(50.1);
+    expect(summary.header.capacity5hPct).toBeGreaterThan(1679.5);
+    expect(summary.header.capacity5hPct).toBeLessThan(1680.5);
+    expect(summary.header.capacity7dPct).toBeGreaterThan(49.9);
+    expect(summary.header.capacity7dPct).toBeLessThan(50.1);
 
     const perHandle = summary.perHandle.get("@kddi");
     expect(perHandle).toBeDefined();
@@ -105,7 +111,7 @@ describe("buildPoolSummary", () => {
     expect(perHandle?.capPct).toBeLessThan(50.1);
   });
 
-  test("case B: 2 token を case A と同条件 → capacity_pct ≒ 100% (合算)", () => {
+  test("case B: 2 token を case A と同条件 → 5h ≒ 3360%, 7d ≒ 100% (合算)", () => {
     const t1 = insertToken(db, makeToken({
       handle: "@kddi",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -126,14 +132,16 @@ describe("buildPoolSummary", () => {
     }
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacityPct).toBeGreaterThan(99.9);
-    expect(summary.header.capacityPct).toBeLessThan(100.1);
+    expect(summary.header.capacity5hPct).toBeGreaterThan(3359);
+    expect(summary.header.capacity5hPct).toBeLessThan(3361);
+    expect(summary.header.capacity7dPct).toBeGreaterThan(99.9);
+    expect(summary.header.capacity7dPct).toBeLessThan(100.1);
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@kddi")?.capPct).toBeGreaterThan(49.9);
     expect(summary.perHandle.get("@tayo")?.capPct).toBeGreaterThan(49.9);
   });
 
-  test("case C: 全 token plan_ratio=null → capacity_pct=0, perHandle 全 token (capPct=null)", () => {
+  test("case C: 全 token plan_ratio=null → cap_5h=0, cap_7d=0, perHandle 全 token (capPct=null)", () => {
     // 現行 main.ts:1444-1483 の in-line 実装と等価:
     //   poolHandleData は listTokens 全 handle を含み、capByHandle.get(handle) ?? null で capPct を埋める
     const t1 = insertToken(db, makeToken({
@@ -160,7 +168,8 @@ describe("buildPoolSummary", () => {
     }
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacityPct).toBe(0);
+    expect(summary.header.capacity5hPct).toBe(0);
+    expect(summary.header.capacity7dPct).toBe(0);
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@a")?.capPct).toBeNull();
     expect(summary.perHandle.get("@b")?.capPct).toBeNull();
@@ -195,8 +204,11 @@ describe("buildPoolSummary", () => {
 
     const summary = buildPoolSummary(db, NOW_ISO);
     // selectable=0 でも plan_ratio が non-null なら capacity に含まれる（案 / 現行実装と等価）
-    expect(summary.header.capacityPct).toBeGreaterThan(99.9);
-    expect(summary.header.capacityPct).toBeLessThan(100.1);
+    // 2 token × case A 条件 → cap_5h ≒ 3360%, cap_7d ≒ 100%
+    expect(summary.header.capacity5hPct).toBeGreaterThan(3359);
+    expect(summary.header.capacity5hPct).toBeLessThan(3361);
+    expect(summary.header.capacity7dPct).toBeGreaterThan(99.9);
+    expect(summary.header.capacity7dPct).toBeLessThan(100.1);
     // perHandle にも両方含まれる（listTokens 全 handle）
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@active")).toBeDefined();

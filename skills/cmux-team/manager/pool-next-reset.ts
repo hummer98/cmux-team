@@ -91,16 +91,26 @@ export function computeNextReset(input: NextResetInput): NextResetResult | null 
     reset_5h_at: t.reset_5h_at,
     reset_7d_at: t.reset_7d_at,
   }));
-  const baseCap = computePoolCapacity(baseTokens, nowIso).capacity_pct;
+  const baseResult = computePoolCapacity(baseTokens, nowIso);
+  // T366: ボトルネック側の動きを deltaPct として表すため min ベース
+  const baseCap = Math.min(baseResult.capacity_5h_pct, baseResult.capacity_7d_pct);
 
+  // T366: reset 直後の世界を「util=0 + 次の window 開始」としてシミュレートする。
+  // `reset_*_at = nowIso` だと hoursUntil が null を返し、新仕様で 5h / 7d を別々に
+  // 集計する際に 0 寄与となってしまうため、reset 直後の典型的な window 長を再設定する。
+  const FIVE_HOURS_MS = 5 * 3_600_000;
+  const SEVEN_DAYS_MS = 168 * 3_600_000;
+  const afterIso5h = new Date(nowMs + FIVE_HOURS_MS).toISOString();
+  const afterIso7d = new Date(nowMs + SEVEN_DAYS_MS).toISOString();
   const afterTokens: TokenForCapacity[] = input.tokens.map((t, i) => {
     if (i !== next.tokenIndex) return { ...t };
     if (next.window === "5h") {
-      return { ...t, util_5h: 0, reset_5h_at: nowIso };
+      return { ...t, util_5h: 0, reset_5h_at: afterIso5h };
     }
-    return { ...t, util_7d: 0, reset_7d_at: nowIso };
+    return { ...t, util_7d: 0, reset_7d_at: afterIso7d };
   });
-  const afterCap = computePoolCapacity(afterTokens, nowIso).capacity_pct;
+  const afterResult = computePoolCapacity(afterTokens, nowIso);
+  const afterCap = Math.min(afterResult.capacity_5h_pct, afterResult.capacity_7d_pct);
 
   return {
     handle: next.handle,

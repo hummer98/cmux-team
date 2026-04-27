@@ -1,9 +1,10 @@
 /**
- * pool-header-display.test.ts (T363)
+ * pool-header-display.test.ts (T363 / T366)
  *
  * dashboard ヘッダー右側用の pool capacity parts を組み立てる純粋関数 unit test。
  *
  * - case 1-7: capacityPct と色閾値（>= 100 green / >= 40 yellow / < 40 red）
+ *   T366: 色判定は `min(capacity5hPct, capacity7dPct)` ベース
  * - case 8-10: nextReset の整形（remainingMs / deltaPct 符号 / <1m）
  * - case 11: parts[0]?.group === true（rate-limit-display と整合）
  */
@@ -13,11 +14,12 @@ import type { PoolSummary } from "./pool-summary";
 import type { PoolHeaderNextReset } from "./pool-status-header";
 
 function makeSummary(
-  capacityPct: number,
+  capacity5hPct: number,
+  capacity7dPct: number = capacity5hPct,
   nextReset: PoolHeaderNextReset | null = null,
 ): PoolSummary {
   return {
-    header: { capacityPct, nextReset },
+    header: { capacity5hPct, capacity7dPct, nextReset },
     perHandle: new Map(),
   };
 }
@@ -27,40 +29,59 @@ describe("buildPoolHeaderDisplay (T363)", () => {
     expect(buildPoolHeaderDisplay(null)).toEqual({ parts: [] });
   });
 
-  test("case 2: capacityPct=173, nextReset=null → green", () => {
+  test("case 2: 5h=7d=173, nextReset=null → green と 5h/7d 二値表示", () => {
     const out = buildPoolHeaderDisplay(makeSummary(173));
     expect(out.parts).toHaveLength(1);
-    expect(out.parts[0]?.text).toContain("pool capacity: 173%");
+    expect(out.parts[0]?.text).toContain("pool capacity:");
+    expect(out.parts[0]?.text).toContain("5h 173%");
+    expect(out.parts[0]?.text).toContain("7d 173%");
     expect(out.parts[0]?.color).toBe("green");
   });
 
-  test("case 3: capacityPct=60 → yellow", () => {
+  test("case 3: 5h=7d=60 → yellow", () => {
     const out = buildPoolHeaderDisplay(makeSummary(60));
     expect(out.parts[0]?.color).toBe("yellow");
   });
 
-  test("case 4: capacityPct=30 → red", () => {
+  test("case 4: 5h=7d=30 → red", () => {
     const out = buildPoolHeaderDisplay(makeSummary(30));
     expect(out.parts[0]?.color).toBe("red");
   });
 
-  test("case 5: capacityPct=100 境界 → green (>= 100%)", () => {
+  test("case 5: 5h=7d=100 境界 → green (>= 100%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(100));
     expect(out.parts[0]?.color).toBe("green");
   });
 
-  test("case 6: capacityPct=40 境界 → yellow (40-100%)", () => {
+  test("case 6: 5h=7d=40 境界 → yellow (40-100%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(40));
     expect(out.parts[0]?.color).toBe("yellow");
   });
 
-  test("case 7: capacityPct=39.9 → red (< 40%)", () => {
+  test("case 7: 5h=7d=39.9 → red (< 40%)", () => {
     const out = buildPoolHeaderDisplay(makeSummary(39.9));
     expect(out.parts[0]?.color).toBe("red");
   });
 
+  test("case 7b: 5h=173 / 7d=80 → yellow (min ベース判定)", () => {
+    const out = buildPoolHeaderDisplay(makeSummary(173, 80));
+    expect(out.parts[0]?.text).toContain("5h 173%");
+    expect(out.parts[0]?.text).toContain("7d 80%");
+    expect(out.parts[0]?.color).toBe("yellow");
+  });
+
+  test("case 7c: 5h=173 / 7d=30 → red (min ベース判定)", () => {
+    const out = buildPoolHeaderDisplay(makeSummary(173, 30));
+    expect(out.parts[0]?.color).toBe("red");
+  });
+
+  test("case 7d: 5h=200 / 7d=100 境界 → green", () => {
+    const out = buildPoolHeaderDisplay(makeSummary(200, 100));
+    expect(out.parts[0]?.color).toBe("green");
+  });
+
   test("case 8: nextReset 有 → next reset part が追加される (gray)", () => {
-    const summary = makeSummary(80, {
+    const summary = makeSummary(80, 80, {
       handle: "@kddi",
       window: "5h",
       remainingMs: 30 * 60 * 1000, // 30m
@@ -78,7 +99,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
 
   test("case 9: deltaPct < 0 → '(-N pts)', deltaPct === 0 → '(+0 pts)'", () => {
     const negative = buildPoolHeaderDisplay(
-      makeSummary(80, {
+      makeSummary(80, 80, {
         handle: "@kddi",
         window: "5h",
         remainingMs: 30 * 60 * 1000,
@@ -88,7 +109,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
     expect(negative.parts[1]?.text).toContain("(-5 pts)");
 
     const zero = buildPoolHeaderDisplay(
-      makeSummary(80, {
+      makeSummary(80, 80, {
         handle: "@kddi",
         window: "7d",
         remainingMs: 30 * 60 * 1000,
@@ -100,7 +121,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
 
   test("case 10: remainingMs < 60_000 → '<1m'", () => {
     const out = buildPoolHeaderDisplay(
-      makeSummary(80, {
+      makeSummary(80, 80, {
         handle: "@kddi",
         window: "5h",
         remainingMs: 30 * 1000,
@@ -125,7 +146,7 @@ describe("buildPoolHeaderDisplay (T363)", () => {
     ];
     for (const [ms, expected] of cases) {
       const out = buildPoolHeaderDisplay(
-        makeSummary(80, {
+        makeSummary(80, 80, {
           handle: "@kddi",
           window: "5h",
           remainingMs: ms,

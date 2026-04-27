@@ -60,7 +60,14 @@ export interface TokenForCapacity {
 }
 
 export interface PoolCapacityResult {
-  capacity_pct: number;
+  /** 全 token の 5h flow 合計を REFERENCE_FLOW で正規化したパーセント */
+  capacity_5h_pct: number;
+  /** 全 token の 7d flow 合計を REFERENCE_FLOW で正規化したパーセント */
+  capacity_7d_pct: number;
+  /**
+   * 各 token の per-token cap。`cap_pct` は従来通り `min(flow_5h, flow_7d)` ベース
+   * （per-token 表示は引き続きボトルネック側を出すのが自然なので維持）。
+   */
   per_token: Array<{ handle: string; cap_pct: number }>;
 }
 
@@ -737,7 +744,8 @@ export function computePoolCapacity(
 ): PoolCapacityResult {
   const now = new Date(nowIso).getTime();
   const perToken: Array<{ handle: string; cap_pct: number }> = [];
-  let totalCap = 0;
+  let total5h = 0;
+  let total7d = 0;
 
   for (const t of tokens) {
     if (t.plan_ratio == null) continue;
@@ -750,22 +758,35 @@ export function computePoolCapacity(
     const t5hH = hoursUntil(t.reset_5h_at, now);
     const t7dH = hoursUntil(t.reset_7d_at, now);
 
+    // 5h 側合計: reset 情報がある token のみ寄与
+    if (t5hH != null) {
+      total5h += ((remaining5h * t.plan_ratio) / t5hH / REFERENCE_FLOW) * 100;
+    }
+
+    // 7d 側合計: reset 情報がある token は通常計算、両 window null の token は
+    // 「フル 7d 相当」として 7d 側に寄与（既存挙動を 7d 側で温存）
+    if (t7dH != null) {
+      total7d += ((remaining7d * t.plan_ratio) / t7dH / REFERENCE_FLOW) * 100;
+    } else if (t5hH == null) {
+      total7d += ((1.0 * t.plan_ratio) / FULL_WEEK_HOURS / REFERENCE_FLOW) * 100;
+    }
+
+    // per_token は従来通り min(flow_5h, flow_7d) ベース
     const candidates: number[] = [];
     if (t5hH != null) candidates.push((remaining5h * t.plan_ratio) / t5hH);
     if (t7dH != null) candidates.push((remaining7d * t.plan_ratio) / t7dH);
     if (candidates.length === 0) {
-      // 両 window とも reset 済み / null → フル 7d 相当として扱う
       candidates.push((1.0 * t.plan_ratio) / FULL_WEEK_HOURS);
     }
-
     const flow = Math.min(...candidates);
-    const cap_pct = (flow / REFERENCE_FLOW) * 100;
-
-    perToken.push({ handle: t.handle, cap_pct });
-    totalCap += cap_pct;
+    perToken.push({ handle: t.handle, cap_pct: (flow / REFERENCE_FLOW) * 100 });
   }
 
-  return { capacity_pct: totalCap, per_token: perToken };
+  return {
+    capacity_5h_pct: total5h,
+    capacity_7d_pct: total7d,
+    per_token: perToken,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -8,9 +8,12 @@
  * `buildRateLimitDisplay` の戻り値を同じループで描画できる。
  *
  * 色閾値（docs/spec/09-token-pool.md / 既存 buildPoolHeader と一致）:
- *   - capacityPct >= 100% → green
- *   - 40% 〜 100%        → yellow
- *   - < 40%              → red
+ *   - min(capacity5hPct, capacity7dPct) >= 100% → green
+ *   - 40% 〜 100%                                → yellow
+ *   - < 40%                                      → red
+ *
+ * T366: 5h / 7d 別合計を `pool capacity: 5h NN% / 7d NN%` の二値表示にし、
+ *       色判定は `min(5h, 7d)` ベースに変更。
  */
 import type { PoolSummary } from "./pool-summary";
 import type { RateLimitPart } from "./rate-limit-display";
@@ -24,13 +27,15 @@ export function buildPoolHeaderDisplay(
 ): PoolHeaderDisplay {
   if (summary == null) return { parts: [] };
 
-  const capPct = summary.header.capacityPct;
+  const cap5h = summary.header.capacity5hPct;
+  const cap7d = summary.header.capacity7dPct;
+  const minPct = Math.min(cap5h, cap7d);
   const capColor: RateLimitPart["color"] =
-    capPct >= 100 ? "green" : capPct >= 40 ? "yellow" : "red";
+    minPct >= 100 ? "green" : minPct >= 40 ? "yellow" : "red";
 
   const parts: RateLimitPart[] = [
     {
-      text: `pool capacity: ${Math.round(capPct)}%`,
+      text: `pool capacity: 5h ${Math.round(cap5h)}% / 7d ${Math.round(cap7d)}%`,
       color: capColor,
       group: true,
     },
