@@ -155,15 +155,28 @@ Claude: → cmux-team create-task --title "..." --status ready
 | `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
 | `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Agent タブを起動 |
 | `cmux-team agents` | 稼働中エージェント一覧 |
-| `cmux-team kill-agent --surface <s>` | Agent 終了 |
+| `cmux-team close-agent --surface <s>` | Agent を正常終了 |
+| `cmux-team kill-agent --surface <s>` | Agent を強制停止（crash 扱い） |
 | `cmux-team send-agent --surface <s> <message>` | Agent / Conductor にメッセージ送信 |
 | `cmux-team conductor` | Conductor 起動（proxy 自動解決） |
 | `cmux-team spawn-master` | Master 起動（proxy 自動解決） |
+
+**トークンプール**
+| コマンド | やること |
+|---------|---------|
+| `cmux-team token add` | Claude OAuth トークンを対話式で登録 |
+| `cmux-team token list` | 登録済みトークンと 5h/7d 使用率を表示 |
+| `cmux-team token remove --handle <h>` | トークンを削除 |
+| `cmux-team token rotate --handle <h>` | credential を再取得して auth hash を更新 |
+| `cmux-team token set-plan --handle <h> --plan <p>` | plan / ratio を手動設定 |
+| `cmux-team token promote --handle <h>` | auto-discover トークンを selectable に昇格 |
+| `cmux-team pool status` | pool capacity ダッシュボードを表示 |
 
 **診断・補助**
 | コマンド | やること |
 |---------|---------|
 | `cmux-team trace-task <task-id>` | タスクのセッション履歴を表示 |
+| `cmux-team trace-hooks` | hook シグナル履歴を表示 |
 | `cmux-team artifacts [add\|show\|open\|search]` | アーティファクト管理 |
 
 #### スラッシュコマンド（Claude 内で実行）
@@ -326,6 +339,37 @@ overlay の最大サイズは 100 KB。dashboard TUI の `Settings` タブ（`4`
   }
 }
 ```
+
+## トークンプール
+
+複数の Claude アカウントを持っている場合、Agent spawn を自動的に振り分けてレート制限を回避できます。
+
+**有効化**（opt-in、プロジェクト単位）:
+
+```json
+// .team/config.json
+{ "tokenPool": { "enabled": true } }
+```
+
+または環境変数: `CMUX_TEAM_TOKEN_POOL=1`。
+
+**トークン登録**（macOS Keychain 必須）:
+
+```bash
+cmux-team token add      # 対話式 — ~/.claude/.credentials.json を読むか手動入力
+cmux-team token list     # 5h/7d 使用率とともに全トークンを表示
+```
+
+**選択アルゴリズム**（Agent spawn ごと）:
+
+1. `policy.exclude` に含まれる handle を除外
+2. lease 中（120 秒）または `util_5h > 95%` のトークンを除外
+3. 以下の順で admit: `projectDefault` 一致 → `include` リスト → `isOss` フラグ → tag マッチ（`"any"`）
+4. スコア = `0.3 × util_5h + 0.7 × util_7d` — 最小値を選択
+
+TUI dashboard ヘッダーに pool capacity（5h / 7d 残量）と、バインド後の per-surface トークン handle が表示されます。
+
+詳細（tag フィルタ・exclude/include ポリシー・plan ratio）は `docs/spec/09-token-pool.md` を参照。
 
 ## トレーサビリティ
 

@@ -155,15 +155,28 @@ See `cmux-team --help` for the full list. Common commands:
 | `cmux-team spawn-conductor` | Spawn and register a single Conductor |
 | `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Spawn an Agent tab |
 | `cmux-team agents` | List running agents |
-| `cmux-team kill-agent --surface <s>` | Terminate an Agent |
+| `cmux-team close-agent --surface <s>` | Gracefully stop an Agent |
+| `cmux-team kill-agent --surface <s>` | Force-terminate an Agent (crash) |
 | `cmux-team send-agent --surface <s> <message>` | Send a message to Agent / Conductor |
 | `cmux-team conductor` | Boot Conductor role (proxy auto-resolved) |
 | `cmux-team spawn-master` | Boot Master role (proxy auto-resolved) |
+
+**Token Pool**
+| Command | What it does |
+|---------|-------------|
+| `cmux-team token add` | Register a Claude OAuth token interactively |
+| `cmux-team token list` | List registered tokens with utilization |
+| `cmux-team token remove --handle <h>` | Remove a token |
+| `cmux-team token rotate --handle <h>` | Re-probe credential and update auth hash |
+| `cmux-team token set-plan --handle <h> --plan <p>` | Override plan/ratio manually |
+| `cmux-team token promote --handle <h>` | Set `selectable=true` on an auto-discovered token |
+| `cmux-team pool status` | Show pool capacity dashboard |
 
 **Diagnostics**
 | Command | What it does |
 |---------|-------------|
 | `cmux-team trace-task <task-id>` | Show session history for a task |
+| `cmux-team trace-hooks` | Show hook signal history |
 | `cmux-team artifacts [add\|show\|open\|search]` | Manage knowledge artifacts |
 
 #### Slash Commands (run within Claude)
@@ -253,6 +266,37 @@ cmux-team delete-agent-instructions --role implementer
 ```
 
 Max overlay size is 100 KB. The dashboard's `Settings` tab (`4` key) shows a read-only preview of all role overlays plus a config snapshot.
+
+## Token Pool
+
+When you have multiple Claude accounts, cmux-team can automatically distribute Agent spawns across them to avoid rate limits.
+
+**Enable** (opt-in, per-project):
+
+```json
+// .team/config.json
+{ "tokenPool": { "enabled": true } }
+```
+
+Or via env: `CMUX_TEAM_TOKEN_POOL=1`.
+
+**Register tokens** (macOS Keychain required):
+
+```bash
+cmux-team token add      # interactive — reads from ~/.claude/.credentials.json or manual paste
+cmux-team token list     # show all tokens with 5h/7d utilization
+```
+
+**Selection algorithm** (per Agent spawn):
+
+1. Exclude handles in `policy.exclude`
+2. Skip tokens with active lease (120 s) or `util_5h > 95%`
+3. Admit by: `projectDefault` match → `include` list → `isOss` flag → tag match (`"any"`)
+4. Score = `0.3 × util_5h + 0.7 × util_7d` — pick the lowest
+
+The TUI dashboard header shows pool capacity (`5h` / `7d` remaining) and per-surface token handle once bound.
+
+See `docs/spec/09-token-pool.md` for tag filtering, exclude/include policy, and plan ratio details.
 
 ## Traceability
 
