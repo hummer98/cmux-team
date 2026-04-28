@@ -1742,7 +1742,7 @@ export async function startDashboard(
     A: () => switchTab("artifacts"),
     I: () => switchTab("issues"),
     M: () => switchTab("metrics"),
-    R: (ctx) => {
+    "shift+r": (ctx) => {
       if (ctx.state.activeTab !== "issues") return;
       syncIssuesFromGh().catch((e: any) => {
         log("issues_sync_error", e?.message ?? String(e)).catch(() => {});
@@ -1843,7 +1843,7 @@ export async function startDashboard(
       }
       return s;
     }),
-    G: () => app.update((s) => {
+    "shift+g": () => app.update((s) => {
       // G = 末尾（最古）へ、autoScroll OFF
       if (s.focusedArea === "journal") {
         const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
@@ -1878,7 +1878,7 @@ export async function startDashboard(
       cleanup();
       opts?.onQuit?.();
     },
-    Q: (ctx) => {
+    "shift+q": (ctx) => {
       if (ctx.state.focusedArea !== "global") return;
       confirmingFullQuit = true;
       app.update((s) => ({ ...s, confirmingFullQuit: true }));
