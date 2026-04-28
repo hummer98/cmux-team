@@ -20,7 +20,7 @@ import type {
   ProjectionResult,
 } from "./trace-store";
 import { normalizeRole } from "./trace-store";
-import { buildUtilizationBar } from "./rate-limit-display";
+import { buildUtilizationBar, type RateLimitPart } from "./rate-limit-display";
 import { t } from "./i18n";
 
 const GREEN = rgb(0, 160, 0);
@@ -222,28 +222,65 @@ function buildPoolTokensSection(
     (m, r) => Math.max(m, r.handle.length),
     0,
   );
-  for (const r of poolTokens) {
-    if (!r.hasSnapshot) {
+  // 5h / 7d 列の reset 残時間（gray part）を縦に揃えるため、各 token の bar を
+  // 一旦事前計算して列ごとの最大幅を求める。util が null / hasSnapshot=false の
+  // 行は対応する bar が存在せず、最大幅計算の対象外となる。
+  const computed = poolTokens.map((r) => ({
+    row: r,
+    bar5h:
+      r.hasSnapshot && r.util5h !== null
+        ? buildUtilizationBar("5h", r.util5h, r.reset5hIso, nowMs)
+        : null,
+    bar7d:
+      r.hasSnapshot && r.util7d !== null
+        ? buildUtilizationBar("7d", r.util7d, r.reset7dIso, nowMs)
+        : null,
+  }));
+  const max5hGray = maxGrayPartLen(computed.map((c) => c.bar5h));
+  const max7dGray = maxGrayPartLen(computed.map((c) => c.bar7d));
+  for (const c of computed) {
+    if (!c.row.hasSnapshot) {
       rows.push(
         ui.row({ gap: 1 }, [
-          ui.text(r.handle.padEnd(maxHandleLen)),
+          ui.text(c.row.handle.padEnd(maxHandleLen)),
           ui.text(t("metrics_pool_no_data"), { style: { fg: GRAY } }),
         ]),
       );
       continue;
     }
-    const cells: any[] = [ui.text(r.handle.padEnd(maxHandleLen))];
-    if (r.util5h !== null) {
-      const bar5h = buildUtilizationBar("5h", r.util5h, r.reset5hIso, nowMs);
-      cells.push(...partsToUiText(bar5h.parts));
-    }
-    if (r.util7d !== null) {
-      const bar7d = buildUtilizationBar("7d", r.util7d, r.reset7dIso, nowMs);
-      cells.push(...partsToUiText(bar7d.parts));
-    }
+    const cells: any[] = [ui.text(c.row.handle.padEnd(maxHandleLen))];
+    if (c.bar5h)
+      cells.push(...partsToUiText(padGrayParts(c.bar5h.parts, max5hGray)));
+    if (c.bar7d)
+      cells.push(...partsToUiText(padGrayParts(c.bar7d.parts, max7dGray)));
     rows.push(ui.row({ gap: 1 }, cells));
   }
   return rows;
+}
+
+/** bar list 内の gray part の最大幅（reset 残時間列の縦揃えに使う）。 */
+function maxGrayPartLen(
+  bars: ({ parts: RateLimitPart[] } | null)[],
+): number {
+  let max = 0;
+  for (const b of bars) {
+    if (!b) continue;
+    for (const p of b.parts) {
+      if (p.color === "gray") max = Math.max(max, p.text.length);
+    }
+  }
+  return max;
+}
+
+/** parts のうち gray part の text を padStart(maxLen) で揃える。max=0 は no-op。 */
+function padGrayParts(
+  parts: RateLimitPart[],
+  maxLen: number,
+): RateLimitPart[] {
+  if (maxLen === 0) return parts;
+  return parts.map((p) =>
+    p.color === "gray" ? { ...p, text: p.text.padStart(maxLen) } : p,
+  );
 }
 
 /**

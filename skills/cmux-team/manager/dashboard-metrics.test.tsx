@@ -306,6 +306,117 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
   });
 });
 
+describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
+  test("複数 token で 5h reset 桁が異なる場合 → 5h 列が padStart で揃う", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@a",
+        util5h: 0.42,
+        // 5min → "5m"
+        reset5hIso: new Date(FIXED_NOW + 5 * 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: true,
+      },
+      {
+        handle: "@b",
+        util5h: 0.1,
+        // 1h30m → "1h30m"
+        reset5hIso: new Date(FIXED_NOW + 90 * 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: true,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // "5m" は最大幅 5 ("1h30m") に padStart されて "   5m" になる
+    expect(s).toContain("   5m");
+    // 最大幅側はそのまま
+    expect(s).toContain("1h30m");
+  });
+
+  test("複数 token で 7d 列も padStart で揃う", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@a",
+        util5h: null,
+        reset5hIso: null,
+        util7d: 0.42,
+        // 12h → "12h"
+        reset7dIso: new Date(FIXED_NOW + 12 * 3600 * 1000).toISOString(),
+        hasSnapshot: true,
+      },
+      {
+        handle: "@b",
+        util5h: null,
+        reset5hIso: null,
+        util7d: 0.1,
+        // 1d → "1d"
+        reset7dIso: new Date(FIXED_NOW + 86_400 * 1000).toISOString(),
+        hasSnapshot: true,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // "1d" は最大幅 3 ("12h") に padStart されて " 1d" になる
+    expect(s).toContain(" 1d");
+    expect(s).toContain("12h");
+  });
+
+  test("hasSnapshot=false 混在時、snapshot 有り行の時刻列が揃う", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@stale",
+        util5h: null,
+        reset5hIso: null,
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: false,
+      },
+      {
+        handle: "@a",
+        util5h: 0.42,
+        reset5hIso: new Date(FIXED_NOW + 5 * 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: true,
+      },
+      {
+        handle: "@b",
+        util5h: 0.1,
+        reset5hIso: new Date(FIXED_NOW + 90 * 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: true,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // hasSnapshot=false の行はパディング計算から除外され、snapshot 有り行は揃う
+    expect(s).toContain("   5m");
+    expect(s).toContain("1h30m");
+  });
+
+  test("1 token のみでパディング 0（従来挙動）", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@only",
+        util5h: 0.42,
+        reset5hIso: new Date(FIXED_NOW + 5 * 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: null,
+        hasSnapshot: true,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // 単独 token は padStart(2) = no-op で "5m" のまま（前置スペース無し）
+    expect(s).toContain('"5m"');
+    expect(s).not.toContain("   5m");
+  });
+});
+
 describe("buildMetricsRows: role / task aggregations (T354 S9 桁揃え)", () => {
   test("ロール行が表示され、数値列が padStart(12) で揃う", () => {
     const data = makeData({
