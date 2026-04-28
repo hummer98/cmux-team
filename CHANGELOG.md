@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [4.16.0] - 2026-04-28
+
+### Changed
+
+- **token pool を cmux-team リポジトリ自身の運用にも有効化**。`default @kddi` / `project_tags=["any"]` で OSS 系プロジェクトも token pool 配分対象にする標準設定を反映
+- **Conductor のフェーズ判定を量的基準に精緻化、推奨フロー hint を最優先 signal に追加**。「ヘルパー追加 + 数行置換 + テスト追加」レベル（<30 lines, ≤2 files, 設計判断不要）の修正が「単一機能のバグ修正」ラベルだけで中規模判定され Plan→Impl→Inspect の 3 phase を回されていた問題に対処。タスク本文で実装方針が明示されている小規模 fix を軽微に倒し、criteria を上から評価方式（先にマッチした条件で確定）に変更。タスク本文の `推奨フロー: <レベル>` hint を最優先 signal として追加し、Master 起票時の意思を Conductor に直接伝えられるようにした
+- **README の「Why cmux-team?」を AI 観察箱コンセプトで書き直し**。サブエージェントが「見えない」ことの本質的な問題（異常検知の遅れ・改善サイクルが回らない）を明示し、ターミナルペインを飾りではなくプロダクトそのものとして位置付けるメッセージに寄せた
+
+### Fixed
+
+- **token pool の stale snapshot で利用可能な token が候補から外れデッドロックするバグを修正（T373）**。`admitCandidates` が「stale + 全軸 reset 未到達」を完全除外していたため、`util_5h=0.07` / `util_7d=0.18` / 1h+ 前 recorded / reset 未来 の余裕がある token が spawn 候補から永久に外れていた。reset 済み軸は `effUtil=0`、未到達軸は `snap.util_*` を下限として残す方針に拡張。ブロッカー判定（`util_5h > 0.95`）は `effUtil5h` で行い、stale でも snap 値が高ければ継続ブロックを維持。`pool-throttle.ts: countPoolTokens` も同形に揃えた
+- **`admitCandidates` が epoch sec 文字列の reset 値を解釈できないバグを修正（T372）**。Anthropic ratelimit ヘッダー由来の `reset_5h_at` / `reset_7d_at` は epoch sec 文字列（例 `"1777366200"`）として DB に保存されており、`new Date(v).getTime()` が NaN を返すため T369 の stale snapshot 救済が常に除外側に倒れていた。`parseResetEpochMs` を新設し epoch sec / ISO 8601 / 不正値を一元解釈する経路に統合（不正値は `<=` 比較で false になり「reset 済み判定しない」安全側を維持）
+- **`spawn-agent` の OAuth token が direnv の `.envrc.local` で上書きされるバグを修正（T371）**。`export CLAUDE_CODE_OAUTH_TOKEN=...` が後勝ちで上書きされ、`selectToken` が選んだ handle と実際のアカウントが乖離していた。token を `CMUX_CLAUDE_TOKEN` として export し、claude 起動コマンドに `CLAUDE_CODE_OAUTH_TOKEN="$CMUX_CLAUDE_TOKEN" claude ...` の inline env prefix を付与することで execve env を親 shell の env より優先させる。token 未選択経路（selected なし / Keychain 不在）は inline prefix なしで起動して Master 認証継承の挙動を維持
+
 ## [4.15.0] - 2026-04-28
 
 ### Changed
