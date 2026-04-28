@@ -21,6 +21,7 @@ import {
   canSelectAnyToken,
   listTokens,
   getLatestUsageSnapshot,
+  parseResetEpochMs,
   type SelectTokenPolicy,
 } from "./token-store";
 import { isStale5h } from "./rate-limit-persistence";
@@ -137,12 +138,16 @@ export function countPoolTokens(
     if (!tok.selectable && tok.handle !== effectiveDefault) continue;
     if (activeLeases.has(tok.id)) continue;
     const snap = getLatestUsageSnapshot(db, tok.id);
+    // T373: stale でも除外しない。reset_5h_at が過去なら effUtil5h=0 で評価。
+    let effUtil5h = snap?.util_5h ?? 0;
     if (snap) {
       const recAt = new Date(snap.recorded_at).getTime();
-      if (nowMs - recAt > STALE_THRESHOLD_MS) continue;
+      const isStale = nowMs - recAt > STALE_THRESHOLD_MS;
+      if (isStale && snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= nowMs) {
+        effUtil5h = 0;
+      }
     }
-    const util5h = snap?.util_5h ?? 0;
-    if (util5h > POOL_BLOCKER_THRESHOLD) continue;
+    if (effUtil5h > POOL_BLOCKER_THRESHOLD) continue;
     let admitted = false;
     if (tok.handle === effectiveDefault) {
       admitted = true;

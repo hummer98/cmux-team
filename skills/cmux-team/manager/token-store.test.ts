@@ -1791,38 +1791,42 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     expect(sel?.token.handle).toBe("@k3");
   });
 
-  test("TC4: stale + 両軸未来 → 既存挙動 (候補外)", () => {
+  test("TC4 (T373: 旧 null → admit 転換): stale + 両軸未来 → snap 値で admit", () => {
+    // T373 で挙動変更: 旧仕様では「両軸 reset 未到達 → null」だったが、
+    // T373 で stale 救済により snap 値（低 util）のまま admit されるよう変わった。
     const t = insertToken(
       db,
       makeToken({ handle: "@k4", organization_id: "org-k4-tc4", tags: ["any"] }),
     );
     seedStaleSnapshot({
       tokenId: t.id,
-      util5h: 0.9,
-      util7d: 0.5,
+      util5h: 0.07,
+      util7d: 0.18,
       reset5hAt: futureIso(60),
       reset7dAt: futureIso(120),
       recordedMinutesAgo: 50,
     });
     const sel = selectToken(db, "h-tc4");
-    expect(sel).toBeNull();
+    expect(sel?.token.handle).toBe("@k4");
   });
 
-  test("TC5: stale + reset_5h_at=null + reset_7d_at=null → 候補外（リセット情報無し）", () => {
+  test("TC5 (T373: 旧 null → admit 転換): stale + reset_5h_at=null + reset_7d_at=null → snap 値で admit", () => {
+    // T373 で挙動変更: 旧仕様では「reset 情報無し → null」だったが、
+    // T373 で reset 情報が無くても snap 値が下限となり admit される。
     const t = insertToken(
       db,
       makeToken({ handle: "@k5", organization_id: "org-k5-tc5", tags: ["any"] }),
     );
     seedStaleSnapshot({
       tokenId: t.id,
-      util5h: 0.9,
-      util7d: 0.5,
+      util5h: 0.05,
+      util7d: 0.10,
       reset5hAt: null,
       reset7dAt: null,
       recordedMinutesAgo: 50,
     });
     const sel = selectToken(db, "h-tc5");
-    expect(sel).toBeNull();
+    expect(sel?.token.handle).toBe("@k5");
   });
 
   test("TC6: fresh snapshot は util 上書きされない（回帰）", () => {
@@ -1894,21 +1898,23 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     expect(sel?.token.handle).toBe("@kepoch1");
   });
 
-  test("T372-2: stale + reset_5h_at = epoch sec(future) + reset_7d_at = epoch sec(future) → 候補外", () => {
+  test("T372-2 (T373: 旧 null → admit 転換): stale + 両軸 epoch sec(future) → snap 値で admit", () => {
+    // T373 で挙動変更: 旧仕様では「両軸 reset 未到達 → null」だったが、
+    // T373 で epoch sec の未来値でも snap 値が下限となり admit される。
     const t = insertToken(
       db,
       makeToken({ handle: "@kepoch2", organization_id: "org-kepoch2", tags: ["any"] }),
     );
     seedStaleSnapshot({
       tokenId: t.id,
-      util5h: 0.9,
-      util7d: 0.5,
+      util5h: 0.05,
+      util7d: 0.10,
       reset5hAt: futureEpochSec(60),
       reset7dAt: futureEpochSec(120),
       recordedMinutesAgo: 50,
     });
     const sel = selectToken(db, "h-372-2");
-    expect(sel).toBeNull();
+    expect(sel?.token.handle).toBe("@kepoch2");
   });
 
   test("T372-3: stale + reset_5h_at = ISO 8601(past) → 後方互換で admit（既存 TC1 と同等）", () => {
@@ -1928,21 +1934,25 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     expect(sel?.token.handle).toBe("@kiso");
   });
 
-  test("T372-4: stale + reset_5h_at = 不正値 → NaN 解釈 → 候補外（安全側）", () => {
+  test("T372-4 (T373: 旧 null → admit 転換): stale + reset_*_at が不正値 → NaN 解釈で reset 過去とみなさず snap 値で admit", () => {
+    // T373 で挙動変更: 旧仕様では「不正値 → null」だったが、
+    // T373 では reset 過去判定 (NaN<=now → false) で effUtil 上書きが発動せず、
+    // snap 値そのまま admit される。snap.util_5h>0.95 ならブロッカーで止まる、という設計に変わった。
+    // T373-2 で「snap.util_5h>0.95 でブロッカー除外」を別途 assert している。
     const t = insertToken(
       db,
       makeToken({ handle: "@kbad", organization_id: "org-kbad", tags: ["any"] }),
     );
     seedStaleSnapshot({
       tokenId: t.id,
-      util5h: 0.9,
-      util7d: 0.5,
+      util5h: 0.05,
+      util7d: 0.10,
       reset5hAt: "abc",
       reset7dAt: "not-a-date",
       recordedMinutesAgo: 50,
     });
     const sel = selectToken(db, "h-372-4");
-    expect(sel).toBeNull();
+    expect(sel?.token.handle).toBe("@kbad");
   });
 
   test("T372-5: fresh snapshot は reset_5h_at が epoch sec でも util 上書きされない（回帰）", () => {
@@ -1965,6 +1975,158 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     seedFreshSnapshot(tComp.id, 0.5, 0.5);
     const sel = selectToken(db, "h-372-5");
     expect(sel?.token.handle).toBe("@compfresh");
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // T373: stale + reset 未到達でも snap 値を下限として admit する（旧 TC4 等の挙動を反転）
+  // ───────────────────────────────────────────────────────────────────────────
+
+  test("T373-1: stale + 両軸 reset 未到達 + 低 util → admit、score=0.3·snap.util_5h+0.7·snap.util_7d", () => {
+    const kami = insertToken(
+      db,
+      makeToken({ handle: "@kami", organization_id: "org-kami-373-1", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: kami.id,
+      util5h: 0.07,
+      util7d: 0.18,
+      reset5hAt: futureIso(60),
+      reset7dAt: futureIso(60 * 24 * 7),
+      recordedMinutesAgo: 74,
+    });
+    // 競合: fresh @hi, score = 0.3*0.5 + 0.7*0.5 = 0.5
+    // @kami の score = 0.3*0.07 + 0.7*0.18 = 0.147 → @kami 勝利
+    const hi = insertToken(
+      db,
+      makeToken({ handle: "@hi", organization_id: "org-hi-373-1", tags: ["any"] }),
+    );
+    seedFreshSnapshot(hi.id, 0.5, 0.5);
+    const sel = selectToken(db, "h-373-1");
+    expect(sel?.token.handle).toBe("@kami");
+  });
+
+  test("T373-2: stale + 両軸 reset 未到達 + snap.util_5h>0.95 → ブロッカーで除外", () => {
+    const hot = insertToken(
+      db,
+      makeToken({ handle: "@hot", organization_id: "org-hot-373-2", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: hot.id,
+      util5h: 0.97,
+      util7d: 0.18,
+      reset5hAt: futureIso(60),
+      reset7dAt: futureIso(60 * 24 * 7),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-373-2");
+    expect(sel).toBeNull();
+  });
+
+  test("T373-3: stale + 5h reset 過去 / 7d 未到達 → effUtil=(0, snap.util_7d)", () => {
+    const aux = insertToken(
+      db,
+      makeToken({ handle: "@aux", organization_id: "org-aux-373-3", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: aux.id,
+      util5h: 0.9,
+      util7d: 0.1,
+      reset5hAt: pastIso(5),
+      reset7dAt: futureIso(120),
+      recordedMinutesAgo: 50,
+    });
+    // 競合: fresh @cmp, score = 0.3*0.05 + 0.7*0.5 = 0.365
+    // @aux の effUtil=(0, 0.1) → score = 0.07 → @aux 勝利
+    const cmp = insertToken(
+      db,
+      makeToken({ handle: "@cmp", organization_id: "org-cmp-373-3", tags: ["any"] }),
+    );
+    seedFreshSnapshot(cmp.id, 0.05, 0.5);
+    const sel = selectToken(db, "h-373-3");
+    expect(sel?.token.handle).toBe("@aux");
+  });
+
+  test("T373-4: stale + 両軸 reset 過去 → effUtil=(0,0)、score=0 で fresh より優先（リグレッション）", () => {
+    const k4r = insertToken(
+      db,
+      makeToken({ handle: "@k4r", organization_id: "org-k4r-373-4", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: k4r.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: pastIso(5),
+      reset7dAt: pastIso(5),
+      recordedMinutesAgo: 50,
+    });
+    const cmp = insertToken(
+      db,
+      makeToken({ handle: "@cmp4r", organization_id: "org-cmp4r-373-4", tags: ["any"] }),
+    );
+    seedFreshSnapshot(cmp.id, 0.05, 0.05);
+    const sel = selectToken(db, "h-373-4");
+    expect(sel?.token.handle).toBe("@k4r");
+  });
+
+  test("T373-5: fresh snapshot は reset_*_at 過去でも effUtil 上書きされない（回帰）", () => {
+    const hi = insertToken(
+      db,
+      makeToken({ handle: "@hi5", organization_id: "org-hi-373-5", tags: ["any"] }),
+    );
+    upsertUsageSnapshot(db, {
+      token_id: hi.id,
+      util_5h: 0.9,
+      util_7d: 0.5,
+      reset_5h_at: pastEpochSec(5),
+      reset_7d_at: pastEpochSec(5),
+      unified_status: null,
+    });
+    const cmp = insertToken(
+      db,
+      makeToken({ handle: "@cmp5", organization_id: "org-cmp-373-5", tags: ["any"] }),
+    );
+    seedFreshSnapshot(cmp.id, 0.5, 0.5);
+    // fresh @hi5 は上書きされず score = 0.3*0.9 + 0.7*0.5 = 0.62
+    // @cmp5 score = 0.5 → @cmp5 勝利
+    const sel = selectToken(db, "h-373-5");
+    expect(sel?.token.handle).toBe("@cmp5");
+  });
+
+  test("T373-6: DB-level 統合 (@kami stale 未到達 / @tayo stale 5h 過去 / @kddi fresh) → @kami が選ばれる", () => {
+    const kami = insertToken(
+      db,
+      makeToken({ handle: "@kami", organization_id: "org-kami-373-6", tags: ["any"] }),
+    );
+    const tayo = insertToken(
+      db,
+      makeToken({ handle: "@tayo", organization_id: "org-tayo-373-6", tags: ["any"] }),
+    );
+    const kddi = insertToken(
+      db,
+      makeToken({ handle: "@kddi", organization_id: "org-kddi-373-6", tags: ["any"] }),
+    );
+    // @kami: stale 両軸未到達 → effUtil=(0.07, 0.18) → score=0.147
+    seedStaleSnapshot({
+      tokenId: kami.id,
+      util5h: 0.07,
+      util7d: 0.18,
+      reset5hAt: futureIso(60),
+      reset7dAt: futureIso(60 * 24 * 7),
+      recordedMinutesAgo: 74,
+    });
+    // @tayo: stale 5h 過去 / 7d 未来 → effUtil=(0, 0.91) → score=0.637
+    seedStaleSnapshot({
+      tokenId: tayo.id,
+      util5h: 0.02,
+      util7d: 0.91,
+      reset5hAt: pastIso(5),
+      reset7dAt: futureIso(60 * 24 * 7),
+      recordedMinutesAgo: 60,
+    });
+    // @kddi: fresh, util=(0.51, 0.85) → score=0.748
+    seedFreshSnapshot(kddi.id, 0.51, 0.85);
+    const sel = selectToken(db, "h-373-6");
+    expect(sel?.token.handle).toBe("@kami");
   });
 });
 

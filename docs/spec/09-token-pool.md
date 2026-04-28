@@ -237,17 +237,36 @@ effectiveDefault = tokenPool.default
 1. **exclude**: `policy.exclude` に含まれる handle を最優先で除外
 2. **selectable=0 の runtime 昇格**: handle が `effectiveDefault` と一致する場合のみ候補化（DB 書き換えなし）
 3. **lease 中は除外**（120 秒 TTL）
-4. **stale 除外**: `recorded_at` が 30 分以上古い
-5. **ブロッカー除外**: `util_5h > 0.95`（5h 使用率 95% 超）
+4. **stale 救済 (T373)**: `recorded_at` が 30 分以上古くても除外しない。
+   `reset_5h_at` / `reset_7d_at` が過去の軸は `effUtil*=0` として、未到達 / null の軸は
+   `snap.util_*` を下限として残す。旧仕様 (T369) の「両軸とも reset 未到達なら除外」は廃止した。
+   理由: 久しく使われていない token = 余裕がある、のに stale で永久除外されると spawn → snap 更新の
+   循環が起動せずデッドロックする（`@kami` の症状）。高 util の stale token は 5. ブロッカーで止まる。
+5. **ブロッカー除外**: `effUtil5h > 0.95`（4. で算出した effUtil で判定。stale でも snap 値が高ければ継続ブロック）
 6. **admit 判定**:
    - handle == `effectiveDefault` → 無条件 admit
    - handle ∈ `policy.include` → tags 不問 admit
    - `isOss=true` → tags 不問 admit
    - 通常 tag マッチ（`token.tags` が `any` を含む / `projectTags` が `any` / 交集合あり）→ admit
-7. **score 最小を選択**: `score = 0.3 * util_5h + 0.7 * util_7d`（null は 0 扱い）
+7. **score 最小を選択**: `score = 0.3 * effUtil5h + 0.7 * effUtil7d`（null は 0 扱い）
 8. **atomic lease 取得**: `INSERT OR IGNORE`、120 秒 TTL
 
 race で他に先に取られた場合は null を返す（フォールバックへ）。
+
+#### stale 救済の挙動 (T373)
+
+stale snapshot の effUtil 算出と admit 結果のサンプル:
+
+| handle | snap (5h, 7d) | stale | reset_5h | reset_7d | effUtil_5h | effUtil_7d | score | 結果 |
+|---|---|---|---|---|---|---|---|---|
+| @kami | (0.07, 0.18) | yes | 未来 | 未来 | 0.07 | 0.18 | 0.147 | **選ばれる** |
+| @tayo | (0.02, 0.91) | yes | 過去 | 未来 | 0 | 0.91 | 0.637 | 候補（負け） |
+| @kddi | (0.51, 0.85) | no | — | — | 0.51 | 0.85 | 0.748 | 候補（負け） |
+| @hot | (0.97, 0.5) | yes | 未来 | 未来 | 0.97 | 0.5 | — | **ブロッカー除外** |
+
+`reset_*_at` が不正値・空文字の場合は `parseResetEpochMs` が `NaN` を返し、`<=` 比較が常に false になるため
+未到達扱い（snap 値そのまま）になる。`pool-throttle.ts: countPoolTokens` の `available` 計数も同じロジックを共有する
+（`parseResetEpochMs` を export して両方で再利用）。
 
 ---
 
@@ -277,10 +296,13 @@ sort して `acquireLease` するだけ。
 
 これにより以下が **規約レベルではなく実装レベルで一意** になる:
 
-- exclude / lease / stale / blocker (`util_5h > 0.95`) の除外条件
+- exclude / lease / stale 救済 (T373: `effUtil*=0` 上書き) / blocker (`effUtil5h > 0.95`) の除外条件
 - `effectiveDefault = projectDefault ?? (isOss ? ossDefault : null)` の解決
 - selectable=0 の default 昇格（DB 書き換えなし）
 - include / OSS / tag マッチの admit 判定
+
+`pool-throttle.ts: countPoolTokens` の `available` 計数も `parseResetEpochMs` を共有して同じ
+stale 救済ロジックで数える（cosmetic な dashboard 表示が `selectToken` の admit と乖離しない）。
 
 「pool throttled なのに spawn できる / pool 余裕なのに止まる」という乖離は構造的に発生しない。
 

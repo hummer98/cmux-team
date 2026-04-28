@@ -128,11 +128,22 @@ describe("isThrottled5h: pool 有効経路", () => {
     expect(result).toBe(true);
   });
 
-  test("T4: selectable=2 件、両方 stale (35 分前) → throttled=true", () => {
+  test("T4 (T373: 旧 true → false 転換): 両方 stale (35 分前) + reset 情報なし → throttled=false (snap 値で admit)", () => {
+    // T373 で挙動変更: stale 救済により reset 情報が無くても snap 値（低 util）が下限となり admit される。
     const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
     const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
     seedSnapshot(a.id, 0.1, 0.1, staleRecordedAt());
     seedSnapshot(b.id, 0.1, 0.1, staleRecordedAt());
+    const result = isThrottled5h(db, null, { ...DEFAULT_OPTS, policy: defaultPolicy() }, NOW_ISO);
+    expect(result).toBe(false);
+  });
+
+  test("T4-blocker (T373): 両方 stale + util_5h>0.95 → throttled=true (ブロッカー除外で残らない)", () => {
+    // T373: stale でも snap.util_5h が blocker 閾値 (0.95) 超なら除外される。
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    seedSnapshot(a.id, 0.97, 0.5, staleRecordedAt());
+    seedSnapshot(b.id, 0.97, 0.5, staleRecordedAt());
     const result = isThrottled5h(db, null, { ...DEFAULT_OPTS, policy: defaultPolicy() }, NOW_ISO);
     expect(result).toBe(true);
   });
@@ -252,7 +263,9 @@ describe("isThrottled5h: pool 無効経路 (db=null)", () => {
 });
 
 describe("countPoolTokens", () => {
-  test("T12: 3 件 (selectable=true: 0.5 / 0.96 / stale) → enabled:true, selectable:3, available:1, total:3, stale:1", () => {
+  test("T12 (T373: stale も snap 値で admit): 3 件 (0.5 / 0.96 / stale 0.1) → available:2, stale:1", () => {
+    // T373 で挙動変更: stale token (util=0.1) も snap 値で blocker 通らず admit されるため
+    // available は 2 (a の 0.5 と c の 0.1)。stale=1 は変わらず。
     const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
     const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
     const c = insertToken(db, makeToken({ handle: "@c", organization_id: "org-c" }));
@@ -264,7 +277,7 @@ describe("countPoolTokens", () => {
     expect(r.enabled).toBe(true);
     expect(r.total).toBe(3);
     expect(r.selectable).toBe(3);
-    expect(r.available).toBe(1);
+    expect(r.available).toBe(2);
     expect(r.stale).toBe(1);
   });
 
