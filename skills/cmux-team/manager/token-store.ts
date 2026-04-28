@@ -738,6 +738,19 @@ function hoursUntil(raw: string | null, nowMs: number): number | null {
   return Math.max(deltaH, MIN_HOURS);
 }
 
+/**
+ * Anthropic ratelimit ヘッダー由来の reset 時刻を epoch ms に変換する。
+ * - epoch sec の文字列（例 "1777366200"）→ * 1000 して epoch ms
+ * - ISO 8601 文字列（例 "2026-04-25T10:00:00.000Z"）→ Date.parse 経由で epoch ms
+ * - 不正値・空文字 → NaN（呼び出し側の `<=` 比較で安全側 false になる）
+ */
+function parseResetEpochMs(v: string): number {
+  const n = Number(v);
+  if (Number.isFinite(n)) return n * 1000;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : NaN;
+}
+
 export function computePoolCapacity(
   tokens: TokenForCapacity[],
   nowIso: string = new Date().toISOString(),
@@ -917,9 +930,9 @@ function admitCandidates(
 
       if (isStale) {
         const reset5hPast =
-          snap.reset_5h_at != null && new Date(snap.reset_5h_at).getTime() <= now;
+          snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= now;
         const reset7dPast =
-          snap.reset_7d_at != null && new Date(snap.reset_7d_at).getTime() <= now;
+          snap.reset_7d_at != null && parseResetEpochMs(snap.reset_7d_at) <= now;
 
         if (!reset5hPast && !reset7dPast) continue;
 

@@ -1728,6 +1728,12 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
   function futureIso(minutesAhead: number): string {
     return new Date(Date.now() + minutesAhead * 60_000).toISOString();
   }
+  function pastEpochSec(minutesAgo: number): string {
+    return String(Math.floor((Date.now() - minutesAgo * 60_000) / 1000));
+  }
+  function futureEpochSec(minutesAhead: number): string {
+    return String(Math.floor((Date.now() + minutesAhead * 60_000) / 1000));
+  }
 
   test("TC1: stale + reset_5h_at 過去 + reset_7d_at 未来 → 候補化、util_5h=0 で評価", () => {
     const t = insertToken(
@@ -1869,6 +1875,96 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
     });
     const sel = selectToken(db, "h-tc8");
     expect(sel?.token.handle).toBe("@k8");
+  });
+
+  test("T372-1: stale + reset_5h_at = epoch sec(past) → 候補化、effUtil5h=0 で score 計算", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@kepoch1", organization_id: "org-kepoch1", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: pastEpochSec(5),
+      reset7dAt: futureEpochSec(60),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-372-1");
+    expect(sel?.token.handle).toBe("@kepoch1");
+  });
+
+  test("T372-2: stale + reset_5h_at = epoch sec(future) + reset_7d_at = epoch sec(future) → 候補外", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@kepoch2", organization_id: "org-kepoch2", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: futureEpochSec(60),
+      reset7dAt: futureEpochSec(120),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-372-2");
+    expect(sel).toBeNull();
+  });
+
+  test("T372-3: stale + reset_5h_at = ISO 8601(past) → 後方互換で admit（既存 TC1 と同等）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@kiso", organization_id: "org-kiso", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: pastIso(5),
+      reset7dAt: futureIso(60),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-372-3");
+    expect(sel?.token.handle).toBe("@kiso");
+  });
+
+  test("T372-4: stale + reset_5h_at = 不正値 → NaN 解釈 → 候補外（安全側）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@kbad", organization_id: "org-kbad", tags: ["any"] }),
+    );
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.5,
+      reset5hAt: "abc",
+      reset7dAt: "not-a-date",
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-372-4");
+    expect(sel).toBeNull();
+  });
+
+  test("T372-5: fresh snapshot は reset_5h_at が epoch sec でも util 上書きされない（回帰）", () => {
+    const tHigh = insertToken(
+      db,
+      makeToken({ handle: "@hifresh", organization_id: "org-hifresh", tags: ["any"] }),
+    );
+    upsertUsageSnapshot(db, {
+      token_id: tHigh.id,
+      util_5h: 0.9,
+      util_7d: 0.5,
+      reset_5h_at: pastEpochSec(5),
+      reset_7d_at: pastEpochSec(5),
+      unified_status: null,
+    });
+    const tComp = insertToken(
+      db,
+      makeToken({ handle: "@compfresh", organization_id: "org-compfresh", tags: ["any"] }),
+    );
+    seedFreshSnapshot(tComp.id, 0.5, 0.5);
+    const sel = selectToken(db, "h-372-5");
+    expect(sel?.token.handle).toBe("@compfresh");
   });
 });
 
