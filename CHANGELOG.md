@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.17.0] - 2026-04-28
+
+### Added
+
+- **agent ペインの statusline に tokenHandle (`@xxx`) を表示（T375）**。token pool 有効時に各 agent が使用中の token アカウントを統計欄末尾の `@<handle>` セグメントで確認できる。tokenHandle 未指定時は no-op で既存出力と bit 一致を保つ後方互換設計
+
 ### Changed
 
 - **pool capacity 表示を「7d 日次 forecast ゲージ + next 候補 5h」に再設計（T374 / A024）**。従来の `pool capacity: 5h NN% / 7d NN%` 二値表示を廃止し、ヘッダーを 1 行に集約: `pool 7d ██▇▅▅▆█  next: @kddi 5h:65%`。7d は今後 7 日（Day 0..6）の日次割当 forecast を 8 段スパークラインで可視化（100% = sustainable pace）、next は spawn-agent が次に割り当てる候補アカウントの util_5h を peek（lease は取らない）。per-surface decoration `<5h:X%/7d:Y%> cap:Z%` は削除（詳細は `cmux-team pool status` / `token list` で確認）
