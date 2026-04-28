@@ -17,12 +17,19 @@ https://github.com/user-attachments/assets/1d402a69-f48c-4a43-b52d-9c80f0f90ea1
 
 ## Why cmux-team?
 
-Claude Code's built-in sub-agents (the Agent tool) are useful, but **you can't see what they're doing**. You only get the final result — the process is a black box.
+Claude Code's built-in sub-agents are useful, but **you can't see what they're doing**. You only get the final result — the process is a black box.
 
-cmux-team uses cmux's terminal splitting to run sub-agents **visibly** in parallel.
+This matters more than it might seem. When AI agents work invisibly, two problems compound:
 
-**What you do**: Just give Claude instructions in natural language.
-**What Claude does**: Splits panes via cmux, launches sub-agents, monitors them, and integrates results.
+- **Late detection**: You only discover something went wrong after the work is done — wasting compute and time, with no way to intervene mid-course
+- **No improvement signal**: Without seeing intermediate behavior, you can't tell *why* a result was good or bad — which makes it hard to improve your prompts, tasks, and agent design
+
+cmux-team is an **AI observatory**, not another automation black box. The terminal panes aren't decoration — they're the product. A 10-second glance at a Conductor pane is often enough to catch a problem that would otherwise only surface at the end.
+
+The design principle: *reduce cognitive load by making the process **visible**, not by hiding it.*
+
+**What you do**: Give Claude instructions in natural language.
+**What Claude does**: Splits panes via cmux, launches sub-agents, monitors them, and integrates results — all in plain sight.
 
 ## Prerequisites
 
