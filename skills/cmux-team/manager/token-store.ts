@@ -884,11 +884,22 @@ function normalizePolicy(policy: SelectTokenPolicy | string[] | undefined): Sele
  *
  * 副作用なし。`expireLeases` を呼ばない（呼び出し側の責務）。
  */
+interface AdmitCandidate {
+  token: Token;
+  score: number;
+  /** 候補抽出時の effUtil_5h（stale 救済反映後）。score と同じ値を採用する（T374 / peek 用） */
+  effUtil5h: number;
+  /** 候補抽出時の effUtil_7d（stale 救済反映後） */
+  effUtil7d: number;
+  /** snapshot が存在したか。peek 時に null 返却を判定するために使う（T374） */
+  hasSnapshot: boolean;
+}
+
 function admitCandidates(
   db: Database,
   policy: SelectTokenPolicy,
   nowIso: string,
-): Array<{ token: Token; score: number }> {
+): AdmitCandidate[] {
   const effectiveDefault: string | null =
     policy.projectDefault !== null ? policy.projectDefault : policy.isOss ? policy.ossDefault : null;
 
@@ -905,7 +916,7 @@ function admitCandidates(
   const projectTagSet = new Set(policy.projectTags);
   const includeSet = new Set(policy.include);
   const excludeSet = new Set(policy.exclude);
-  const candidates: Array<{ token: Token; score: number }> = [];
+  const candidates: AdmitCandidate[] = [];
 
   for (const tok of tokens) {
     // 1) exclude 最優先
@@ -963,7 +974,13 @@ function admitCandidates(
     if (!admitted) continue;
 
     const score = 0.3 * effUtil5h + 0.7 * effUtil7d;
-    candidates.push({ token: tok, score });
+    candidates.push({
+      token: tok,
+      score,
+      effUtil5h,
+      effUtil7d,
+      hasSnapshot: snap !== null,
+    });
   }
 
   return candidates;
@@ -1038,6 +1055,44 @@ export function selectToken(
   if (!lease) return null; // race で他が先に取得
 
   return { token: selected, lease };
+}
+
+/**
+ * `selectToken` が次に選ぶ候補を peek する（lease を取らない / T374 / A024）。
+ *
+ * - `selectToken` と同一の admit 経路 (`admitCandidates`) を共有するため、
+ *   peek で出した候補が実際の spawn-agent で選ばれる候補と一致する（UX 整合性）
+ * - lease を取らないので連続 peek しても副作用なし（`expireLeases` の DB write は許容）
+ * - score 最小（`0.3 * effUtil5h + 0.7 * effUtil7d`）が選ばれる
+ *
+ * `util_5h` / `util_7d` は admit 時の effUtil（stale 救済反映後）を返す。
+ * snapshot が存在しない token が選ばれた場合は両方 null を返す（snapshot 待ち UI 表示用）。
+ */
+export interface PeekedToken {
+  handle: string;
+  /** stale 救済反映後の effUtil_5h（snapshot 不在時 null） */
+  util_5h: number | null;
+  /** stale 救済反映後の effUtil_7d（snapshot 不在時 null） */
+  util_7d: number | null;
+}
+
+export function peekNextToken(
+  db: Database,
+  policy: SelectTokenPolicy | string[] = ["any"],
+  nowIso: string = new Date().toISOString(),
+): PeekedToken | null {
+  const p = normalizePolicy(policy);
+  expireLeases(db, nowIso);
+  const candidates = admitCandidates(db, p, nowIso);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.score - b.score);
+  const best = candidates[0];
+  if (!best) return null;
+  return {
+    handle: best.token.handle,
+    util_5h: best.hasSnapshot ? best.effUtil5h : null,
+    util_7d: best.hasSnapshot ? best.effUtil7d : null,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -365,30 +365,109 @@ stale 救済ロジックで数える（cosmetic な dashboard 表示が `selectT
 
 ---
 
-## pool_capacity 指標
+## 7d Forecast ゲージ + next 候補（A024 / T374）
 
-**「Max x20 を 100% とした持続可能流量の比率」**。100% 超あり（複数 x20 持ちなら 200%+）。
+ヘッダー表示は **「今後 7 日の日次割当 forecast を 8 段スパークラインで表示 + 次に spawn-agent が選ぶ候補アカウントの 5h util」** の 1 行に集約する。
 
 ```
-# 各 token の持続可能流量（pro unit / hour）
-flow_i = min(
-  remaining_5h_i * plan_ratio_i / t_5h_i,  # t = reset までの時間 [h]
-  remaining_7d_i * plan_ratio_i / t_7d_i
-)
-# 両 window とも reset 済み / null の場合: flow = plan_ratio / 168（7d フル相当）
-
-REFERENCE_FLOW = 20.0 / 168  # Max x20 満タン・7d 全期間の流量
-
-pool_capacity_pct = sum(flow_i) / REFERENCE_FLOW * 100
+pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%
 ```
 
-**色分け閾値**:
+### 計算式（forecast.ts）
 
-| 範囲 | 意味 |
-|------|------|
-| 100%+ | x20 相当以上、通常運用 |
-| 40〜100% | 手加減推奨 |
-| < 40% | タスク投入は reset 待ちを検討 |
+各 selectable アカウント i の per-hour rate:
+
+```
+rate_i(t) =
+  t < hoursToReset_i  → (1 - util_7d_i) / hoursToReset_i        # reset 前: 残量 / 残時間
+  t >= hoursToReset_i → 1 / 168                                  # reset 後: sustainable pace
+```
+
+bin = `[a, b]` における allocation 積分:
+
+```
+alloc_i([a, b]) =
+  b <= reset_i      : (b - a) * rate_pre_i
+  a >= reset_i      : (b - a) / 168
+  bin straddles     : (reset - a) * rate_pre + (b - reset) / 168
+
+pool(d)  = Σ alloc_i(bin_d) * plan_ratio_i
+denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i
+bar(d)   = pool(d) / denom(d) * 100   # 100% = sustainable pace
+```
+
+### bin 切り出し
+
+| Day | bin |
+|---|---|
+| 0 | `[now, 当日 24:00 (local TZ)]`（残り時間のみ。可変幅） |
+| 1..6 | 24h 固定 |
+
+local TZ は `Intl.DateTimeFormat().resolvedOptions().timeZone` を pool-summary.ts でランタイム解決し、forecast.ts に引数で注入する純関数構造。
+
+### スパークライン文字マッピング（8 段）
+
+| 範囲 | 文字 |
+|---|---|
+| 0–12.5% | ` ` (空) |
+| 12.5–25% | `▁` |
+| 25–37.5% | `▂` |
+| 37.5–50% | `▃` |
+| 50–62.5% | `▄` |
+| 62.5–75% | `▅` |
+| 75–87.5% | `▆` |
+| 87.5–100% | `▇` |
+| ≥100% | `█` (cap) |
+
+### 色閾値
+
+スパークライン色は `min(bar(d) for d=0..6)` ベース、全 cell 一括:
+
+| 範囲 | 色 |
+|---|---|
+| ≥100% | green |
+| 70–100% | yellow |
+| <70% | red |
+
+next 候補の 5h util 色:
+
+| 範囲 | 色 |
+|---|---|
+| `>95%` | red（実質 blocker 通過、別アカウントに切り替わる境界） |
+| `>70%` | yellow |
+| `<=70%` | green |
+| null（snapshot 待ち） | gray |
+
+### next 候補の選定（peek、lease を取らない）
+
+`peekNextToken(db, policy, nowIso)` は `selectToken` と **同一の admit 経路** (`admitCandidates`) を共有する。これにより peek で出した候補が実際の spawn-agent で選ばれる候補と一致する（UX 整合性）。
+
+- `policy.exclude` を最優先で除外
+- `selectable=0` の token は `effectiveDefault` 一致時のみ runtime 候補化
+- lease 中は除外
+- **stale 救済 (T373)**: `recorded_at` が 30 分超でも除外せず、reset 通過済み軸の `effUtil*=0` 救済込みで peek
+- ブロッカー除外: `effUtil5h > 0.95`
+- admit 判定: `effectiveDefault` → `include` → `isOss` → tag マッチ
+- score 最小: `0.3 * effUtil5h + 0.7 * effUtil7d`
+
+snapshot 不在の token が選ばれた場合 `util_5h=null` / `util_7d=null` を返し、UI は `next: @handle 5h:—` を表示する。
+
+### エッジケース
+
+| 状況 | 表示 |
+|---|---|
+| 候補アカウントなし（全 blocker / tags 不適合） | `next: ⚠ no eligible account` |
+| pool 機能 OFF / token 未登録 | このヘッダー行ごと出さない |
+| 候補有 + util_5h null（snapshot 待ち） | `next: @kddi 5h:—` |
+| 全アカウントの reset_7d_at が null | 7d スパークラインを出さず `next:` だけ表示 |
+
+### per-handle 行は出さない
+
+旧 A019 §TUI 表示の `Master [969] @pers <5h:10%/7d:30%> cap:100%` 形式の per-surface decoration は **撤去**（A024 §per-handle 行は出さない）。アカウント別の詳細は `cmux-team token list` / `cmux-team pool status` で確認する。
+
+### 廃止: pool_capacity_pct
+
+旧 `capacity_5h_pct` / `capacity_7d_pct` 集計値（`computePoolCapacity` の `total5h` / `total7d`）は UI から完全撤去（T374 / A024）。`per_token.cap_pct`（min ベース）は `cmux-team pool status` / `cmux-team token list` の per-token 表示用に温存する。
 
 ---
 
@@ -460,7 +539,11 @@ Agent 実行中（proxy 経由）
 
 | ファイル | 役割 |
 |---------|------|
-| `skills/cmux-team/manager/token-store.ts` | DB 初期化・CRUD・Keychain 連携・`selectToken`・`computePoolCapacity` |
+| `skills/cmux-team/manager/token-store.ts` | DB 初期化・CRUD・Keychain 連携・`selectToken`・`peekNextToken`・`computePoolCapacity` |
+| `skills/cmux-team/manager/forecast.ts` | A024 §計算式 — 7d 日次割当 forecast の純関数 (`computePool7dForecast`) |
+| `skills/cmux-team/manager/pool-summary.ts` | `buildPoolSummary` — forecast7d / nextCandidate / perHandle を集約 |
+| `skills/cmux-team/manager/pool-status-header.ts` | CLI ヘッダー文字列組み立て + スパークライン helper (`mapBarToSparkline` / `pickSparklineColor`) |
+| `skills/cmux-team/manager/pool-header-display.ts` | dashboard ヘッダー parts 組み立て (Ink RateLimitPart) |
 | `skills/cmux-team/manager/token-cli.ts` | `cmux-team token` サブコマンド実装 |
 | `skills/cmux-team/manager/token-format.ts` | `token list` / `pool status` 共有フォーマッタ |
 | `~/.cmux-team/tokens.db` | グローバルトークンストア |

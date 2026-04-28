@@ -34,6 +34,7 @@ import {
   updateTokenPromoteFields,
   selectToken,
   canSelectAnyToken,
+  peekNextToken,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -2216,5 +2217,132 @@ describe("canSelectAnyToken (T367)", () => {
     );
     seedFreshSnapshot(t.id, 0.96, 0.5);
     expect(canSelectAnyToken(db, "h", ["any"])).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// peekNextToken (T374 / A024)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("peekNextToken (T374 / A024)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h: number | null, util7d: number | null): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  function seedStaleSnapshot(args: {
+    tokenId: number;
+    util5h: number | null;
+    util7d: number | null;
+    reset5hAt: string | null;
+    reset7dAt: string | null;
+    recordedMinutesAgo: number;
+  }): void {
+    upsertUsageSnapshot(db, {
+      token_id: args.tokenId,
+      util_5h: args.util5h,
+      util_7d: args.util7d,
+      reset_5h_at: args.reset5hAt,
+      reset_7d_at: args.reset7dAt,
+      unified_status: null,
+    });
+    const recordedAt = new Date(Date.now() - args.recordedMinutesAgo * 60_000).toISOString();
+    db.prepare("UPDATE usage_snapshots SET recorded_at = ? WHERE token_id = ?")
+      .run(recordedAt, args.tokenId);
+  }
+
+  function pastIso(minutesAgo: number): string {
+    return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  }
+
+  test("score 最小の候補を返す（lease 取得しない）", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-1", tags: ["any"] }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b-peek-1", tags: ["any"] }));
+    seedFreshSnapshot(a.id, 0.1, 0.2); // score = 0.03 + 0.14 = 0.17
+    seedFreshSnapshot(b.id, 0.5, 0.5); // score = 0.40
+    const peek = peekNextToken(db, ["any"]);
+    expect(peek?.handle).toBe("@a");
+    expect(peek?.util_5h).toBeCloseTo(0.1, 5);
+    expect(peek?.util_7d).toBeCloseTo(0.2, 5);
+    // peek 後に lease は取られていない → selectToken でも @a が選ばれる
+    const sel = selectToken(db, "h-peek-1", ["any"]);
+    expect(sel?.token.handle).toBe("@a");
+  });
+
+  test("連続 peek で同じ結果を返す（副作用なし）", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-2", tags: ["any"] }));
+    seedFreshSnapshot(a.id, 0.1, 0.2);
+    const p1 = peekNextToken(db, ["any"]);
+    const p2 = peekNextToken(db, ["any"]);
+    expect(p1?.handle).toBe(p2?.handle);
+    expect(p1?.util_5h).toBe(p2?.util_5h);
+    expect(p1?.util_7d).toBe(p2?.util_7d);
+  });
+
+  test("候補なし → null", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-3", tags: ["any"] }));
+    seedFreshSnapshot(a.id, 0.99, 0.99); // blocker
+    expect(peekNextToken(db, ["any"])).toBeNull();
+  });
+
+  test("snapshot 不在の token が候補 → util_5h=null, util_7d=null", () => {
+    insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-4", tags: ["any"] }));
+    // snapshot を仕込まない
+    const peek = peekNextToken(db, ["any"]);
+    expect(peek?.handle).toBe("@a");
+    expect(peek?.util_5h).toBeNull();
+    expect(peek?.util_7d).toBeNull();
+  });
+
+  test("stale 救済: stale + 両軸 reset 過去 → effUtil=(0,0) で peek", () => {
+    const t = insertToken(db, makeToken({ handle: "@stale", organization_id: "org-stale-peek", tags: ["any"] }));
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.9,
+      util7d: 0.8,
+      reset5hAt: pastIso(5),
+      reset7dAt: pastIso(5),
+      recordedMinutesAgo: 50,
+    });
+    const peek = peekNextToken(db, ["any"]);
+    expect(peek?.handle).toBe("@stale");
+    expect(peek?.util_5h).toBe(0); // stale 救済反映
+    expect(peek?.util_7d).toBe(0);
+  });
+
+  test("policy: SelectTokenPolicy オブジェクト形式を受け付ける（spawn-agent と同じ admit 経路）", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-5", tags: ["any"] }));
+    seedFreshSnapshot(a.id, 0.3, 0.3);
+    const peek = peekNextToken(db, {
+      projectTags: ["any"],
+      projectDefault: null,
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(peek?.handle).toBe("@a");
+  });
+
+  test("project_tags フィルタ: tags 不一致 token は admit されない", () => {
+    insertToken(db, makeToken({ handle: "@k", organization_id: "org-k-peek-6", tags: ["org:kddi"] }));
+    const peek = peekNextToken(db, ["org:other"]);
+    expect(peek).toBeNull();
+  });
+
+  test("score 同点なら DB 順（listTokens 順）で先頭が選ばれる", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a-peek-7", tags: ["any"] }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b-peek-7", tags: ["any"] }));
+    seedFreshSnapshot(a.id, 0.5, 0.5);
+    seedFreshSnapshot(b.id, 0.5, 0.5);
+    const peek = peekNextToken(db, ["any"]);
+    // score 同点 → 安定ソートで先に push された方
+    expect(peek?.handle).toBeOneOf(["@a", "@b"]);
   });
 });

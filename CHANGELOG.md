@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **pool capacity 表示を「7d 日次 forecast ゲージ + next 候補 5h」に再設計（T374 / A024）**。従来の `pool capacity: 5h NN% / 7d NN%` 二値表示を廃止し、ヘッダーを 1 行に集約: `pool 7d ██▇▅▅▆█  next: @kddi 5h:65%`。7d は今後 7 日（Day 0..6）の日次割当 forecast を 8 段スパークラインで可視化（100% = sustainable pace）、next は spawn-agent が次に割り当てる候補アカウントの util_5h を peek（lease は取らない）。per-surface decoration `<5h:X%/7d:Y%> cap:Z%` は削除（詳細は `cmux-team pool status` / `token list` で確認）
+
+### Removed
+
+- `pool-surface-row.ts` および per-surface pool decoration（A024 §per-handle 行は出さない / T374）
+- `dashboard.tsx::buildPoolHeader` legacy 経路（T363 で描画経路から外していた dead code を撤去）
+
 ## [4.16.0] - 2026-04-28
 
 ### Changed

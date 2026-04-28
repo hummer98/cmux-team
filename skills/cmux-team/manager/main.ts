@@ -131,7 +131,6 @@ import {
   KeychainNotFoundError,
 } from "./token-store";
 import { buildPoolHeaderLines } from "./pool-status-header";
-import { formatSurfaceRow } from "./pool-surface-row";
 import { loadPoolSummary } from "./pool-summary";
 
 // --- プロジェクトルート検出 ---
@@ -1454,22 +1453,18 @@ async function cmdStatus(): Promise<void> {
   const layout = typeof teamJson.layout === "string" ? teamJson.layout : "wide";
   console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
 
-  // T351: pool 機能の有効化判定 + snapshot 構築を loadPoolSummary に集約（pool-summary.ts 経由）。
-  // OFF / 失敗時は summary=null となり以降の pool セクション/handle 装飾を全て skip する。
+  // T374: pool ヘッダー（forecast7d スパークライン + next 候補）を 1 行で表示。
+  // OFF / 失敗時は summary=null となり pool ヘッダー行ごと省略する。
+  // per-surface decoration は A024 で撤去済（詳細は `cmux-team pool status` / `token list` で確認）。
   const poolSummary = await loadPoolSummary(PROJECT_ROOT);
-  const poolEnabled = poolSummary != null;
-  const poolHandleData = poolSummary?.perHandle ?? null;
   if (poolSummary) {
-    for (const line of buildPoolHeaderLines(poolSummary.header)) {
+    for (const line of buildPoolHeaderLines({
+      forecast7d: poolSummary.forecast7d,
+      nextCandidate: poolSummary.nextCandidate,
+    })) {
       console.log(line);
     }
   }
-
-  // T323: handle に対応する pool 情報をルックアップする。OFF / 失敗時は null を返す
-  const lookupPool = (handle: string | undefined) => {
-    if (!handle || !poolHandleData) return null;
-    return poolHandleData.get(handle) ?? null;
-  };
 
   // --- Master ---
   const mastersHeader = masters.length <= 1 ? "Master" : `Masters ${masters.length}`;
@@ -1480,19 +1475,7 @@ async function cmdStatus(): Promise<void> {
     for (const m of masters) {
       const st = m.status === "disconnected" ? "⚠" : m.status === "running" ? "◐" : "●";
       const statusLabel = m.status ? ` ${m.status}` : "";
-      let line = `  ${st} [${m.surface.replace("surface:", "")}]${statusLabel}`;
-      if (poolEnabled) {
-        const data = lookupPool(m.tokenHandle);
-        const suffix = formatSurfaceRow({
-          surface: m.surface,
-          handle: m.tokenHandle,
-          util5h: data?.util5h ?? null,
-          util7d: data?.util7d ?? null,
-          capPct: data?.capPct ?? null,
-        });
-        line = `  ${st} ${suffix}${statusLabel}`;
-      }
-      console.log(line);
+      console.log(`  ${st} [${m.surface.replace("surface:", "")}]${statusLabel}`);
     }
   }
 
@@ -1506,33 +1489,13 @@ async function cmdStatus(): Promise<void> {
       const statusLabel = c.status === "broken" ? " BROKEN" : "";
       const title = c.taskTitle ? `  ${c.taskTitle}` : "";
       const tid = c.taskId && c.taskId !== "undefined" ? `T${c.taskId}` : "---";
-      let cline = `  ${icon} [${c.surface.replace("surface:", "")}]${statusLabel}  ${tid}${title}`;
-      if (poolEnabled) {
-        const data = lookupPool(c.tokenHandle);
-        const suffix = formatSurfaceRow({
-          surface: c.surface,
-          handle: c.tokenHandle,
-          util5h: data?.util5h ?? null,
-          util7d: data?.util7d ?? null,
-          capPct: data?.capPct ?? null,
-        });
-        cline = `  ${icon} ${suffix}${statusLabel}  ${tid}${title}`;
-      }
-      console.log(cline);
+      console.log(`  ${icon} [${c.surface.replace("surface:", "")}]${statusLabel}  ${tid}${title}`);
 
-      // D5: agents は Conductor 行配下に indent 表示（pool 有効時のみ）
-      if (poolEnabled && c.agents && c.agents.length > 0) {
+      // D5: agents は Conductor 行配下に indent 表示
+      if (c.agents && c.agents.length > 0) {
         for (const a of c.agents) {
-          const data = lookupPool(a.tokenHandle);
-          const suffix = formatSurfaceRow({
-            surface: a.surface,
-            handle: a.tokenHandle,
-            util5h: data?.util5h ?? null,
-            util7d: data?.util7d ?? null,
-            capPct: data?.capPct ?? null,
-          });
           const roleLabel = a.role ? ` (${a.role})` : "";
-          console.log(`      └ ${suffix}${roleLabel}`);
+          console.log(`      └ [${a.surface.replace("surface:", "")}]${roleLabel}`);
         }
       }
     }

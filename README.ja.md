@@ -374,7 +374,13 @@ cmux-team token list     # 5h/7d 使用率とともに全トークンを表示
 3. 以下の順で admit: `projectDefault` 一致 → `include` リスト → `isOss` フラグ → tag マッチ（`"any"`）
 4. スコア = `0.3 × util_5h + 0.7 × util_7d` — 最小値を選択
 
-TUI dashboard ヘッダーに pool capacity（5h / 7d 残量）と、バインド後の per-surface トークン handle が表示されます。
+TUI dashboard ヘッダーには **7 日 forecast スパークライン**（Day 0..6 の日次割当、100% = sustainable pace）と次に spawn-agent が選ぶ **next 候補** を表示します:
+
+```
+pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%
+```
+
+per-surface decoration（`@handle <5h:X%/7d:Y%> cap:Z%`）は撤去し、ヘッダー集約に一本化しました。アカウント別の詳細は `cmux-team pool status` で確認してください。
 
 詳細（tag フィルタ・exclude/include ポリシー・plan ratio）は `docs/spec/09-token-pool.md` を参照。
 

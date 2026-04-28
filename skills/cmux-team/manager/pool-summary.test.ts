@@ -36,6 +36,16 @@ import {
   type InsertTokenInput,
 } from "./token-store";
 import { buildPoolSummary, loadPoolSummary } from "./pool-summary";
+import type { SelectTokenPolicy } from "./token-store";
+
+const ANY_POLICY: SelectTokenPolicy = {
+  projectTags: ["any"],
+  projectDefault: null,
+  include: [],
+  exclude: [],
+  isOss: false,
+  ossDefault: null,
+};
 
 const NOW_ISO = "2026-04-25T10:00:00.000Z";
 const NOW_MS = new Date(NOW_ISO).getTime();
@@ -79,11 +89,8 @@ afterEach(() => {
 });
 
 describe("buildPoolSummary", () => {
-  test("case A: 単一 token util_5h=util_7d=0.5, plan_ratio=20 → 5h ≒ 1680%, 7d ≒ 50%", () => {
-    // remaining_5h = remaining_7d = 0.5
-    // flow_5h = 0.5 * 20 / 5 = 2.0  → cap_5h = 2.0 / (20/168) * 100 = 1680%
-    // flow_7d = 0.5 * 20 / 168 ≒ 0.0595 → cap_7d ≒ 50%
-    // per_token (min ベース) ≒ 50%
+  test("case A: 単一 token util_5h=util_7d=0.5 → perHandle.capPct ≒ 50%、forecast7d は寄与 1 token", () => {
+    // T374: 旧 header.capacity_*_pct は撤去。per_token cap (min ベース) は perHandle.capPct に残る
     const t = insertToken(db, makeToken({
       handle: "@kddi",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -98,20 +105,18 @@ describe("buildPoolSummary", () => {
     });
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacity5hPct).toBeGreaterThan(1679.5);
-    expect(summary.header.capacity5hPct).toBeLessThan(1680.5);
-    expect(summary.header.capacity7dPct).toBeGreaterThan(49.9);
-    expect(summary.header.capacity7dPct).toBeLessThan(50.1);
-
     const perHandle = summary.perHandle.get("@kddi");
     expect(perHandle).toBeDefined();
     expect(perHandle?.util5h).toBe(0.5);
     expect(perHandle?.util7d).toBe(0.5);
     expect(perHandle?.capPct).toBeGreaterThan(49.9);
     expect(perHandle?.capPct).toBeLessThan(50.1);
+    // forecast7d: 単一 selectable + plan_ratio + util_7d + reset_7d_at が non-null → contributingTokens=1
+    expect(summary.forecast7d.contributingTokens).toBe(1);
+    expect(summary.forecast7d.bars).toHaveLength(7);
   });
 
-  test("case B: 2 token を case A と同条件 → 5h ≒ 3360%, 7d ≒ 100% (合算)", () => {
+  test("case B: 2 token を case A と同条件 → perHandle.size=2、forecast7d 寄与 2", () => {
     const t1 = insertToken(db, makeToken({
       handle: "@kddi",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -132,18 +137,13 @@ describe("buildPoolSummary", () => {
     }
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacity5hPct).toBeGreaterThan(3359);
-    expect(summary.header.capacity5hPct).toBeLessThan(3361);
-    expect(summary.header.capacity7dPct).toBeGreaterThan(99.9);
-    expect(summary.header.capacity7dPct).toBeLessThan(100.1);
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@kddi")?.capPct).toBeGreaterThan(49.9);
     expect(summary.perHandle.get("@tayo")?.capPct).toBeGreaterThan(49.9);
+    expect(summary.forecast7d.contributingTokens).toBe(2);
   });
 
-  test("case C: 全 token plan_ratio=null → cap_5h=0, cap_7d=0, perHandle 全 token (capPct=null)", () => {
-    // 現行 main.ts:1444-1483 の in-line 実装と等価:
-    //   poolHandleData は listTokens 全 handle を含み、capByHandle.get(handle) ?? null で capPct を埋める
+  test("case C: 全 token plan_ratio=null → forecast contributing=0、perHandle 全 token (capPct=null)", () => {
     const t1 = insertToken(db, makeToken({
       handle: "@a",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -168,8 +168,8 @@ describe("buildPoolSummary", () => {
     }
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    expect(summary.header.capacity5hPct).toBe(0);
-    expect(summary.header.capacity7dPct).toBe(0);
+    expect(summary.forecast7d.contributingTokens).toBe(0);
+    expect(summary.forecast7d.bars).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@a")?.capPct).toBeNull();
     expect(summary.perHandle.get("@b")?.capPct).toBeNull();
@@ -177,10 +177,9 @@ describe("buildPoolSummary", () => {
     expect(summary.perHandle.get("@b")?.util7d).toBe(0.2);
   });
 
-  test("case D: selectable=0 の token は nextReset 入力対象には残るが capacity 計算には影響しない", () => {
-    // 現行 main.ts:1444-1483 の in-line 実装と等価:
-    //   computeNextReset の入力に `selectable: t.selectable` を渡す
-    //   computePoolCapacity 側は plan_ratio == null のみで除外（selectable は見ない）
+  test("case D: selectable=0 の token は forecast に寄与しないが perHandle には残る (T374)", () => {
+    // 旧仕様: nextReset の入力対象として selectable=0 が残るが capacity 計算には影響しない
+    // 新仕様 (T374): forecast は A024 §エッジケース「selectable=false は denom にも入れない」に従う
     const t1 = insertToken(db, makeToken({
       handle: "@active",
       organization_id: "00000000-0000-0000-0000-000000000001",
@@ -189,7 +188,6 @@ describe("buildPoolSummary", () => {
       handle: "@frozen",
       organization_id: "00000000-0000-0000-0000-000000000002",
     }));
-    // t2 を selectable=0 にする
     db.prepare("UPDATE tokens SET selectable = 0 WHERE id = ?").run(t2.id);
     for (const t of [t1, t2]) {
       upsertUsageSnapshot(db, {
@@ -203,12 +201,8 @@ describe("buildPoolSummary", () => {
     }
 
     const summary = buildPoolSummary(db, NOW_ISO);
-    // selectable=0 でも plan_ratio が non-null なら capacity に含まれる（案 / 現行実装と等価）
-    // 2 token × case A 条件 → cap_5h ≒ 3360%, cap_7d ≒ 100%
-    expect(summary.header.capacity5hPct).toBeGreaterThan(3359);
-    expect(summary.header.capacity5hPct).toBeLessThan(3361);
-    expect(summary.header.capacity7dPct).toBeGreaterThan(99.9);
-    expect(summary.header.capacity7dPct).toBeLessThan(100.1);
+    // forecast: @active のみ寄与
+    expect(summary.forecast7d.contributingTokens).toBe(1);
     // perHandle にも両方含まれる（listTokens 全 handle）
     expect(summary.perHandle.size).toBe(2);
     expect(summary.perHandle.get("@active")).toBeDefined();
@@ -216,8 +210,6 @@ describe("buildPoolSummary", () => {
     // T367: perHandle.selectable が listTokens の selectable と一致する
     expect(summary.perHandle.get("@active")?.selectable).toBe(true);
     expect(summary.perHandle.get("@frozen")?.selectable).toBe(false);
-    // nextReset は selectable=true の @active からのみ取られる（computeNextReset の filter）
-    expect(summary.header.nextReset?.handle).toBe("@active");
   });
 
   test("case E: perHandle のキー集合 = listTokens 全 handle 集合", () => {
@@ -271,6 +263,110 @@ describe("buildPoolSummary", () => {
     expect(summary.perHandle.size).toBe(1);
     expect(summary.perHandle.get("@orphan")?.util5h).toBeNull();
     expect(summary.perHandle.get("@orphan")?.util7d).toBeNull();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // T374: forecast7d / nextCandidate
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  test("T374: forecast7d.bars.length === 7 かつ contributingTokens が一致する", () => {
+    const t1 = insertToken(db, makeToken({
+      handle: "@a",
+      organization_id: "00000000-0000-0000-0000-000000000001",
+    }));
+    const t2 = insertToken(db, makeToken({
+      handle: "@b",
+      organization_id: "00000000-0000-0000-0000-000000000002",
+    }));
+    for (const t of [t1, t2]) {
+      upsertUsageSnapshot(db, {
+        token_id: t.id,
+        util_5h: 0.3,
+        util_7d: 0.5,
+        reset_5h_at: isoIn(5 * 3600 * 1000),
+        reset_7d_at: isoIn(168 * 3600 * 1000),
+        unified_status: null,
+      });
+    }
+    const summary = buildPoolSummary(db, NOW_ISO);
+    expect(summary.forecast7d.bars).toHaveLength(7);
+    expect(summary.forecast7d.contributingTokens).toBe(2);
+    expect(summary.forecast7d.bars.every((b) => Number.isFinite(b))).toBe(true);
+  });
+
+  test("T374: util_7d/reset_7d_at が null の token は forecast 寄与なし", () => {
+    insertToken(db, makeToken({
+      handle: "@orphan",
+      organization_id: "00000000-0000-0000-0000-000000000001",
+    }));
+    const summary = buildPoolSummary(db, NOW_ISO);
+    expect(summary.forecast7d.contributingTokens).toBe(0);
+    expect(summary.forecast7d.bars).toEqual([0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  test("T374: policy が null（default）なら nextCandidate=null", () => {
+    const t = insertToken(db, makeToken({
+      handle: "@a",
+      organization_id: "00000000-0000-0000-0000-000000000001",
+    }));
+    upsertUsageSnapshot(db, {
+      token_id: t.id,
+      util_5h: 0.1,
+      util_7d: 0.2,
+      reset_5h_at: isoIn(5 * 3600 * 1000),
+      reset_7d_at: isoIn(168 * 3600 * 1000),
+      unified_status: null,
+    });
+    const summary = buildPoolSummary(db, NOW_ISO);
+    expect(summary.nextCandidate).toBeNull();
+  });
+
+  test("T374: policy 渡し → nextCandidate が peek 結果と一致", () => {
+    const a = insertToken(db, makeToken({
+      handle: "@a",
+      organization_id: "00000000-0000-0000-0000-000000000001",
+    }));
+    const b = insertToken(db, makeToken({
+      handle: "@b",
+      organization_id: "00000000-0000-0000-0000-000000000002",
+    }));
+    upsertUsageSnapshot(db, {
+      token_id: a.id,
+      util_5h: 0.1,
+      util_7d: 0.2,
+      reset_5h_at: isoIn(5 * 3600 * 1000),
+      reset_7d_at: isoIn(168 * 3600 * 1000),
+      unified_status: null,
+    });
+    upsertUsageSnapshot(db, {
+      token_id: b.id,
+      util_5h: 0.5,
+      util_7d: 0.5,
+      reset_5h_at: isoIn(5 * 3600 * 1000),
+      reset_7d_at: isoIn(168 * 3600 * 1000),
+      unified_status: null,
+    });
+    const summary = buildPoolSummary(db, NOW_ISO, ANY_POLICY);
+    expect(summary.nextCandidate?.handle).toBe("@a");
+    expect(summary.nextCandidate?.util_5h).toBeCloseTo(0.1, 5);
+    expect(summary.nextCandidate?.util_7d).toBeCloseTo(0.2, 5);
+  });
+
+  test("T374: 全 blocker → nextCandidate=null", () => {
+    const t = insertToken(db, makeToken({
+      handle: "@a",
+      organization_id: "00000000-0000-0000-0000-000000000001",
+    }));
+    upsertUsageSnapshot(db, {
+      token_id: t.id,
+      util_5h: 0.99,
+      util_7d: 0.99,
+      reset_5h_at: isoIn(5 * 3600 * 1000),
+      reset_7d_at: isoIn(168 * 3600 * 1000),
+      unified_status: null,
+    });
+    const summary = buildPoolSummary(db, NOW_ISO, ANY_POLICY);
+    expect(summary.nextCandidate).toBeNull();
   });
 });
 

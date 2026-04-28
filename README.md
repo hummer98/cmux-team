@@ -301,7 +301,13 @@ cmux-team token list     # show all tokens with 5h/7d utilization
 3. Admit by: `projectDefault` match → `include` list → `isOss` flag → tag match (`"any"`)
 4. Score = `0.3 × util_5h + 0.7 × util_7d` — pick the lowest
 
-The TUI dashboard header shows pool capacity (`5h` / `7d` remaining) and per-surface token handle once bound.
+The TUI dashboard header shows the **7-day forecast sparkline** (Day 0..6 daily allocation, 100% = sustainable pace) and the **next account** the agent spawn will pick:
+
+```
+pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%
+```
+
+Per-surface decoration (`@handle <5h:X%/7d:Y%> cap:Z%`) is removed in favor of the aggregate header. Run `cmux-team pool status` for per-account detail.
 
 See `docs/spec/09-token-pool.md` for tag filtering, exclude/include policy, and plan ratio details.
 

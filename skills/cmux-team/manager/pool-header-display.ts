@@ -1,22 +1,24 @@
 /**
- * pool-header-display.ts (T363)
+ * pool-header-display.ts (T374 / A024)
  *
  * dashboard ヘッダー右側に pool capacity を表示するための parts 組み立て純粋関数。
  *
- * `pool-status-header.ts` (CLI 用 `string[]` ボックス API) と異なり、本ファイルは
- * TUI 用 `RateLimitPart[]` 構造データを返す。dashboard.tsx 側は本関数の戻り値と
- * `buildRateLimitDisplay` の戻り値を同じループで描画できる。
+ * 旧 (T363/T366) の `pool capacity: 5h NN% / 7d NN%` 二値表示は撤去。
+ * 新仕様: A024 §TUI 表示の `pool 7d <spark>  next: @handle 5h:NN%` 形式。
  *
- * 色閾値（docs/spec/09-token-pool.md / 既存 buildPoolHeader と一致）:
- *   - min(capacity5hPct, capacity7dPct) >= 100% → green
- *   - 40% 〜 100%                                → yellow
- *   - < 40%                                      → red
+ * `pool-status-header.ts` (CLI 用 `string[]` API) と表示文言を一致させるため
+ * `mapBarToSparkline` / `pickSparklineColor` / `pickNextUtilColor` を共有する。
  *
- * T366: 5h / 7d 別合計を `pool capacity: 5h NN% / 7d NN%` の二値表示にし、
- *       色判定は `min(5h, 7d)` ベースに変更。
+ * dashboard.tsx 側は本関数の戻り値と `buildRateLimitDisplay` の戻り値を同じループで描画できる。
  */
 import type { PoolSummary } from "./pool-summary";
+import type { PeekedToken } from "./token-store";
 import type { RateLimitPart } from "./rate-limit-display";
+import {
+  mapBarToSparkline,
+  pickSparklineColor,
+  pickNextUtilColor,
+} from "./pool-status-header";
 
 export interface PoolHeaderDisplay {
   parts: RateLimitPart[];
@@ -27,48 +29,33 @@ export function buildPoolHeaderDisplay(
 ): PoolHeaderDisplay {
   if (summary == null) return { parts: [] };
 
-  const cap5h = summary.header.capacity5hPct;
-  const cap7d = summary.header.capacity7dPct;
-  const minPct = Math.min(cap5h, cap7d);
-  const capColor: RateLimitPart["color"] =
-    minPct >= 100 ? "green" : minPct >= 40 ? "yellow" : "red";
+  const parts: RateLimitPart[] = [];
+  const f = summary.forecast7d;
 
-  const parts: RateLimitPart[] = [
-    {
-      text: `pool capacity: 5h ${Math.round(cap5h)}% / 7d ${Math.round(cap7d)}%`,
-      color: capColor,
-      group: true,
-    },
-  ];
-
-  const next = summary.header.nextReset;
-  if (next) {
-    const remain = formatRelativeDuration(next.remainingMs);
-    const sign = next.deltaPct >= 0 ? "+" : "";
-    parts.push({
-      text: `next reset: ${next.handle} ${next.window} in ${remain}  (${sign}${next.deltaPct} pts)`,
-      color: "gray",
-    });
+  // 1) "pool 7d" ラベル + spark (contributingTokens > 0 のみ)
+  if (f.contributingTokens > 0) {
+    const spark = f.bars.map(mapBarToSparkline).join("");
+    const color = pickSparklineColor(f.bars);
+    parts.push({ text: `pool 7d  ${spark}`, color, group: true });
   }
+
+  // 2) next: @handle 5h:NN%
+  parts.push(buildNextPart(summary.nextCandidate));
 
   return { parts };
 }
 
-/**
- * remainingMs を `<1m` / `30m` / `2h` / `2h30m` / `3d2h` 流に整形する。
- * `pool-status-header.ts::formatRelativeDuration` と等価（cross-validate by test）。
- */
-function formatRelativeDuration(remainingMs: number): string {
-  const sec = Math.floor(remainingMs / 1000);
-  if (sec <= 0) return "<1m";
-  if (sec < 60) return "<1m";
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86400) {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    return m > 0 ? `${h}h${m}m` : `${h}h`;
+function buildNextPart(next: PeekedToken | null): RateLimitPart {
+  if (next == null) {
+    return { text: "next: ⚠ no eligible account", color: "yellow", group: true };
   }
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  return h > 0 ? `${d}d${h}h` : `${d}d`;
+  if (next.util_5h == null) {
+    return { text: `next: ${next.handle} 5h:—`, color: "gray", group: true };
+  }
+  const pct = Math.round(next.util_5h * 100);
+  return {
+    text: `next: ${next.handle} 5h:${pct}%`,
+    color: pickNextUtilColor(next.util_5h),
+    group: true,
+  };
 }

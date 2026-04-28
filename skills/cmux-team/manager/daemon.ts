@@ -423,7 +423,7 @@ export async function refreshPoolSnapshot(state: DaemonState): Promise<void> {
     return;
   }
   try {
-    state.pool = buildPoolSummary(state.tokenDb);
+    state.pool = buildPoolSummary(state.tokenDb, undefined, state.poolPolicy);
   } catch (e: any) {
     state.pool = null;
     await log("error", `refreshPoolSnapshot failed: ${e?.message ?? e}`);
