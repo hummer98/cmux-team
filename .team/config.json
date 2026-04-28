@@ -4,5 +4,12 @@
     "conductor": "opus",
     "agent": "opus"
   },
-  "mainBranch": "main"
+  "mainBranch": "main",
+  "tokenPool": {
+    "enabled": true,
+    "default": "@kddi",
+    "include": [],
+    "exclude": []
+  },
+  "project_tags": ["any"]
 }
