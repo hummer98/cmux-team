@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [4.15.0] - 2026-04-28
+
+### Changed
+
+- **pool 有効時の THROTTLE 判定を pool-aware に変更（T367）**。token pool 機能が有効な場合、単一 token の rate limit に達しても pool 全体としてはまだ available capacity が残っているため、従来の「特定 token が throttled なら即 THROTTLE 扱い」という判定では spawn が不必要に止まっていた。pool 有効時は pool capacity を見て判定する経路に切り替え、複数 token を活用したスケジューリングを可能にした
+- **token pool capacity を 5h / 7d 別表示に変更（T366）**。Anthropic API は 5 時間ウィンドウと 7 日間ウィンドウの 2 種類のレート制限を持つため、TUI ヘッダーで pool capacity を 1 つの数値として表示するのではなく 5h / 7d をそれぞれ表示するようにした。短期・長期どちらの軸で枯渇に近づいているかが一目でわかる
+- **Metrics タブを Rate Limit Projection に作り直し + 更新間隔を config 化（T354)**。従来の Metrics タブを廃し、各 surface ごとに 5h / 7d レート制限の到達予測を表示する Rate Limit Projection ビューに置換。更新間隔は `.team/config.json` で調整可能になった
+- **README に token pool・close-agent・trace-hooks のドキュメントを追加 + デモ動画を埋め込み**。インストール直後のユーザーが token pool 運用や Conductor 運用の主要 CLI を辿れるよう README を拡充した
+
+### Fixed
+
+- **`selectToken` が stale snapshot のリセット済み軸を候補化できないバグを修正（T369）**。token pool snapshot が古い状態で reset 時刻を過ぎていた場合、本来は util=0 として再利用可能な token が「util 値が古いまま」候補から除外されていた。reset 済み軸は util=0 として扱う補正ロジックを追加し、reset 直後に新規 spawn が pool 利用できないハングを解消
+- **`pool-header-display.test.ts` の TypeScript strict 化対応（T368）**。`Object is possibly 'undefined'` エラー 18 件を optional chain と nullish coalescing で解消し、CI / ローカルの型検査を pass する状態に戻した
+
 ## [4.14.1] - 2026-04-27
 
 ### Fixed
