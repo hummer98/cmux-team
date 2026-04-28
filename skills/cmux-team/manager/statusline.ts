@@ -38,7 +38,13 @@ export interface StatuslineConductor {
   taskId?: string;
   taskTitle?: string;
   status?: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected";
-  agents?: Array<{ surface: string; role?: string; taskTitle?: string }>;
+  agents?: Array<{
+    surface: string;
+    role?: string;
+    taskTitle?: string;
+    /** T375: token pool 有効時に agent が掴んでいる handle（`@xxx`）。未設定なら表示しない */
+    tokenHandle?: string;
+  }>;
 }
 
 /** リクエスト毎の描画オプション（ヘッダー由来） */
@@ -60,7 +66,12 @@ export type StatuslineRole =
   | {
       kind: "agent";
       conductorSurface: string;
-      agent: { surface: string; role?: string; taskTitle?: string };
+      agent: {
+        surface: string;
+        role?: string;
+        taskTitle?: string;
+        tokenHandle?: string;
+      };
     }
   | { kind: "unknown" };
 
@@ -288,7 +299,7 @@ function renderConductor(
 }
 
 function renderAgent(
-  agent: { surface: string; role?: string; taskTitle?: string },
+  agent: { surface: string; role?: string; taskTitle?: string; tokenHandle?: string },
   conductor: StatuslineConductor,
   ctx: RenderCtx,
 ): string {
@@ -300,20 +311,27 @@ function renderAgent(
   const roleName = agent.role ?? "agent";
   // Conductor がタスクを持っていればそれを Agent の task id として使う
   const taskId = conductor.taskId ?? "";
+  // T375: token pool 有効時のみ末尾に `@<handle>` セグメントを足す。
+  //       未設定なら既存出力と完全一致させる。
+  const handleSeg = agent.tokenHandle
+    ? ` ${dim}|${reset} @${agent.tokenHandle}`
+    : "";
 
   if (taskId) {
     // printf: `${C_YELLOW}%s %s${C_RESET} ${C_DIM}| T%s |${C_RESET} ${CTX_COLOR}%s %s%%${C_RESET}`
     // args: (ICON, ROLE_NAME, TASK_ID, CTX_ICON, CTX_PCT)
     return (
       `${yellow}${i.icon} ${roleName}${reset} ${dim}| T${taskId} |${reset} ` +
-      `${ctxColorCode}${i.ctx} ${ctx.pct}%${reset}`
+      `${ctxColorCode}${i.ctx} ${ctx.pct}%${reset}` +
+      handleSeg
     );
   }
   // printf: `${C_YELLOW}%s %s${C_RESET} ${C_DIM}|${C_RESET} ${CTX_COLOR}%s %s%%${C_RESET}`
   // args: (ICON, ROLE_NAME, CTX_ICON, CTX_PCT)
   return (
     `${yellow}${i.icon} ${roleName}${reset} ${dim}|${reset} ` +
-    `${ctxColorCode}${i.ctx} ${ctx.pct}%${reset}`
+    `${ctxColorCode}${i.ctx} ${ctx.pct}%${reset}` +
+    handleSeg
   );
 }
 

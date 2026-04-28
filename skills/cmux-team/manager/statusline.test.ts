@@ -376,6 +376,64 @@ describe("formatStatusline - agent", () => {
   });
 });
 
+describe("formatStatusline - agent tokenHandle (T375)", () => {
+  test("tokenHandle あり / NF off — `@pers` が末尾セグメントとして出る", () => {
+    const state = baseState();
+    const cond = state.conductors.get("surface:200")!;
+    cond.agents = [
+      { surface: "surface:300", role: "implementer", tokenHandle: "pers" },
+    ];
+    const out = formatStatusline(
+      baseInput(),
+      state,
+      baseOpts({ surface: "surface:300", nerdFont: false, color: false }),
+    );
+    // `▸ implementer | T042 | ctx 42% | @pers`
+    expect(out).toBe("▸ implementer | T042 | ctx 42% | @pers");
+  });
+
+  test("tokenHandle あり / NF on / Color on — dim 区切り + `@pers`", () => {
+    const state = baseState();
+    const cond = state.conductors.get("surface:200")!;
+    cond.agents = [
+      { surface: "surface:300", role: "implementer", tokenHandle: "pers" },
+    ];
+    const out = formatStatusline(
+      baseInput(),
+      state,
+      baseOpts({ surface: "surface:300", nerdFont: true, color: true }),
+    );
+    expect(out).toContain(" \x1b[2m|\x1b[0m @pers");
+    expect(out.endsWith("@pers")).toBe(true);
+  });
+
+  test("tokenHandle なし — 既存出力と完全一致（後方互換）", () => {
+    // 既存の "task id あり / NF off / Color off" ケースのスナップショットと完全一致する必要がある。
+    const out = formatStatusline(
+      baseInput(),
+      baseState(),
+      baseOpts({ surface: "surface:300", nerdFont: false, color: false }),
+    );
+    expect(out).toBe("▸ researcher | T042 | ctx 42%");
+  });
+
+  test("conductor.taskId なし + tokenHandle あり — タスクなし表示でも `@pers` が出る", () => {
+    const state = baseState();
+    const cond = state.conductors.get("surface:200")!;
+    cond.taskId = undefined;
+    cond.agents = [
+      { surface: "surface:300", role: "implementer", tokenHandle: "pers" },
+    ];
+    const out = formatStatusline(
+      baseInput(),
+      state,
+      baseOpts({ surface: "surface:300", nerdFont: false, color: false }),
+    );
+    // `▸ implementer | ctx 42% | @pers`（`T<id>` セクションなし）
+    expect(out).toBe("▸ implementer | ctx 42% | @pers");
+  });
+});
+
 describe("formatStatusline - unknown", () => {
   test("surface が state 内のどこにもない場合は空文字", () => {
     const out = formatStatusline(
