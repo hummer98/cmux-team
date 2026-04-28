@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.18.0] - 2026-04-29
+
+### Added
+
+- **dashboard の Pool Tokens セクションで reset 残り時間を列内で padStart 整列（T377）**。各 token 行の reset 表示を固定幅で右寄せし、`5h:` / `7d:` の数値列が縦に揃って視認性が向上した
+
 ## [4.17.0] - 2026-04-28
 
 ### Added
