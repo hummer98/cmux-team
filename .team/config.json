@@ -7,9 +7,9 @@
   "mainBranch": "main",
   "tokenPool": {
     "enabled": true,
-    "default": "@kddi",
+    "default": "@tayo",
     "include": [],
-    "exclude": []
+    "exclude": ["@kddi"]
   },
   "project_tags": ["any"]
 }
