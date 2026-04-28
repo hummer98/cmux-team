@@ -2668,6 +2668,10 @@ async function cmdSpawnAgent(): Promise<void> {
     `CMUX_CLAUDE_HOOKS_DISABLED=1`,
     `CMUX_TEAM_SKIP_SYNC_CHECK=1`,
   ];
+  // T371: token pool 注入の有無を claude 起動コマンドの inline env prefix 判定に使う。
+  // direnv の .envrc.local が CLAUDE_CODE_OAUTH_TOKEN を上書きするため、
+  // `CLAUDE_CODE_OAUTH_TOKEN="$CMUX_CLAUDE_TOKEN" claude ...` の形で execve env を渡す。
+  let tokenInjected = false;
   if (taskId) {
     exportVars.push(`CMUX_TASK_ID=${taskId}`);
   }
@@ -2709,7 +2713,11 @@ async function cmdSpawnAgent(): Promise<void> {
         }
 
         if (tokenStr) {
-          exportVars.push(`CLAUDE_CODE_OAUTH_TOKEN=${tokenStr}`);
+          // T371: direnv の .envrc.local が CLAUDE_CODE_OAUTH_TOKEN を上書きするため、
+          // ここでは中継変数 CMUX_CLAUDE_TOKEN として export し、claude 起動時に
+          // inline env prefix で CLAUDE_CODE_OAUTH_TOKEN にリネームする。
+          exportVars.push(`CMUX_CLAUDE_TOKEN=${tokenStr}`);
+          tokenInjected = true;
           await log(
             "token_pool_assigned",
             `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source} is_oss=${isOss}`,
@@ -2788,11 +2796,15 @@ async function cmdSpawnAgent(): Promise<void> {
     }
   }
 
+  // T371: token pool が token を注入した経路だけ inline env prefix を付ける。
+  // direnv の .envrc.local が CLAUDE_CODE_OAUTH_TOKEN を export していても、
+  // この prefix は execve env として優先される。
+  const tokenPrefix = tokenInjected ? `CLAUDE_CODE_OAUTH_TOKEN="$CMUX_CLAUDE_TOKEN" ` : "";
   let claudeCmd: string;
   if (effectivePromptFile) {
-    claudeCmd = `claude ${claudeFlags.join(" ")} '${effectivePromptFile} を読んで指示に従ってください。'`;
+    claudeCmd = `${tokenPrefix}claude ${claudeFlags.join(" ")} '${effectivePromptFile} を読んで指示に従ってください。'`;
   } else {
-    claudeCmd = `claude ${claudeFlags.join(" ")} '${prompt}'`;
+    claudeCmd = `${tokenPrefix}claude ${claudeFlags.join(" ")} '${prompt}'`;
   }
   await cmux.send(surface, claudeCmd + "\n");
 
