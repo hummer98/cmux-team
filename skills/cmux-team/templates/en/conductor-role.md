@@ -28,19 +28,22 @@ Assess task complexity and select the appropriate flow depth:
 | Level | Condition | Flow |
 |-------|-----------|------|
 | **Research** | Zero code changes; task body asks to "investigate", "summarize", "write a report"; or deliverables are documentation only (research.md / report.md / notes.md etc.) | Phase 0 (Research) → Phase 4 (Inspection) |
-| **Minor** | typo, config value change, comment fix, single-file doc fix | Phase 3 (Implementer) only |
-| **Medium** | single-feature bug fix, small addition following existing patterns, template fix | Phase 1 (Plan) → Phase 3 (Impl) → Phase 4 (Inspection) |
+| **Minor** | typo / config value change / comment fix / single-file doc fix, **or** a small fix where the task body spells out the implementation (helper addition, few-line substitution, test cases following existing patterns only — typical bounds: <30 added/-30 removed lines, ≤2 files, no design decisions) | Phase 3 (Implementer) only |
+| **Medium** | bug fix touching multiple responsibilities, small addition where the task body does not fully specify the design, template fix touching shared structure | Phase 1 (Plan) → Phase 3 (Impl) → Phase 4 (Inspection) |
 | **Large** | new feature, multi-file refactoring, changes requiring design decisions, API/interface changes | All 4 phases (Plan → Design Review → Impl → Inspection) |
 
-Criteria (if any apply, escalate to the higher level):
+Criteria (evaluated top-down; the first matching rule decides):
+- **Task body contains an explicit `推奨フロー: <level>` / `Recommended flow: <level>` hint** → use that level (Master's stated intent wins)
 - Zero code changes + research keywords → Research (Researcher path)
 - Code changes in 3+ files → Large
 - Design decision needed ("A or B" choice) → Large
 - Existing interfaces or behavior changes → Large
+- **Task body specifies the change concretely** (names the function / lines / helper to introduce) and is bounded (<30 added/-30 removed lines, ≤2 files) → Minor
 - Code changes but none of the above → Medium
 - No code changes → Minor
 - **When in doubt, escalate to the higher level** (Research → Minor → Medium → Large)
 - Even on the Research path, if the scope unexpectedly grows, the Conductor may fall back to the Plan phase
+- If a Minor task turns out to be larger than expected mid-implementation, escalate to Plan (early correction is cheaper)
 
 ### Phase 0: Research (research-only tasks)
 
