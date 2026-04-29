@@ -85,16 +85,16 @@ Usage:
   cmux-team start [--layout=<wide|16x9>] [--no-sleep-prevention]
 
 Options:
-  --layout <wide|16x9>     layout mode (default: wide, or config.json layout)
-                           - wide: 2x2 layout, 3 Conductors (default)
-                           - 16x9: top full-width + bottom split, 2 Conductors
+  --layout <wide|16x9>     layout mode (default: 16x9, or config.json layout)
+                           - 16x9: top full-width + bottom split, 2 Conductors (default)
+                           - wide: 2x2 layout, 3 Conductors
   --no-sleep-prevention    disable macOS sleep prevention (caffeinate -dis)
                            also configurable via .team/config.json "sleepPrevention": false
 
 Notes:
   - Must be run inside a cmux session (CMUX_SOCKET_PATH is required)
   - Starts daemon + logging proxy + layout panes + Master
-  - Priority: --layout > .team/config.json "layout" > "wide"
+  - Priority: --layout > .team/config.json "layout" > "16x9"
   - CMUX_TEAM_MAX_CONDUCTORS env var overrides layout-derived max
     (16x9 still creates only 2 panes; extra conductors are clamped)
   - Dashboard is displayed with keyboard shortcuts for interaction
@@ -895,16 +895,16 @@ Usage:
   cmux-team start [--layout=<wide|16x9>] [--no-sleep-prevention]
 
 Options:
-  --layout <wide|16x9>     レイアウトモード (デフォルト: wide、または config.json の layout)
-                           - wide: 2x2 レイアウト、Conductor x3（デフォルト）
-                           - 16x9: 上段フル幅 + 下段 2 分割、Conductor x2
+  --layout <wide|16x9>     レイアウトモード (デフォルト: 16x9、または config.json の layout)
+                           - 16x9: 上段フル幅 + 下段 2 分割、Conductor x2（デフォルト）
+                           - wide: 2x2 レイアウト、Conductor x3
   --no-sleep-prevention    macOS スリープ抑止を無効化（caffeinate -dis を使わない）
                            .team/config.json の "sleepPrevention": false でも設定可能
 
 Notes:
   - cmux 環境内で実行する必要があります（CMUX_SOCKET_PATH が必要）
   - daemon + ロギングプロキシ + レイアウト pane + Master を起動します
-  - 優先順位: --layout > .team/config.json の "layout" > "wide"
+  - 優先順位: --layout > .team/config.json の "layout" > "16x9"
   - CMUX_TEAM_MAX_CONDUCTORS 環境変数は layout 派生値を上書きします
     （16x9 は 2 pane のみ作成、超過分は clamp されます）
   - ダッシュボードが表示され、キーボードショートカットで操作できます

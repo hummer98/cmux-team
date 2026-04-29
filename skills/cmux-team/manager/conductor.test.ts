@@ -359,12 +359,11 @@ describe("createConductorPanes layout 分岐 (T176)", () => {
     expect(newSplitSpy.mock.calls.length).toBe(2);
   });
 
-  test("layout 省略時は wide と同じ挙動（後方互換）", async () => {
-    const panes = await createConductorPanes(3, "surface:1");
-    expect(panes).toHaveLength(3);
-    expect(newSplitSpy.mock.calls[0][0]).toBe("right");
-    expect(newSplitSpy.mock.calls[1][0]).toBe("down");
-    expect(newSplitSpy.mock.calls[2][0]).toBe("down");
+  test("layout 省略時は 16x9 と同じ挙動（デフォルト）", async () => {
+    const panes = await createConductorPanes(2, "surface:1");
+    expect(panes).toHaveLength(2);
+    expect(newSplitSpy.mock.calls[0][0]).toBe("down");
+    expect(newSplitSpy.mock.calls[1][0]).toBe("right");
   });
 });
 

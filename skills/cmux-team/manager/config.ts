@@ -305,14 +305,14 @@ export async function loadConfig(projectRoot: string): Promise<TeamConfig> {
 
 /**
  * レイアウトモードを解決する。
- * 優先順位: CLI フラグ (--layout) > config.json の layout > "wide"
+ * 優先順位: CLI フラグ (--layout) > config.json の layout > "16x9"
  * 不正値は Error を throw する（呼び出し元で process.exit する想定）。
  */
 export function resolveLayout(
   config: Pick<TeamConfig, "layout">,
   cliLayout: string | undefined,
 ): LayoutMode {
-  const raw = cliLayout ?? config.layout ?? "wide";
+  const raw = cliLayout ?? config.layout ?? "16x9";
   if (raw !== "wide" && raw !== "16x9") {
     throw new Error(`Unknown layout: ${raw} (expected "wide" or "16x9")`);
   }

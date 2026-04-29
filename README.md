@@ -81,7 +81,7 @@ Created per-project by `cmux-team start`. All keys are optional — the file can
 | Key | Type | Default | Purpose |
 |-----|------|---------|---------|
 | `mainBranch` | string | auto-detected from `origin/HEAD` | Primary development branch used as the default worktree base & merge target. Overrides: env `CMUX_TEAM_MAIN_BRANCH`, CLI `--main-branch`, per-task `--base-branch`. |
-| `layout` | `"wide"` \| `"16x9"` | `"wide"` | Pane layout preset at startup. Override: CLI `--layout`. |
+| `layout` | `"wide"` \| `"16x9"` | `"16x9"` | Pane layout preset at startup. Override: CLI `--layout`. |
 | `sleepPrevention` | boolean | `true` | Whether `cmux-team start` runs `caffeinate` to prevent macOS sleep. Override: CLI `--no-sleep-prevention`. |
 | `autoUpdate` | `"off"` \| `"notify"` | `"off"` | Version detection mode (see above). Override: env `CMUX_TEAM_AUTO_UPDATE`. |
 | `models.master` / `models.conductor` / `models.agent` | string | Claude defaults | Per-role model selection (e.g. `"claude-sonnet-4-6"`). |

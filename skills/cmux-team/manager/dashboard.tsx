@@ -398,7 +398,7 @@ async function loadSettingsItems(projectRoot: string): Promise<SettingsItem[]> {
 
   items.push({ kind: "section", label: "Team Config (.team/config.json)" });
   const cfg: TeamConfig = await loadConfig(projectRoot);
-  items.push({ kind: "config", label: "layout", value: cfg.layout ?? "wide (default)" });
+  items.push({ kind: "config", label: "layout", value: cfg.layout ?? "16x9 (default)" });
   items.push({
     kind: "config",
     label: "autoUpdate",

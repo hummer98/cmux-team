@@ -81,7 +81,7 @@ daemon は `update-notifier` で新バージョンを**検出**し、TUI バナ�
 | キー | 型 | デフォルト | 用途 |
 |-----|---|----------|------|
 | `mainBranch` | string | `origin/HEAD` から自動検出 | 主開発ブランチ。worktree のデフォルト起点・マージ先として使用。上書き: 環境変数 `CMUX_TEAM_MAIN_BRANCH`、CLI `--main-branch`、タスク単位の `--base-branch`。 |
-| `layout` | `"wide"` \| `"16x9"` | `"wide"` | 起動時のペインレイアウト。上書き: CLI `--layout`。 |
+| `layout` | `"wide"` \| `"16x9"` | `"16x9"` | 起動時のペインレイアウト。上書き: CLI `--layout`。 |
 | `sleepPrevention` | boolean | `true` | `cmux-team start` 時に `caffeinate` で macOS スリープを抑止するか。上書き: CLI `--no-sleep-prevention`。 |
 | `autoUpdate` | `"off"` \| `"notify"` | `"off"` | バージョン検出モード（上記参照）。上書き: 環境変数 `CMUX_TEAM_AUTO_UPDATE`。 |
 | `models.master` / `models.conductor` / `models.agent` | string | Claude デフォルト | ロール別モデル指定（例: `"claude-sonnet-4-6"`）。 |

@@ -143,13 +143,13 @@ export async function launchConductor(
  * Conductor 用の pane を分割作成する（Claude は起動しない）
  *
  * layout:
- *   - "wide" (default): 2x2 — 左上 daemon+Master、右上 C1、左下 C2、右下 C3（最大 3）
- *   - "16x9": 上段フル幅 daemon+Master、下段を 2 分割して C1（左）/ C2（右）（最大 2）
+ *   - "16x9" (default): 上段フル幅 daemon+Master、下段を 2 分割して C1（左）/ C2（右）（最大 2）
+ *   - "wide": 2x2 — 左上 daemon+Master、右上 C1、左下 C2、右下 C3（最大 3）
  */
 export async function createConductorPanes(
   count: number,
   daemonSurface?: string,
-  layout: LayoutMode = "wide",
+  layout: LayoutMode = "16x9",
 ): Promise<string[]> {
   const panes: string[] = [];
 
@@ -207,7 +207,7 @@ export async function initializeConductorSlots(
   count: number = 3,
   daemonSurface?: string,
   resumePlan?: ResumePlanItem[],
-  layout: LayoutMode = "wide",
+  layout: LayoutMode = "16x9",
   mainBranch: string = "",
   backend?: ClaudeCodeBackend,
 ): Promise<ResumeAssignment[]> {

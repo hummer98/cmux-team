@@ -265,8 +265,8 @@ describe("validateSendAgentTarget (§4.3)", () => {
 });
 
 describe("resolveLayout (T176)", () => {
-  test("default: config なし・CLI なし → wide", () => {
-    expect(resolveLayout({}, undefined)).toBe("wide");
+  test("default: config なし・CLI なし → 16x9", () => {
+    expect(resolveLayout({}, undefined)).toBe("16x9");
   });
 
   test("config.layout=16x9, CLI なし → 16x9", () => {

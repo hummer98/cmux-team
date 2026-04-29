@@ -349,7 +349,7 @@ async function logBrokenIgnore(conductor: ConductorState, event: string): Promis
 
 export async function createDaemon(
   projectRoot: string,
-  layout: LayoutMode = "wide",
+  layout: LayoutMode = "16x9",
   backend?: RuntimeBackend,
 ): Promise<DaemonState> {
   // maxConductors: env が指定されていればそれを優先（既存挙動を破壊しない）。
@@ -1282,7 +1282,7 @@ export async function initializeLayout(
       const teamJson = JSON.parse(await readFile(teamJsonPath, "utf-8"));
       conductorsFromJson = teamJson.conductors ?? [];
       const restoredLayout: LayoutMode =
-        teamJson.layout === "16x9" ? "16x9" : "wide";
+        teamJson.layout === "wide" ? "wide" : "16x9";
       if (restoredLayout !== state.layout) {
         // 行動案内は削除（T286 fallback が入ると "kept" か "rebuild" かを
         // この地点では判定できないため、事実ベースの観測ログに統一）。

@@ -49,22 +49,9 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 ## レイアウト
 
 起動時にレイアウトモードに応じたペイン構成を作成し、セッション終了まで変更しない。
-モードは `cmux-team start --layout=<wide|16x9>` または `.team/config.json` の `layout` で指定する（デフォルト: `wide`）。
+モードは `cmux-team start --layout=<wide|16x9>` または `.team/config.json` の `layout` で指定する（デフォルト: `16x9`）。
 
-### wide（デフォルト — 2x2、Conductor x3）
-
-```
-[Manager|Master] | [Conductor-1]
-[Conductor-2   ] | [Conductor-3]
-```
-
-- **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
-- **右上**: Conductor-1（常駐 Claude セッション）
-- **左下**: Conductor-2（常駐 Claude セッション）
-- **右下**: Conductor-3（常駐 Claude セッション）
-- **最大3タスク並列**、4つ目以降はキューイング
-
-### 16x9（上段フル幅 + 下段 2 分割、Conductor x2）
+### 16x9（デフォルト — 上段フル幅 + 下段 2 分割、Conductor x2）
 
 ```
 [ Manager | Master (上段フル幅) ]
@@ -76,6 +63,19 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 - **下段右**: Conductor-2
 - **最大2タスク並列**、3つ目以降はキューイング
 - 16:9 ディスプレイで Conductor ペインの横幅を最大化する用途
+
+### wide（2x2、Conductor x3）
+
+```
+[Manager|Master] | [Conductor-1]
+[Conductor-2   ] | [Conductor-3]
+```
+
+- **左上**: Manager（daemon）| Master（ユーザーセッション）— 2つの surface がタブとして同居
+- **右上**: Conductor-1（常駐 Claude セッション）
+- **左下**: Conductor-2（常駐 Claude セッション）
+- **右下**: Conductor-3（常駐 Claude セッション）
+- **最大3タスク並列**、4つ目以降はキューイング
 
 ### 共通事項
 

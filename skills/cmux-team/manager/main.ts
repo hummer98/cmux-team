@@ -523,7 +523,7 @@ async function cmdStart(): Promise<void> {
     console.warn("[cmux-team] direnv が見つかりません — .envrc の環境変数は反映されません");
   }
 
-  // layout 解決（CLI --layout > config.json > "wide"）
+  // layout 解決（CLI --layout > config.json > "16x9"）
   const startConfig = await loadConfig(PROJECT_ROOT);
   let layout: LayoutMode;
   try {
@@ -1450,7 +1450,7 @@ async function cmdStatus(): Promise<void> {
 
   // --- ヘッダー ---
   const status = alive ? "RUNNING" : "STOPPED";
-  const layout = typeof teamJson.layout === "string" ? teamJson.layout : "wide";
+  const layout = typeof teamJson.layout === "string" ? teamJson.layout : "16x9";
   console.log(`cmux-team  ${status}  PID ${pid || "-"}  conductors ${conductors.length}  layout=${layout}`);
 
   // T374: pool ヘッダー（forecast7d スパークライン + next 候補）を 1 行で表示。

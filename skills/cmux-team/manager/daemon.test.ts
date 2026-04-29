@@ -1287,13 +1287,13 @@ describe("createDaemon: layout (T176)", () => {
     else process.env.CMUX_TEAM_MAX_CONDUCTORS = prevEnv;
   });
 
-  test("default (layout 未指定) → wide / maxConductors=3", async () => {
+  test("default (layout 未指定) → 16x9 / maxConductors=2", async () => {
     const state = await createDaemon(testDir);
-    expect(state.layout).toBe("wide");
-    expect(state.maxConductors).toBe(3);
+    expect(state.layout).toBe("16x9");
+    expect(state.maxConductors).toBe(2);
   });
 
-  test("layout=16x9 → maxConductors=2", async () => {
+  test("layout=16x9 を明示 → maxConductors=2", async () => {
     const state = await createDaemon(testDir, "16x9");
     expect(state.layout).toBe("16x9");
     expect(state.maxConductors).toBe(2);
@@ -1969,8 +1969,8 @@ describe("handleMessage: CONDUCTOR_REGISTERED (T228)", () => {
   });
 
   test("state.conductors.size >= state.maxConductors 超過 → warning ログは出るが登録成功", async () => {
-    const state = await createDaemon(testDir);
-    // wide デフォルト = 3。3 つ登録してから 4 つ目を追加する
+    const state = await createDaemon(testDir, "wide");
+    // wide = maxConductors 3。3 つ登録してから 4 つ目を追加する
     state.conductors.set("surface:1", {
       surface: "surface:1",
       status: "running",
@@ -3646,7 +3646,7 @@ describe("initializeLayout: マトリクス復帰 (T255 §8.3 M6〜M16)", () => 
     });
     const stubs = await stubCmuxIO();
     try {
-      // 1 件のみ alive — maxConductors=3 (wide のデフォルト) より少ない
+      // 1 件のみ alive — 直後に maxConductors=3 を強制設定する
       await writeTeamJson([{ surface: "surface:900", pid: 9001 }]);
 
       const state = await createDaemon(testDir);
