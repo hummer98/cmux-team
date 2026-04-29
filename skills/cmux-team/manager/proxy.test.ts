@@ -1383,6 +1383,38 @@ describe("proxy: tokenHandle apply (T323)", () => {
   });
 });
 
+// ─── 共通 helper: anthropic-organization-id 付き upstream ───
+// T341 / T384 / 後続テストで共有。util_5h / util_7d は opts で上書き可能。
+// orgId に null を渡すと anthropic-organization-id ヘッダーを返さない（T384-P3 用）。
+function startUpstreamWithOrgHeader(
+  orgId: string | null,
+  opts: { u5h?: string; u7d?: string } = {},
+): { upstream: ReturnType<typeof Bun.serve> } {
+  const u5h = opts.u5h ?? "0.10";
+  const u7d = opts.u7d ?? "0.20";
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "anthropic-ratelimit-unified-5h-utilization": u5h,
+        "anthropic-ratelimit-unified-7d-utilization": u7d,
+        "anthropic-ratelimit-unified-5h-reset": "2099-01-01T00:00:00Z",
+        "anthropic-ratelimit-unified-7d-reset": "2099-01-08T00:00:00Z",
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-tokens-remaining": "1000",
+        "anthropic-ratelimit-tokens-limit": "1000",
+        "anthropic-ratelimit-tokens-reset": "2099-01-01T00:00:00Z",
+        "anthropic-ratelimit-input-tokens-remaining": "100",
+        "anthropic-ratelimit-output-tokens-remaining": "100",
+      };
+      if (orgId) headers["anthropic-organization-id"] = orgId;
+      return new Response("{}", { headers });
+    },
+  });
+  return { upstream };
+}
+
 // ─── T341: auto-discover gate (token pool OFF では未知 token を INSERT しない) ───
 describe("proxy: auto-discover gate (T341)", () => {
   let tokenDbDir: string;
@@ -1417,31 +1449,6 @@ describe("proxy: auto-discover gate (T341)", () => {
     else delete process.env.CMUX_TEAM_TOKEN_POOL;
     __resetTokensDbForTest();
   });
-
-  function startUpstreamWithOrgHeader(orgId: string): { upstream: ReturnType<typeof Bun.serve> } {
-    const upstream = Bun.serve({
-      port: 0,
-      fetch() {
-        return new Response("{}", {
-          headers: {
-            "content-type": "application/json",
-            "anthropic-organization-id": orgId,
-            "anthropic-ratelimit-unified-5h-utilization": "0.10",
-            "anthropic-ratelimit-unified-7d-utilization": "0.20",
-            "anthropic-ratelimit-unified-5h-reset": "2099-01-01T00:00:00Z",
-            "anthropic-ratelimit-unified-7d-reset": "2099-01-08T00:00:00Z",
-            "anthropic-ratelimit-unified-status": "allowed",
-            "anthropic-ratelimit-tokens-remaining": "1000",
-            "anthropic-ratelimit-tokens-limit": "1000",
-            "anthropic-ratelimit-tokens-reset": "2099-01-01T00:00:00Z",
-            "anthropic-ratelimit-input-tokens-remaining": "100",
-            "anthropic-ratelimit-output-tokens-remaining": "100",
-          },
-        });
-      },
-    });
-    return { upstream };
-  }
 
   test("T341-P1: pool OFF — 未知 token は tokens.db に INSERT されない", async () => {
     process.env.CMUX_TEAM_TOKEN_POOL = "0";
@@ -1731,6 +1738,536 @@ describe("proxy: auto-discover gate (T341)", () => {
     } finally {
       db.close();
     }
+
+    handle.stop();
+    upstream.stop();
+  });
+});
+
+// ─── T384: auth_hash auto-rotate (OAuth refresh で auth_hash 乖離した既存 token を自動修復) ───
+describe("proxy: auth_hash auto-rotate (T384)", () => {
+  let tokenDbDir: string;
+  let originalTokenDb: string | undefined;
+  let originalKeychain: string | undefined;
+  let originalApi: string | undefined;
+  let originalPool: string | undefined;
+
+  beforeEach(async () => {
+    tokenDbDir = join(testDir, "token-store-rotate");
+    await mkdir(tokenDbDir, { recursive: true });
+    originalTokenDb = process.env.TOKEN_STORE_DB_PATH;
+    originalKeychain = process.env.KEYCHAIN_TEST_MODE;
+    originalApi = process.env.ANTHROPIC_API_URL;
+    originalPool = process.env.CMUX_TEAM_TOKEN_POOL;
+    process.env.TOKEN_STORE_DB_PATH = join(
+      tokenDbDir,
+      `tokens-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    process.env.KEYCHAIN_TEST_MODE = "1";
+    __resetTokensDbForTest();
+  });
+
+  afterEach(() => {
+    if (originalTokenDb !== undefined) process.env.TOKEN_STORE_DB_PATH = originalTokenDb;
+    else delete process.env.TOKEN_STORE_DB_PATH;
+    if (originalKeychain !== undefined) process.env.KEYCHAIN_TEST_MODE = originalKeychain;
+    else delete process.env.KEYCHAIN_TEST_MODE;
+    if (originalApi !== undefined) process.env.ANTHROPIC_API_URL = originalApi;
+    else delete process.env.ANTHROPIC_API_URL;
+    if (originalPool !== undefined) process.env.CMUX_TEAM_TOKEN_POOL = originalPool;
+    else delete process.env.CMUX_TEAM_TOKEN_POOL;
+    __resetTokensDbForTest();
+  });
+
+  test("T384-P1: auth_hash mismatch + org 一致 → 既存 token の auth_hash が UPDATE され usage_snapshots が UPSERT される", async () => {
+    const { initTokenDB, insertToken, getLatestUsageSnapshot, getTokenByOrganizationId } =
+      await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-old-credential";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    const inserted = insertToken(db0, {
+      handle: "@known",
+      organization_id: "org-rotate-1",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    const newAuth = "Bearer rotate-new-credential-after-refresh";
+    const newAuthHash = createHash("sha256").update(newAuth).digest("hex").slice(0, 12);
+
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-1");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByOrganizationId(db, "org-rotate-1");
+      expect(tok).not.toBeNull();
+      expect(tok?.handle).toBe("@known");
+      expect(tok?.auth_hash).toBe(newAuthHash);
+      expect(tok?.auth_hash).not.toBe(oldAuthHash);
+
+      const snap = getLatestUsageSnapshot(db, inserted.id);
+      expect(snap).not.toBeNull();
+      expect(snap?.util_5h).toBeCloseTo(0.1, 5);
+      expect(snap?.util_7d).toBeCloseTo(0.2, 5);
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P2: auto-rotate 後の連続リクエストは getTokenByAuthHash 経路で UPSERT が継続する", async () => {
+    const { initTokenDB, insertToken, getLatestUsageSnapshot, getTokenByOrganizationId } =
+      await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-p2-old";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    const inserted = insertToken(db0, {
+      handle: "@p2",
+      organization_id: "org-rotate-2",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    const newAuth = "Bearer rotate-p2-new";
+    const newAuthHash = createHash("sha256").update(newAuth).digest("hex").slice(0, 12);
+
+    // 1 回目: util_5h=0.10 で auto-rotate 発火
+    const { upstream: u1 } = startUpstreamWithOrgHeader("org-rotate-2", { u5h: "0.10" });
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${u1.port}`;
+
+    const handle1 = await start(testDir);
+    let res = await fetch(`http://127.0.0.1:${handle1.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+    handle1.stop();
+    u1.stop();
+
+    // 2 回目: util_5h=0.50 で同じ newAuth → auth_hash 直ヒット経路で UPSERT 更新
+    const { upstream: u2 } = startUpstreamWithOrgHeader("org-rotate-2", { u5h: "0.50" });
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${u2.port}`;
+    const handle2 = await start(testDir);
+    res = await fetch(`http://127.0.0.1:${handle2.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByOrganizationId(db, "org-rotate-2");
+      expect(tok?.auth_hash).toBe(newAuthHash);
+      const snap = getLatestUsageSnapshot(db, inserted.id);
+      expect(snap?.util_5h).toBeCloseTo(0.5, 5);
+    } finally {
+      db.close();
+    }
+
+    handle2.stop();
+    u2.stop();
+  });
+
+  test("T384-P3: org が返ってこない場合は auto-rotate も auto-discover も skip", async () => {
+    const { initTokenDB, insertToken, getLatestUsageSnapshot, listTokens } =
+      await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-p3-old";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    const inserted = insertToken(db0, {
+      handle: "@p3",
+      organization_id: "org-rotate-3",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    // anthropic-organization-id を返さない upstream
+    const { upstream } = startUpstreamWithOrgHeader(null);
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const newAuth = "Bearer rotate-p3-new";
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db = initTokenDB();
+    try {
+      // 既存 token の auth_hash は変わっていない
+      const tokens = listTokens(db);
+      expect(tokens.length).toBe(1);
+      expect(tokens[0]?.handle).toBe("@p3");
+      expect(tokens[0]?.auth_hash).toBe(oldAuthHash);
+      // 新 token も INSERT されていない（org 不明なので auto-discover も skip）
+      // 既存 token の snapshot も更新されない（auth_hash mismatch + org なしで Phase 1/2/3 全 skip）
+      expect(getLatestUsageSnapshot(db, inserted.id)).toBeNull();
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P4: pool OFF でも auto-rotate は実行される（手動 add token の OAuth refresh ケース）", async () => {
+    const { initTokenDB, insertToken, getLatestUsageSnapshot, getTokenByOrganizationId } =
+      await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-p4-old";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    const inserted = insertToken(db0, {
+      handle: "@p4",
+      organization_id: "org-rotate-4",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-4");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const newAuth = "Bearer rotate-p4-new";
+    const newAuthHash = createHash("sha256").update(newAuth).digest("hex").slice(0, 12);
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db = initTokenDB();
+    try {
+      // pool OFF でも rotate が成立する（INSERT のみ pool gate するという設計の検証）
+      const tok = getTokenByOrganizationId(db, "org-rotate-4");
+      expect(tok?.auth_hash).toBe(newAuthHash);
+      const snap = getLatestUsageSnapshot(db, inserted.id);
+      expect(snap?.util_5h).toBeCloseTo(0.1, 5);
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P5: org も未登録 + pool ON → 従来通り auto-discover INSERT（rotate ではなく新規）", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-5-fresh");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer rotate-p5-fresh",
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const { initTokenDB, listTokens } = await import("./token-store");
+    const db = initTokenDB();
+    try {
+      const tokens = listTokens(db);
+      expect(tokens.length).toBe(1);
+      expect(tokens[0]?.organization_id).toBe("org-rotate-5-fresh");
+      expect(tokens[0]?.credential_source).toBe("auto-discover");
+      expect(tokens[0]?.selectable).toBe(false);
+    } finally {
+      db.close();
+    }
+
+    // token_auto_rotated ログは出ない（rotate 経路に入っていないこと）
+    const logFile = join(testDir, ".team/logs/manager.log");
+    const content = await readFile(logFile, "utf-8").catch(() => "");
+    expect(content).not.toMatch(/token_auto_rotated/);
+    expect(content).toMatch(/token_auto_discovered/);
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P6: org も未登録 + pool OFF → 何もしない（T341-P1 regression guard）", async () => {
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-6-pool-off");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer rotate-p6-fresh",
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const { initTokenDB, listTokens } = await import("./token-store");
+    const db = initTokenDB();
+    try {
+      expect(listTokens(db).length).toBe(0);
+    } finally {
+      db.close();
+    }
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P7: token_auto_rotated ログフォーマット検証（auth=6 / org=8 桁マスキング）", async () => {
+    const { initTokenDB, insertToken } = await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-p7-old";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    insertToken(initTokenDB(), {
+      handle: "@p7",
+      organization_id: "org-rotate-7-long-id",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+
+    const newAuth = "Bearer rotate-p7-new";
+    const newAuthHash = createHash("sha256").update(newAuth).digest("hex").slice(0, 12);
+
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-7-long-id");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const logFile = join(testDir, ".team/logs/manager.log");
+    const content = await readFile(logFile, "utf-8");
+    // expected: token_auto_rotated handle=@p7 old_auth=AAAAAA new_auth=BBBBBB org=ORGORG12
+    const expectedOld = oldAuthHash.slice(0, 6);
+    const expectedNew = newAuthHash.slice(0, 6);
+    const expectedOrg = "org-rotate-7-long-id".slice(0, 8); // = "org-rota"
+    const re = new RegExp(
+      `token_auto_rotated handle=@p7 old_auth=${expectedOld} new_auth=${expectedNew} org=${expectedOrg.replace(/-/g, "\\-")}`,
+    );
+    expect(content).toMatch(re);
+    // フル auth_hash がログに混入していないこと（masking ポリシーの守り）
+    expect(content).not.toContain(`old_auth=${oldAuthHash}`);
+    expect(content).not.toContain(`new_auth=${newAuthHash}`);
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-P8: auth_hash 既ヒット時は updateTokenAuth が呼ばれない（regression guard）", async () => {
+    const { initTokenDB, insertToken, getLatestUsageSnapshot } = await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const auth = "Bearer rotate-p8-known";
+    const authHash = createHash("sha256").update(auth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    const inserted = insertToken(db0, {
+      handle: "@p8",
+      organization_id: "org-rotate-8",
+      auth_hash: authHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-8");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const db = initTokenDB();
+    try {
+      // auth_hash 列は変わっていない（auto-rotate 経路に入っていないこと）
+      const row = db
+        .prepare("SELECT auth_hash FROM tokens WHERE id = ?")
+        .get(inserted.id) as { auth_hash: string } | undefined;
+      expect(row?.auth_hash).toBe(authHash);
+      // ただし usage_snapshots は通常通り UPSERT される
+      const snap = getLatestUsageSnapshot(db, inserted.id);
+      expect(snap).not.toBeNull();
+      expect(snap?.util_5h).toBeCloseTo(0.1, 5);
+    } finally {
+      db.close();
+    }
+
+    // token_auto_rotated ログは出ない
+    const logFile = join(testDir, ".team/logs/manager.log");
+    const content = await readFile(logFile, "utf-8").catch(() => "");
+    expect(content).not.toMatch(/token_auto_rotated/);
+
+    handle.stop();
+    upstream.stop();
+  });
+
+  test("T384-F1: DB 操作が throw しても呼び出し側に例外が漏れない（catch 経路の guard）", async () => {
+    const { initTokenDB, insertToken } = await import("./token-store");
+    const { createHash } = await import("crypto");
+
+    const oldAuth = "Bearer rotate-f1-old";
+    const oldAuthHash = createHash("sha256").update(oldAuth).digest("hex").slice(0, 12);
+    const db0 = initTokenDB();
+    insertToken(db0, {
+      handle: "@f1",
+      organization_id: "org-rotate-f1",
+      auth_hash: oldAuthHash,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "manual",
+      selectable: true,
+    });
+    db0.close();
+
+    // tokens テーブルから auth_hash カラムを drop することで、proxy の
+    // `getTokenByAuthHash` が prepare 時に "no such column: auth_hash" で throw する状況を作る。
+    // CREATE TABLE IF NOT EXISTS では既存テーブルは作り直されず、v1 migration 配列も空なので
+    // proxy は drop されたままの schema を使い続け、結果として catch 経路に到達する。
+    const dbPath = process.env.TOKEN_STORE_DB_PATH!;
+    const { Database } = await import("bun:sqlite");
+    const direct = new Database(dbPath);
+    try {
+      direct.exec("ALTER TABLE tokens DROP COLUMN auth_hash");
+    } finally {
+      direct.close();
+    }
+
+    const { upstream } = startUpstreamWithOrgHeader("org-rotate-f1");
+    process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+    const handle = await start(testDir);
+    const newAuth = "Bearer rotate-f1-new";
+    const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: newAuth,
+        "x-cmux-surface": "surface:m1",
+        "x-cmux-role": "master",
+      },
+      body: "{}",
+    });
+    // proxy が落ちず 200 を返すこと
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const logFile = join(testDir, ".team/logs/manager.log");
+    const content = await readFile(logFile, "utf-8").catch(() => "");
+    expect(content).toMatch(/token_db_update_failed/);
 
     handle.stop();
     upstream.stop();

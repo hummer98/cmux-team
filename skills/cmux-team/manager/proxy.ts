@@ -22,6 +22,8 @@ import {
 import {
   initTokenDB,
   getTokenByAuthHash,
+  getTokenByOrganizationId,
+  updateTokenAuth,
   insertToken,
   getLatestUsageSnapshot,
   upsertUsageSnapshot,
@@ -83,15 +85,24 @@ function genAutoDiscoverHandle(
 }
 
 /**
- * Anthropic レスポンス 1 件につき tokens.db を更新する（T320）。
- * - auth_hash が既知: utilization 変化時のみ throttled UPSERT
- * - auth_hash 未知: organization_id が取れれば auto-discover 登録（selectable=0）
+ * Anthropic レスポンス 1 件につき tokens.db を更新する（T320 / T384）。
+ * - auth_hash が既知 (`getTokenByAuthHash`): utilization 変化時のみ throttled UPSERT
+ * - auth_hash 未知 + organization_id 既知 (`getTokenByOrganizationId`):
+ *     auto-rotate（既存 token の auth_hash を UPDATE してから UPSERT 経路に合流）。
+ *     OAuth refresh で auth_hash が乖離した token の usage_snapshots 更新を再開させる（T384）。
+ *     `tokenPoolEnabled` には依存しない（手動 add の正規 token も rotate 対象）。
+ * - auth_hash も organization_id も未知 + tokenPoolEnabled=true:
+ *     auto-discover INSERT（selectable=0）
+ * - tokenPoolEnabled=false かつ未知 token: skip
  *
- * T323: 既知 token ヒット時に role が `master` / `conductor` の場合、
+ * T323: 既知 token ヒット時（rotate 経路含む）に role が `master` / `conductor` の場合、
  *   `getState().masters.get(surface)?.tokenHandle` / `findConductor(state, surface)?.tokenHandle`
  *   を tok.handle で書き戻す（変更時のみ notifyStateChanged）。
  *   `role === "agent"` は spawn-agent 経路で AGENT_TOKEN_BOUND が確定するためここでは触らない。
  *   surface / role が空 / 未知の場合は handle 反映を skip（safety guard）。
+ *
+ * masking: ログ上の auth_hash は prefix 6 文字、organization_id は prefix 8 文字（T384）。
+ *   DB 内の auth_hash は `computeProxyAuthHash` の戻り値である 12 文字フルを保持する。
  *
  * エラーは全て fire-and-forget（既存 traces.db 書き込みに影響させない）。
  */
@@ -111,8 +122,30 @@ function updateTokensDB(
   const { tokenPoolEnabled, getState } = opts;
 
   try {
-    const tok = getTokenByAuthHash(db, authHash);
+    // ── Phase 1: auth_hash で検索 ──
+    let tok = getTokenByAuthHash(db, authHash);
 
+    // ── Phase 2: auto-rotate（auth_hash mismatch だが organization_id 一致）──
+    // OAuth refresh で auth_hash が乖離した既存 token を自動修復する（T384）。
+    // tokenPoolEnabled には依存しない: pool OFF の手動運用でも rotate されないと
+    // usage_snapshots の更新が永久に止まるため。
+    if (!tok && organizationId) {
+      const byOrg = getTokenByOrganizationId(db, organizationId);
+      if (byOrg) {
+        const oldAuthHash = byOrg.auth_hash;
+        updateTokenAuth(db, byOrg.id, authHash);
+        // 後続 UPSERT で参照する byOrg を新 auth_hash に差し替えて Phase 3 に流す
+        tok = { ...byOrg, auth_hash: authHash };
+        // ログ上は auth_hash 6 文字 / organization_id 8 文字に丸める
+        log(
+          "token_auto_rotated",
+          `handle=${tok.handle} old_auth=${oldAuthHash.slice(0, 6)} ` +
+            `new_auth=${authHash.slice(0, 6)} org=${organizationId.slice(0, 8)}`,
+        ).catch(() => {});
+      }
+    }
+
+    // ── Phase 3: tok があれば UPSERT 経路（既存 + auto-rotate 直後の合流点）──
     if (tok) {
       // throttle: 変化があるときのみ UPSERT
       const prev = getLatestUsageSnapshot(db, tok.id);
@@ -139,7 +172,8 @@ function updateTokensDB(
         });
       }
 
-      // T323: surface ↔ tokenHandle 反映（master/conductor のみ。agent は AGENT_TOKEN_BOUND 経路）
+      // T323: surface ↔ tokenHandle 反映（master/conductor のみ。agent は AGENT_TOKEN_BOUND 経路）。
+      // T384: auto-rotate 経路でも呼ぶ（rotate 後は新 auth_hash でヒットした token と同じ扱い）。
       if (surface && role && getState) {
         try {
           maybeApplyTokenHandle(getState(), surface, role, tok.handle);
@@ -151,9 +185,10 @@ function updateTokensDB(
         }
       }
     } else if (organizationId) {
+      // ── Phase 4: 真の新規 token（auth_hash も organization_id も未知）──
       if (!tokenPoolEnabled) {
         // T341: pool 機能 OFF では auto-discover INSERT を skip。
-        // 既知 token の usage_snapshots UPSERT は影響しない（上の if 分岐内）。
+        // 既知 token の usage_snapshots UPSERT / auto-rotate は影響しない（上の分岐内で完結）。
         return;
       }
       // auto-discover: 未知アカウントを selectable=0 で登録
