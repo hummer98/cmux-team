@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [4.19.0] - 2026-04-29
+
+### Added
+
+- **proxy: OAuth refresh で auth_hash が乖離した token を自動 rotate（T384）**。同一 organization_id にヒットすれば既存レコードの auth_hash を UPDATE して通常 UPSERT 経路に合流させ、usage_snapshots 更新の停止を防ぐ。`tokenPoolEnabled` に依存せず手動 add token も rotate 対象。`token_auto_rotated` ログでマスキング済み auth/org を可視化。Dear T318 の auth_hash 乖離による snapshot 凍結シナリオへの根本対応
+- **token-store: `admitCandidates` に 7d ブロッカー軸を追加（T382）**。`selectToken` の admit ループで `effUtil7d > BLOCKER_7D` の OR 条件を加え、5h と 7d を対称な blocker 軸として扱う。`BLOCKER_5H` / `BLOCKER_7D` を export 定数として定義し `pool-throttle.ts` の `countPoolTokens` / `hasPoolHeadroomFromSummary` も 7d 軸を反映するよう同期。pool 逼迫時に唯一の admit 候補が落札して monthly limit hit する構造的バグに対する一次対応
+- **manager: `.team/logs/events.jsonl` への構造化イベントストリーム writer を実装（T358 / docs/spec/10-events-stream.md）**。spec §6 で確定した v2 schema に従い、task lifecycle / Conductor lifecycle / sync guard など 16 event 種を 17+ 経路で append。`emitEvent` / `EventStreamRecord` discriminated union / `mapAbortReason`（8 値 → 6 値正規化）を提供。`manager.log` は v1 として並行運用、retention は無制限 append、書き込み失敗時は best-effort で `manager.log` に `events_writer_error` を残す
+
+### Changed
+
+- **デフォルトレイアウトを `wide` → `16x9` に変更**。`createDaemon` / `resolveLayout` / `createConductorPanes` の default 引数および `team.json` restore 時の fallback を 16x9 に統一。help text / dashboard / README / docs/spec のデフォルト記述も更新
+- **token-pool の default handle を `@tayo` に変更し `@kddi` を exclude**。OSS / 個人プロジェクト用デフォルト構成として `@kddi` を業務系 token から外し `@tayo` を default に設定
+
+### Fixed
+
+- **dashboard のキーバインド `R` / `G` / `Q` を shift+letter 構文に修正してハンドラ発火不能を解消**。`@rezi-ui/core` のパーサーが大文字小文字を区別せず lowercase 化するため `"R"` が `"r"` と同じシーケンスとして登録され後勝ちで上書きされていた。`g` (top) / `r` (reload) / `q` (quit) の小文字側ハンドラが発火せず、ヘルプ表記の `g/G` / `R` / `Q` が意図通り動作していなかった問題を shift+letter 明示で修正
+
 ## [4.18.0] - 2026-04-29
 
 ### Added
