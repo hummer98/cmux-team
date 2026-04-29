@@ -5,6 +5,7 @@ import { createDummyProject, type DummyProject } from "./test-project";
 import {
   parseTaskMeta,
   filterExecutableTasks,
+  filterRunAfterAllTasks,
   sortByPriority,
   cascadeAbortToChildren,
   classifyResumeAction,
@@ -384,6 +385,81 @@ describe("filterExecutableTasks", () => {
       new Set(["20"]) // 実装はアサイン済み
     );
     expect(result.map((t) => t.id)).toEqual(["99999"]); // 新規のみ実行可能
+  });
+});
+
+describe("filterRunAfterAllTasks (T387)", () => {
+  const makeMeta = (
+    id: string,
+    status: string,
+    dependsOn: string[] = [],
+    runAfterAll: boolean = false,
+  ): TaskMeta => ({
+    id,
+    title: `task-${id}`,
+    status,
+    priority: "medium",
+    dependsOn,
+    runAfterAll,
+    exclusive: false,
+    filePath: `/path/${id}.md`,
+    fileName: `${id}.md`,
+    createdAt: "",
+  });
+
+  test("ready 依存元が draft なら drain 通過し run_after_all が返る (再現)", () => {
+    const t1 = makeMeta("1", "draft");
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const t3 = makeMeta("3", "ready", [], true);
+    const result = filterRunAfterAllTasks([t1, t2, t3], new Set(), new Set());
+    expect(result.map((t) => t.id)).toEqual(["3"]);
+  });
+
+  test("draft に依存する ready のみで run_after_all が無い場合は空配列", () => {
+    const t1 = makeMeta("1", "draft");
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const result = filterRunAfterAllTasks([t1, t2], new Set(), new Set());
+    expect(result).toEqual([]);
+  });
+
+  test("2 段間接の draft 依存もチェーン遡及で検出して drain 通過", () => {
+    const t1 = makeMeta("1", "draft");
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const t3 = makeMeta("3", "ready", ["2"]);
+    const t4 = makeMeta("4", "ready", [], true);
+    const result = filterRunAfterAllTasks([t1, t2, t3, t4], new Set(), new Set());
+    expect(result.map((t) => t.id)).toEqual(["4"]);
+  });
+
+  test("aborted 依存も draft と同様に drain 通過させる (cascade 漏れの保険)", () => {
+    const t1 = makeMeta("1", "aborted");
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const t3 = makeMeta("3", "ready", [], true);
+    const result = filterRunAfterAllTasks([t1, t2, t3], new Set(), new Set());
+    expect(result.map((t) => t.id)).toEqual(["3"]);
+  });
+
+  test("循環参照していても無限ループせず空配列を返す", () => {
+    const t1 = makeMeta("1", "ready", ["2"]);
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const t3 = makeMeta("3", "ready", [], true);
+    const result = filterRunAfterAllTasks([t1, t2, t3], new Set(), new Set());
+    expect(result).toEqual([]);
+  });
+
+  test("closed のみのチェーンならブロッカーなし、T2 は normalActive に残り drain ブロック (既存挙動)", () => {
+    const t1 = makeMeta("1", "closed");
+    const t2 = makeMeta("2", "ready", ["1"]);
+    const t3 = makeMeta("3", "ready", [], true);
+    const result = filterRunAfterAllTasks([t1, t2, t3], new Set(["1"]), new Set());
+    expect(result).toEqual([]);
+  });
+
+  test("依存先タスクが削除済み（byId に無い）なら無視して既存挙動を維持", () => {
+    const t2 = makeMeta("2", "ready", ["999"]);
+    const t3 = makeMeta("3", "ready", [], true);
+    const result = filterRunAfterAllTasks([t2, t3], new Set(), new Set());
+    expect(result).toEqual([]);
   });
 });
 
