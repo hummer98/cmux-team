@@ -486,11 +486,34 @@ export function filterRunAfterAllTasks(
     ).map(t => t.id)
   );
 
-  // 通常タスク（run_after_all でも、run_after_all に依存するタスクでもない）の ready + assigned 数
+  // すべてのタスクを id で引けるマップ（チェーン遡及で再利用）
+  const byId = new Map(tasks.map(t => [t.id, t]));
+
+  // ready/assigned タスクが「進む見込みのない依存」(draft/aborted) を持つかを BFS で再帰判定。
+  // 循環は visited で防ぐ。closed はそれ以上辿らない。byId に無い依存は無視する（既存挙動踏襲）。
+  const isBlockedByDeadDep = (task: TaskMeta): boolean => {
+    const visited = new Set<string>();
+    const queue: string[] = [...task.dependsOn];
+    while (queue.length > 0) {
+      const depId = queue.shift()!;
+      if (visited.has(depId)) continue;
+      visited.add(depId);
+      const dep = byId.get(depId);
+      if (!dep) continue;
+      if (dep.status === "draft" || dep.status === "aborted") return true;
+      if (dep.status === "closed") continue;
+      queue.push(...dep.dependsOn);
+    }
+    return false;
+  };
+
+  // 通常タスク（run_after_all でも、run_after_all に依存するタスクでもない）の ready + assigned 数。
+  // チェーンを遡って draft/aborted に到達する場合は drain ブロッカーから除外する（T387）。
   const normalActive = tasks.filter(t =>
     !t.runAfterAll &&
     !dependsOnRunAfterAll.has(t.id) &&
-    (t.status === "ready" || assignedIds.has(t.id))
+    (t.status === "ready" || assignedIds.has(t.id)) &&
+    !isBlockedByDeadDep(t)
   );
 
   if (normalActive.length > 0) return [];
