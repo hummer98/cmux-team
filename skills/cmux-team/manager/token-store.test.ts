@@ -2132,6 +2132,146 @@ describe("selectToken (T369: stale snapshot の util リセット時刻反映)",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// selectToken (T382: 7d ブロッカー追加)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("selectToken (T382: 7d blocker)", () => {
+  function seedFreshSnapshot(tokenId: number, util5h: number, util7d: number): void {
+    upsertUsageSnapshot(db, {
+      token_id: tokenId,
+      util_5h: util5h,
+      util_7d: util7d,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+    });
+  }
+
+  function seedStaleSnapshot(args: {
+    tokenId: number;
+    util5h: number | null;
+    util7d: number | null;
+    reset5hAt: string | null;
+    reset7dAt: string | null;
+    recordedMinutesAgo: number;
+  }): void {
+    upsertUsageSnapshot(db, {
+      token_id: args.tokenId,
+      util_5h: args.util5h,
+      util_7d: args.util7d,
+      reset_5h_at: args.reset5hAt,
+      reset_7d_at: args.reset7dAt,
+      unified_status: null,
+    });
+    const recordedAt = new Date(Date.now() - args.recordedMinutesAgo * 60_000).toISOString();
+    db.prepare("UPDATE usage_snapshots SET recorded_at = ? WHERE token_id = ?")
+      .run(recordedAt, args.tokenId);
+  }
+
+  function pastIso(minutesAgo: number): string {
+    return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  }
+  function futureIso(minutesAhead: number): string {
+    return new Date(Date.now() + minutesAhead * 60_000).toISOString();
+  }
+
+  test("T382-1: util_7d=0.96 / util_5h=0.0 → admit されない（7d 軸単独でブロック）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@hot7d", organization_id: "org-hot7d-382-1", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.0, 0.96);
+    const sel = selectToken(db, "h-382-1");
+    expect(sel).toBeNull();
+  });
+
+  test("T382-2: 全 token が util_7d>0.95 のとき selectToken は null", () => {
+    const a = insertToken(
+      db,
+      makeToken({ handle: "@a382", organization_id: "org-a-382-2", tags: ["any"] }),
+    );
+    const b = insertToken(
+      db,
+      makeToken({ handle: "@b382", organization_id: "org-b-382-2", tags: ["any"] }),
+    );
+    seedFreshSnapshot(a.id, 0.1, 0.96);
+    seedFreshSnapshot(b.id, 0.1, 0.99);
+    const sel = selectToken(db, "h-382-2");
+    expect(sel).toBeNull();
+  });
+
+  test("T382-3: util_7d=0.95（境界値）→ admit される（厳密不等号 `>`）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@boundary", organization_id: "org-boundary-382-3", tags: ["any"] }),
+    );
+    seedFreshSnapshot(t.id, 0.1, 0.95);
+    const sel = selectToken(db, "h-382-3");
+    expect(sel?.token.handle).toBe("@boundary");
+  });
+
+  test("T382-4: default 一致でも util_7d=0.96 なら除外される", () => {
+    // selectable=0 / handle が effectiveDefault と一致 / util_7d=0.96
+    // → default 昇格より blocker 判定が手前なので除外される
+    const t = insertToken(
+      db,
+      makeToken({
+        handle: "@deftok",
+        organization_id: "org-deftok-382-4",
+        tags: ["any"],
+        selectable: false,
+      }),
+    );
+    seedFreshSnapshot(t.id, 0.1, 0.96);
+    const sel = selectToken(db, "h-382-4", {
+      projectTags: ["any"],
+      projectDefault: "@deftok",
+      include: [],
+      exclude: [],
+      isOss: false,
+      ossDefault: null,
+    });
+    expect(sel).toBeNull();
+  });
+
+  test("T382-5: stale + reset_7d_at 過去 で snap.util_7d=0.99 → admit（effUtil7d=0 救済）", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@reset7d", organization_id: "org-reset7d-382-5", tags: ["any"] }),
+    );
+    // stale + 7d reset 過去 → effUtil7d=0、5h は低い → admit
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.1,
+      util7d: 0.99,
+      reset5hAt: futureIso(60),
+      reset7dAt: pastIso(5),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-382-5");
+    expect(sel?.token.handle).toBe("@reset7d");
+  });
+
+  test("T382-6: stale + reset_7d_at 未来 で snap.util_7d=0.97 → ブロッカー除外", () => {
+    const t = insertToken(
+      db,
+      makeToken({ handle: "@stillhot7d", organization_id: "org-stillhot7d-382-6", tags: ["any"] }),
+    );
+    // stale + 7d reset 未到達 → effUtil7d=0.97 で blocker 除外
+    seedStaleSnapshot({
+      tokenId: t.id,
+      util5h: 0.1,
+      util7d: 0.97,
+      reset5hAt: futureIso(60),
+      reset7dAt: futureIso(60 * 24 * 7),
+      recordedMinutesAgo: 50,
+    });
+    const sel = selectToken(db, "h-382-6");
+    expect(sel).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // canSelectAnyToken (T367: pool admit peek)
 // ─────────────────────────────────────────────────────────────────────────────
 

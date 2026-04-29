@@ -13,6 +13,15 @@ import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 共有定数（admit blocker 閾値）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** admit blocker: stale 救済反映後の effUtil_5h がこの値を超える token は除外する。 */
+export const BLOCKER_5H = 0.95;
+/** admit blocker: stale 救済反映後の effUtil_7d がこの値を超える token は除外する（T382）。 */
+export const BLOCKER_7D = 0.95;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 型定義
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -872,8 +881,9 @@ function normalizePolicy(policy: SelectTokenPolicy | string[] | undefined): Sele
  *  5. **stale snapshot の reset 反映 (T373)**: recorded_at が 30 分超前でも除外しない。
  *     `reset_5h_at` / `reset_7d_at` を過ぎた軸は実 util がリセット済みと見なし `effUtil*=0` で評価し、
  *     未到達 / null の軸は `snap.util_*` を下限として残す。stale だけを理由に候補から外さない。
- *     高 util の stale token は次の `effUtil5h > 0.95` ブロッカーで止まる。
- *  6. **ブロッカー除外**: `effUtil5h > 0.95` は候補外
+ *     高 util の stale token は次の `effUtil5h > BLOCKER_5H` / `effUtil7d > BLOCKER_7D` ブロッカーで止まる。
+ *  6. **ブロッカー除外**: `effUtil5h > BLOCKER_5H` または `effUtil7d > BLOCKER_7D` は候補外（T382 で 7d 軸を追加）。
+ *     `effectiveDefault` 一致 token もこのブロッカーは免除されない（後続の admit 判定の手前で除外される）。
  *  7. **admit 判定**:
  *     - `effectiveDefault` 一致 → 無条件 admit
  *     - `policy.include` に含まれる → tags 不問で admit
@@ -951,8 +961,11 @@ function admitCandidates(
       }
     }
 
-    // 5) ブロッカー除外: 5h > 95%
-    if (effUtil5h > 0.95) continue;
+    // 5) ブロッカー除外: 5h or 7d > BLOCKER_*（T382: 7d 軸を追加）
+    //    Dear T318 で発生した「5h は余裕があるが 7d 月次枠ほぼ枯渇」 token が落札 → monthly limit hit
+    //    を回避するため、5h と 7d を対称な blocker 軸として扱う。
+    if (effUtil5h > BLOCKER_5H) continue;
+    if (effUtil7d > BLOCKER_7D) continue;
 
     // 6) admit 判定（順序: default → include → OSS → tag マッチ）
     let admitted = false;
@@ -1018,10 +1031,11 @@ export function canSelectAnyToken(
  *     と一致する handle は **`selectable=0` でも runtime で候補化**（DB 不変。spawn-agent ごとに in-memory 判定）。
  *     副作用ゼロ・auto-discover 経路と相互汚染しない。複数 spawn の競合は 120 秒 lease で吸収する
  *  3. **selectable=0 の他 token は候補外**（default 以外の non-selectable は素通し）
- *  4. **lease / `effUtil5h>0.95` ブロッカー**は除外。stale は除外条件ではなく、
+ *  4. **lease / blocker 除外**: lease 中、または `effUtil5h > BLOCKER_5H` / `effUtil7d > BLOCKER_7D`
+ *     のいずれかに該当する token は除外（T382 で 7d 軸を追加）。stale は除外条件ではなく、
  *     reset 済み軸を `effUtil*=0` で上書き、未到達軸は `snap.util_*` をそのまま残す形で救済する (T373)
  *  5. **admit 判定**:
- *     - `effectiveDefault` 一致 → 無条件 admit
+ *     - `effectiveDefault` 一致 → 無条件 admit（ただし 4. の blocker は免除されない）
  *     - `policy.include` に含まれる → tags 不問で admit
  *     - `policy.isOss=true` → admit（exclude のみ尊重、tag 不問）
  *     - 通常 tag マッチ（`token.tags` が "any" を含む / `projectTags` が "any" / 交集合あり）→ admit
@@ -1062,6 +1076,7 @@ export function selectToken(
  *
  * - `selectToken` と同一の admit 経路 (`admitCandidates`) を共有するため、
  *   peek で出した候補が実際の spawn-agent で選ばれる候補と一致する（UX 整合性）
+ * - blocker は `effUtil5h > BLOCKER_5H` / `effUtil7d > BLOCKER_7D` の両軸（T382）
  * - lease を取らないので連続 peek しても副作用なし（`expireLeases` の DB write は許容）
  * - score 最小（`0.3 * effUtil5h + 0.7 * effUtil7d`）が選ばれる
  *

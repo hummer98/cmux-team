@@ -242,9 +242,14 @@ effectiveDefault = tokenPool.default
    `snap.util_*` を下限として残す。旧仕様 (T369) の「両軸とも reset 未到達なら除外」は廃止した。
    理由: 久しく使われていない token = 余裕がある、のに stale で永久除外されると spawn → snap 更新の
    循環が起動せずデッドロックする（`@kami` の症状）。高 util の stale token は 5. ブロッカーで止まる。
-5. **ブロッカー除外**: `effUtil5h > 0.95`（4. で算出した effUtil で判定。stale でも snap 値が高ければ継続ブロック）
+5. **ブロッカー除外**: `effUtil5h > 0.95` または `effUtil7d > 0.95`（T382）。
+   4. で算出した effUtil で判定。stale でも snap 値が blocker 閾値を超えていれば継続ブロック。
+   閾値は `token-store.ts` の `BLOCKER_5H` / `BLOCKER_7D` 定数を唯一の真理として `pool-throttle.ts` も import で共有する。
+   **note**: handle == `effectiveDefault` の token もこのブロッカーは免除されない（後続の 6. admit 判定の手前で除外される）。
+   Dear T318 の「default 一致 token が 7d=0.91 で唯一の admit 候補 → monthly limit hit」事故を
+   構造的に防ぐため、default 昇格より blocker 判定が先になる順序を維持する。
 6. **admit 判定**:
-   - handle == `effectiveDefault` → 無条件 admit
+   - handle == `effectiveDefault` → 無条件 admit（ただし 5. の blocker は通過済みの token のみ）
    - handle ∈ `policy.include` → tags 不問 admit
    - `isOss=true` → tags 不問 admit
    - 通常 tag マッチ（`token.tags` が `any` を含む / `projectTags` が `any` / 交集合あり）→ admit
@@ -262,11 +267,13 @@ stale snapshot の effUtil 算出と admit 結果のサンプル:
 | @kami | (0.07, 0.18) | yes | 未来 | 未来 | 0.07 | 0.18 | 0.147 | **選ばれる** |
 | @tayo | (0.02, 0.91) | yes | 過去 | 未来 | 0 | 0.91 | 0.637 | 候補（負け） |
 | @kddi | (0.51, 0.85) | no | — | — | 0.51 | 0.85 | 0.748 | 候補（負け） |
-| @hot | (0.97, 0.5) | yes | 未来 | 未来 | 0.97 | 0.5 | — | **ブロッカー除外** |
+| @hot | (0.97, 0.5) | yes | 未来 | 未来 | 0.97 | 0.5 | — | **ブロッカー除外（5h 軸）** |
+| @over7d | (0.5, 0.96) | yes | 未来 | 未来 | 0.5 | 0.96 | — | **ブロッカー除外（7d 軸、T382）** |
+| @reset7d | (0.5, 0.99) | yes | 未来 | 過去 | 0.5 | 0 | 0.15 | 候補（7d リセット直後の救済） |
 
 `reset_*_at` が不正値・空文字の場合は `parseResetEpochMs` が `NaN` を返し、`<=` 比較が常に false になるため
 未到達扱い（snap 値そのまま）になる。`pool-throttle.ts: countPoolTokens` の `available` 計数も同じロジックを共有する
-（`parseResetEpochMs` を export して両方で再利用）。
+（`parseResetEpochMs` を export して両方で再利用、5h / 7d 両軸の stale 救済を行う）。
 
 ---
 
@@ -296,13 +303,14 @@ sort して `acquireLease` するだけ。
 
 これにより以下が **規約レベルではなく実装レベルで一意** になる:
 
-- exclude / lease / stale 救済 (T373: `effUtil*=0` 上書き) / blocker (`effUtil5h > 0.95`) の除外条件
+- exclude / lease / stale 救済 (T373: `effUtil*=0` 上書き) / blocker (`effUtil5h > BLOCKER_5H` / `effUtil7d > BLOCKER_7D`、T382) の除外条件
 - `effectiveDefault = projectDefault ?? (isOss ? ossDefault : null)` の解決
 - selectable=0 の default 昇格（DB 書き換えなし）
 - include / OSS / tag マッチの admit 判定
 
 `pool-throttle.ts: countPoolTokens` の `available` 計数も `parseResetEpochMs` を共有して同じ
-stale 救済ロジックで数える（cosmetic な dashboard 表示が `selectToken` の admit と乖離しない）。
+stale 救済ロジックで数える（5h / 7d 両軸とも reset 通過済みなら `effUtil*=0`。
+cosmetic な dashboard 表示が `selectToken` の admit と乖離しない）。
 
 「pool throttled なのに spawn できる / pool 余裕なのに止まる」という乖離は構造的に発生しない。
 
@@ -315,7 +323,8 @@ stale 救済ロジックで数える（cosmetic な dashboard 表示が `selectT
 
 ### 閾値
 
-- pool 有効経路: `selectToken` の `> 0.95` ブロッカーを唯一の閾値として共有する。
+- pool 有効経路: `selectToken` の blocker を唯一の閾値として共有する。
+  5h / 7d 両軸とも `> 0.95`（`BLOCKER_5H` / `BLOCKER_7D`、T382）でブロッカーとして扱う。
   `THROTTLE_5H_THRESHOLD (=0.90)` は **参照しない**
 - pool 無効経路: `THROTTLE_5H_THRESHOLD (=0.90)` を引き続き使う（後方互換）
 
@@ -446,7 +455,7 @@ next 候補の 5h util 色:
 - `selectable=0` の token は `effectiveDefault` 一致時のみ runtime 候補化
 - lease 中は除外
 - **stale 救済 (T373)**: `recorded_at` が 30 分超でも除外せず、reset 通過済み軸の `effUtil*=0` 救済込みで peek
-- ブロッカー除外: `effUtil5h > 0.95`
+- ブロッカー除外: `effUtil5h > 0.95` または `effUtil7d > 0.95`（T382）
 - admit 判定: `effectiveDefault` → `include` → `isOss` → tag マッチ
 - score 最小: `0.3 * effUtil5h + 0.7 * effUtil7d`
 

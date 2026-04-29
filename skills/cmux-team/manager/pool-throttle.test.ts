@@ -217,6 +217,24 @@ describe("isThrottled5h: pool 有効経路", () => {
     const result = isThrottled5h(db, null, { running: false, bootReady: true, policy: defaultPolicy() }, NOW_ISO);
     expect(result).toBe(false);
   });
+
+  test("T382-T1: 全 token util_5h=0.5 / util_7d=0.96 → throttled=true (7d blocker)", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    seedSnapshot(a.id, 0.5, 0.96);
+    seedSnapshot(b.id, 0.5, 0.96);
+    const result = isThrottled5h(db, null, { ...DEFAULT_OPTS, policy: defaultPolicy() }, NOW_ISO);
+    expect(result).toBe(true);
+  });
+
+  test("T382-T2: 1 件 5h=0.5/7d=0.5、1 件 5h=0.5/7d=0.96 → throttled=false (片方残れば false)", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    seedSnapshot(a.id, 0.5, 0.5);
+    seedSnapshot(b.id, 0.5, 0.96);
+    const result = isThrottled5h(db, null, { ...DEFAULT_OPTS, policy: defaultPolicy() }, NOW_ISO);
+    expect(result).toBe(false);
+  });
 });
 
 describe("isThrottled5h: pool 無効経路 (db=null)", () => {
@@ -290,6 +308,42 @@ describe("countPoolTokens", () => {
     expect(r.total).toBe(2);
     expect(r.selectable).toBe(1);
   });
+
+  test("T382-C1: 3 件 (5h=0.5/7d=0.5, 5h=0.5/7d=0.96, 5h=0.96/7d=0.5) → available=1", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    const b = insertToken(db, makeToken({ handle: "@b", organization_id: "org-b" }));
+    const c = insertToken(db, makeToken({ handle: "@c", organization_id: "org-c" }));
+    seedSnapshot(a.id, 0.5, 0.5);
+    seedSnapshot(b.id, 0.5, 0.96);
+    seedSnapshot(c.id, 0.96, 0.5);
+
+    const r = countPoolTokens(db, defaultPolicy(), NOW_ISO);
+    expect(r.total).toBe(3);
+    expect(r.selectable).toBe(3);
+    expect(r.available).toBe(1);
+  });
+
+  test("T382-C2: stale + reset_7d_at 過去 + util_7d=0.99 → available にカウントされる（7d 救済）", () => {
+    const a = insertToken(db, makeToken({ handle: "@a", organization_id: "org-a" }));
+    // stale snapshot: util_7d=0.99 だが reset_7d_at=過去 → effUtil7d=0 で admit
+    const past = new Date(NOW_MS - 5 * 60 * 1000).toISOString();
+    const future = new Date(NOW_MS + 60 * 60 * 1000).toISOString();
+    upsertUsageSnapshot(db, {
+      token_id: a.id,
+      util_5h: 0.1,
+      util_7d: 0.99,
+      reset_5h_at: future,
+      reset_7d_at: past,
+      unified_status: null,
+    });
+    db.prepare("UPDATE usage_snapshots SET recorded_at = ? WHERE token_id = ?")
+      .run(staleRecordedAt(), a.id);
+
+    const r = countPoolTokens(db, defaultPolicy(), NOW_ISO);
+    expect(r.total).toBe(1);
+    expect(r.available).toBe(1);
+    expect(r.stale).toBe(1);
+  });
 });
 
 describe("hasPoolHeadroomFromSummary", () => {
@@ -334,5 +388,17 @@ describe("hasPoolHeadroomFromSummary", () => {
 
   test("空配列 → false", () => {
     expect(hasPoolHeadroomFromSummary([])).toBe(false);
+  });
+
+  test("T382-H1: util5h=0.1 / util7d=0.96 → false (7d blocked を正しく拾う)", () => {
+    expect(
+      hasPoolHeadroomFromSummary([ph({ util5h: 0.1, util7d: 0.96, selectable: true })]),
+    ).toBe(false);
+  });
+
+  test("T382-H2: util5h=0.1 / util7d=null → true (util7d 不明時は 5h で判定)", () => {
+    expect(
+      hasPoolHeadroomFromSummary([ph({ util5h: 0.1, util7d: null, selectable: true })]),
+    ).toBe(true);
   });
 });

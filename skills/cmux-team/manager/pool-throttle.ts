@@ -1,13 +1,13 @@
 /**
- * pool-throttle.ts (T367)
+ * pool-throttle.ts (T367 / T382)
  *
  * pool-aware THROTTLE 判定の単一エントリ helper。
  * proxy `/rate-limit` / scanTasks / computeSidebarStatus / dashboard の 4 箇所がこの 1 関数を呼ぶ。
  *
  * - **pool 有効経路** (`db !== null`): `canSelectAnyToken` を `selectToken` と共有することで
  *   admit 判定が spawn-agent 側と構造的に一致する（design-review-r2 Major #3 / N1 対応）。
- *   閾値は `selectToken` 側の `> 0.95` を唯一の真理として扱い、`THROTTLE_5H_THRESHOLD (=0.90)`
- *   は pool 無効経路でのみ参照する。
+ *   閾値は `selectToken` 側の `> BLOCKER_5H` / `> BLOCKER_7D`（T382）を唯一の真理として扱い、
+ *   `THROTTLE_5H_THRESHOLD (=0.90)` は pool 無効経路でのみ参照する。
  * - **pool 無効経路** (`db === null`): 従来挙動（`unified5hUtilization >= THROTTLE_5H_THRESHOLD`）を完全保持。
  * - **boot/running ガード**: `running=false` または `bootReady=false` のとき常に false を返す
  *   （起動中・停止後の throttle 判定を回避）。
@@ -22,6 +22,8 @@ import {
   listTokens,
   getLatestUsageSnapshot,
   parseResetEpochMs,
+  BLOCKER_5H,
+  BLOCKER_7D,
   type SelectTokenPolicy,
 } from "./token-store";
 import { isStale5h } from "./rate-limit-persistence";
@@ -38,9 +40,6 @@ const DEFAULT_POLICY: SelectTokenPolicy = {
 };
 
 const STALE_THRESHOLD_MS = 30 * 60 * 1000;
-
-/** `selectToken` の admit ループ閾値（`token-store.ts:896` の `> 0.95` に揃える）。 */
-const POOL_BLOCKER_THRESHOLD = 0.95;
 
 export interface ThrottleOpts {
   /** daemon が running 状態か */
@@ -120,7 +119,7 @@ export function countPoolTokens(
 
   // available は admit 候補数。canSelectAnyToken と同じ閾値で数える。
   // canSelectAnyToken は length>0 だけ返すため、ここでは admitCandidates 相当を再現する。
-  // selectToken の admit と同一に揃える（B1: default 昇格、B2: exclude、B3: lease、B4: 0.92 OK、stale skip）。
+  // selectToken の admit と同一に揃える（B1: default 昇格、B2: exclude、B3: lease、B4: BLOCKER_5H/7D 以下、stale 救済 5h/7d）。
   const effectiveDefault: string | null =
     policy.projectDefault !== null ? policy.projectDefault : policy.isOss ? policy.ossDefault : null;
   const projectTagSet = new Set(policy.projectTags);
@@ -138,16 +137,23 @@ export function countPoolTokens(
     if (!tok.selectable && tok.handle !== effectiveDefault) continue;
     if (activeLeases.has(tok.id)) continue;
     const snap = getLatestUsageSnapshot(db, tok.id);
-    // T373: stale でも除外しない。reset_5h_at が過去なら effUtil5h=0 で評価。
+    // T373 / T382: stale でも除外しない。reset_*_at が過去なら effUtil*=0 で評価。
     let effUtil5h = snap?.util_5h ?? 0;
+    let effUtil7d = snap?.util_7d ?? 0;
     if (snap) {
       const recAt = new Date(snap.recorded_at).getTime();
       const isStale = nowMs - recAt > STALE_THRESHOLD_MS;
-      if (isStale && snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= nowMs) {
-        effUtil5h = 0;
+      if (isStale) {
+        if (snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= nowMs) {
+          effUtil5h = 0;
+        }
+        if (snap.reset_7d_at != null && parseResetEpochMs(snap.reset_7d_at) <= nowMs) {
+          effUtil7d = 0;
+        }
       }
     }
-    if (effUtil5h > POOL_BLOCKER_THRESHOLD) continue;
+    if (effUtil5h > BLOCKER_5H) continue;
+    if (effUtil7d > BLOCKER_7D) continue;
     let admitted = false;
     if (tok.handle === effectiveDefault) {
       admitted = true;
@@ -176,10 +182,13 @@ export function countPoolTokens(
 }
 
 /**
- * Ink dashboard / pool-header-display 用の純粋関数（T367 Minor #6）。
+ * Ink dashboard / pool-header-display 用の純粋関数（T367 Minor #6 / T382）。
  *
  * SQLite を触らず、`PerHandleSummary` 配列だけで pool に余裕があるかを判定する。
- * 判定基準は `selectToken` の `> 0.95` ブロッカー閾値と一致させる。
+ * 判定基準は `selectToken` の blocker 閾値（`BLOCKER_5H` / `BLOCKER_7D`、T382 で 7d 軸を追加）と一致させる。
+ *
+ * **util7d=null の扱い**: snapshot 受信前の起動直後は util_7d 不明なので、5h のみで判定する
+ * （誤った throttle 表示を避けるため）。両方 null なら headroom あり扱い（既存挙動）。
  *
  * **近似**: selectable=0 の default 昇格は考慮しない（dashboard は cosmetic な ⏸ 表示のため）。
  * 厳密判定が必要な daemon 側 (scanTasks / computeSidebarStatus) は SQLite を直接見るので
@@ -188,8 +197,12 @@ export function countPoolTokens(
 export function hasPoolHeadroomFromSummary(perHandle: PerHandleSummary[]): boolean {
   for (const ph of perHandle) {
     if (!ph.selectable) continue;
-    if (ph.util5h == null) return true;
-    if (ph.util5h < POOL_BLOCKER_THRESHOLD) return true;
+    const u5 = ph.util5h;
+    const u7 = ph.util7d;
+    const blocked5h = u5 != null && u5 > BLOCKER_5H;
+    const blocked7d = u7 != null && u7 > BLOCKER_7D;
+    if (blocked5h || blocked7d) continue;
+    return true;
   }
   return false;
 }
