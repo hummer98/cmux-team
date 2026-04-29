@@ -20,6 +20,7 @@ import type { TaskState, TaskStateMap } from "../task";
 import { taskReduce } from "./task-fsm";
 import { shadowObserveTask } from "./shadow";
 import { applyTaskActions } from "./apply-task-actions";
+import type { EventStreamContext } from "./apply-task-actions";
 import type { TaskCtx, TaskFsmEvent, TaskStatus } from "./events";
 
 // -----------------------------------------------------------------------------
@@ -76,6 +77,13 @@ export interface ApplyTaskEventInput {
   ctx?: Partial<TaskCtx>;
   /** status 以外のフィールド書き込み。reducer noop 時は呼ばない。 */
   patch?: TaskStatePatchFn;
+  /**
+   * T358: events.jsonl 転送用の追加 context。
+   * apply-task-actions.ts の switch case で必要な field のみ caller が組み立てて渡す。
+   * undefined の場合 spec §6 対応 5 種のうち eventStream 必須 case では emit が skip され
+   * `events_writer_error` が manager.log に残る。
+   */
+  eventStream?: EventStreamContext;
 }
 
 export interface ApplyTaskEventResult {
@@ -156,6 +164,7 @@ export async function applyTaskEvent(
           hasConductor: false,
           parentAborted: true,
         },
+        eventStream: input.eventStream,
       });
 
       await saveTaskState(projectRoot, taskState);
@@ -219,6 +228,7 @@ export async function applyTaskEvent(
         hasConductor: false,
         parentAborted: true,
       },
+      eventStream: input.eventStream,
     });
 
     await saveTaskState(projectRoot, taskState);

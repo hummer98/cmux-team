@@ -44,8 +44,14 @@ export function taskReduce(
       // T303: CREATE は新規エントリ生成用。ctx.initialStatus で初期 status を指定
       // (draft / ready)。未指定時は draft。呼び出し側 store で既存 entry に対する
       // CREATE は reducer 到達前に idempotent skip される契約。
+      // T358 M2: initialStatus === "ready" のときは task_created + task_ready の 2 件を返し、
+      // events.jsonl reader が 「draft 経由で ready に上がった」遷移と区別できるようにする。
       const initial: TaskStatus = ctx.initialStatus ?? "draft";
-      return withActions(initial, [{ type: "log", event: "task_created" }]);
+      const actions: TaskAction[] = [{ type: "log", event: "task_created" }];
+      if (initial === "ready") {
+        actions.push({ type: "log", event: "task_ready" });
+      }
+      return withActions(initial, actions);
     }
 
     case "UPDATE_STATUS": {
@@ -74,8 +80,10 @@ export function taskReduce(
       // errorKind=task は task 側を aborted に倒す (daemon.ts:2460 相当)。
       // errorKind=conductor は Conductor 側を disconnected にして task は ready のまま。
       if (event.errorKind === "task" && state === "ready") {
+        // T358 M4: ABORT 経路 (line 104) と命名統一。reducer 直系 log は wrapper の
+        // `task_aborted` (markTaskAborted) と被らないよう `task_aborted_core` に揃える。
         return withActions("aborted", [
-          { type: "log", event: "task_aborted", detail: "reason=assign_failed kind=task" },
+          { type: "log", event: "task_aborted_core", detail: "reason=assign_failed kind=task" },
           { type: "cascade_children" },
         ]);
       }

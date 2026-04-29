@@ -617,6 +617,23 @@ export async function markTaskAborted(
   }
   await log("task_aborted", parts.join(" "));
 
+  // T358 M1: events.jsonl 用に SpecAbortReason へマップして emit する。
+  // 循環依存 (task.ts → events-writer.ts → task.ts) を避けるため dynamic import。
+  try {
+    const { emitEvent, mapAbortReason } = await import("./events-writer");
+    await emitEvent({
+      event: "task_aborted",
+      task_id: taskId,
+      reason: mapAbortReason(reason),
+      journal_summary: journal,
+    });
+  } catch (e: any) {
+    await log(
+      "events_writer_error",
+      `event=task_aborted task_id=${taskId} message=${e?.message ?? String(e)}`,
+    );
+  }
+
   for (const childId of result.revertedChildren) {
     await log(
       "child_reverted_to_draft",
@@ -883,6 +900,8 @@ ${body}
       opts.createdBy
         ? { merge: { createdBy: opts.createdBy, status: initialStatus } }
         : { merge: { status: initialStatus } },
+    // T358: events.jsonl の task_created.title に title を載せる。
+    eventStream: { taskTitle: title },
   });
 
   const relPath = `.team/tasks/${dirName}/task.md`;

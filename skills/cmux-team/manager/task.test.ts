@@ -779,6 +779,66 @@ describe("markTaskAborted (T290)", () => {
     // （log 詳細の検証は統合テストで、単体では journal と return 値で十分）
   });
 
+  test("T358 M1: markTaskAborted は events.jsonl に SpecAbortReason 適用後 reason で emit する", async () => {
+    await setupTask("40");
+    await saveTaskState(tmpRoot, { "40": { status: "assigned" } });
+
+    await markTaskAborted(tmpRoot, "40", "abort_task", "user invoked abort-task", {
+      taskTitle: "Foo",
+    });
+
+    const eventsPath = join(tmpRoot, ".team/logs/events.jsonl");
+    const content = await readFile(eventsPath, "utf-8");
+    const lines = content
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // task_aborted event が emit される (reducer 直系の task_aborted_core は events.jsonl に流れない)
+    const aborted = lines.find((l) => l.event === "task_aborted");
+    expect(aborted).toBeDefined();
+    // abort_task → other に map される (M1)
+    expect(aborted?.reason).toBe("other");
+    expect(aborted?.task_id).toBe("40");
+    expect(aborted?.journal_summary).toBe("reason=abort_task; user invoked abort-task");
+  });
+
+  test("T358 M1: markTaskAborted は AbortReason の同名 pass-through を維持する", async () => {
+    const cases: Array<{ id: string; input: any; expected: string }> = [
+      { id: "50", input: "user_clear", expected: "user_clear" },
+      { id: "51", input: "judgment_pending", expected: "judgment_pending" },
+      { id: "52", input: "disconnect_timeout", expected: "disconnect_timeout" },
+      { id: "53", input: "assign_failed", expected: "assign_failed" },
+      { id: "54", input: "resume_no_session_id", expected: "resume_marked_aborted" },
+      { id: "55", input: "resume_no_task_run_id", expected: "resume_marked_aborted" },
+      { id: "56", input: "resume_no_worktree", expected: "resume_marked_aborted" },
+    ];
+
+    const initialState: TaskStateMap = {};
+    for (const c of cases) {
+      await setupTask(c.id);
+      initialState[c.id] = { status: "assigned" };
+    }
+    await saveTaskState(tmpRoot, initialState);
+
+    for (const c of cases) {
+      await markTaskAborted(tmpRoot, c.id, c.input, "detail", { taskTitle: `Task ${c.id}` });
+    }
+
+    const eventsPath = join(tmpRoot, ".team/logs/events.jsonl");
+    const content = await readFile(eventsPath, "utf-8");
+    const lines = content
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const abortedById: Record<string, string> = {};
+    for (const l of lines) {
+      if (l.event === "task_aborted") abortedById[l.task_id as string] = l.reason as string;
+    }
+    for (const c of cases) {
+      expect(abortedById[c.id]).toBe(c.expected);
+    }
+  });
+
   test("T9: parseAbortJournal — new format 4 ケース", () => {
     expect(parseAbortJournal("reason=user_clear; C[5] taskRunId=task-1-123")).toEqual({
       reason: "user_clear",

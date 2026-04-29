@@ -254,6 +254,42 @@ describe("task-state-store — applyTaskEvent (T303)", () => {
     expect(after["010"]?.status).toBe("ready");
   });
 
+  test("T358 M2: CREATE + initialStatus=ready は events.jsonl に task_created + task_ready の 2 件を emit する", async () => {
+    await applyTaskEvent(project.root, {
+      taskId: "010R",
+      event: { type: "CREATE" },
+      ctx: { initialStatus: "ready" },
+      eventStream: { taskTitle: "ready-task" },
+    });
+    const eventsPath = join(project.root, ".team/logs/events.jsonl");
+    const content = await readFile(eventsPath, "utf-8");
+    const lines = content
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const eventNames = lines.map((l) => l.event);
+    expect(eventNames).toEqual(["task_created", "task_ready"]);
+    expect(lines[0]?.title).toBe("ready-task");
+    expect(lines[0]?.task_id).toBe("010R");
+    expect(lines[1]?.task_id).toBe("010R");
+  });
+
+  test("T358: CREATE + initialStatus=draft は events.jsonl に task_created のみ emit する", async () => {
+    await applyTaskEvent(project.root, {
+      taskId: "011D",
+      event: { type: "CREATE" },
+      ctx: { initialStatus: "draft" },
+      eventStream: { taskTitle: "draft-task" },
+    });
+    const eventsPath = join(project.root, ".team/logs/events.jsonl");
+    const content = await readFile(eventsPath, "utf-8");
+    const lines = content
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines.map((l) => l.event)).toEqual(["task_created"]);
+  });
+
   test("CREATE new entry with initialStatus=draft (default) → draft", async () => {
     const result = await applyTaskEvent(project.root, {
       taskId: "011",

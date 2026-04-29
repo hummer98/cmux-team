@@ -25,6 +25,19 @@ async function readLog(projectRoot: string): Promise<string> {
   }
 }
 
+async function readEvents(projectRoot: string): Promise<unknown[]> {
+  const p = join(projectRoot, ".team/logs/events.jsonl");
+  try {
+    const c = await readFile(p, "utf-8");
+    return c
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
 async function seedTasksDir(
   projectRoot: string,
   defs: Array<{ id: string; title: string; status: string; dependsOn?: string[] }>,
@@ -181,6 +194,167 @@ describe("applyTaskActions — T303", () => {
     expect(result.revertedChildren).toEqual(["003"]);
     expect(state["002"]?.status).toBe("draft"); // unchanged
     expect(state["003"]?.status).toBe("draft"); // reverted
+  });
+
+  // ---- T358: events.jsonl emit -----------------------------------------
+
+  test("T358: task_created log は events.jsonl に title 付きで emit される", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_created" }],
+      {
+        projectRoot: project.root,
+        taskId: "T100",
+        state: {},
+        childCtx: { hasConductor: false, parentAborted: false },
+        eventStream: { taskTitle: "hello world" },
+      },
+    );
+    const events = (await readEvents(project.root)) as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("task_created");
+    expect(events[0]?.task_id).toBe("T100");
+    expect(events[0]?.title).toBe("hello world");
+    expect(events[0]?.schema_version).toBe(2);
+  });
+
+  test("T358: task_ready log は events.jsonl に emit される", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_ready" }],
+      {
+        projectRoot: project.root,
+        taskId: "T101",
+        state: {},
+        childCtx: { hasConductor: false, parentAborted: false },
+      },
+    );
+    const events = (await readEvents(project.root)) as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("task_ready");
+    expect(events[0]?.task_id).toBe("T101");
+  });
+
+  test("T358: task_assigned: eventStream を渡せば conductor_surface / task_run_id が emit される", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_assigned" }],
+      {
+        projectRoot: project.root,
+        taskId: "T102",
+        state: {},
+        childCtx: { hasConductor: true, parentAborted: false },
+        eventStream: {
+          conductorSurface: "surface:5",
+          taskRunId: "task-102-1700000000",
+        },
+      },
+    );
+    const events = (await readEvents(project.root)) as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.conductor_surface).toBe("surface:5");
+    expect(events[0]?.task_run_id).toBe("task-102-1700000000");
+  });
+
+  test("T358: task_assigned: eventStream を渡し忘れると events_writer_error が manager.log に出る", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_assigned" }],
+      {
+        projectRoot: project.root,
+        taskId: "T103",
+        state: {},
+        childCtx: { hasConductor: true, parentAborted: false },
+        // eventStream 渡し忘れ
+      },
+    );
+    const events = await readEvents(project.root);
+    expect(events).toHaveLength(0);
+    const mlog = await readLog(project.root);
+    expect(mlog).toContain("events_writer_error");
+    expect(mlog).toContain("event=task_assigned");
+    expect(mlog).toContain("task_id=T103");
+  });
+
+  test("T358: task_completed_state_mismatch: eventStream 全 field 付きで emit", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_completed_state_mismatch" }],
+      {
+        projectRoot: project.root,
+        taskId: "T104",
+        state: {},
+        childCtx: { hasConductor: true, parentAborted: false },
+        eventStream: {
+          conductorSurface: "surface:6",
+          worktreePath: "/tmp/wt",
+          journalSummary: "auto-closed",
+        },
+      },
+    );
+    const events = (await readEvents(project.root)) as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("task_completed_state_mismatch");
+    expect(events[0]?.reason).toBe("missing_close_task");
+    expect(events[0]?.worktree_path).toBe("/tmp/wt");
+    expect(events[0]?.journal_summary).toBe("auto-closed");
+  });
+
+  test("T358: task_completed_state_mismatch: eventStream 渡し忘れると events_writer_error", async () => {
+    await applyTaskActions(
+      [{ type: "log", event: "task_completed_state_mismatch" }],
+      {
+        projectRoot: project.root,
+        taskId: "T105",
+        state: {},
+        childCtx: { hasConductor: true, parentAborted: false },
+      },
+    );
+    const events = await readEvents(project.root);
+    expect(events).toHaveLength(0);
+    const mlog = await readLog(project.root);
+    expect(mlog).toContain("events_writer_error");
+    expect(mlog).toContain("event=task_completed_state_mismatch");
+  });
+
+  test("T358: task_reverted_to_ready: detail から reason 抽出", async () => {
+    await applyTaskActions(
+      [
+        {
+          type: "log",
+          event: "task_reverted_to_ready",
+          detail: "reason=worktree_missing",
+        },
+      ],
+      {
+        projectRoot: project.root,
+        taskId: "T106",
+        state: {},
+        childCtx: { hasConductor: false, parentAborted: false },
+      },
+    );
+    const events = (await readEvents(project.root)) as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("task_reverted_to_ready");
+    expect(events[0]?.reason).toBe("worktree_missing");
+  });
+
+  test("T358: allowlist 外の log action は events.jsonl に流れない", async () => {
+    await applyTaskActions(
+      [
+        { type: "log", event: "task_aborted_core", detail: "reason=user_clear" },
+        { type: "log", event: "task_closed" },
+        { type: "log", event: "task_deleted" },
+        { type: "log", event: "task_restarted" },
+        { type: "log", event: "task_create_idempotent_skip" },
+      ],
+      {
+        projectRoot: project.root,
+        taskId: "T107",
+        state: {},
+        childCtx: { hasConductor: false, parentAborted: false },
+      },
+    );
+    const events = await readEvents(project.root);
+    expect(events).toHaveLength(0);
+    const mlog = await readLog(project.root);
+    expect(mlog).toContain("task_aborted_core");
+    expect(mlog).toContain("task_closed");
   });
 
   test("mixed actions: log + cascade_children", async () => {

@@ -33,6 +33,8 @@ import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon, ccBackend, refreshPoolSnapshot } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
 import { log, formatSurface } from "./logger";
+// T358: events.jsonl writer
+import { emitEvent } from "./events-writer";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -3218,6 +3220,15 @@ async function runSyncCheckOrExit(opts: {
         "ready_rejected",
         `phase=${opts.phase} state=${result.state}${taskIdField}`,
       );
+      // T358 §6.7: events.jsonl にも sync guard reject を流す。
+      // reject に到達する SyncState は diverged / uncommitted / detached のみ。
+      await emitEvent({
+        event: "task_sync_guard_rejected",
+        task_id: opts.taskId ?? "",
+        kind: result.state as "diverged" | "uncommitted" | "detached",
+        detail: result.verdict.message,
+        main_branch: mainBranch,
+      });
       console.error(result.verdict.message);
       process.exit(1);
       return;
@@ -3257,6 +3268,14 @@ async function runSyncCheckOrExit(opts: {
         "ready_auto_pull_failed",
         `phase=${opts.phase} state=${result.state}${taskIdField} stderr=${outcome.stderrSummary}`,
       );
+      // T358 §6.7: auto-pull failed は kind 固定値で events.jsonl に流す。
+      await emitEvent({
+        event: "task_sync_guard_rejected",
+        task_id: opts.taskId ?? "",
+        kind: "auto_pull_failed",
+        detail: outcome.stderrSummary,
+        main_branch: mainBranch,
+      });
       console.error(outcome.errorMessage);
       process.exit(1);
       return;

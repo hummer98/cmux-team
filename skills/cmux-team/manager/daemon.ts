@@ -36,6 +36,8 @@ import { normalizeSurfaceForPath as normalizeSurfaceForPathImpl } from "./paths"
 // T279: FSM shadow observer (observe only, no state mutation).
 import { shadowObserveConductor } from "./state-machine/shadow";
 import type { FsmEvent, ConductorCtx, ConductorStatus } from "./state-machine/events";
+// T358: events.jsonl writer
+import { emitEvent } from "./events-writer";
 import { initTokenDB, releaseLeaseByHolder } from "./token-store";
 // T351: dashboard / CLI で共有する pool snapshot 純関数
 import { buildPoolSummary, type PoolSummary } from "./pool-summary";
@@ -1697,6 +1699,15 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
             formatSurface(message.surface, "C")
           );
+          // T358 §6.10: disconnected → idle 復帰のみ events.jsonl に流す
+          // (starting → idle は spec の conductor_recovered ではなく conductor_ready)
+          if (prevStatus === "disconnected") {
+            await emitEvent({
+              event: "conductor_recovered",
+              conductor_surface: message.surface,
+              new_status: "idle",
+            });
+          }
           // T302-race: disconnected → idle 復帰時に即 scanTasks を発火し、
           // "ready" 状態で待機中のタスクをこの Conductor に再割り当てする。
           if (prevStatus === "disconnected") {
@@ -1720,6 +1731,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             "conductor_running",
             `${formatSurface(message.surface, "C")} via=SESSION_STARTED source=${message.source ?? "-"}`
           );
+          // T358 §6.9: assigning → running 遷移を events.jsonl に流す
+          await emitEvent({
+            event: "conductor_running",
+            conductor_surface: message.surface,
+            task_id: conductor.taskId ?? "",
+          });
         }
         // T203: SessionStart hook 経由で受信した sessionId を最新値に追従
         const prevSessionId = conductor.sessionId;
@@ -2024,6 +2041,13 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "conductor_disconnected",
           `${formatSurface(message.surface, "C")} reason=session_ended${message.reason ? `:${message.reason}` : ""} ${snapshot}`
         );
+        // T358 §6.11: events.jsonl にも SESSION_ENDED 由来の disconnect を流す
+        await emitEvent({
+          event: "conductor_disconnected",
+          conductor_surface: message.surface,
+          reason: "session_ended",
+          ...(conductor.taskId ? { task_id: conductor.taskId } : {}),
+        });
         // T279: shadow observe (observe only).
         try {
           const ev: FsmEvent = { type: "SESSION_ENDED", reason: message.reason };
@@ -2102,6 +2126,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         if (conductor.status === "disconnected") {
           conductor.status = "running";
           await log("conductor_recovered", `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE new_status=running`);
+          // T358 §6.10: events.jsonl にも recovered を流す
+          await emitEvent({
+            event: "conductor_recovered",
+            conductor_surface: message.surface,
+            new_status: "running",
+          });
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
           await log("conductor_ready", `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE`);
@@ -2113,6 +2143,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             "conductor_running",
             `${formatSurface(message.surface, "C")} via=SESSION_ACTIVE taskRunId=${conductor.taskRunId}`
           );
+          // T358 §6.9: assigning → running 遷移を events.jsonl に流す
+          await emitEvent({
+            event: "conductor_running",
+            conductor_surface: message.surface,
+            task_id: conductor.taskId ?? "",
+          });
         }
         notifyStateChanged("daemon.ts:handleMessage:session-active-conductor");
         // T279: shadow observe.
@@ -2220,10 +2256,22 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
               "conductor_recovered",
               `${formatSurface(message.surface, "C")} via=SESSION_IDLE new_status=running taskRunId=${conductor.taskRunId}`
             );
+            // T358 §6.10: events.jsonl
+            await emitEvent({
+              event: "conductor_recovered",
+              conductor_surface: message.surface,
+              new_status: "running",
+            });
           } else {
             // taskRunId なし → 通常復帰 (idle)
             conductor.status = "idle";
             await log("conductor_recovered", `${formatSurface(message.surface, "C")} via=SESSION_IDLE`);
+            // T358 §6.10: events.jsonl
+            await emitEvent({
+              event: "conductor_recovered",
+              conductor_surface: message.surface,
+              new_status: "idle",
+            });
           }
         } else if (conductor.status === "starting") {
           conductor.status = "idle";
@@ -2310,6 +2358,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           "conductor_asking",
           `${formatSurface(message.surface, "C")} question=${truncate(message.question, 120)}`
         );
+        // T358 §6.12: events.jsonl にも AskUserQuestion 受信を流す
+        await emitEvent({
+          event: "conductor_asking",
+          conductor_surface: message.surface,
+          question: message.question,
+        });
         // T279: shadow observe.
         try {
           const ev: FsmEvent = { type: "SESSION_ASK" };
@@ -2396,6 +2450,7 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         break;
       }
       if (conductor && (conductor.status === "disconnected" || conductor.status === "starting")) {
+        const wasDisconnected = conductor.status === "disconnected";
         const event = conductor.status === "starting" ? "conductor_ready" : "conductor_recovered";
         conductor.status = "idle";
         conductor.disconnectedAt = undefined;
@@ -2404,6 +2459,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T195: pid 更新は SESSION_STARTED の責務に統一。SESSION_CLEAR で pid を触らない
         notifyStateChanged("daemon.ts:handleMessage:session-clear-idle");
         await log(event, `${formatSurface(message.surface, "C")} via=SESSION_CLEAR`);
+        // T358 §6.10: disconnected → idle 復帰のみ events.jsonl に流す
+        if (wasDisconnected) {
+          await emitEvent({
+            event: "conductor_recovered",
+            conductor_surface: message.surface,
+            new_status: "idle",
+          });
+        }
       }
       // T219: running 分岐の先頭で taskRunId 一致検証。
       //       destructive な task-state 書き換え + resetConductor の直前で stale を弾く.
@@ -2836,6 +2899,13 @@ export async function scanTasks(state: DaemonState): Promise<void> {
               "conductor_disconnected",
               `${formatSurface(idleConductor.surface, "C")} reason=assigning_stuck kind=task task_id=${task.id} ${formatConductorSnapshot(idleConductor)}`
             );
+            // T358 §6.11: events.jsonl
+            await emitEvent({
+              event: "conductor_disconnected",
+              conductor_surface: idleConductor.surface,
+              reason: "assign_failed",
+              task_id: task.id,
+            });
           }
           // 次のタスクへ。idle Conductor はそのまま維持
           try {
@@ -2855,6 +2925,13 @@ export async function scanTasks(state: DaemonState): Promise<void> {
           "conductor_disconnected",
           `${formatSurface(idleConductor.surface, "C")} reason=assign_failed kind=conductor task_id=${task.id} detail=${e.reason} ${formatConductorSnapshot(idleConductor)}`
         );
+        // T358 §6.11: events.jsonl
+        await emitEvent({
+          event: "conductor_disconnected",
+          conductor_surface: idleConductor.surface,
+          reason: "assign_failed",
+          task_id: task.id,
+        });
         try {
           const ev: FsmEvent = { type: "ASSIGN", ok: false, errorKind: "conductor" };
           const cctx: ConductorCtx = { hasTaskRunId: idleConductor.taskRunId != null, now: Date.now() };
@@ -2930,6 +3007,11 @@ async function applyAssignCommit(
             },
           }
         : {},
+    // T358 M6: events.jsonl の task_assigned に conductor surface / taskRunId を載せる。
+    eventStream: {
+      conductorSurface: updated.surface,
+      taskRunId: updated.taskRunId ?? "",
+    },
   });
 
   if (result.committed) {
@@ -2989,6 +3071,13 @@ export async function __testSpawnPidWatcherTick(
     "conductor_disconnected",
     `${formatSurface(conductor.surface, "C")} reason=pid_dead ${snapshot}`
   );
+  // T358 §6.11: events.jsonl
+  await emitEvent({
+    event: "conductor_disconnected",
+    conductor_surface: conductor.surface,
+    reason: "pid_dead",
+    ...(conductor.taskId ? { task_id: conductor.taskId } : {}),
+  });
   try {
     const ev: FsmEvent = { type: "PID_DIED" };
     const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
@@ -3075,6 +3164,12 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
         conductor.status = "running";
         notifyStateChanged("daemon.ts:handleRuntimeEvent:session-started-running");
         await log("conductor_running", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
+        // T358 §6.9: events.jsonl
+        await emitEvent({
+          event: "conductor_running",
+          conductor_surface: conductor.surface,
+          task_id: conductor.taskId ?? "",
+        });
       }
       break;
     }
@@ -3358,6 +3453,12 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           "conductor_start_timeout",
           `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s`
         );
+        // T358 §6.14: events.jsonl
+        await emitEvent({
+          event: "conductor_start_timeout",
+          conductor_surface: surface,
+          elapsed_ms: Math.round(elapsed * 1000),
+        });
         try {
           const ev: FsmEvent = { type: "TIMEOUT", kind: "starting" };
           const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
@@ -3390,6 +3491,13 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
           "conductor_assign_timeout",
           `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s taskRunId=${conductor.taskRunId ?? "-"}`
         );
+        // T358 §6.15: events.jsonl
+        await emitEvent({
+          event: "conductor_assign_timeout",
+          conductor_surface: surface,
+          task_run_id: conductor.taskRunId ?? "",
+          elapsed_ms: Math.round(elapsed * 1000),
+        });
         try {
           const ev: FsmEvent = { type: "TIMEOUT", kind: "assigning" };
           const cctx: ConductorCtx = { hasTaskRunId: conductor.taskRunId != null, now: Date.now() };
@@ -3411,6 +3519,13 @@ export async function monitorConductors(state: DaemonState): Promise<void> {
             "conductor_disconnect_timeout",
             `${formatSurface(surface, "C")} elapsed=${Math.round(elapsed)}s ${formatConductorSnapshot(conductor)}`
           );
+          // T358 §6.16: events.jsonl
+          await emitEvent({
+            event: "conductor_disconnect_timeout",
+            conductor_surface: surface,
+            ...(conductor.taskId ? { task_id: conductor.taskId } : {}),
+            elapsed_ms: Math.round(elapsed * 1000),
+          });
           const shadowPrevDisconnectedTO: ConductorStatus = conductor.status;
           await forceCloseDisconnectedConductor(state, conductor);
           try {
@@ -3536,6 +3651,15 @@ async function handleConductorDone(
         (conductor.taskTitle ? ` title=${conductor.taskTitle}` : "") +
         (journalSummary ? ` journal_summary=${journalSummary}` : "")
     );
+    // T358 §6.13: events.jsonl にも conductor_done_unresolved を流す。
+    // (markTaskAborted が並行して task_aborted reason=judgment_pending を emit する設計)
+    await emitEvent({
+      event: "conductor_done_unresolved",
+      task_id: taskId,
+      conductor_surface: conductor.surface,
+      worktree_path: conductor.worktreePath ?? "",
+      journal_summary: journalSummary ?? "",
+    });
     // T269: preserveWorktree 経路でも task-state は `aborted` に倒す。
     //       assigned のまま残すと applyResumeTransitions が resume 対象と誤分類する。
     // T290: markTaskAborted に集約。journal は `reason=judgment_pending;
@@ -3596,6 +3720,12 @@ async function handleConductorDone(
                 },
               }
             : {},
+        // T358 M5: events.jsonl の task_completed_state_mismatch に詳細 context を渡す。
+        eventStream: {
+          conductorSurface: conductor.surface,
+          worktreePath: conductor.worktreePath ?? "",
+          journalSummary: journalSummary ?? "",
+        },
       });
       await log(
         "task_completed",
@@ -3640,6 +3770,17 @@ async function handleConductorDone(
         conductor.taskTitle ? ` title=${conductor.taskTitle}` : ""
       }${journalSummary ? ` journal_summary=${journalSummary}` : ""}`
     );
+    // T358 M3: events.jsonl の task_completed は通常完了経路のみ emit。
+    // auto-close 経路 (stateMismatchOnSuccess === true) は task_completed_state_mismatch のみ。
+    if (taskId && taskId !== "undefined") {
+      await emitEvent({
+        event: "task_completed",
+        task_id: taskId,
+        conductor_surface: conductor.surface,
+        worktree_path: conductor.worktreePath ?? "",
+        journal_summary: journalSummary ?? "",
+      });
+    }
   }
 
   // Conductor をリセットして idle に戻す（unresolved 時は worktree/branch を温存）
