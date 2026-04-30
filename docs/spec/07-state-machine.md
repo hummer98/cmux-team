@@ -269,7 +269,55 @@ Task の shadow observer は `state-machine/task-state-store.ts:applyTaskEvent` 
 | `apply-task-actions:cascade_children` (子) | `PARENT_ABORTED` | cascade 対象の各 childId に対して呼ぶ (R5) |
 | `task-state-store:updateTaskSessionId` | — | status 遷移を伴わないため shadow は呼ばない (reducer scope 外) |
 
-## 5. 段階計画
+## 5. dispatch ガード (run_after_all / exclusive)
+
+`scanTasks` のタスク dispatch ループに先立ち、3 段階のガードが評価される。
+評価順序は: throttle → exclusive lock → run_after_all lock → dispatch ループ。
+
+### 5.1 throttle (5h utilization)
+
+`unified5hUtilization >= THROTTLE_5H_THRESHOLD` または pool 経由で admit 候補が
+ゼロのとき、`throttled_rate_limit` をログして全 dispatch を停止する。
+詳細は token pool 仕様 (`09-token-pool.md`) を参照。
+
+### 5.2 Exclusive lock
+
+| 条件 | 効果 |
+|------|------|
+| `exclusive: true` のタスクが `assigned` | `executable` (normal) + `runAfterAllExecutable` (RAA) の **全 dispatch を停止** |
+
+`exclusive` は `parseTaskMeta` で `runAfterAll: true` を暗黙に強制する
+（drain 待ちセマンティクス）。
+log event: `exclusive_lock_active task_ids=<csv> pending=<n>`
+
+### 5.3 run_after_all lock (T398)
+
+| 条件 | 効果 |
+|------|------|
+| `runAfterAll: true && !exclusive` のタスクが `assigned`、かつ `executable.length > 0` | `executable` (normal) のみ dispatch を停止。`runAfterAllExecutable` (他の RAA) は通す |
+
+T397 で `filterRunAfterAllTasks` の `normalActive` を executable ベースに変更した結果、
+**draft が後で ready 化されたタイミングで新 ready chain と既存 RAA が並走する** 可能性が
+残った。本 guard はそれを防ぐ。`runAfterAllExecutable` を通すことで、複数の RAA を
+順次 drain する semantics は維持される。
+
+実装上は `dispatchTargets` 変数を `allExecutable` から `runAfterAllExecutable` に
+切り替えることで、ループ構造を維持しつつ normal のみ抑止する。
+log event: `run_after_all_lock_active task_ids=<csv> pending_normal=<n>`
+
+評価順序の安全性: exclusive ⇒ runAfterAll=true (parser 強制) のため、
+`assignedExclusiveTaskIds ⊆ assignedRunAfterAllTaskIds`（フィルタを外した場合）。
+exclusive guard は `allExecutable.length > 0` で先に return するため、本 guard は
+exclusive を二重カウントしない。defense-in-depth として `!t.exclusive` フィルタを付与している。
+
+### 5.4 各 flag の semantics 比較
+
+| flag | drain 発火条件 | assigned 中の挙動 |
+|------|---------------|-------------------|
+| `--run-after-all` (非排他) | `executable + assignedNormal = 0` (executable ベース、T397) | normal の新規 assignment を停止。他の RAA とは並走可 (T398) |
+| `--exclusive` | 同上 (runAfterAll を暗黙包含) | normal + RAA の **全 assignment** を停止 |
+
+## 6. 段階計画
 
 | フェーズ | 範囲 | リリース条件 |
 |---------|-----|-------------|
@@ -283,7 +331,7 @@ CLI 経路は新 Node プロセスで起動されるため in-process mutex で�
 CLI ↔ daemon 間の cross-process race は reducer noop (`ASSIGN_OK` / `CLOSE` / `ABORT`
 の guard) で観測的に吸収する方針で、24h 観測の結果次第で file lock 導入を別タスク化する。
 
-### 5.1 T302 脚注
+### 6.1 T302 脚注
 
 T302 は T220 の assign race (terminal 巻き戻し) を塞ぐ暫定ガードとして
 `__testApplyAssignCommit` 内に `isTerminalStatus` チェックを導入した。

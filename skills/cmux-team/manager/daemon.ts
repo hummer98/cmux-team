@@ -3027,7 +3027,27 @@ export async function scanTasks(state: DaemonState): Promise<void> {
     return;
   }
 
-  for (const task of allExecutable) {
+  // === run_after_all lock ガード (T398) ===
+  // runAfterAll: true && !exclusive のタスクが assigned の間、normal タスクの新規
+  // assignment を停止する。他の run_after_all は並走可能（単独実行を保証したい場合は
+  // --exclusive を使う）。
+  // 評価順序: exclusive lock guard が先に return しているため、ここに到達した時点で
+  //           exclusive な assigned は存在しない。defense-in-depth で `!t.exclusive` を付ける。
+  const assignedRunAfterAllTaskIds = new Set(
+    tasks
+      .filter((t) => t.runAfterAll && !t.exclusive && assignedIds.has(t.id))
+      .map((t) => t.id),
+  );
+  let dispatchTargets = allExecutable;
+  if (assignedRunAfterAllTaskIds.size > 0 && executable.length > 0) {
+    await log(
+      "run_after_all_lock_active",
+      `task_ids=${[...assignedRunAfterAllTaskIds].join(",")} pending_normal=${executable.length}`,
+    );
+    dispatchTargets = runAfterAllExecutable;
+  }
+
+  for (const task of dispatchTargets) {
     // idle Conductor を探す
     const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
     if (!idleConductor) {

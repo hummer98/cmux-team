@@ -161,7 +161,7 @@ cmux-team update-task --task-id 112 --status ready
 
 | 属性 | 意味 | CLI フラグ |
 |------|------|-----------|
-| `run_after_all: true` | 全 open タスクが closed になってから実行（非排他 drain） | `--run-after-all` |
+| `run_after_all: true` | 全 open タスクが closed になってから実行（非排他 drain）。assigned 中は normal の新規 assignment を停止するが、他の `run_after_all` とは並走可 | `--run-after-all` |
 | `exclusive: true` | drain 後に単独実行。assigned の間は他の全 assignment を停止 | `--exclusive` |
 
 - `--exclusive` 同士は共存可能（ID 昇順に順次排他実行）
