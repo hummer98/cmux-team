@@ -346,17 +346,20 @@ Options:
   --title <title>         new title (optional)
   --body <text>           new body (optional)
   --depends-on <ids>      dependency task IDs (comma-separated, e.g. "081,082") (optional)
+  --no-exclusive          remove exclusive: true / run_after_all: true from the
+                          task frontmatter (cancels exclusive/drain semantics)
   --force                 bypass the ready sync-state check (use with caution)
   --skip-fetch            skip 'git fetch' before the ready sync-state check
   --no-auto-pull          on behind-ff while on <mainBranch>, skip the auto
                           'git pull --ff-only' and warn instead
 
-  * At least one of --status, --title, --body, or --depends-on is required
+  * At least one of --status, --title, --body, --depends-on, or --no-exclusive is required
 
 Examples:
   cmux-team update-task --task-id 035 --status ready
   cmux-team update-task --task-id 035 --title "New title" --body "New description"
   cmux-team update-task --task-id 035 --depends-on "081,082"
+  cmux-team update-task --task-id 035 --no-exclusive
 
 Notes:
   - Tasks in assigned (running) state cannot be updated
@@ -1156,17 +1159,20 @@ Options:
   --title <title>         新しいタイトル（任意）
   --body <text>           新しい本文（任意）
   --depends-on <ids>      依存タスク ID（カンマ区切り、例: "081,082"）（任意）
+  --no-exclusive          frontmatter から exclusive: true / run_after_all: true を除去
+                          （exclusive / drain 待ちセマンティクスをキャンセル）
   --force                 ready 昇格時の sync state チェックをバイパス（注意して使用）
   --skip-fetch            sync state チェック前の 'git fetch' を省略
   --no-auto-pull          behind-ff + <mainBranch> checkout 時の自動 'git pull --ff-only'
                           を抑止し warn 扱いで続行する
 
-  ※ --status, --title, --body, --depends-on のうち少なくとも1つが必要
+  ※ --status, --title, --body, --depends-on, --no-exclusive のうち少なくとも1つが必要
 
 Examples:
   cmux-team update-task --task-id 035 --status ready
   cmux-team update-task --task-id 035 --title "新タイトル" --body "新しい説明"
   cmux-team update-task --task-id 035 --depends-on "081,082"
+  cmux-team update-task --task-id 035 --no-exclusive
 
 Notes:
   - assigned（実行中）のタスクは更新できません

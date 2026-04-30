@@ -14,7 +14,7 @@
  *   ./main.ts kill-agent --surface <s>
  *   ./main.ts close-agent --surface <s>
  *   ./main.ts create-task --title <title> [--priority <p>] [--status <s>] [--body <text>] [--depends-on <ids>] [--run-after-all]
- *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>]
+ *   ./main.ts update-task --task-id <id> [--status <status>] [--body <text>] [--title <title>] [--depends-on <ids>] [--no-exclusive]
  *   ./main.ts close-task --task-id <id> --deliverable-kind <files|merged|pr|none> [kind-specific flags] [--journal <text>] [--force]
  *   ./main.ts await-task --task-id <id> [--timeout <sec>]  # タスク完了待ち
  *   ./main.ts abort-task --task-id <id>
@@ -3458,9 +3458,19 @@ async function cmdUpdateTask(): Promise<void> {
   const body = getArg("body");
   const title = getArg("title");
   const dependsOn = getArg("depends-on");
+  // --no-exclusive は frontmatter から exclusive: true / run_after_all: true を除去する。
+  // exclusive は run_after_all を暗黙に含む設計（task.ts の parseTaskMeta 参照）なので、
+  // exclusive を外す＝drain 待ちセマンティクスも外す、という前提で両行を同時に削除する。
+  const noExclusive = process.argv.includes("--no-exclusive");
 
-  if (newStatus === undefined && body === undefined && title === undefined && dependsOn === undefined) {
-    console.error("Error: at least one of --status, --body, --title, or --depends-on is required");
+  if (
+    newStatus === undefined &&
+    body === undefined &&
+    title === undefined &&
+    dependsOn === undefined &&
+    !noExclusive
+  ) {
+    console.error("Error: at least one of --status, --body, --title, --depends-on, or --no-exclusive is required");
     process.exit(1);
   }
 
@@ -3509,6 +3519,14 @@ async function cmdUpdateTask(): Promise<void> {
       const fmEnd = content.indexOf("---", content.indexOf("---") + 3);
       content = content.slice(0, fmEnd) + `depends_on: ${depsValue}\n` + content.slice(fmEnd);
     }
+    await writeFile(taskFile, content);
+  }
+
+  // --no-exclusive: frontmatter から exclusive: true / run_after_all: true 行を除去
+  if (noExclusive) {
+    let content = await readFile(taskFile, "utf-8");
+    content = content.replace(/^exclusive:\s*true\s*$\n?/m, "");
+    content = content.replace(/^run_after_all:\s*true\s*$\n?/m, "");
     await writeFile(taskFile, content);
   }
 
@@ -3578,6 +3596,7 @@ async function cmdUpdateTask(): Promise<void> {
   if (title !== undefined) parts.push("title updated");
   if (body !== undefined) parts.push("body updated");
   if (dependsOn !== undefined) parts.push("depends_on updated");
+  if (noExclusive) parts.push("exclusive removed");
   console.log(`OK updated ${taskId} ${parts.join(", ")}`);
 }
 

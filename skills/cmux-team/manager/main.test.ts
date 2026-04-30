@@ -892,6 +892,61 @@ describe("TASK_UPDATED postMessage (T183)", () => {
     expect(r.code).toBe(0);
   });
 
+  // --- T394 後続: update-task --no-exclusive で frontmatter から
+  // exclusive: true / run_after_all: true を除去できることを検証 ---
+
+  async function setupExclusiveTaskDir(taskId: string): Promise<string> {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks", `${taskId}-excl`), { recursive: true });
+    const taskFile = join(testDir, ".team/tasks", `${taskId}-excl`, "task.md");
+    await wf(
+      taskFile,
+      `---\nid: ${taskId}\ntitle: excl-task\npriority: high\nstatus: ready\nrun_after_all: true\nexclusive: true\n---\n\nbody\n`,
+    );
+    const taskState: Record<string, any> = {};
+    taskState[taskId] = { status: "ready" };
+    await wf(join(testDir, ".team/task-state.json"), JSON.stringify(taskState, null, 2));
+    await wf(join(testDir, ".team/proxy-port"), String(port));
+    return taskFile;
+  }
+
+  test("update-task --no-exclusive: frontmatter から exclusive と run_after_all を除去する", async () => {
+    const taskFile = await setupExclusiveTaskDir("580");
+    const r = await runCli(["update-task", "--task-id", "580", "--no-exclusive"]);
+    expect(r.code).toBe(0);
+    const content = await readFile(taskFile, "utf-8");
+    expect(content).not.toMatch(/^exclusive:\s*true$/m);
+    expect(content).not.toMatch(/^run_after_all:\s*true$/m);
+    // 他の frontmatter は保持されること
+    expect(content).toMatch(/^id:\s*580$/m);
+    expect(content).toMatch(/^title:\s*excl-task$/m);
+    expect(receivedMessages.map((m) => m.type)).toEqual(["TASK_UPDATED"]);
+  });
+
+  test("update-task --no-exclusive: 既に exclusive でないタスクでも no-op で成功する", async () => {
+    const { mkdir: mk, writeFile: wf } = await import("fs/promises");
+    await mk(join(testDir, ".team/tasks", "581-plain"), { recursive: true });
+    const taskFile = join(testDir, ".team/tasks", "581-plain", "task.md");
+    await wf(taskFile, `---\nid: 581\ntitle: plain\nstatus: ready\n---\n\nbody\n`);
+    await wf(
+      join(testDir, ".team/task-state.json"),
+      JSON.stringify({ "581": { status: "ready" } }, null, 2),
+    );
+    await wf(join(testDir, ".team/proxy-port"), String(port));
+    const r = await runCli(["update-task", "--task-id", "581", "--no-exclusive"]);
+    expect(r.code).toBe(0);
+    const content = await readFile(taskFile, "utf-8");
+    expect(content).not.toMatch(/^exclusive:\s*true$/m);
+    expect(content).not.toMatch(/^run_after_all:\s*true$/m);
+  });
+
+  test("update-task --no-exclusive のみで他フラグなしでも valid（status/title/body/depends-on 必須エラーにならない）", async () => {
+    await setupExclusiveTaskDir("582");
+    const r = await runCli(["update-task", "--task-id", "582", "--no-exclusive"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("at least one of");
+  });
+
   // --- T291: slug 渡し canonical 化テスト ---
   //
   // update-task / close-task / delete-task / abort-task / restart-task が --task-id に
