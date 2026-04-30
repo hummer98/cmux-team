@@ -18,6 +18,10 @@
 - **`shouldInjectCredential(source)` / `assertCanRetrieveFromKeychain(source)` を `token-store.ts` から export**。spawn-agent の inject 判定を pure function に抽出し、subscription source で keychain を誤参照した場合の guard を提供
 - **proxy `updateTokensDB` の Phase 構成を再整理**: Phase 1 (auth_hash 検索) / Phase 2 (auto-rotate or subscription auth_hash 初観測) / **Phase 2.5 (subscription organization_id 初観測 — 新規)** / Phase 3 (usage_snapshots UPSERT) / Phase 4 (auto-discover INSERT)。Phase 1〜2.5 は `rl=null` でも動作する（401 等で rate-limit ヘッダ不在でも auth_hash / organization_id の同期だけは進める）
 
+### Changed
+
+- **token pool: `cmux-team pool status` / `token list` の per-handle 行を effUtil（stale 救済反映後）に揃える（T390）**。`reset_5h_at` / `reset_7d_at` を経過した stale token の表示が snap 生値（例: @tayo の 7d=91%）のままで、内部 admit ロジック（`selectToken` / `peekNextToken` / `admitCandidates`）の effUtil = 0 扱いと乖離していた問題を解消。reset 通過済み軸を 0% で表示することで TUI の見た目と pickup 判定が一致する。`computeEffUtil` を pure function として抽出して表示層と admit 経路で共有
+
 ### Migration
 
 - 既存 `claude-credentials` source の row は initTokenDB 起動時の data migration で自動的に `subscription` + `auth_hash=NULL` に変換される（冪等、変換時に 1 行 console.warn）
