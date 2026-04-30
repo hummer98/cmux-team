@@ -200,11 +200,12 @@ function buildProjectionRows(
 }
 
 /**
- * T401: token snapshot から 1 行分の PoolTokenRow を組み立てる pure 関数。
+ * T401 / T402: token snapshot から 1 行分の PoolTokenRow を組み立てる pure 関数。
  *
- * - `computeEffUtil` の effUtil5h/7d をそのまま `util5h/7d` に詰める (stale + reset 通過軸は 0)。
- * - `snap.util_5h === null` 等の null 値は null のまま保持 (UI で bar 非描画)。
- *   `effUtil*` は 0 になるが `util5h: null` を返すことで bar 描画を skip する従来挙動と整合。
+ * - reset 通過軸 (`reset*Passed=true`) は元 `snap.util_*=null` でも `effUtil=0` を採用し、
+ *   `util*=0` 確定として返す (`computeEffUtil` の意味と整合: 新ウィンドウは 0 から始まる)。
+ * - null として残るのは「snap exists かつ `util_*=null` かつ reset 未通過」のみ。
+ *   この状態は UI で bar を出さず軸単位 placeholder ("5h:  --" / "7d:  --") を描画する。
  * - admit / throttle / CLI 表示と同一の `computeEffUtil` を経由するため、Metrics と
  *   `cmux-team token list` で同一値が表示される (T390 の "3 箇所共有" 原則を 4 箇所に拡張)。
  */
@@ -214,8 +215,10 @@ export function buildPoolTokenRowFromSnapshot(
   nowMs: number,
 ): PoolTokenRow {
   const eff = computeEffUtil(snap, nowMs);
-  const util5h = snap?.util_5h == null ? null : eff.effUtil5h;
-  const util7d = snap?.util_7d == null ? null : eff.effUtil7d;
+  const util5h =
+    snap?.util_5h == null && !eff.reset5hPassed ? null : eff.effUtil5h;
+  const util7d =
+    snap?.util_7d == null && !eff.reset7dPassed ? null : eff.effUtil7d;
   return {
     handle,
     util5h,
@@ -284,10 +287,19 @@ function buildPoolTokensSection(
       continue;
     }
     const cells: any[] = [ui.text(c.row.handle.padEnd(maxHandleLen))];
-    if (c.bar5h)
+    if (c.bar5h) {
       cells.push(...partsToUiText(padGrayParts(c.bar5h.parts, max5hGray)));
-    if (c.bar7d)
+    } else if (c.row.util5h === null) {
+      // T402: snap exists で軸 util=null（値が来ていない）は dim "5h:  --" を出して
+      //       「reset 通過で 0」(0% bar) と視覚的に区別する。先頭 7 文字幅を
+      //       buildUtilizationBar の "5h:  0%" と揃える (label + ":" + " " + " --" = 7 文字)。
+      cells.push(ui.text("5h:  --", { dim: true }));
+    }
+    if (c.bar7d) {
       cells.push(...partsToUiText(padGrayParts(c.bar7d.parts, max7dGray)));
+    } else if (c.row.util7d === null) {
+      cells.push(ui.text("7d:  --", { dim: true }));
+    }
     if (c.row.reset5hPassed || c.row.reset7dPassed) {
       cells.push(ui.text("*", { dim: true }));
       anyMarker = true;

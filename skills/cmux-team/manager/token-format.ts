@@ -60,8 +60,16 @@ export function formatPerHandleUtilCell(
   if (!eff.hasSnapshot) {
     return { display5h: "--", display7d: "--", marker: "" };
   }
-  const display5h = formatUtil(eff.effUtil5h);
-  const display7d = formatUtil(eff.effUtil7d);
+  // T402: snap exists + util_*=null かつ reset 未通過 → "--" を維持し、null と 0 を区別する。
+  // reset 通過軸は元 null でも effUtil=0 が入るため "0%" 表示に倒す。
+  const display5h =
+    snap!.util_5h == null && !eff.reset5hPassed
+      ? "--"
+      : formatUtil(eff.effUtil5h);
+  const display7d =
+    snap!.util_7d == null && !eff.reset7dPassed
+      ? "--"
+      : formatUtil(eff.effUtil7d);
   const marker = eff.reset5hPassed || eff.reset7dPassed ? "*" : "";
   return { display5h, display7d, marker };
 }

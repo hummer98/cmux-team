@@ -633,6 +633,89 @@ describe("buildPoolTokenRowFromSnapshot (CLI consistency)", () => {
       cli.marker,
     );
   });
+
+  // T402: snap exists で軸 util=null（未観測）と reset 通過 0 を区別する
+  test("(g) snap exists + util_5h=null + util_7d=数値 + 両 reset 未通過 → util5h は null、util7d は数値", () => {
+    const r = buildPoolTokenRowFromSnapshot(
+      "@partial",
+      snap({
+        util_5h: null,
+        util_7d: 0.5,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: FRESH_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({
+      handle: "@partial",
+      util5h: null,
+      reset5hIso: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      util7d: 0.5,
+      reset7dIso: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      hasSnapshot: true,
+      reset5hPassed: false,
+      reset7dPassed: false,
+    });
+  });
+
+  test("(h) snap exists + 両軸 null + reset 未通過 → 両軸 null、hasSnapshot=false (no data 扱い)", () => {
+    const r = buildPoolTokenRowFromSnapshot(
+      "@all-null",
+      snap({
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: FRESH_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.util5h).toBeNull();
+    expect(r.util7d).toBeNull();
+    expect(r.hasSnapshot).toBe(false);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("(i) snap exists + 両軸 null + 5h reset 通過 stale → util5h=0 確定、util7d=null、hasSnapshot=true", () => {
+    const r = buildPoolTokenRowFromSnapshot(
+      "@reset-only",
+      snap({
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.util5h).toBe(0);
+    expect(r.util7d).toBeNull();
+    expect(r.hasSnapshot).toBe(true);
+    expect(r.reset5hPassed).toBe(true);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("(T402 CLI 等価性) snap exists + util_5h=null fixture を CLI/Metrics 双方で同期", () => {
+    // token-format.test.ts (t1) と同 fixture を共有する: 5h null + 7d 数値 + reset 未通過
+    const fixture = snap({
+      util_5h: null,
+      util_7d: 0.5,
+      reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      recorded_at: FRESH_RECORDED,
+    });
+    const cli = formatPerHandleUtilCell(fixture, NOW_MS);
+    const metrics = buildPoolTokenRowFromSnapshot("@partial", fixture, NOW_MS);
+
+    expect(cli).toEqual({ display5h: "--", display7d: "50%", marker: "" });
+    expect(metrics.util5h).toBeNull();
+    expect(metrics.util7d).toBe(0.5);
+    // formatUtil(null) === "--" で CLI と一致
+    expect(formatUtil(metrics.util5h)).toBe(cli.display5h);
+    expect(formatUtil(metrics.util7d)).toBe(cli.display7d);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -711,5 +794,57 @@ describe("buildMetricsRows: pool tokens marker (T401)", () => {
     expect(s).not.toContain("*");
     expect(s).not.toContain("reset passed");
     expect(s).not.toContain("reset 通過済み");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T402: buildMetricsRows — 軸単位 null placeholder ("5h:  --" / "7d:  --")
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildMetricsRows: util_5h null axis placeholder (T402)", () => {
+  test("(j) util5h=null + util7d=数値 + hasSnapshot=true → '5h:  --' placeholder + 7d bar、'*' なし", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@partial",
+        util5h: null,
+        reset5hIso: new Date(FIXED_NOW + 60 * 60 * 1000).toISOString(),
+        util7d: 0.5,
+        reset7dIso: new Date(FIXED_NOW + 60 * 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // 5h 軸の placeholder (label + ":" + " " + " --" = 7 文字)
+    expect(s).toContain("5h:  --");
+    // 7d 側は bar が出る (50%)
+    expect(s).toContain("50%");
+    // reset 通過していないので '*' は出ない
+    expect(s).not.toContain('"*"');
+  });
+
+  test("(k) util5h=0 + util7d=null + reset5hPassed=true + reset7dPassed=false → 5h '0%' bar + '*' と 7d '7d:  --' placeholder が同一行内に共存", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@reset-only",
+        util5h: 0,
+        reset5hIso: new Date(FIXED_NOW - 60 * 1000).toISOString(),
+        util7d: null,
+        reset7dIso: new Date(FIXED_NOW + 60 * 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: true,
+        reset7dPassed: false,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // 5h 側: "0%" bar + "*" マーカー
+    expect(s).toContain("0%");
+    expect(s).toContain('"*"');
+    // 7d 側: placeholder
+    expect(s).toContain("7d:  --");
+    // 受け入れ条件 ②: 「値がない」と「reset 通過で 0」が同一行内で共存しても視覚的に区別される
   });
 });

@@ -198,4 +198,47 @@ describe("formatPerHandleUtilCell (T390)", () => {
     );
     expect(r).toEqual({ display5h: "50%", display7d: "50%", marker: "" });
   });
+
+  // T402: snap exists で軸 util=null（未観測）と reset 通過 0 を視覚的に区別する
+  test("T402 (t1): snap exists + util_5h=null + util_7d=数値 + reset 未通過 → 5h は --", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: null,
+        util_7d: 0.5,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: FRESH_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "--", display7d: "50%", marker: "" });
+  });
+
+  test("T402 (t2): snap exists + util_5h=null + util_7d=null + 両 reset 未通過 → 両軸 --", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: FRESH_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "--", display7d: "--", marker: "" });
+  });
+
+  test("T402 (t3): snap exists + util_5h=null + util_7d=null + 5h reset 通過 → 5h は 0% + *、7d は --", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: null,
+        util_7d: null,
+        reset_5h_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "0%", display7d: "--", marker: "*" });
+  });
 });
