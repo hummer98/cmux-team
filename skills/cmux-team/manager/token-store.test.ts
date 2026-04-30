@@ -2653,22 +2653,29 @@ describe("schema migration (T391: claude-credentials → subscription)", () => {
       CREATE INDEX IF NOT EXISTS idx_tokens_selectable ON tokens(selectable);
       CREATE TABLE usage_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        token_id INTEGER NOT NULL UNIQUE,
+        token_id INTEGER NOT NULL UNIQUE REFERENCES tokens(id),
         util_5h REAL, util_7d REAL,
         reset_5h_at TEXT, reset_7d_at TEXT,
         unified_status TEXT, recorded_at TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_usage_snapshots_token_time
+        ON usage_snapshots(token_id, recorded_at DESC);
       CREATE TABLE leases (
-        token_id INTEGER NOT NULL UNIQUE,
+        token_id INTEGER NOT NULL UNIQUE REFERENCES tokens(id),
         holder TEXT NOT NULL,
         acquired_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         PRIMARY KEY (token_id, holder)
       );
+      CREATE INDEX IF NOT EXISTS idx_leases_expires ON leases(expires_at);
       INSERT INTO tokens (handle, organization_id, auth_hash, plan, plan_ratio,
                           credential_source, tags, selectable, created_at)
       VALUES ('@kept', 'org-kept-001', 'keep0000aaaa', 'max-x20', 20.0,
               'manual', '["any"]', 1, '2026-04-01T00:00:00.000Z');
+      INSERT INTO usage_snapshots (token_id, util_5h, util_7d, recorded_at)
+      VALUES (1, 0.42, 0.10, '2026-04-01T00:00:00.000Z');
+      INSERT INTO leases (token_id, holder, acquired_at, expires_at)
+      VALUES (1, 'holder-1', '2026-04-01T00:00:00.000Z', '2026-04-01T01:00:00.000Z');
     `);
     old.close();
 
@@ -2696,6 +2703,14 @@ describe("schema migration (T391: claude-credentials → subscription)", () => {
       });
       expect(subTok.organization_id).toBeNull();
       expect(subTok.auth_hash).toBeNull();
+
+      // FK 違反 0 件（migration 後の referential integrity 担保）
+      const violations = db2.prepare("PRAGMA foreign_key_check").all();
+      expect(violations).toEqual([]);
+
+      // initTokenDB 出口で foreign_keys が ON になっていること
+      const fk = db2.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
+      expect(fk.foreign_keys).toBe(1);
     } finally {
       db2.close();
     }

@@ -243,18 +243,57 @@ export function initTokenDB(opts?: InitTokenDBOptions): Database {
   }
 
   db.exec("PRAGMA journal_mode=WAL;");
-  db.exec("PRAGMA foreign_keys=ON;");
+  // foreign_keys は SQLite default の OFF のまま SCHEMA_V1 と migration を流す。
+  // SCHEMA_V1 は IF NOT EXISTS なので新 DB でのみ実体作成される。既存 DB では no-op。
   db.exec(SCHEMA_V1);
 
   ensureTokensColumns(db);
   ensureUsageSnapshotsColumns(db);
   ensureLeasesColumns(db);
+
+  // T391 migration は table re-create を伴うため SQLite 12-step procedure に従い
+  // FK enforcement を OFF にした状態で実行する必要がある。
+  // PRAGMA foreign_keys はトランザクション外でしか effective でないため、
+  // migration 関数の BEGIN より前にここで切り替える。
+  const needsT391 = needsTokensSchemaT391Migration(db);
+  if (needsT391) {
+    db.exec("PRAGMA foreign_keys=OFF;");
+  }
   // T391: claude-credentials 旧 source を持つ row を subscription に変換し
   // auth_hash を NULL に倒す。同時に旧 NOT NULL 制約を持つ table は re-create する。
   migrateTokensSchemaT391(db);
   migrateClaudeCredentialsToSubscription(db);
+  if (needsT391) {
+    const violations = db.prepare("PRAGMA foreign_key_check").all() as unknown[];
+    if (violations.length > 0) {
+      throw new Error(
+        `[token-store] T391 migration left ${violations.length} FK violation(s): ${JSON.stringify(violations)}`,
+      );
+    }
+  }
+  // 通常運用は FK ON で行う（INSERT/UPDATE 時の整合性担保のため）。
+  // migration 不要パスでも default OFF からの 1 回切替として実行する。
+  db.exec("PRAGMA foreign_keys=ON;");
 
   return db;
+}
+
+/**
+ * T391 migration が必要かどうかを判定する。
+ *
+ * `migrateTokensSchemaT391` 冒頭の冪等条件と同じ式（`organization_id` / `auth_hash` の
+ * `notnull` がいずれも 0 でなければ migration が必要）を、`initTokenDB` 側の FK 切替
+ * skip 判定に再利用するため切り出した関数。両者は **同じ条件であること** を維持する。
+ */
+function needsTokensSchemaT391Migration(db: Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(tokens)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const orgCol = cols.find((c) => c.name === "organization_id");
+  const authCol = cols.find((c) => c.name === "auth_hash");
+  if (!orgCol || !authCol) return false;
+  return !(orgCol.notnull === 0 && authCol.notnull === 0);
 }
 
 /**
@@ -264,6 +303,15 @@ export function initTokenDB(opts?: InitTokenDBOptions): Database {
  *   両カラムを NULL 許容に変更する必要がある
  * - SQLite は ALTER COLUMN で `NOT NULL` を緩めることができないので table を re-create する
  * - 既に NULL 許容なら no-op（冪等）
+ *
+ * 呼出側の責務:
+ *   `usage_snapshots` / `leases` から `tokens(id)` への FK が張られているため、
+ *   migration 中の `DROP TABLE tokens` は `foreign_keys=ON` のままだと
+ *   FOREIGN KEY constraint failed で必ず落ちる。SQLite の PRAGMA foreign_keys は
+ *   トランザクション外でしか effective でないため、本関数の中で OFF/ON を発行しても
+ *   無効化される。よって呼出側で `PRAGMA foreign_keys=OFF` を立ててから本関数を呼び、
+ *   migration 完了後に `PRAGMA foreign_key_check` で integrity を確認した上で
+ *   `PRAGMA foreign_keys=ON` に戻す責務を持つ（`initTokenDB` を参照）。
  */
 function migrateTokensSchemaT391(db: Database): void {
   const cols = db.prepare("PRAGMA table_info(tokens)").all() as Array<{
