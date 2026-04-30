@@ -7,6 +7,9 @@ import {
   NotificationMessage,
   OVERLAY_ROLES,
   OverlayRole,
+  PreToolUseDeniedMessage,
+  PreToolUseMessage,
+  PostToolUseMessage,
   QueueMessage,
   StopFailureMessage,
   normalizeOverlayRole,
@@ -333,5 +336,151 @@ describe("normalizeOverlayRole (T342)", () => {
 
   test("unknown role → undefined", () => {
     expect(normalizeOverlayRole("foobar")).toBeUndefined();
+  });
+});
+
+// --- T379: PreToolUse / PostToolUse / PreToolUseDenied ---
+
+describe("PreToolUseMessage (T379)", () => {
+  const base = {
+    type: "PRE_TOOL_USE" as const,
+    surface: "surface:100",
+    pid: 1234,
+    role: "agent" as const,
+    sessionId: "sess-123",
+    toolName: "Edit",
+    payload: { tool_input: { file_path: "/tmp/x.ts" } },
+    timestamp: "2026-04-29T10:00:00.000Z",
+  };
+
+  test("正常系: 必須フィールドでパース成功", () => {
+    const parsed = PreToolUseMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: sessionId は optional", () => {
+    const { sessionId: _s, ...rest } = base;
+    const parsed = PreToolUseMessage.safeParse(rest);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: role は master/conductor/agent のいずれか", () => {
+    for (const role of ["master", "conductor", "agent"] as const) {
+      const parsed = PreToolUseMessage.safeParse({ ...base, role });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  test("異常系: toolName 欠落は reject", () => {
+    const { toolName: _t, ...rest } = base;
+    const parsed = PreToolUseMessage.safeParse(rest);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: pid 欠落は reject", () => {
+    const { pid: _p, ...rest } = base;
+    const parsed = PreToolUseMessage.safeParse(rest);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: type 不一致は reject", () => {
+    const parsed = PreToolUseMessage.safeParse({ ...base, type: "POST_TOOL_USE" });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("PostToolUseMessage (T379)", () => {
+  const base = {
+    type: "POST_TOOL_USE" as const,
+    surface: "surface:100",
+    pid: 1234,
+    role: "agent" as const,
+    sessionId: "sess-123",
+    toolName: "Edit",
+    payload: {
+      tool_input: { file_path: "/tmp/x.ts" },
+      tool_response: { success: true },
+    },
+    timestamp: "2026-04-29T10:00:01.000Z",
+  };
+
+  test("正常系: 必須フィールドでパース成功", () => {
+    const parsed = PostToolUseMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("異常系: toolName 欠落は reject", () => {
+    const { toolName: _t, ...rest } = base;
+    const parsed = PostToolUseMessage.safeParse(rest);
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("PreToolUseDeniedMessage (T379)", () => {
+  const base = {
+    type: "PRE_TOOL_USE_DENIED" as const,
+    surface: "surface:100",
+    pid: 1234,
+    role: "conductor" as const,
+    reason: "cmux send/send-key denied",
+    timestamp: "2026-04-29T10:00:02.000Z",
+  };
+
+  test("正常系: 必須フィールドでパース成功", () => {
+    const parsed = PreToolUseDeniedMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: reason は optional", () => {
+    const { reason: _r, ...rest } = base;
+    const parsed = PreToolUseDeniedMessage.safeParse(rest);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("異常系: type 不一致は reject", () => {
+    const parsed = PreToolUseDeniedMessage.safeParse({ ...base, type: "PRE_TOOL_USE" });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("QueueMessage T379 messages are included", () => {
+  test("PRE_TOOL_USE は QueueMessage にも含まれる", () => {
+    const parsed = QueueMessage.safeParse({
+      type: "PRE_TOOL_USE",
+      surface: "surface:100",
+      pid: 1234,
+      role: "agent",
+      sessionId: "sess-1",
+      toolName: "Read",
+      payload: {},
+      timestamp: "2026-04-29T10:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("POST_TOOL_USE は QueueMessage にも含まれる", () => {
+    const parsed = QueueMessage.safeParse({
+      type: "POST_TOOL_USE",
+      surface: "surface:100",
+      pid: 1234,
+      role: "agent",
+      sessionId: "sess-1",
+      toolName: "Read",
+      payload: {},
+      timestamp: "2026-04-29T10:00:01.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("PRE_TOOL_USE_DENIED は QueueMessage にも含まれる", () => {
+    const parsed = QueueMessage.safeParse({
+      type: "PRE_TOOL_USE_DENIED",
+      surface: "surface:100",
+      pid: 1234,
+      role: "conductor",
+      reason: "denied",
+      timestamp: "2026-04-29T10:00:02.000Z",
+    });
+    expect(parsed.success).toBe(true);
   });
 });

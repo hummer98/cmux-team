@@ -48,14 +48,21 @@ afterEach(async () => {
 // --- §4.1 generateConductorSettings の PreToolUse hook 構成テスト ---
 
 describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
+  // T379: matcher: "Bash" の Bash deny ブロック以外に matcher: "" の PRE_TOOL_USE 観察 hook が
+  // 追加されたため、index アクセスではなく matcher で filter して取り出す。
+  function findBashDenyBlock(settings: any): any {
+    const blocks = settings.hooks.PreToolUse as any[];
+    return blocks.find((b) => b.matcher === "Bash");
+  }
+
   test("PreToolUse hook が Bash matcher で追加される", async () => {
     await mkdir(join(testDir, ".team/prompts"), { recursive: true });
     const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
     expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
-    expect(settings.hooks.PreToolUse.length).toBe(1);
-    const entry = settings.hooks.PreToolUse[0];
+    const entry = findBashDenyBlock(settings);
+    expect(entry).toBeTruthy();
     expect(entry.matcher).toBe("Bash");
     expect(entry.hooks.length).toBe(1);
     expect(entry.hooks[0].type).toBe("command");
@@ -65,13 +72,26 @@ describe("generateConductorSettings - PreToolUse hook (§4.1)", () => {
   test("hook の command に cmux, send, exit 2 と日本語エラー文が含まれる (R3)", async () => {
     const settingsPath = generateConductorSettings(testDir, "surface:200");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
-    const cmd: string = settings.hooks.PreToolUse[0].hooks[0].command;
+    const cmd: string = findBashDenyBlock(settings).hooks[0].command;
     expect(cmd).toContain("cmux");
     expect(cmd).toContain("send");
     expect(cmd).toContain("exit 2");
     expect(cmd).toContain("cmux send / cmux send-key は Conductor から使用禁止です。");
     // R3: 代替コマンド行
     expect(cmd).toContain("cmux-team send-agent --surface");
+  });
+
+  // T379: deny 直前に PRE_TOOL_USE_DENIED 送信が入っていること
+  test("T379: hook の command に cmux-team send PRE_TOOL_USE_DENIED が含まれる", async () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const cmd: string = findBashDenyBlock(settings).hooks[0].command;
+    expect(cmd).toContain("cmux-team send PRE_TOOL_USE_DENIED");
+    // exit 2 の前に送信していること（順序保証）
+    const denyIdx = cmd.indexOf("cmux-team send PRE_TOOL_USE_DENIED");
+    const exitIdx = cmd.indexOf("exit 2");
+    expect(denyIdx).toBeGreaterThan(0);
+    expect(exitIdx).toBeGreaterThan(denyIdx);
   });
 
   test("既存の SessionStart / Stop / SessionEnd hook が残存している (regression)", async () => {
@@ -100,8 +120,10 @@ async function runHook(
 }
 
 function extractHookScript(settings: any): string {
-  // 生成形式: `bash -c '<script>'`
-  const cmd: string = settings.hooks.PreToolUse[0].hooks[0].command;
+  // T379: matcher で Bash deny ブロックを取り出す（index アクセスは PRE_TOOL_USE 観察 hook 追加で破壊された）
+  const block = (settings.hooks.PreToolUse as any[]).find((b) => b.matcher === "Bash");
+  if (!block) throw new Error("Bash deny block not found");
+  const cmd: string = block.hooks[0].command;
   const m = cmd.match(/^bash -c '([\s\S]*)'$/);
   if (!m) throw new Error(`unexpected hook command format: ${cmd}`);
   return m[1]!;
@@ -1627,6 +1649,101 @@ describe("buildMessageFromHookInput (T203)", () => {
       buildMessageFromHookInput("STOP_FAILURE", raw, { ...opts, role: "hacker" }),
     ).toThrow();
   });
+
+  // --- T379: PRE_TOOL_USE / POST_TOOL_USE branch ---
+
+  test("T379: PRE_TOOL_USE — tool_name / session_id を抽出し payload を畳み込む", () => {
+    const raw = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "sess-pre",
+      cwd: "/tmp",
+      tool_name: "Edit",
+      tool_input: { file_path: "/tmp/x.ts", old_string: "a", new_string: "b" },
+    });
+    const msg = buildMessageFromHookInput("PRE_TOOL_USE", raw, {
+      ...opts,
+      role: "agent",
+    });
+    expect(msg.type).toBe("PRE_TOOL_USE");
+    if (msg.type === "PRE_TOOL_USE") {
+      expect(msg.surface).toBe("surface:100");
+      expect(msg.pid).toBe(12345);
+      expect(msg.role).toBe("agent");
+      expect(msg.sessionId).toBe("sess-pre");
+      expect(msg.toolName).toBe("Edit");
+      expect(msg.payload?.tool_input).toEqual({
+        file_path: "/tmp/x.ts",
+        old_string: "a",
+        new_string: "b",
+      });
+    }
+  });
+
+  test("T379: POST_TOOL_USE — tool_response を含む payload で通る", () => {
+    const raw = JSON.stringify({
+      hook_event_name: "PostToolUse",
+      session_id: "sess-post",
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/r.ts" },
+      tool_response: { success: true, content: "abc" },
+    });
+    const msg = buildMessageFromHookInput("POST_TOOL_USE", raw, {
+      ...opts,
+      role: "agent",
+    });
+    if (msg.type === "POST_TOOL_USE") {
+      expect(msg.toolName).toBe("Read");
+      expect(msg.sessionId).toBe("sess-post");
+      expect(msg.payload?.tool_response).toEqual({ success: true, content: "abc" });
+    }
+  });
+
+  test("T379: POST_TOOL_USE — tool_response.content 8KB 超は 1KB に切り詰められる", () => {
+    const big = "x".repeat(8192);
+    const raw = JSON.stringify({
+      session_id: "sess-big",
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/big.txt" },
+      tool_response: { success: true, content: big },
+    });
+    const msg = buildMessageFromHookInput("POST_TOOL_USE", raw, {
+      ...opts,
+      role: "agent",
+    });
+    if (msg.type === "POST_TOOL_USE") {
+      const content = (msg.payload?.tool_response as any)?.content;
+      expect(typeof content).toBe("string");
+      expect(content.length).toBeLessThanOrEqual(1024);
+      // 切り詰めても success フラグは保持される
+      expect((msg.payload?.tool_response as any)?.success).toBe(true);
+    }
+  });
+
+  test("T379: PRE_TOOL_USE — tool_name 欠落は throw", () => {
+    const raw = JSON.stringify({ session_id: "sess-x", tool_input: {} });
+    expect(() =>
+      buildMessageFromHookInput("PRE_TOOL_USE", raw, { ...opts, role: "agent" }),
+    ).toThrow();
+  });
+
+  test("T379: PRE_TOOL_USE — session_id 無しでも sessionId: undefined で通る", () => {
+    const raw = JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } });
+    const msg = buildMessageFromHookInput("PRE_TOOL_USE", raw, {
+      ...opts,
+      role: "conductor",
+    });
+    if (msg.type === "PRE_TOOL_USE") {
+      expect(msg.sessionId).toBeUndefined();
+      expect(msg.toolName).toBe("Bash");
+    }
+  });
+
+  test("T379: PRE_TOOL_USE — role 不正値は zod で throw", () => {
+    const raw = JSON.stringify({ tool_name: "Edit" });
+    expect(() =>
+      buildMessageFromHookInput("PRE_TOOL_USE", raw, { ...opts, role: "hacker" }),
+    ).toThrow();
+  });
 });
 
 // --- T203: cmdSend --from-stdin discriminator 回帰 (C2) ---
@@ -2062,6 +2179,109 @@ describe("generateMasterSettings (T211)", () => {
     expect(cmd).toContain("$PPID");
     expect(cmd).toContain("--role master");
     expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(5000);
+  });
+
+  // T379: Master settings に PreToolUse / PostToolUse の matcher: "" 観察 hook が追加される
+  test("T379: Master settings.hooks.PreToolUse に matcher: \"\" 観察 hook が追加される (role=master)", async () => {
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+    const observerBlock = (settings.hooks.PreToolUse as any[]).find(
+      (b) => b.matcher === "",
+    );
+    expect(observerBlock).toBeTruthy();
+    const cmd: string = observerBlock.hooks[0].command;
+    expect(cmd).toContain("cmux-team send PRE_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role master");
+    expect(cmd).toContain("$PPID");
+    expect(observerBlock.hooks[0].timeout).toBe(3000);
+  });
+
+  test("T379: Master settings.hooks.PostToolUse が cmux-team send POST_TOOL_USE を呼ぶ (role=master)", async () => {
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.PostToolUse)).toBe(true);
+    expect(settings.hooks.PostToolUse.length).toBe(1);
+    expect(settings.hooks.PostToolUse[0].matcher).toBe("");
+    const cmd: string = settings.hooks.PostToolUse[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send POST_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role master");
+    expect(settings.hooks.PostToolUse[0].hooks[0].timeout).toBe(3000);
+  });
+});
+
+// --- T379: Conductor / Agent settings の PreToolUse / PostToolUse 観察 hook ---
+
+describe("T379: Conductor settings の PreToolUse / PostToolUse 観察 hook", () => {
+  test("Conductor settings.hooks.PreToolUse に Bash deny + matcher: \"\" 観察 hook の 2 ブロックが含まれる", async () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const blocks = settings.hooks.PreToolUse as any[];
+    expect(blocks.length).toBeGreaterThanOrEqual(2);
+    const bashBlock = blocks.find((b) => b.matcher === "Bash");
+    const observerBlock = blocks.find((b) => b.matcher === "");
+    expect(bashBlock).toBeTruthy();
+    expect(observerBlock).toBeTruthy();
+  });
+
+  test("Conductor PreToolUse 観察 hook の command に --role conductor が含まれる", async () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const observerBlock = (settings.hooks.PreToolUse as any[]).find(
+      (b) => b.matcher === "",
+    );
+    const cmd: string = observerBlock.hooks[0].command;
+    expect(cmd).toContain("cmux-team send PRE_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role conductor");
+  });
+
+  test("Conductor settings.hooks.PostToolUse が cmux-team send POST_TOOL_USE を呼ぶ (role=conductor)", async () => {
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(Array.isArray(settings.hooks.PostToolUse)).toBe(true);
+    const observerBlock = (settings.hooks.PostToolUse as any[]).find(
+      (b) => b.matcher === "",
+    );
+    expect(observerBlock).toBeTruthy();
+    const cmd: string = observerBlock.hooks[0].command;
+    expect(cmd).toContain("cmux-team send POST_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role conductor");
+  });
+});
+
+describe("T379: Agent settings の PreToolUse / PostToolUse 観察 hook", () => {
+  test("Agent settings.hooks.PreToolUse の command に --role agent が含まれる", async () => {
+    const settingsPath = generateAgentSettings(testDir, "surface:300");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+    const observerBlock = (settings.hooks.PreToolUse as any[]).find(
+      (b) => b.matcher === "",
+    );
+    expect(observerBlock).toBeTruthy();
+    const cmd: string = observerBlock.hooks[0].command;
+    expect(cmd).toContain("cmux-team send PRE_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role agent");
+  });
+
+  test("Agent settings.hooks.PostToolUse の command に --role agent が含まれる", async () => {
+    const settingsPath = generateAgentSettings(testDir, "surface:300");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(Array.isArray(settings.hooks.PostToolUse)).toBe(true);
+    const observerBlock = (settings.hooks.PostToolUse as any[]).find(
+      (b) => b.matcher === "",
+    );
+    expect(observerBlock).toBeTruthy();
+    const cmd: string = observerBlock.hooks[0].command;
+    expect(cmd).toContain("cmux-team send POST_TOOL_USE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("--role agent");
   });
 });
 

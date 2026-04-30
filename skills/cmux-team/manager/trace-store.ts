@@ -153,7 +153,9 @@ CREATE TABLE IF NOT EXISTS hook_signals (
   conductor_surface TEXT,
   agent_role TEXT,
   message TEXT,
-  notification_type TEXT
+  notification_type TEXT,
+  session_id TEXT,
+  tool_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_hook_signals_type ON hook_signals(type);
 CREATE INDEX IF NOT EXISTS idx_hook_signals_surface ON hook_signals(surface);
@@ -355,6 +357,11 @@ function ensureHookSignalsColumns(db: Database): void {
     "agent_role",
     "message",
     "notification_type",
+    // T379: tool 単位観察用の専用列。
+    // session_id は hook stdin の `session_id`、tool_name は PreToolUse/PostToolUse の `tool_name` を入れる。
+    // payload_json と冗長だが集計 SQL の WHERE/JOIN を高速化するためインデックス対象として実列化する。
+    "session_id",
+    "tool_name",
   ] as const;
   for (const col of required) {
     if (!existing.has(col)) {
@@ -372,6 +379,13 @@ function ensureHookSignalsColumns(db: Database): void {
   );
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_hook_signals_task_id ON hook_signals(task_id)",
+  );
+  // T379
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_hook_signals_session_id ON hook_signals(session_id)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_hook_signals_tool_name ON hook_signals(tool_name)",
   );
 }
 
@@ -453,6 +467,11 @@ export function insertHookSignal(db: Database, message: QueueMessage): number {
   const source = typeof m.source === "string" ? m.source : null;
   const question = typeof m.question === "string" ? m.question : null;
   const taskRunId = typeof m.taskRunId === "string" ? m.taskRunId : null;
+  // T379: PRE_TOOL_USE / POST_TOOL_USE / PRE_TOOL_USE_DENIED で本体メッセージに乗る
+  // role / sessionId / toolName を専用列に直接書く（NotificationEnrichment 経路を経由しない）。
+  const role = typeof m.role === "string" ? m.role : null;
+  const sessionId = typeof m.sessionId === "string" ? m.sessionId : null;
+  const toolName = typeof m.toolName === "string" ? m.toolName : null;
 
   const json = JSON.stringify(message);
   let safeJson = json;
@@ -464,8 +483,8 @@ export function insertHookSignal(db: Database, message: QueueMessage): number {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO hook_signals (timestamp, type, surface, pid, reason, source, question, task_run_id, payload_json)
-    VALUES ($timestamp, $type, $surface, $pid, $reason, $source, $question, $task_run_id, $payload_json)
+    INSERT INTO hook_signals (timestamp, type, surface, pid, reason, source, question, task_run_id, payload_json, role, session_id, tool_name)
+    VALUES ($timestamp, $type, $surface, $pid, $reason, $source, $question, $task_run_id, $payload_json, $role, $session_id, $tool_name)
   `);
   const result = stmt.run({
     $timestamp: timestamp,
@@ -477,6 +496,9 @@ export function insertHookSignal(db: Database, message: QueueMessage): number {
     $question: question,
     $task_run_id: taskRunId,
     $payload_json: safeJson,
+    $role: role,
+    $session_id: sessionId,
+    $tool_name: toolName,
   });
   return Number(result.lastInsertRowid);
 }
@@ -1118,6 +1140,181 @@ export function aggregateApiUsageByTask(
     $untilIso: opts.untilIso,
     $limit: opts.limit,
   }) as AggregatedTaskRow[];
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// T379: hook_signals 由来の tool 単位集計 SQL
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * T379: PRE_TOOL_USE / POST_TOOL_USE / PRE_TOOL_USE_DENIED の集計 1 行。
+ * 集計上 task_id が解決できない hook（task_assigned 前 / task_sessions 未到達）は
+ * `task_id = null` で残し、CLI 側で「unattached」として別カウントできるようにする。
+ */
+export interface ToolCallByTaskRow {
+  /** 対応する task_id（task_sessions の event=assigned 行で MIN(task_id) を取って解決した値）。未解決なら null。 */
+  task_id: string | null;
+  /** PreToolUse/PostToolUse メッセージの `tool_name`（Edit / Read / Bash 等）。 */
+  tool_name: string;
+  /** count(*) */
+  n: number;
+}
+
+/**
+ * T379: タスク × tool_name で PRE_TOOL_USE 件数を集計する。
+ *
+ * task_sessions は同 session_id に対して複数行を持ちうる（resume / clear 等で append される）ため、
+ * `WITH session_to_task AS (... GROUP BY session_id)` で session_id → task_id を 1:1 に集約してから JOIN する。
+ * これがないと 2 行 hit で tool 件数が二重カウントされる（design-review Recommendation 3）。
+ *
+ * task_id 未解決（join 結果 NULL）の行は task_id = null として残し、
+ * 集計 CLI 側で unattached として別カウントできるようにする。
+ */
+export function countToolCallsByTask(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string; type?: "PRE_TOOL_USE" | "POST_TOOL_USE" },
+): ToolCallByTaskRow[] {
+  const type = opts.type ?? "PRE_TOOL_USE";
+  const stmt = db.prepare(`
+    WITH session_to_task AS (
+      SELECT session_id, MIN(task_id) AS task_id
+      FROM task_sessions
+      WHERE event = 'assigned' AND task_id IS NOT NULL
+      GROUP BY session_id
+    )
+    SELECT s2t.task_id AS task_id, h.tool_name AS tool_name, COUNT(*) AS n
+    FROM hook_signals h
+    LEFT JOIN session_to_task s2t USING (session_id)
+    WHERE h.type = $type
+      AND h.timestamp >= $sinceIso
+      AND h.timestamp <= $untilIso
+      AND h.tool_name IS NOT NULL
+    GROUP BY s2t.task_id, h.tool_name
+    ORDER BY s2t.task_id IS NULL ASC, s2t.task_id ASC, h.tool_name ASC
+  `);
+  return stmt.all({
+    $type: type,
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as ToolCallByTaskRow[];
+}
+
+/** T379: タスク別「最初の Edit ツール呼び出し時刻」を返す。 */
+export interface FirstEditByTaskRow {
+  /** 対応する task_id。session_to_task で解決できなかったものは含まない（NULL は除外）。 */
+  task_id: string;
+  /** 最初の PRE_TOOL_USE Edit の timestamp（ISO 8601）。 */
+  first_edit_ts: string;
+}
+
+/**
+ * T379: タスク別に最初の Edit ツール呼び出し時刻を返す。
+ * task_assigned 時刻との差分から「time-to-first-edit」を算出する目的。
+ * task_id 未解決行は除外（time-to-first-edit を算出できないため）。
+ */
+export function firstEditPerTask(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string },
+): FirstEditByTaskRow[] {
+  const stmt = db.prepare(`
+    WITH session_to_task AS (
+      SELECT session_id, MIN(task_id) AS task_id
+      FROM task_sessions
+      WHERE event = 'assigned' AND task_id IS NOT NULL
+      GROUP BY session_id
+    )
+    SELECT s2t.task_id AS task_id, MIN(h.timestamp) AS first_edit_ts
+    FROM hook_signals h
+    JOIN session_to_task s2t USING (session_id)
+    WHERE h.type = 'PRE_TOOL_USE'
+      AND h.tool_name = 'Edit'
+      AND h.timestamp >= $sinceIso
+      AND h.timestamp <= $untilIso
+    GROUP BY s2t.task_id
+  `);
+  return stmt.all({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as FirstEditByTaskRow[];
+}
+
+/** T379: タスク別 PostToolUse の成功 / 失敗件数（payload_json から JSON_EXTRACT で抽出）。 */
+export interface ToolFailureByTaskRow {
+  task_id: string | null;
+  total: number;
+  failures: number;
+}
+
+/**
+ * T379: タスク別に PostToolUse の総数と失敗数を返す。
+ * 失敗判定は `tool_response.success = false` または `tool_response.error IS NOT NULL`。
+ * 集計時の `JSON_EXTRACT` の path は payload_json の `payload.tool_response`（schema に従う）。
+ */
+export function failureRateByTask(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string },
+): ToolFailureByTaskRow[] {
+  const stmt = db.prepare(`
+    WITH session_to_task AS (
+      SELECT session_id, MIN(task_id) AS task_id
+      FROM task_sessions
+      WHERE event = 'assigned' AND task_id IS NOT NULL
+      GROUP BY session_id
+    )
+    SELECT
+      s2t.task_id AS task_id,
+      COUNT(*) AS total,
+      SUM(
+        CASE
+          WHEN JSON_EXTRACT(h.payload_json, '$.payload.tool_response.success') = 0 THEN 1
+          WHEN JSON_EXTRACT(h.payload_json, '$.payload.tool_response.error') IS NOT NULL THEN 1
+          ELSE 0
+        END
+      ) AS failures
+    FROM hook_signals h
+    LEFT JOIN session_to_task s2t USING (session_id)
+    WHERE h.type = 'POST_TOOL_USE'
+      AND h.timestamp >= $sinceIso
+      AND h.timestamp <= $untilIso
+    GROUP BY s2t.task_id
+    ORDER BY s2t.task_id IS NULL ASC, s2t.task_id ASC
+  `);
+  return stmt.all({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as ToolFailureByTaskRow[];
+}
+
+/** T379: 期間内の PreToolUse 総数と PRE_TOOL_USE_DENIED 件数（hook block 率算出用）。 */
+export interface DenyRateRow {
+  pre_total: number;
+  denied: number;
+}
+
+/**
+ * T379: 期間内の PRE_TOOL_USE 件数と PRE_TOOL_USE_DENIED 件数を返す。
+ * help_metrics に明記する通り、現状の denied は「Conductor の Bash deny script による block」のみで
+ * Claude Code の他 hook が exit 2 で deny した件数は含まない。利用者誤読を避けるため CLI 説明にも明記。
+ */
+export function denyRateByPeriod(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string },
+): DenyRateRow {
+  const stmt = db.prepare(`
+    SELECT
+      SUM(CASE WHEN type = 'PRE_TOOL_USE' THEN 1 ELSE 0 END) AS pre_total,
+      SUM(CASE WHEN type = 'PRE_TOOL_USE_DENIED' THEN 1 ELSE 0 END) AS denied
+    FROM hook_signals
+    WHERE timestamp >= $sinceIso AND timestamp <= $untilIso
+  `);
+  const row = stmt.get({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as { pre_total: number | null; denied: number | null };
+  return {
+    pre_total: row.pre_total ?? 0,
+    denied: row.denied ?? 0,
+  };
 }
 
 /**

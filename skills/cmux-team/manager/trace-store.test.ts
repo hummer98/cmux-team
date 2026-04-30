@@ -592,6 +592,181 @@ describe("trace-store: hook_signals NOTIFICATION columns (T266)", () => {
   });
 });
 
+describe("trace-store: hook_signals tool columns (T379)", () => {
+  let project: DummyProject;
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-hook-signals-t379-",
+      subdirs: ["logs"],
+    });
+    tmpDir = project.root;
+    db = initDB(tmpDir);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("新規 DB: hook_signals に session_id / tool_name 列が存在する", () => {
+    const cols = db
+      .prepare("PRAGMA table_info(hook_signals)")
+      .all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    expect(names.has("session_id")).toBe(true);
+    expect(names.has("tool_name")).toBe(true);
+  });
+
+  test("新規 DB: hook_signals に session_id / tool_name の index が作られている", () => {
+    const idx = db
+      .prepare("PRAGMA index_list(hook_signals)")
+      .all() as Array<{ name: string }>;
+    const idxNames = new Set(idx.map((i) => i.name));
+    expect(idxNames.has("idx_hook_signals_session_id")).toBe(true);
+    expect(idxNames.has("idx_hook_signals_tool_name")).toBe(true);
+  });
+
+  test("PRE_TOOL_USE 挿入で session_id / tool_name 列が埋まる", () => {
+    const id = insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      surface: "surface:200",
+      pid: 22222,
+      role: "agent",
+      sessionId: "sess-pre-1",
+      toolName: "Edit",
+      payload: { tool_input: { file_path: "/tmp/x.ts" } },
+      timestamp: "2026-04-29T10:00:00.000Z",
+    } as unknown as QueueMessage);
+
+    const row = db
+      .prepare(
+        "SELECT type, session_id, tool_name, role, surface FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+    expect(row.type).toBe("PRE_TOOL_USE");
+    expect(row.session_id).toBe("sess-pre-1");
+    expect(row.tool_name).toBe("Edit");
+    expect(row.surface).toBe("surface:200");
+    // role 列は updateNotificationEnrichment 経由ではなく、PRE_TOOL_USE は最初から
+    // メッセージ本体に乗るため insert 時点で書き込まれる（NotificationEnrichment との一貫性）。
+    expect(row.role).toBe("agent");
+  });
+
+  test("POST_TOOL_USE 挿入で session_id / tool_name 列が埋まる", () => {
+    const id = insertHookSignal(db, {
+      type: "POST_TOOL_USE",
+      surface: "surface:201",
+      pid: 22223,
+      role: "agent",
+      sessionId: "sess-post-1",
+      toolName: "Read",
+      payload: {
+        tool_input: { file_path: "/tmp/y.ts" },
+        tool_response: { success: true },
+      },
+      timestamp: "2026-04-29T10:00:01.000Z",
+    } as unknown as QueueMessage);
+
+    const row = db
+      .prepare(
+        "SELECT type, session_id, tool_name FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+    expect(row.type).toBe("POST_TOOL_USE");
+    expect(row.session_id).toBe("sess-post-1");
+    expect(row.tool_name).toBe("Read");
+  });
+
+  test("既存 SESSION_STARTED 挿入では session_id / tool_name が NULL", () => {
+    const id = insertHookSignal(db, {
+      type: "SESSION_STARTED",
+      surface: "surface:100",
+      pid: 1234,
+      source: "startup",
+      timestamp: "2026-04-29T10:00:00.000Z",
+    } as unknown as QueueMessage);
+
+    const row = db
+      .prepare(
+        "SELECT session_id, tool_name FROM hook_signals WHERE id = ?",
+      )
+      .get(id) as Record<string, string | null>;
+    expect(row.session_id).toBeNull();
+    expect(row.tool_name).toBeNull();
+  });
+
+  test("旧スキーマ DB → initDB 再呼び出しで session_id / tool_name 列が ADD される（idempotent）", async () => {
+    const oldProject = await createDummyProject({
+      prefix: "cmux-team-old-hook-tool-",
+      subdirs: [],
+      setProjectRootEnv: false,
+    });
+    const oldDir = oldProject.root;
+    let migratedDb: Database | undefined;
+    try {
+      await mkdir(join(oldDir, ".team/traces"), { recursive: true });
+      const oldDb = new Database(join(oldDir, ".team/traces/traces.db"));
+      // T266 までの 8 列だけが ADD された旧 DB を再現
+      oldDb.exec(`
+        CREATE TABLE hook_signals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp TEXT NOT NULL,
+          type TEXT NOT NULL,
+          surface TEXT,
+          pid INTEGER,
+          reason TEXT,
+          source TEXT,
+          question TEXT,
+          task_run_id TEXT,
+          payload_json TEXT NOT NULL,
+          surface_uuid TEXT,
+          workspace_uuid TEXT,
+          role TEXT,
+          task_id TEXT,
+          conductor_surface TEXT,
+          agent_role TEXT,
+          message TEXT,
+          notification_type TEXT
+        );
+      `);
+      oldDb.close();
+
+      migratedDb = initDB(oldDir);
+      const cols = migratedDb
+        .prepare("PRAGMA table_info(hook_signals)")
+        .all() as Array<{ name: string }>;
+      const names = new Set(cols.map((c) => c.name));
+      expect(names.has("session_id")).toBe(true);
+      expect(names.has("tool_name")).toBe(true);
+
+      const idx = migratedDb
+        .prepare("PRAGMA index_list(hook_signals)")
+        .all() as Array<{ name: string }>;
+      const idxNames = new Set(idx.map((i) => i.name));
+      expect(idxNames.has("idx_hook_signals_session_id")).toBe(true);
+      expect(idxNames.has("idx_hook_signals_tool_name")).toBe(true);
+
+      // 2 回目の initDB 呼び出しでも ALTER は冪等（throw しない）
+      migratedDb.close();
+      migratedDb = undefined;
+      const reopen = initDB(oldDir);
+      const cols2 = reopen
+        .prepare("PRAGMA table_info(hook_signals)")
+        .all() as Array<{ name: string }>;
+      const names2 = new Set(cols2.map((c) => c.name));
+      expect(names2.has("session_id")).toBe(true);
+      expect(names2.has("tool_name")).toBe(true);
+      reopen.close();
+    } finally {
+      try { migratedDb?.close(); } catch {}
+      await oldProject.dispose();
+    }
+  });
+});
+
 describe("trace-store: getHookSignals role/taskId filter (T266)", () => {
   let project: DummyProject;
   let tmpDir: string;

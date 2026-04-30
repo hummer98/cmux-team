@@ -588,6 +588,44 @@ Exit codes:
   1  argument error / events.jsonl not found
 `,
 
+  help_metrics: `
+cmux-team metrics -- per-task / per-period aggregate of events.jsonl + hook_signals + api_usage
+
+Usage:
+  cmux-team metrics [options]
+
+Options:
+  --task-id <id>           filter to a single task (only with --group-by task; default).
+  --since <when>           lower bound for the aggregation window.
+                           duration: 5m / 1h / 2d
+                           ISO 8601: 2026-04-27T12:00:00Z
+  --format json|text|csv   output format (default: json).
+                           text: key=value per record. csv: RFC 4180.
+  --group-by task|day|week aggregation key (default: task).
+                           week: ISO week, Monday start.
+
+Output (--group-by task):
+  array of per-task records: task_id, outcome, duration_ms, tool_calls, tool_failure_rate,
+  time_to_first_edit_ms, tokens.
+
+Output (--group-by day|week):
+  array of per-bucket records: tasks_assigned/completed/aborted, completion_rate, abort_rate,
+  forced_close_rate, deny_rate, tool_call_total, stddev, duration mean/stddev, tokens_total.
+
+Notes:
+  - "deny_rate" = (PRE_TOOL_USE_DENIED count) / (PRE_TOOL_USE count) within the bucket window.
+    Currently this only counts the Conductor's Bash deny script (cmux send/send-key block);
+    it does NOT cover all PreToolUse exit-2 hooks. Treat it as a "cmux-team Bash deny rate"
+    rather than a generic hook block rate.
+  - Tool calls are joined to tasks via task_sessions.session_id MIN(task_id).
+    Hooks fired before task_assigned (no matching session_started row) are dropped.
+  - tool_response.content is truncated to 1KB at hook receive time; success / error fields are kept.
+
+Exit codes:
+  0  normal exit
+  1  argument error / events.jsonl or traces.db not found
+`,
+
   help_conductor: `
 cmux-team conductor -- launch Claude Code for Conductor (internal use)
 
@@ -768,6 +806,8 @@ Usage:
   cmux-team trace-hooks                        display hook signal history
   cmux-team events [--follow] [--types ...] [--since ...] [--format json|text]
                                               tail / filter the events stream (.team/logs/events.jsonl)
+  cmux-team metrics [--task-id ...] [--since ...] [--format json|text|csv] [--group-by task|day|week]
+                                              aggregate task / tool / token metrics from events.jsonl + hook_signals + api_usage
   cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
@@ -1435,6 +1475,44 @@ Exit codes:
   1  argument error / events.jsonl not found
 `,
 
+  help_metrics: `
+cmux-team metrics -- events.jsonl + hook_signals + api_usage を per-task / 期間で集計する
+
+Usage:
+  cmux-team metrics [options]
+
+Options:
+  --task-id <id>           1 タスクにフィルタ（--group-by task=既定 のみで有効）
+  --since <when>           集計の下限。
+                           duration: 5m / 1h / 2d
+                           ISO 8601: 2026-04-27T12:00:00Z
+  --format json|text|csv   出力 format（既定: json）
+                           text: key=value 1 行 / csv: RFC 4180
+  --group-by task|day|week 集計キー（既定: task）
+                           week は ISO week（月曜開始）
+
+出力 (--group-by task):
+  per-task オブジェクト配列: task_id, outcome, duration_ms, tool_calls, tool_failure_rate,
+  time_to_first_edit_ms, tokens を含む。
+
+出力 (--group-by day|week):
+  per-bucket オブジェクト配列: tasks_assigned / completed / aborted, completion_rate, abort_rate,
+  forced_close_rate, deny_rate, tool_call_total, stddev, duration mean/stddev, tokens_total を含む。
+
+注意:
+  - "deny_rate" = (PRE_TOOL_USE_DENIED 件数) / (PRE_TOOL_USE 件数) で計算される。
+    現状これは Conductor の Bash deny script（cmux send / send-key の block）のみを数えており、
+    PreToolUse hook が exit 2 で deny したケースを網羅していない。
+    「cmux-team の Bash deny 率」と読むべきで、汎用的な hook block 率ではない。
+  - tool call と task の紐付けは task_sessions.session_id を MIN(task_id) で集約して JOIN する。
+    task_assigned 前に発火した hook（session_started 未到達）は集計から除外される。
+  - tool_response.content は hook 受信時点で 1KB に切り詰められる（success / error フラグは保持）。
+
+Exit codes:
+  0  正常終了
+  1  引数エラー / events.jsonl または traces.db が無い
+`,
+
   help_conductor: `
 cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
 
@@ -1616,6 +1694,8 @@ Usage:
   cmux-team trace-hooks                        hook シグナル履歴を表示
   cmux-team events [--follow] [--types ...] [--since ...] [--format json|text]
                                               events ストリームを tail / filter（.team/logs/events.jsonl）
+  cmux-team metrics [--task-id ...] [--since ...] [--format json|text|csv] [--group-by task|day|week]
+                                              events.jsonl + hook_signals + api_usage を per-task / 期間で集計
   cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧

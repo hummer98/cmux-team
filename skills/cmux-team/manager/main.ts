@@ -36,6 +36,7 @@ import { log, formatSurface } from "./logger";
 // T358: events.jsonl writer
 import { emitEvent } from "./events-writer";
 import { runEventsCli } from "./events-cli";
+import { runMetricsCli } from "./metrics-cli";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -68,8 +69,8 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, Deliverable } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, StopFailureMessage as StopFailureMessageSchema, Deliverable as DeliverableSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, PreToolUseMessage, PostToolUseMessage, PreToolUseDeniedMessage, Deliverable } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, StopFailureMessage as StopFailureMessageSchema, PreToolUseMessage as PreToolUseMessageSchema, PostToolUseMessage as PostToolUseMessageSchema, PreToolUseDeniedMessage as PreToolUseDeniedMessageSchema, Deliverable as DeliverableSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import {
   loadConfig,
@@ -1387,8 +1388,23 @@ async function cmdSend(): Promise<void> {
       message = { type: "SHUTDOWN", timestamp: now };
       break;
 
+    case "PRE_TOOL_USE_DENIED": {
+      // T379: Conductor の Bash deny script が hook block 検出時に明示的に送るメッセージ。
+      // surface は空文字 fallback を許容（hook script で `${CMUX_SURFACE:-}` 経由）し、未解決でも送信は試みる。
+      const surfaceArg = getArg("surface") ?? "";
+      message = {
+        type: "PRE_TOOL_USE_DENIED",
+        surface: surfaceArg,
+        pid: Number(requireArg("pid")),
+        role: (getArg("role") as PreToolUseDeniedMessage["role"]) ?? "conductor",
+        reason: getArg("message"),
+        timestamp: now,
+      };
+      break;
+    }
+
     default:
-      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|NOTIFICATION|STOP_FAILURE|SHUTDOWN> [--from-stdin]");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|NOTIFICATION|STOP_FAILURE|PRE_TOOL_USE_DENIED|SHUTDOWN> [--from-stdin]");
       process.exit(1);
   }
 
@@ -1661,6 +1677,10 @@ const PRE_TOOL_USE_HOOK_SCRIPT = [
   'if printf "%s" "$cmd" | grep -qE "(^|[^-[:alnum:]_])cmux[[:space:]]+(send|send-key)([[:space:]]|$)"; then',
   '  echo "cmux send / cmux send-key は Conductor から使用禁止です。" >&2',
   '  echo "代替: cmux-team send-agent --surface <agent-surface> <message>  (自分が spawn した Agent のみ送信可)" >&2',
+  // T379: deny を daemon に通知（hook block 率の集計に使う）。
+  // Claude Code は PreToolUse hook の exit 2 を別 hook 経由で再通知しないため、ここで明示送信する。
+  // 失敗時はそのまま deny を続行（|| true で suppress）。
+  '  cmux-team send PRE_TOOL_USE_DENIED --message "cmux send/send-key denied" --surface "${CMUX_SURFACE:-}" --pid "$PPID" 2>/dev/null || true',
   '  exit 2',
   'fi',
   'exit 0',
@@ -1700,6 +1720,29 @@ const DETECT_ASK_SCRIPT = [
   'exit 0',
   '',
 ].join("\n");
+
+/**
+ * T379: PreToolUse / PostToolUse の `tool_response.content`（および `tool_input.content`）が
+ * 大きい（Read ツールの数千行ファイル等）と hook_signals.payload_json の 64KB truncate に当たって
+ * JSON 構造ごと壊れる。集計に必要なのは `tool_response.success` / `tool_response.error` 等の
+ * 軽量フィールドだけなので、`content` のみを 1KB に切り詰めた浅いコピーを返す。
+ */
+const TOOL_USE_CONTENT_LIMIT = 1024;
+function truncateToolUsePayload(obj: Record<string, unknown>): Record<string, unknown> {
+  const truncated: Record<string, unknown> = { ...obj };
+  for (const key of ["tool_input", "tool_response"] as const) {
+    const v = truncated[key];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const copy = { ...(v as Record<string, unknown>) };
+      const content = copy.content;
+      if (typeof content === "string" && content.length > TOOL_USE_CONTENT_LIMIT) {
+        copy.content = content.slice(0, TOOL_USE_CONTENT_LIMIT);
+      }
+      truncated[key] = copy;
+    }
+  }
+  return truncated;
+}
 
 /**
  * Claude Code hook の stdin JSON を type 別の QueueMessage に組み立てる純関数。
@@ -1783,6 +1826,56 @@ export function buildMessageFromHookInput(
       timestamp: opts.now,
     };
     return NotificationMessageSchema.parse(message);
+  }
+
+  if (type === "PRE_TOOL_USE" || type === "POST_TOOL_USE") {
+    // T379: PreToolUse / PostToolUse hook の生 stdin JSON を payload にそのまま畳み込む。
+    // - tool_name は専用フィールド（toolName）に取り出し schema 必須にする（trace DB の専用列に直接 INSERT するため）
+    // - session_id は task_sessions JOIN 用の専用フィールド（sessionId）に取り出す
+    // - tool_response.content は 1KB を超える場合 1KB に切り詰めて再シリアライズする
+    //   （hook_signals.payload_json の 64KB truncate に当たらないようにする / 集計には success フラグだけあれば足りる）
+    const emptyToUndef = (s: string | undefined): string | undefined =>
+      s === undefined || s === "" ? undefined : s;
+    const role = emptyToUndef(opts.role);
+    const toolNameRaw = obj.tool_name;
+    if (typeof toolNameRaw !== "string" || toolNameRaw.length === 0) {
+      throw new Error(`${type}: payload.tool_name is required (string)`);
+    }
+    const sessionId = typeof obj.session_id === "string" ? obj.session_id : undefined;
+    const safePayload = truncateToolUsePayload(obj);
+    const message: PreToolUseMessage | PostToolUseMessage = {
+      type,
+      surface: opts.surface,
+      pid: opts.pid,
+      role: role as PreToolUseMessage["role"],
+      sessionId,
+      toolName: toolNameRaw,
+      payload: safePayload,
+      timestamp: opts.now,
+    };
+    if (type === "PRE_TOOL_USE") {
+      return PreToolUseMessageSchema.parse(message);
+    }
+    return PostToolUseMessageSchema.parse(message);
+  }
+
+  if (type === "PRE_TOOL_USE_DENIED") {
+    // T379: Conductor の PRE_TOOL_USE_HOOK_SCRIPT が `cmux send`/`cmux send-key` を deny したときに
+    //       hook 自身が `cmux-team send PRE_TOOL_USE_DENIED ...` で daemon に通知する。
+    //       payload は持たず、reason 文字列だけを必要に応じて添付する。
+    const emptyToUndef = (s: string | undefined): string | undefined =>
+      s === undefined || s === "" ? undefined : s;
+    const role = emptyToUndef(opts.role);
+    const reason = typeof obj.reason === "string" ? obj.reason : undefined;
+    const message: PreToolUseDeniedMessage = {
+      type: "PRE_TOOL_USE_DENIED",
+      surface: opts.surface,
+      pid: opts.pid,
+      role: role as PreToolUseDeniedMessage["role"],
+      reason,
+      timestamp: opts.now,
+    };
+    return PreToolUseDeniedMessageSchema.parse(message);
   }
 
   if (type === "STOP_FAILURE") {
@@ -2006,6 +2099,30 @@ export function generateMasterSettings(projectRoot: string, surface: string): st
           }],
         },
       ],
+      // T379: PreToolUse / PostToolUse hook で tool 単位の観察データを daemon に集約。
+      // hook stdin の tool_name / tool_input / tool_response を payload としてそのまま転送し、
+      // hook_signals テーブルに専用列 (session_id, tool_name) と payload_json で記録する。
+      // timeout 3000ms は claude のレスポンスに直接乗るため短めに（|| true で suppress）。
+      PreToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send PRE_TOOL_USE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role master 2>/dev/null || true'",
+            timeout: 3000,
+          }],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send POST_TOOL_USE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role master 2>/dev/null || true'",
+            timeout: 3000,
+          }],
+        },
+      ],
       // T392: StopFailure hook で Claude Code 内部リトライが諦めた API エラーを daemon に通知する。
       // payload.error は rate_limit / authentication_failed / billing_error / server_error の 4 種別。
       StopFailure: [
@@ -2093,6 +2210,27 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
           }],
         },
       ],
+      // T379: PreToolUse / PostToolUse hook で tool 単位の観察データを daemon に集約。
+      PreToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send PRE_TOOL_USE --from-stdin --surface "${surface}" --pid "$PPID" --role agent 2>/dev/null || true'`,
+            timeout: 3000,
+          }],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send POST_TOOL_USE --from-stdin --surface "${surface}" --pid "$PPID" --role agent 2>/dev/null || true'`,
+            timeout: 3000,
+          }],
+        },
+      ],
       // T392: StopFailure hook で API エラーを daemon に通知する。
       StopFailure: [
         {
@@ -2158,6 +2296,27 @@ export function generateConductorSettings(projectRoot: string, surface: string):
           hooks: [{
             type: "command",
             command: `bash -c '${PRE_TOOL_USE_HOOK_SCRIPT}'`,
+            timeout: 3000,
+          }],
+        },
+        // T379: tool 単位観察用の PreToolUse hook（matcher: "" で全 tool 対象）。
+        // 既存の Bash deny matcher と並列に存在する（Claude Code は同 event に複数 matcher ブロック登録可）。
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send PRE_TOOL_USE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role conductor 2>/dev/null || true'",
+            timeout: 3000,
+          }],
+        },
+      ],
+      // T379: tool 単位観察用の PostToolUse hook（Conductor は PostToolUse を従来持っていない）。
+      PostToolUse: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send POST_TOOL_USE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role conductor 2>/dev/null || true'",
             timeout: 3000,
           }],
         },
@@ -4933,6 +5092,29 @@ async function cmdEvents(): Promise<void> {
   process.exit(exitCode);
 }
 
+// T379: metrics サブコマンド thin wrapper（events と同型）。
+// follow モードは無いが SIGINT/SIGTERM で abort を伝播する余地は残す（将来 stream 化したくなった時のため）。
+async function cmdMetrics(): Promise<void> {
+  const ac = new AbortController();
+  const onSig = () => ac.abort();
+  process.on("SIGINT", onSig);
+  process.on("SIGTERM", onSig);
+  let exitCode = 1;
+  try {
+    exitCode = await runMetricsCli({
+      args: args.slice(1),
+      projectRoot: PROJECT_ROOT,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      abortSignal: ac.signal,
+    });
+  } finally {
+    process.off("SIGINT", onSig);
+    process.off("SIGTERM", onSig);
+  }
+  process.exit(exitCode);
+}
+
 function deriveJsonlDir(worktreePath: string): string {
   const hash = createHash("sha256").update(worktreePath).digest("hex").slice(0, 16);
   return join(process.env.HOME ?? "~", ".claude/projects", hash);
@@ -5532,6 +5714,9 @@ switch (command) {
     break;
   case "events":
     await cmdEvents();
+    break;
+  case "metrics":
+    await cmdMetrics();
     break;
   case "conductor":
     await cmdConductor();

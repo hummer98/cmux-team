@@ -173,6 +173,47 @@ export const StopFailureMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T379: Claude Code の PreToolUse / PostToolUse hook 受信時のメッセージ。
+// hook 側で分岐せず stdin 生 JSON を payload に丸ごと持たせ、daemon が trace DB に書き込む。
+// - toolName: payload.tool_name と同値（trace DB の専用列に分離する集計用ショートカット）
+// - sessionId: hook stdin の session_id（task_sessions と JOIN するため optional だが基本は埋まる）
+// - role: settings.json テンプレートで `--role` flag によりハードコードされる
+// - payload: tool_input / tool_response を含む生 JSON。tool_response.content は trace 記録前に 1KB に切り詰める
+export const PreToolUseMessage = z.object({
+  type: z.literal("PRE_TOOL_USE"),
+  surface: z.string(),
+  pid: z.number(),
+  role: z.enum(["master", "conductor", "agent"]).optional(),
+  sessionId: z.string().optional(),
+  toolName: z.string(),
+  payload: z.record(z.string(), z.any()).optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const PostToolUseMessage = z.object({
+  type: z.literal("POST_TOOL_USE"),
+  surface: z.string(),
+  pid: z.number(),
+  role: z.enum(["master", "conductor", "agent"]).optional(),
+  sessionId: z.string().optional(),
+  toolName: z.string(),
+  payload: z.record(z.string(), z.any()).optional(),
+  timestamp: z.string().datetime(),
+});
+
+// T379: Conductor の Bash deny script が `cmux send` 系を拒否したときに送るメッセージ。
+// Claude Code 側からは PreToolUse hook の exit 2 が deny を発火させるが、その事実は
+// Claude Code から daemon に通知されないため、hook script 側で明示的に send する。
+// 集計上は「hook block 率」として扱う（現状は Conductor の Bash deny 率に限定）。
+export const PreToolUseDeniedMessage = z.object({
+  type: z.literal("PRE_TOOL_USE_DENIED"),
+  surface: z.string(),
+  pid: z.number(),
+  role: z.enum(["master", "conductor", "agent"]).optional(),
+  reason: z.string().optional(),
+  timestamp: z.string().datetime(),
+});
+
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   TaskUpdatedMessage,
@@ -191,6 +232,9 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionClearMessage,
   NotificationMessage,
   StopFailureMessage,
+  PreToolUseMessage,
+  PostToolUseMessage,
+  PreToolUseDeniedMessage,
   ShutdownMessage,
 ]);
 
@@ -208,6 +252,9 @@ export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
 export type NotificationMessage = z.infer<typeof NotificationMessage>;
 export type StopFailureMessage = z.infer<typeof StopFailureMessage>;
 export type AgentTokenBoundMessage = z.infer<typeof AgentTokenBoundMessage>;
+export type PreToolUseMessage = z.infer<typeof PreToolUseMessage>;
+export type PostToolUseMessage = z.infer<typeof PostToolUseMessage>;
+export type PreToolUseDeniedMessage = z.infer<typeof PreToolUseDeniedMessage>;
 
 // --- Deliverable (T295) ---
 
