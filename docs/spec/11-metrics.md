@@ -2,6 +2,8 @@
 
 > `cmux-team metrics` サブコマンド（T379）の集計ロジックと CodeDNA 評価判定基準の SSOT。
 > 実装の根本は `skills/cmux-team/manager/metrics-aggregate.ts`（417 行）。本 spec はそれと整合する文書化である。
+>
+> 日次 snapshot 自動収集と cohort 比較ツール（T381）の仕様は §7〜§13 に記載。
 
 ---
 
@@ -80,7 +82,7 @@
 | lint / typecheck 失敗率 | PostToolUse の Bash で `bun run lint` 等の終了コードが非 0 だった率 | （未実装） | hook_signals | — | — | ○ |
 | task reopen 率 | `restart-task` で `aborted → ready` に戻された task の比率 | （未実装） | events.jsonl | — | — | ○ |
 
-**注意**: `deny_rate` は **Conductor の Bash deny script のみ**を集計対象とする（`help_metrics` および §6 Caveats を参照）。汎用的な PreToolUse exit-2 hook の block 率ではない。
+**注意**: `deny_rate` は **Conductor の Bash deny script のみ**を集計対象とする（`help_metrics` および §6 Caveats を参照）。汎用的な PreToolUse exit-2 hook の block 率ではない。`deny_rate` は per-task aggregate のみで集計され、daily snapshot / cohort 比較（§7〜§9）の対象には含めていない（fact として 1 日単位の比率が安定しないため）。
 
 ### 2.3 連鎖破壊系
 
@@ -218,6 +220,8 @@ WITH session_to_task AS (
 
 CodeDNA 採用評価は「介入前 baseline」と「介入後 evaluation」の 2 cohort を統計検定で比較する。
 
+実運用としての baseline 開始日時・期間・cohort 比較 CLI / 警報閾値の SSOT は **§7〜§13**（T381 で確定）に集約する。本節 §4 は taxonomy 上の判定方法の定義に絞る。
+
 ### 4.1 baseline period / evaluation period の定義
 
 | 用語 | 定義 |
@@ -225,20 +229,20 @@ CodeDNA 採用評価は「介入前 baseline」と「介入後 evaluation」の 
 | baseline period | 介入導入前の連続 N day。CodeDNA 評価の比較基準点となる metric 観測期間 |
 | evaluation period | 介入導入後の連続 N day。baseline と統計検定で比較する観測期間 |
 
-**N の暫定値**: `N = 14 day`
+**実運用値（T381 で確定）**: N = **4 週（28 day）**。baseline 開始日時 = **2026-05-04 (UTC, 月曜)**。詳細は §8 を参照。
 
-**根拠**: cohort 内 task 数 30+ を確保しやすい短期境界として暫定設定。タスク発生密度（直近 1 週間で T370 番台 → T380 程度の進行ペース）から、14 day で 30+ task を見込める。後続タスクで実測値を見て再評価する。
-
-> **注釈**: baseline 計測前は撤退判定の閾値（§4.4）も「業界経験則ベース」の暫定値である。実測 baseline で update する。
+> **歴史メモ**: タスク本文（T380）では暫定値 N=14 day としていたが、T381 で daily snapshot 自動収集が成立した結果、4 週を採用できる前提が揃った（snapshot 経由で再集計コストが消えるため期間を倍にしてもコスト増しない）。
 
 ### 4.2 cohort comparison の手順
 
-1. 同一プロジェクト内の **subject-within** 比較（task ID 範囲で cohort tag を切る）
-2. baseline cohort: 介入導入直前の task ID 範囲（例: T350〜T380）
-3. evaluation cohort: 介入導入直後の task ID 範囲（例: T381〜T410）
+1. 同一プロジェクト内の **subject-within** 比較（task ID 範囲または日付範囲で cohort tag を切る）
+2. baseline cohort: 介入導入直前の N day（または task ID 範囲）
+3. evaluation cohort: 介入導入直後の N day（または task ID 範囲）
 4. 各 metric について cohort 平均・分布・stddev を比較
 5. §4.3 の検定手順で有意差を判定
-6. §4.4 の撤退判定に従って合否を決める
+6. §4.4 の撤退判定または §10 の警報閾値に従って合否を決める
+
+実装は §9「cohort 比較 CLI」を参照（`cmux-team metrics compare`）。
 
 ### 4.3 統計検定の選択
 
@@ -251,6 +255,8 @@ CodeDNA 採用評価は「介入前 baseline」と「介入後 evaluation」の 
   2. 正規性 OK & 等分散 NG → Welch の t-test
   3. 正規性 NG → Wilcoxon rank-sum 検定（順位ベース、分布形状に依存しない）
 
+実装上 `cmux-team metrics compare`（§9）は **Welch の t-test を主、Mann-Whitney U（Wilcoxon と等価）を補助、比率系は 2-proportion z-test** の組み合わせで両方を必ず出力する（事前正規性検定を省略し下位互換）。
+
 ### 4.4 撤退判定
 
 副作用系（§2.5）の **1 metric でも** 以下を満たすなら撤退する:
@@ -260,6 +266,8 @@ evaluation 平均 > baseline 平均 × (1 + threshold)  AND  adjusted p < 0.05
 ```
 
 `threshold` は §2.5 の「警報閾値（暫定）」を用いる（例: `tokens.input` なら +30% → threshold=0.30）。
+
+実装上の警報閾値の SSOT は §10 / `metrics-thresholds.ts` を参照。
 
 #### 多重比較補正
 
@@ -271,7 +279,7 @@ evaluation 平均 > baseline 平均 × (1 + threshold)  AND  adjusted p < 0.05
 - 例: 副作用系 4 metric なら α/N = 0.05 / 4 = **0.0125**
 - 将来 metric が増えると N も変わるため、検定時に N を確定させる
 
-> **暫定注釈**: 上記閾値はすべて **[暫定] baseline 計測前 — 業界経験則ベース**。N=14 day baseline 取得後の commit で実測値に基づき更新する。閾値レビュータスクは §7 関連 task 参照。
+> **暫定注釈**: §2.x の「警報閾値（暫定）」はすべて **[暫定] baseline 計測前 — 業界経験則ベース**。N=4 週 baseline 取得後の commit で実測値に基づき更新する。実装上の cohort 比較 alarm 閾値は §10 で別途確定（コード SSOT）。
 
 ---
 
@@ -332,6 +340,10 @@ task_id=379 outcome=completed assigned_ts=2026-04-30T03:30:50.123Z closed_ts=202
 
 > **text format の注**: `tool_calls` フィールドは object 型のため **JSON-encoded value** として 1 行内に埋め込まれる（`fmtTextValue` で `JSON.stringify` 後、空白等を含めば `JSON.stringify` で再 quote）。パース時は `tool_calls=` の後の `{...}` を `JSON.parse` する必要がある。
 
+### 5.4 daily snapshot / cohort 比較 / health チェック（T381）
+
+snapshot 自動収集と cohort 比較のサブコマンド `cmux-team metrics snapshot|compare|health` は §7〜§13 を参照。
+
 ---
 
 ## 6. Caveats
@@ -354,23 +366,276 @@ task_id=379 outcome=completed assigned_ts=2026-04-30T03:30:50.123Z closed_ts=202
 
 ---
 
-## 7. 関連 spec / 関連 task
+> 以下の §7〜§13 は T381 で追加された **daily snapshot 自動収集 + cohort 比較ツール** の仕様。
+>
+> **閾値 SSOT 注釈**: §10「警報閾値」は **コード `skills/cmux-team/manager/metrics-thresholds.ts` の `DEFAULT_ALARM_THRESHOLDS` を SSOT** とする派生表示である。spec の数値はコードと同期する運用（docs-sync 対象）。値の改定はコード側を変更し、spec を後続で揃える。
+>
+> **タイムゾーン方針**: snapshot の `snapshot_date` は **UTC 基準**。JST 環境では snapshot_date が JST 翌日 09:00 までのデータを含む点に注意。launchd 推奨時刻は **UTC 00:05 = JST 09:05**（前日 UTC が確定済みのタイミング）。
+>
+> **schema_version 方針**: snapshot は fact として固定する設計。`schema_version` は **increment-only** とし、過去 snapshot は再生成しない。`v=2` 移行時は両形式を読める loader を追加し、on-the-fly upgrade は禁止。
+
+---
+
+## 7. snapshot スキーマ + 命名
+
+### 配置 / 命名
+
+```
+.team/metrics/snapshots/YYYY-MM-DD.json
+```
+
+- `YYYY-MM-DD` は **UTC 基準**（snapshot_date 値と一致）
+- 1 日 1 ファイル、increment-only
+- atomic write（temp file + `fs.rename`）で partial write が永続化されないことを保証
+
+### スキーマ (`schema_version = 1`)
+
+```jsonc
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-05-01",       // YYYY-MM-DD（UTC 基準）
+  "window": {
+    "from": "2026-04-30T00:00:00.000Z", // [from, to)
+    "to":   "2026-05-01T00:00:00.000Z"
+  },
+  "per_task":   [/* PerTaskMetrics[] = aggregateMetricsByTask 出力 */],
+  "period":     {/* PeriodSummary = 同じ lifecycle map から aggregatePeriod 派生 */},
+  "metadata": {
+    "generated_at": "2026-05-01T00:05:00.000Z",
+    "events_jsonl_size_bytes": 12345,
+    "events_jsonl_path": ".team/events.jsonl",
+    "traces_db_path": ".team/traces/traces.db"
+  }
+}
+```
+
+### 設計判断（fact / 派生分離）
+
+- `per_task` と `period` は **同じ window から派生**（`aggregateMetricsByTask` を 1 度だけ呼び、その lifecycle map から `aggregatePeriod` を派生）
+- `per_day` を含めない: 1 日 window では per_day = 1 要素で period と完全重複するため。期間横断の per-day trend が必要な場合は compare 側 `derivePerDayFromSnapshots` で snapshot 群から派生する
+- `metadata` は実行時情報を sub-object に隔離（snapshot 再生に寄与しない情報を fact レベルから切り離す）
+
+---
+
+## 8. baseline / evaluation 期間
+
+### baseline 開始日時
+
+- **2026-05-04 (UTC, 月曜)**
+
+### baseline 期間
+
+- 4 週: **2026-05-04 〜 2026-05-31** (UTC, 両端含む)
+
+### evaluation 期間
+
+CodeDNA 投入後を起点として +4w → +8w → +12w のローリング:
+
+| ラウンド | from (UTC) | to (UTC) | 備考 |
+|----------|-----------|----------|------|
+| +4w | CodeDNA 投入 +1 日 | +4 週 | 早期検知 |
+| +8w | CodeDNA 投入 +1 日 | +8 週 | 安定性確認 |
+| +12w | CodeDNA 投入 +1 日 | +12 週 | 長期影響評価 |
+
+評価コマンド例:
+
+```bash
+cmux-team metrics compare \
+  --baseline 2026-05-04..2026-05-31 \
+  --comparison 2026-06-15..2026-07-12
+```
+
+---
+
+## 9. cohort 比較 CLI
+
+### 出力構造
+
+```jsonc
+{
+  "metrics": {
+    "duration_ms":          { "baseline_mean": ..., "comparison_mean": ..., "delta": ..., "delta_pct": ..., "t_test": {...}, "mann_whitney": {...} },
+    "tool_call_total":      { ... },
+    "tool_failure_rate":    { ... },
+    "time_to_first_edit_ms":{ ... },
+    "tokens_total":         { ... }
+  },
+  "rates": {
+    "completion_rate":   { "baseline": ..., "comparison": ..., "delta_pp": ..., "delta_pct": ..., "z_test": {...} },
+    "abort_rate":        { ... },
+    "forced_close_rate": { ... }
+  },
+  "alarms": [/* AlarmSignal[] */],
+  "samples": { "baseline_n": ..., "comparison_n": ... },
+  "skipped_files": [/* schema 不一致 / parse 失敗 */],
+  "missing":       [/* snapshot ファイル無し */]
+}
+```
+
+### dedup 2 段ルール（unionPerTask）
+
+snapshot 範囲内に同じ `task_id` が複数出現した場合の優先規則:
+
+1. **closed-state 優先**: `outcome != "open"` のレコードが優先
+2. **同 outcome 内では snapshot_date 昇順最後**を採用（後発の方が lifecycle が完全）
+
+理由: open task は後日 closed snapshot が出現するため、closed 優先で完全 lifecycle に上書き。同 outcome 内では時間経過で metric が確定するため後発を信頼する。
+
+### exit code
+
+| code | 意味 |
+|------|------|
+| 0 | 正常 (alarm 無し) |
+| 1 | 引数エラー / IO エラー / 範囲不正 |
+| 2 | alarm あり (CI 連携用) |
+
+---
+
+## 10. 警報閾値（DEFAULT_ALARM_THRESHOLDS）
+
+> SSOT は `skills/cmux-team/manager/metrics-thresholds.ts`。下表はコード SSOT の参照表示。
+
+| metric | direction | delta | unit | alarm 条件 |
+|--------|-----------|-------|------|------------|
+| `completion_rate` | `lower_is_worse` | 0.10 | pp | `delta_pp < -0.10` で alarm |
+| `forced_close_rate` | `higher_is_worse` | 0.05 | pp | `delta_pp > 0.05` で alarm |
+| `duration_ms_mean` | `higher_is_worse` | 0.30 | pct | `delta_pct > 0.30` で alarm（baseline_mean=0 では N/A 扱い） |
+| `tool_failure_rate` | `higher_is_worse` | 0.05 | pp | `delta > 0.05` で alarm |
+
+direction の意味:
+- `lower_is_worse`: 値が下がると悪化（completion_rate）
+- `higher_is_worse`: 値が上がると悪化
+
+unit の意味:
+- `pp`: percentage point（絶対差、0..1 スケール）
+- `pct`: 相対変化率（baseline 比、0..1 スケール）
+
+境界判定: 浮動小数の自然な丸め誤差で「ぴったり閾値」のときに alarm 化しないよう **strict greater / less** を使う（`delta_pp == -0.10` ぴったりは alarm にならない）。
+
+---
+
+## 11. snapshot 自動収集（運用）
+
+### 推奨スケジュール
+
+- **UTC 00:05 (= JST 09:05)** に `cmux-team metrics snapshot` を 1 日 1 回実行
+- 前日 UTC のデータが確定済みのタイミング（CLI 既定 `--date` は「昨日 UTC」）
+
+### macOS (launchd)
+
+`skills/cmux-team/templates/launchd/com.cmux-team.metrics-snapshot.plist.template` をコピーし、`{{PROJECT_ROOT}}` を絶対パスに置換して `~/Library/LaunchAgents/com.cmux-team.metrics-snapshot.plist` に配置:
+
+```bash
+sed "s#{{PROJECT_ROOT}}#$(pwd)#g" \
+  skills/cmux-team/templates/launchd/com.cmux-team.metrics-snapshot.plist.template \
+  > ~/Library/LaunchAgents/com.cmux-team.metrics-snapshot.plist
+launchctl load ~/Library/LaunchAgents/com.cmux-team.metrics-snapshot.plist
+```
+
+`StartCalendarInterval` は launchd の **local time** 解釈なので JST 環境では `Hour=9, Minute=5` を設定する（これが UTC 00:05 に相当）。
+
+### Linux (cron)
+
+```cron
+# UTC 00:05 daily（システム TZ に応じて時刻を調整。例: JST → 5 9 * * *）
+5 0 * * * cd /path/to/project && cmux-team metrics snapshot >> .team/logs/snapshot.log 2>&1
+```
+
+### GitHub Actions
+
+```yaml
+on:
+  schedule:
+    - cron: "5 0 * * *"   # UTC 00:05
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npx -y @cmux/team metrics snapshot
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metrics-snapshot
+          path: .team/metrics/snapshots/
+```
+
+---
+
+## 12. failure 検知
+
+### `cmux-team metrics health`
+
+直近 N 日（既定 7、UTC 基準）に snapshot ファイルが揃っているかをチェックする。launchd `StandardErrorPath` で監視を組まなくても **コマンド一発で枯渇判定** できる位置付け。
+
+```bash
+cmux-team metrics health --days 7
+```
+
+| exit code | 意味 |
+|-----------|------|
+| 0 | 全日揃っている |
+| 1 | 欠損あり (json/text に missing 列挙) |
+
+### launchd の StandardErrorPath
+
+snapshot ジョブの stderr を `<project>/.team/logs/snapshot.log` に流す:
+
+```xml
+<key>StandardOutPath</key>
+<string>{{PROJECT_ROOT}}/.team/logs/snapshot.log</string>
+<key>StandardErrorPath</key>
+<string>{{PROJECT_ROOT}}/.team/logs/snapshot.log</string>
+```
+
+`KeepAlive=false` を設定し、snapshot 失敗時に launchd が無限再起動しないようにする。
+
+---
+
+## 13. snapshot fact / 不変条件
+
+### 不変条件
+
+- snapshot は 1 日 = 1 ファイル、再生成禁止
+- atomic write を保証する（partial JSON が永続化されない）
+- schema_version は increment-only（v=2 移行時は両形式 loader を追加し、過去 snapshot は変更しない）
+- events.jsonl が rotate されたあとに過去 snapshot を再生成する用途は **想定外**（fact が固定済み）
+
+### partial write の検知
+
+snapshot ディレクトリに `.tmp-*` が残っていたら、過去の write 中断の可能性を示す。次回起動時に手動で掃除すること:
+
+```bash
+rm .team/metrics/snapshots/.tmp-*
+```
+
+---
+
+## 14. 関連 spec / 関連 task / 関連コード
 
 ### 関連 spec
 
 - [`10-events-stream.md`](10-events-stream.md) — events.jsonl schema（terminal 4 event の一次定義）
 - [`09-token-pool.md`](09-token-pool.md) — api_usage / token pool（副作用系 metric の data source）
-- [`glossary.md`](glossary.md) — 用語集（§11 Metrics 関連）
+- [`glossary.md`](glossary.md) — 用語集（§11 Metrics / cohort 比較）
 
 ### 関連 task
 
 - **T379** — `cmux-team metrics` サブコマンド + hook_signals 棚卸し（実装本体）
-- **T380** — 本 spec（metrics 文書化）
+- **T380** — 本 spec の §1〜§6（metrics 文書化・taxonomy）
+- **T381** — 本 spec §7〜§13（daily snapshot 自動収集 + cohort 比較 CLI 実装）
 - **T354** — dashboard Metrics タブ（`dashboard-metrics.ts`、CLI と互換数値の UI 表示）
 - **T266** — hook_signals テーブル新設（data source の起点）
 - **未起票（後続）**:
   - 連鎖破壊系（§2.3）metric の実装
   - 知識引き継ぎ系（§2.4）metric の実装
   - 副作用系（§2.5）の header rot / agent message GC metric の実装
-  - baseline period 計測実施 + §2 警報閾値の実測値更新
+  - baseline period 計測完了後の §2 警報閾値の実測値更新
   - `session_to_task` CTE の 3 関数共通化リファクタ（§3.5 脚注）
+  - `derivePerDayFromSnapshots` を CLI から露出する `cmux-team metrics trend` サブコマンド
+  - `runWithAbort` helper の既存 `cmdEvents` / `cmdMetrics` への展開（cleanup）
+
+### 関連コード
+
+- 実装本体: `skills/cmux-team/manager/metrics-{aggregate,cli,stats,snapshot,compare,health,thresholds,path}.ts`
+- launchd template: `skills/cmux-team/templates/launchd/com.cmux-team.metrics-snapshot.plist.template`
+- T379 既存 metrics CLI: `cmux-team metrics --group-by task|day|week`（snapshot/compare/health とは独立）

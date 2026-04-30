@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-04-29",
+  "window": {
+    "from": "2026-04-29T00:00:00.000Z",
+    "to": "2026-04-30T00:00:00.000Z"
+  },
+  "per_task": [],
+  "period": {
+    "tasks_assigned": 0,
+    "tasks_completed": 0,
+    "tasks_aborted": 0,
+    "tasks_forced_close": 0,
+    "tasks_state_mismatch": 0,
+    "completion_rate": 0,
+    "abort_rate": 0,
+    "forced_close_rate": 0,
+    "duration_ms_mean": 0,
+    "duration_ms_stddev": 0
+  },
+  "metadata": {
+    "generated_at": "2026-04-30T17:06:37.536Z",
+    "events_jsonl_size_bytes": 13101,
+    "events_jsonl_path": "/Users/yamamoto/git/cmux-team/.worktrees/task-381-1777565435/.team/logs/events.jsonl",
+    "traces_db_path": "/Users/yamamoto/git/cmux-team/.worktrees/task-381-1777565435/.team/traces/traces.db"
+  }
+}

@@ -37,6 +37,9 @@ import { log, formatSurface } from "./logger";
 import { emitEvent } from "./events-writer";
 import { runEventsCli } from "./events-cli";
 import { runMetricsCli } from "./metrics-cli";
+import { runMetricsSnapshotCli } from "./metrics-snapshot";
+import { runMetricsCompareCli } from "./metrics-compare";
+import { runMetricsHealthCli } from "./metrics-health";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -5094,7 +5097,48 @@ async function cmdEvents(): Promise<void> {
 
 // T379: metrics サブコマンド thin wrapper（events と同型）。
 // follow モードは無いが SIGINT/SIGTERM で abort を伝播する余地は残す（将来 stream 化したくなった時のため）。
+//
+// T381: sub-subcommand を追加（snapshot / compare / health）。
+//   `cmux-team metrics`              → 既存 aggregate（runMetricsCli）
+//   `cmux-team metrics snapshot ...` → runMetricsSnapshotCli
+//   `cmux-team metrics compare ...`  → runMetricsCompareCli
+//   `cmux-team metrics health ...`   → runMetricsHealthCli
 async function cmdMetrics(): Promise<void> {
+  const sub = args[1];
+  if (sub === "snapshot") {
+    process.exit(await runWithAbort((signal) =>
+      runMetricsSnapshotCli({
+        args: args.slice(1),
+        projectRoot: PROJECT_ROOT,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        abortSignal: signal,
+      }),
+    ));
+  }
+  if (sub === "compare") {
+    process.exit(await runWithAbort((signal) =>
+      runMetricsCompareCli({
+        args: args.slice(1),
+        projectRoot: PROJECT_ROOT,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        abortSignal: signal,
+      }),
+    ));
+  }
+  if (sub === "health") {
+    process.exit(await runWithAbort((signal) =>
+      runMetricsHealthCli({
+        args: args.slice(1),
+        projectRoot: PROJECT_ROOT,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        abortSignal: signal,
+      }),
+    ));
+  }
+  // 既存挙動（subcommand なし or 未知）: aggregate にフォールバック
   const ac = new AbortController();
   const onSig = () => ac.abort();
   process.on("SIGINT", onSig);
@@ -5113,6 +5157,23 @@ async function cmdMetrics(): Promise<void> {
     process.off("SIGTERM", onSig);
   }
   process.exit(exitCode);
+}
+
+/**
+ * T381 D15: 新 metrics 系 cmd（snapshot / compare / health）専用の SIGINT/SIGTERM
+ * 処理ヘルパ。`cmdEvents` / `cmdMetrics` への適用は scope 外。
+ */
+async function runWithAbort(fn: (signal: AbortSignal) => Promise<number>): Promise<number> {
+  const ac = new AbortController();
+  const onSig = () => ac.abort();
+  process.on("SIGINT", onSig);
+  process.on("SIGTERM", onSig);
+  try {
+    return await fn(ac.signal);
+  } finally {
+    process.off("SIGINT", onSig);
+    process.off("SIGTERM", onSig);
+  }
 }
 
 function deriveJsonlDir(worktreePath: string): string {

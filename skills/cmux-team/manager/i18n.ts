@@ -591,6 +591,11 @@ Exit codes:
   help_metrics: `
 cmux-team metrics -- per-task / per-period aggregate of events.jsonl + hook_signals + api_usage
 
+Subcommands:
+  snapshot                 write a daily snapshot JSON for cohort comparison.
+  compare                  compare baseline vs comparison cohorts (diff + statistical tests).
+  health                   check that snapshot files are present for the recent N days.
+
 Usage:
   cmux-team metrics [options]
 
@@ -624,6 +629,78 @@ Notes:
 Exit codes:
   0  normal exit
   1  argument error / events.jsonl or traces.db not found
+`,
+
+  help_metrics_snapshot: `
+cmux-team metrics snapshot -- write a daily metrics snapshot as a JSON fact
+
+Usage:
+  cmux-team metrics snapshot [--date YYYY-MM-DD] [--out <path>] [--force] [--allow-outside-project]
+
+Options:
+  --date YYYY-MM-DD            UTC date to snapshot (default: yesterday UTC).
+  --out <path>                 output file path (default: .team/metrics/snapshots/YYYY-MM-DD.json).
+                               relative paths resolve under projectRoot.
+  --force                      overwrite an existing snapshot file.
+  --allow-outside-project      permit --out outside projectRoot (path traversal opt-in).
+
+Notes:
+  - The snapshot date is interpreted in UTC. The window is [date 00:00Z, date+1 00:00Z).
+  - Atomic write: a temp file is renamed into place, so partial writes do not persist.
+  - schema_version is increment-only; past snapshots are never regenerated.
+  - Recommended schedule: 00:05 UTC daily (= 09:05 JST), so the previous UTC day is closed.
+
+Exit codes:
+  0  snapshot written
+  1  argument error / events.jsonl or traces.db missing / target exists without --force
+`,
+
+  help_metrics_compare: `
+cmux-team metrics compare -- diff a baseline snapshot range against a comparison range
+
+Usage:
+  cmux-team metrics compare --baseline FROM..TO --comparison FROM..TO [options]
+
+Options:
+  --baseline FROM..TO          inclusive YYYY-MM-DD..YYYY-MM-DD range (UTC).
+  --comparison FROM..TO        inclusive YYYY-MM-DD..YYYY-MM-DD range (UTC).
+  --format json|text           output format (default: json).
+  --snapshot-dir <path>        directory holding YYYY-MM-DD.json snapshots
+                               (default: .team/metrics/snapshots/).
+  --allow-outside-project      permit --snapshot-dir outside projectRoot.
+
+Output:
+  metrics:  per-metric { baseline_mean, comparison_mean, delta, delta_pct, t_test, mann_whitney }
+  rates:    completion_rate, abort_rate, forced_close_rate diffs (z-test)
+  alarms:   list of alarms exceeding DEFAULT_ALARM_THRESHOLDS (direction-aware)
+  samples:  { baseline_n, comparison_n }
+  skipped_files: snapshot files that were skipped (schema_version mismatch / parse error)
+  missing:  YYYY-MM-DD dates with no snapshot file in either range
+
+Exit codes:
+  0  no alarm
+  1  argument error / IO error
+  2  alarm raised (CI integration)
+`,
+
+  help_metrics_health: `
+cmux-team metrics health -- check that recent snapshot files are present
+
+Usage:
+  cmux-team metrics health [--days N] [--snapshot-dir <path>] [--format json|text]
+
+Options:
+  --days N                     check the last N UTC days (default: 7).
+  --snapshot-dir <path>        snapshot directory (default: .team/metrics/snapshots/).
+  --format json|text           output format (default: json).
+  --allow-outside-project      permit --snapshot-dir outside projectRoot.
+
+Output:
+  { missing: ["YYYY-MM-DD", ...], count: <missing count>, days_checked: N }
+
+Exit codes:
+  0  no gaps
+  1  one or more days missing / argument error
 `,
 
   help_conductor: `
@@ -1478,6 +1555,11 @@ Exit codes:
   help_metrics: `
 cmux-team metrics -- events.jsonl + hook_signals + api_usage を per-task / 期間で集計する
 
+Subcommands:
+  snapshot                 cohort 比較用に日次 snapshot JSON を書き出す。
+  compare                  baseline と comparison cohort を比較（diff + 統計検定）。
+  health                   直近 N 日の snapshot ファイルが揃っているか確認する。
+
 Usage:
   cmux-team metrics [options]
 
@@ -1511,6 +1593,77 @@ Options:
 Exit codes:
   0  正常終了
   1  引数エラー / events.jsonl または traces.db が無い
+`,
+
+  help_metrics_snapshot: `
+cmux-team metrics snapshot -- 1 日分の metrics snapshot を JSON として書き出す
+
+Usage:
+  cmux-team metrics snapshot [--date YYYY-MM-DD] [--out <path>] [--force] [--allow-outside-project]
+
+Options:
+  --date YYYY-MM-DD            snapshot 対象の日（UTC）。省略時は「昨日 UTC」。
+  --out <path>                 出力ファイル（既定: .team/metrics/snapshots/YYYY-MM-DD.json）。
+                               相対パスは projectRoot を起点に解決される。
+  --force                      既存ファイルを上書きする。
+  --allow-outside-project      --out が projectRoot 外でも許可（path traversal opt-in）。
+
+注意:
+  - snapshot_date は UTC 基準。window は [date 00:00Z, date+1 00:00Z)。
+  - atomic write: temp file → fs.rename で原子的に反映するため partial write が永続化されない。
+  - schema_version は increment-only / 過去 snapshot は再生成しない（fact 性を保つ）。
+  - 推奨スケジュール: 00:05 UTC 日次（= JST 09:05）。前日 UTC が確定済みのタイミング。
+
+Exit codes:
+  0  snapshot 書き出し成功
+  1  引数エラー / events.jsonl or traces.db 不在 / 既存ファイルあり (--force 無し)
+`,
+
+  help_metrics_compare: `
+cmux-team metrics compare -- baseline / comparison 2 期間の cohort 比較
+
+Usage:
+  cmux-team metrics compare --baseline FROM..TO --comparison FROM..TO [options]
+
+Options:
+  --baseline FROM..TO          両端含む YYYY-MM-DD..YYYY-MM-DD（UTC）。
+  --comparison FROM..TO        両端含む YYYY-MM-DD..YYYY-MM-DD（UTC）。
+  --format json|text           出力 format（既定: json）。
+  --snapshot-dir <path>        snapshot 保管ディレクトリ（既定: .team/metrics/snapshots/）。
+  --allow-outside-project      --snapshot-dir が projectRoot 外でも許可。
+
+出力:
+  metrics:  metric ごとに { baseline_mean, comparison_mean, delta, delta_pct, t_test, mann_whitney }
+  rates:    completion_rate / abort_rate / forced_close_rate の差分（z-test）
+  alarms:   DEFAULT_ALARM_THRESHOLDS を超える signal リスト（direction を考慮）
+  samples:  { baseline_n, comparison_n }
+  skipped_files: schema_version 不一致 / parse 失敗で skip した snapshot
+  missing:  どちらの range にも snapshot ファイルが無い YYYY-MM-DD
+
+Exit codes:
+  0  alarm なし
+  1  引数エラー / IO エラー
+  2  alarm あり（CI 連携用）
+`,
+
+  help_metrics_health: `
+cmux-team metrics health -- 直近 snapshot 欠損チェック
+
+Usage:
+  cmux-team metrics health [--days N] [--snapshot-dir <path>] [--format json|text]
+
+Options:
+  --days N                     直近 N 日の UTC snapshot をチェック（既定: 7）。
+  --snapshot-dir <path>        snapshot ディレクトリ（既定: .team/metrics/snapshots/）。
+  --format json|text           出力 format（既定: json）。
+  --allow-outside-project      --snapshot-dir が projectRoot 外でも許可。
+
+出力:
+  { missing: ["YYYY-MM-DD", ...], count: <欠損数>, days_checked: N }
+
+Exit codes:
+  0  欠損なし
+  1  欠損あり / 引数エラー
 `,
 
   help_conductor: `

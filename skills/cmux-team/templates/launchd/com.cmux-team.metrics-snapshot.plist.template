@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T381: cmux-team metrics snapshot を 1 日 1 回起動する launchd 設定テンプレート。
+
+  ## タイムゾーン
+  snapshot_date は **UTC 基準** であり、CLI 既定 `--date` は「昨日 UTC」を採用する。
+  前日 UTC のデータを取得するため、JST 環境では **09:05 起動** が安全（= UTC 00:05 に相当）。
+  launchd の StartCalendarInterval は **local time** 解釈なので、Hour=9, Minute=5 を JST 環境で設定する。
+  別 TZ で運用する場合は「現在 TZ で UTC 00:05 に該当する時刻」に置き換えること。
+
+  ## 配置手順（macOS）
+    sed "s#{{PROJECT_ROOT}}#$(pwd)#g" \
+      skills/cmux-team/templates/launchd/com.cmux-team.metrics-snapshot.plist.template \
+      > ~/Library/LaunchAgents/com.cmux-team.metrics-snapshot.plist
+    launchctl load ~/Library/LaunchAgents/com.cmux-team.metrics-snapshot.plist
+
+  ## 失敗時挙動
+  KeepAlive=false。snapshot 失敗時は launchd が無限再起動しないようにし、
+  検知は `cmux-team metrics health --days 7` を別途定期実行して行う設計。
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cmux-team.metrics-snapshot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cmux-team</string>
+        <string>metrics</string>
+        <string>snapshot</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{PROJECT_ROOT}}</string>
+
+    <!-- JST 09:05 = UTC 00:05（前日 UTC が確定済みのタイミング） -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>5</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{PROJECT_ROOT}}/.team/logs/snapshot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{PROJECT_ROOT}}/.team/logs/snapshot.log</string>
+
+    <!-- 失敗時に launchd が無限再起動しないようにする -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
