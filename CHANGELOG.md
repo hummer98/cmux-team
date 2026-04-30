@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [4.22.0] - 2026-04-30
+
+### Added
+
+- **`cmux-team update-task --no-exclusive` フラグを追加**。frontmatter から `exclusive: true` / `run_after_all: true` を一括で除去できる。`exclusive` は `run_after_all` を暗黙的に包含する設計に合わせて両行を同時に削除する。既に exclusive でないタスクへの適用は no-op
+
+### Fixed
+
+- **run_after_all が draft 経由で間接デッドロックする問題を解消（T397）**。`filterRunAfterAllTasks` の `normalActive` 判定を「assigned OR (ready AND depends_on 全 closed)」の executable ベースに変更。これにより、ready だが depends_on の依存先が draft 状態（Master 保留中など）の通常タスクによって `run_after_all` タスクが永遠に発火しない問題を回避する
+- **run_after_all assigned 中に normal タスクが並走する race を guard で塞ぐ（T398）**。T397 の修正で残っていた、draft が後で ready 化された際に新 ready chain と既存 run_after_all が並走しうる問題を構造的に排除。`scanTasks` に `run_after_all lock guard` を追加し、`runAfterAll && !exclusive` なタスクが assigned のとき normal 新規 assignment を抑止する（他の RAA との並走は維持）。これにより `--run-after-all` と `--exclusive` の差が「他の RAA と並走するか / 単独か」に明確化された
+
+### Changed
+
+- **タスク・アーティファクト蓄積物のスナップショットコミット**。T297-T398 のタスクファイル群と A018-A025 のアーティファクトをリポジトリに登録し、run/conductor-prompt/summary 等の派生物を含む完全スナップショットを取り込んだ
+
 ## [4.21.0] - 2026-04-30
 
 ### Added
