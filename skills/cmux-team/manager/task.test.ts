@@ -5,6 +5,7 @@ import { createDummyProject, type DummyProject } from "./test-project";
 import {
   parseTaskMeta,
   filterExecutableTasks,
+  filterRunAfterAllTasks,
   sortByPriority,
   cascadeAbortToChildren,
   classifyResumeAction,
@@ -384,6 +385,81 @@ describe("filterExecutableTasks", () => {
       new Set(["20"]) // 実装はアサイン済み
     );
     expect(result.map((t) => t.id)).toEqual(["99999"]); // 新規のみ実行可能
+  });
+});
+
+describe("filterRunAfterAllTasks", () => {
+  const makeMeta = (
+    id: string,
+    status: string,
+    opts: { dependsOn?: string[]; runAfterAll?: boolean; priority?: string } = {}
+  ): TaskMeta => ({
+    id,
+    title: `task-${id}`,
+    status,
+    priority: opts.priority ?? "medium",
+    dependsOn: opts.dependsOn ?? [],
+    filePath: `/path/${id}.md`,
+    fileName: `${id}.md`,
+    createdAt: "",
+    runAfterAll: opts.runAfterAll ?? false,
+    exclusive: false,
+  });
+
+  // T1: T397 本体
+  test("ready でも depends_on が未解決（依存先が draft）の場合、run_after_all は発火する", () => {
+    const tA = makeMeta("A", "ready", { dependsOn: ["B"] });
+    const tB = makeMeta("B", "draft");
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const result = filterRunAfterAllTasks([tA, tB, tC], new Set(), new Set());
+    expect(result.map(t => t.id)).toEqual(["C"]);
+  });
+
+  // T2: regression（依存解決済みの ready はブロック）
+  test("ready で depends_on が解決済みの通常タスクが残っている間は run_after_all をブロックする", () => {
+    const tA = makeMeta("A", "ready", { dependsOn: ["X"] });
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const result = filterRunAfterAllTasks([tA, tC], new Set(["X"]), new Set());
+    expect(result).toHaveLength(0);
+  });
+
+  // T3: regression（assigned はブロック）
+  test("assigned な通常タスクが残っている間は run_after_all をブロックする", () => {
+    const tA = makeMeta("A", "ready");
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const result = filterRunAfterAllTasks([tA, tC], new Set(), new Set(["A"]));
+    expect(result).toHaveLength(0);
+  });
+
+  // T4: 基本パス
+  test("通常タスクが全て closed になれば run_after_all が発火する", () => {
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const result = filterRunAfterAllTasks([tC], new Set(["A", "B"]), new Set());
+    expect(result.map(t => t.id)).toEqual(["C"]);
+  });
+
+  // T5: dependsOnRunAfterAll の除外
+  test("run_after_all に depends_on するタスクは normalActive から除外される", () => {
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const tD = makeMeta("D", "ready", { dependsOn: ["C"] }); // cleanup chain
+    const result = filterRunAfterAllTasks([tC, tD], new Set(), new Set());
+    expect(result.map(t => t.id)).toEqual(["C"]);
+  });
+
+  // T6: run_after_all 自身の依存
+  test("run_after_all タスクの depends_on が未解決なら発火しない", () => {
+    const tC = makeMeta("C", "ready", { runAfterAll: true, dependsOn: ["X"] });
+    // 通常タスクは無し、X はまだ closed ではない
+    const result = filterRunAfterAllTasks([tC], new Set(), new Set());
+    expect(result).toHaveLength(0);
+  });
+
+  // T7: draft のみ残るケース
+  test("残っている通常タスクが draft のみなら run_after_all は発火する", () => {
+    const tB = makeMeta("B", "draft");
+    const tC = makeMeta("C", "ready", { runAfterAll: true });
+    const result = filterRunAfterAllTasks([tB, tC], new Set(), new Set());
+    expect(result.map(t => t.id)).toEqual(["C"]);
   });
 });
 

@@ -467,7 +467,16 @@ export function filterExecutableTasks(
 
 /**
  * run_after_all タスクの実行可否を判定
- * 条件: 通常タスク（run_after_all でない、かつ run_after_all タスクに depends_on しているものを除く）の ready + assigned が 0
+ *
+ * normalActive（= run_after_all をブロックする対象）は以下のいずれか:
+ *   - assigned （現在アサイン中）
+ *   - ready かつ depends_on が全て closed （= 即時 executable）
+ *
+ * ready でも depends_on が未解決（依存先が draft / ready / assigned 等で未 close）のタスクは、
+ * 自身が executable ではないため normalActive にカウントしない。
+ * これにより「draft 経由の間接デッドロック」（T397）を回避する。
+ *
+ * なお run_after_all タスク自身、および run_after_all に depends_on するタスクは normalActive から除外する。
  */
 export function filterRunAfterAllTasks(
   tasks: TaskMeta[],
@@ -486,11 +495,16 @@ export function filterRunAfterAllTasks(
     ).map(t => t.id)
   );
 
-  // 通常タスク（run_after_all でも、run_after_all に依存するタスクでもない）の ready + assigned 数
+  // run_after_all をブロックする「実際に動く / 動ける」通常タスク
+  // （= assigned、もしくは ready かつ依存全 closed）。
+  // ready でも依存未解決のタスクは executable ではないのでカウントしない（T397）。
   const normalActive = tasks.filter(t =>
     !t.runAfterAll &&
     !dependsOnRunAfterAll.has(t.id) &&
-    (t.status === "ready" || assignedIds.has(t.id))
+    (
+      assignedIds.has(t.id) ||
+      (t.status === "ready" && t.dependsOn.every(d => closedIds.has(d)))
+    )
   );
 
   if (normalActive.length > 0) return [];
