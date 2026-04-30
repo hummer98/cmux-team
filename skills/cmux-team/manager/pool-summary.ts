@@ -131,7 +131,9 @@ export function buildPoolSummary(
  * - ON なら `initTokenDB()` で都度 open + `buildSelectTokenPolicy(projectRoot)` で policy 解決
  *   → `buildPoolSummary(db, nowIso, policy)` に委譲
  * - OFF なら null を返す
- * - DB open / read / policy 解決で例外が出たら null を返す
+ * - DB open / read / policy 解決で例外が出たら null を返す。`options.onError` が
+ *   渡されていれば例外を Error にラップして渡す（T356）。gate (`isTokenPoolEnabled`)
+ *   失敗は OFF と等価扱いで `onError` を呼ばない（旧 in-line 実装の挙動を維持）。
  *
  * daemon は long-running なので state.tokenDb / state.poolPolicy を保持し
  * `buildPoolSummary` を直接呼ぶ（このラッパーは使わない）。
@@ -139,6 +141,7 @@ export function buildPoolSummary(
 export async function loadPoolSummary(
   projectRoot: string,
   nowIso?: string,
+  options?: { onError?: (e: Error) => void },
 ): Promise<PoolSummary | null> {
   let enabled = false;
   try {
@@ -153,7 +156,8 @@ export async function loadPoolSummary(
     const db = initTokenDB();
     const policy = await buildSelectTokenPolicy(projectRoot);
     return buildPoolSummary(db, nowIso, policy);
-  } catch {
+  } catch (e) {
+    options?.onError?.(e instanceof Error ? e : new Error(String(e)));
     return null;
   }
 }

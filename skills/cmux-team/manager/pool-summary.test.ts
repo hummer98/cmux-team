@@ -406,4 +406,85 @@ describe("loadPoolSummary (CLI 用 wrapper)", () => {
       }
     }
   });
+
+  // T356: loadPoolSummary 失敗時の CLI ログ復元
+  // case G/H は実 DB 経路で破損を再現する（D5 / mock 禁止）。tokens.db を非 SQLite
+  // ゴミバイトで上書きし、TOKEN_STORE_DB_PATH でその path を指す → initTokenDB → query
+  // 段階で SQLite が throw する。SQLite open は遅延評価なので exec が走った時点で fail。
+  test("case G: tokens.db 破損 → onError が呼ばれて null を返す", async () => {
+    const dbDir = mkdtempSync(join(tmpdir(), "cmux-pool-corrupted-"));
+    const dbPath = join(dbDir, "tokens.db");
+    // 非 SQLite なゴミバイトで上書き（実 DB 経路で reproducible に throw させる）
+    writeFileSync(dbPath, "not a sqlite file" + "\x00".repeat(100));
+
+    const prevPool = process.env.CMUX_TEAM_TOKEN_POOL;
+    const prevDb = process.env.TOKEN_STORE_DB_PATH;
+    process.env.CMUX_TEAM_TOKEN_POOL = "1"; // gate 強制 ON
+    process.env.TOKEN_STORE_DB_PATH = dbPath;
+    try {
+      const captured: Error[] = [];
+      const r = await loadPoolSummary(projectRoot, NOW_ISO, {
+        onError: (e) => captured.push(e),
+      });
+      expect(r).toBeNull();
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toBeInstanceOf(Error);
+    } finally {
+      if (prevPool === undefined) delete process.env.CMUX_TEAM_TOKEN_POOL;
+      else process.env.CMUX_TEAM_TOKEN_POOL = prevPool;
+      if (prevDb === undefined) delete process.env.TOKEN_STORE_DB_PATH;
+      else process.env.TOKEN_STORE_DB_PATH = prevDb;
+      try {
+        rmSync(dbDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("case H: onError 未指定でも throw せず null を返す（後方互換）", async () => {
+    const dbDir = mkdtempSync(join(tmpdir(), "cmux-pool-corrupted-"));
+    const dbPath = join(dbDir, "tokens.db");
+    writeFileSync(dbPath, "not a sqlite file" + "\x00".repeat(100));
+
+    const prevPool = process.env.CMUX_TEAM_TOKEN_POOL;
+    const prevDb = process.env.TOKEN_STORE_DB_PATH;
+    process.env.CMUX_TEAM_TOKEN_POOL = "1";
+    process.env.TOKEN_STORE_DB_PATH = dbPath;
+    try {
+      const r = await loadPoolSummary(projectRoot, NOW_ISO);
+      expect(r).toBeNull();
+    } finally {
+      if (prevPool === undefined) delete process.env.CMUX_TEAM_TOKEN_POOL;
+      else process.env.CMUX_TEAM_TOKEN_POOL = prevPool;
+      if (prevDb === undefined) delete process.env.TOKEN_STORE_DB_PATH;
+      else process.env.TOKEN_STORE_DB_PATH = prevDb;
+      try {
+        rmSync(dbDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test("case I: gate OFF では onError を呼ばない（gate と build の挙動分離保証）", async () => {
+    mkdirSync(join(projectRoot, ".team"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, ".team/config.json"),
+      JSON.stringify({ tokenPool: { enabled: false } }),
+    );
+    const prev = process.env.CMUX_TEAM_TOKEN_POOL;
+    process.env.CMUX_TEAM_TOKEN_POOL = "0";
+    try {
+      const captured: Error[] = [];
+      const r = await loadPoolSummary(projectRoot, NOW_ISO, {
+        onError: (e) => captured.push(e),
+      });
+      expect(r).toBeNull();
+      expect(captured).toHaveLength(0);
+    } finally {
+      if (prev === undefined) delete process.env.CMUX_TEAM_TOKEN_POOL;
+      else process.env.CMUX_TEAM_TOKEN_POOL = prev;
+    }
+  });
 });

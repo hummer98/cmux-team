@@ -1501,7 +1501,11 @@ async function cmdStatus(): Promise<void> {
   // T374: pool ヘッダー（forecast7d スパークライン + next 候補）を 1 行で表示。
   // OFF / 失敗時は summary=null となり pool ヘッダー行ごと省略する。
   // per-surface decoration は A024 で撤去済（詳細は `cmux-team pool status` / `token list` で確認）。
-  const poolSummary = await loadPoolSummary(PROJECT_ROOT);
+  // T356: build 失敗（DB 破損等）は旧 in-line 実装に合わせて 1 行 warning を出す。
+  // gate OFF と区別できるようにするための復元（T351 minor follow-up）。
+  const poolSummary = await loadPoolSummary(PROJECT_ROOT, undefined, {
+    onError: (e) => console.log(`  (token pool read failed: ${e?.message ?? e})`),
+  });
   if (poolSummary) {
     for (const line of buildPoolHeaderLines({
       forecast7d: poolSummary.forecast7d,
