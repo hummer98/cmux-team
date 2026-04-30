@@ -191,6 +191,35 @@ describe("buildMetricsRows: Rate Limit Projection (T354)", () => {
     // 1% は padStart(3) で "  1%" と前 2 スペースになる
     expect(s).toContain("  1%");
   });
+
+  test("poolTokens !== null（Pool key モード）→ Projection セクションは非表示", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@personal",
+        util5h: 0.42,
+        reset5hIso: new Date(FIXED_NOW + 60_000).toISOString(),
+        util7d: 0.1,
+        reset7dIso: new Date(FIXED_NOW + 86_400_000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    // 枯渇予測セクション見出し / 内部行が出ない
+    expect(s).not.toContain("Rate Limit Projection");
+    expect(s).not.toContain("枯渇予測");
+    expect(s).not.toContain("long-term");
+    expect(s).not.toContain("recent 15m");
+  });
+
+  test("poolTokens === [] でも（pool 有効）Projection セクションは非表示", () => {
+    const rows = buildMetricsRows(makeData({ poolTokens: [] }), null);
+    const s = stringifyRows(rows);
+    expect(s).not.toContain("Rate Limit Projection");
+    expect(s).not.toContain("枯渇予測");
+  });
 });
 
 describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {

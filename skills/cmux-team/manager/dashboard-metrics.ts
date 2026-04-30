@@ -378,14 +378,19 @@ export function buildMetricsRows(
   }
 
   // ── 上段: Rate Limit Projection (5h / 7d) ────────────────────────────
-  rows.push(ui.text(""));
-  rows.push(
-    ui.text(`── ${t("metrics_section_rate_limit_projection")} ──`, {
-      dim: true,
-    }),
-  );
-  rows.push(...buildProjectionRows("5h", data.projection5h, data.nowMs));
-  rows.push(...buildProjectionRows("7d", data.projection7d, data.nowMs));
+  // Pool key モード有効時は proxy 全体の集計に基づく枯渇予測が
+  // pool rotation の実態を反映しないため非表示にする。Pool Tokens
+  // セクションが per-token util を出すのでそちらが情報源になる。
+  if (data.poolTokens === null) {
+    rows.push(ui.text(""));
+    rows.push(
+      ui.text(`── ${t("metrics_section_rate_limit_projection")} ──`, {
+        dim: true,
+      }),
+    );
+    rows.push(...buildProjectionRows("5h", data.projection5h, data.nowMs));
+    rows.push(...buildProjectionRows("7d", data.projection7d, data.nowMs));
+  }
 
   // ── Pool Tokens（pool 有効時のみ）──────────────────────────────────────
   rows.push(...buildPoolTokensSection(data.poolTokens, data.nowMs));
