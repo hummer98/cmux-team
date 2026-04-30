@@ -1,0 +1,11 @@
+label	wall_ms	bun_summary
+single-listener-leak-N10	32	Ran 10 tests across 1 file. [14.00ms]
+single-listener-leak-N50	32	Ran 50 tests across 1 file. [15.00ms]
+single-listener-leak-N200	53	Ran 200 tests across 1 file. [27.00ms]
+single-listener-emit-N10	38	Ran 10 tests across 1 file. [18.00ms]
+single-listener-emit-N50	32	Ran 50 tests across 1 file. [15.00ms]
+single-listener-emit-N200	45	Ran 200 tests across 1 file. [25.00ms]
+all8-N200	641	Ran 1600 tests across 8 files. [623.00ms]
+listener-leak-then-emit-N200	49	Ran 400 tests across 2 files. [33.00ms]
+listener-emit-N10+50+200	41	Ran 260 tests across 3 files. [24.00ms]
+listener-leak-N10+50+200	40	Ran 260 tests across 3 files. [23.00ms]

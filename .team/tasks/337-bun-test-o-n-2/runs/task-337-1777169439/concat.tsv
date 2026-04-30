@@ -1,0 +1,10 @@
+label	wall_ms	bun_summary
+all-N10	67	Ran 60 tests across 6 files. [47.00ms]
+all-N50	183	Ran 300 tests across 6 files. [160.00ms]
+all-N200	660	Ran 1200 tests across 6 files. [638.00ms]
+baseline-N10+50+200	32	Ran 260 tests across 3 files. [14.00ms]
+eventbus-N10+50+200	36	Ran 260 tests across 3 files. [18.00ms]
+eventbus-emit-N10+50+200	41	Ran 260 tests across 3 files. [22.00ms]
+sqlite-close-N10+50+200	41	Ran 260 tests across 3 files. [22.00ms]
+sqlite-leak-N10+50+200	45	Ran 260 tests across 3 files. [24.00ms]
+spawn-N10+50+200	758	Ran 260 tests across 3 files. [740.00ms]

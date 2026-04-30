@@ -1,0 +1,11 @@
+M_files	wall_ms	bun_summary
+1	25	Ran 10 tests across 1 file. [7.00ms]
+5	28	Ran 50 tests across 5 files. [11.00ms]
+10	43	Ran 100 tests across 10 files. [24.00ms]
+25	41	Ran 250 tests across 25 files. [24.00ms]
+47	76	Ran 470 tests across 47 files. [55.00ms]
+M20-1	28	Ran 20 tests across 1 file. [7.00ms]
+M20-5	30	Ran 100 tests across 5 files. [14.00ms]
+M20-10	34	Ran 200 tests across 10 files. [17.00ms]
+M20-25	60	Ran 500 tests across 25 files. [31.00ms]
+M20-47	66	Ran 940 tests across 47 files. [48.00ms]

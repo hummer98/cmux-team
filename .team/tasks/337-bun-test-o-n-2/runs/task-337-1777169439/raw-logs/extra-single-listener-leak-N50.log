@@ -1,0 +1,40 @@
+bun test v1.3.12 (700fc117)
+..........
+
+perf-probe/eventbus-listener-leak-N50.probe.ts:
+MaxListenersExceededWarning: Possible EventTarget memory leak detected. 11 state-changed listeners added to [EventEmitter]. MaxListeners is undefined. Use events.setMaxListeners() to increase limit
+ emitter: EventEmitter {
+  _events: [Object ...],
+  _eventsCount: 1,
+  _maxListeners: undefined,
+  [Symbol(kCapture)]: false,
+  setMaxListeners: [Function: setMaxListeners],
+  getMaxListeners: [Function: getMaxListeners],
+  emit: [Function: emit],
+  addListener: [Function: addListener],
+  on: [Function: addListener],
+  prependListener: [Function: prependListener],
+  once: [Function: once],
+  prependOnceListener: [Function: prependOnceListener],
+  removeListener: [Function: removeListener],
+  off: [Function: removeListener],
+  removeAllListeners: [Function: removeAllListeners],
+  listeners: [Function: listeners],
+  rawListeners: [Function: rawListeners],
+  listenerCount: [Function: listenerCount],
+  eventNames: [Function: eventNames],
+},
+    type: "state-changed",
+   count: 11,
+
+      at overflowWarning (node:events:185:19)
+      at addListener (node:events:158:22)
+      at onStateChanged (/Users/yamamoto/git/cmux-team/.worktrees/task-337-1777169439/skills/cmux-team/manager/eventBus.ts:16:7)
+      at <anonymous> (/Users/yamamoto/git/cmux-team/.worktrees/task-337-1777169439/skills/cmux-team/manager/perf-probe/eventbus-listener-leak-N50.probe.ts:16:43)
+
+........................................
+
+50 pass
+0 fail
+50 expect() calls
+Ran 50 tests across 1 file. [15.00ms]
