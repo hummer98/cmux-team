@@ -735,7 +735,6 @@ export async function start(
       const startTime = Date.now();
 
       // リクエストヘッダーからメタデータを動的抽出（opts はフォールバック）
-      const taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
       // T323: x-cmux-surface ヘッダー優先（master/conductor/agent の per-surface 識別）。
       // x-cmux-conductor-id は legacy fallback として残す（旧 daemon / 旧 settings.json 経路）。
       const conductorSurface =
@@ -743,6 +742,21 @@ export async function start(
         || req.headers.get("x-cmux-conductor-id")
         || opts?.conductorSurface;
       const role = req.headers.get("x-cmux-role") || opts?.role;
+      // T403: agent は spawn 時に x-cmux-task-id を固定注入する（main.ts:generateAgentSettings）。
+      // conductor は同一 surface のまま task が動的に切り替わるため、固定埋め込みでは追従できない。
+      // ヘッダ・opts どちらにも値が無く role=conductor の場合のみ、state.conductors から
+      // 現在割り当て中の taskId を pure read で逆引きする（master surface の誤マッチ防止のため
+      // role による絞り込みを必ず行う。master は task に紐付かないため NULL のまま運用）。
+      let taskId = req.headers.get("x-cmux-task-id") || opts?.taskId;
+      if (!taskId && role === "conductor" && conductorSurface && opts?.getState) {
+        try {
+          const s = opts.getState();
+          const c = s?.conductors?.get?.(conductorSurface);
+          if (c?.taskId) taskId = c.taskId;
+        } catch {
+          // state アクセス失敗時は taskId NULL のまま（既存挙動維持）
+        }
+      }
 
       // リクエストボディを読み取り（転送用 + サイズ計測用）
       const reqBody = req.body ? await req.arrayBuffer() : null;

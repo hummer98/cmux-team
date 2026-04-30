@@ -2329,12 +2329,34 @@ describe("generateConductorSettings (T304: x-cmux-role / T323: x-cmux-surface / 
   });
 });
 
-describe("generateAgentSettings (T304: x-cmux-role)", () => {
-  test("settings.env.ANTHROPIC_CUSTOM_HEADERS に x-cmux-role: agent を注入する", async () => {
+describe("generateAgentSettings (T304: x-cmux-role / T403: x-cmux-surface + x-cmux-task-id)", () => {
+  test("taskId 未指定時は x-cmux-role と x-cmux-surface のみを改行区切りで注入する（x-cmux-task-id 行なし）", async () => {
     const settingsPath = generateAgentSettings(testDir, "surface:100");
     const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(settings.env).toBeDefined();
-    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("x-cmux-role: agent");
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      "x-cmux-role: agent\nx-cmux-surface: surface:100",
+    );
+    // taskId 未指定時は x-cmux-task-id 行を含めない（壊れた値で書き込まないため）
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).not.toContain("x-cmux-task-id");
+  });
+
+  test("T403: taskId 指定時は x-cmux-role / x-cmux-surface / x-cmux-task-id の 3 行を改行区切りで注入する", async () => {
+    const settingsPath = generateAgentSettings(testDir, "surface:100", "T403");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      "x-cmux-role: agent\nx-cmux-surface: surface:100\nx-cmux-task-id: T403",
+    );
+  });
+
+  test("T403: taskId 指定時の ANTHROPIC_CUSTOM_HEADERS にカンマ区切り (T355 regression) が混入しない", async () => {
+    const settingsPath = generateAgentSettings(testDir, "surface:100", "T403");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+    const headers: string = settings.env.ANTHROPIC_CUSTOM_HEADERS;
+    // T355: ANTHROPIC_CUSTOM_HEADERS は改行区切り（カンマ区切りは SDK が 1 ヘッダー値として送ってしまう）
+    expect(headers).toContain("\n");
+    expect(headers).not.toContain(", x-cmux-surface");
+    expect(headers).not.toContain(", x-cmux-task-id");
   });
 });
 

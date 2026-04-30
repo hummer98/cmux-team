@@ -1166,6 +1166,232 @@ describe("proxy", () => {
         delete process.env.ANTHROPIC_API_URL;
       }
     });
+
+    // T403: x-cmux-task-id ヘッダ未指定時に role=conductor + state.conductors から taskId を逆引きする。
+    // conductor は同一 surface のまま task が動的に切り替わるため、settings.json 固定埋め込みでは追従できない。
+    // proxy 側でリクエスト到着時の最新 state を引いて api_usage.task_id を埋める。
+    test("T403: role=conductor + x-cmux-task-id 未指定でも state.conductors から task_id を逆引きする", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_t403_lookup",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      const fakeState: any = {
+        conductors: new Map([
+          [
+            "surface:c1",
+            {
+              surface: "surface:c1",
+              taskId: "T403",
+              taskRunId: "task-403-run",
+              taskTitle: "test",
+              status: "running",
+              startedAt: new Date().toISOString(),
+              agents: [],
+            },
+          ],
+        ]),
+      };
+
+      const handle = await start(testDir, {
+        db,
+        getState: () => fakeState,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test",
+          "x-cmux-role": "conductor",
+          "x-cmux-surface": "surface:c1",
+          // x-cmux-task-id は意図的に送らない
+        },
+        body: JSON.stringify({ model: "claude-opus-4-7", messages: [] }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T403" });
+      expect(rows.length).toBe(1);
+      const row = rows[0]!;
+      expect(row.task_id).toBe("T403");
+      expect(row.role).toBe("conductor");
+      expect(row.surface).toBe("surface:c1");
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("T403: ヘッダ x-cmux-task-id がある場合は state を引かずヘッダ値を優先する", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_t403_header_priority",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      // state には別 task が登録されているが、ヘッダの値が優先されること
+      const fakeState: any = {
+        conductors: new Map([
+          [
+            "surface:c1",
+            {
+              surface: "surface:c1",
+              taskId: "T999_FROM_STATE",
+              status: "running",
+              startedAt: new Date().toISOString(),
+              agents: [],
+            },
+          ],
+        ]),
+      };
+
+      const handle = await start(testDir, {
+        db,
+        getState: () => fakeState,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test",
+          "x-cmux-role": "conductor",
+          "x-cmux-surface": "surface:c1",
+          "x-cmux-task-id": "T403_FROM_HEADER",
+        },
+        body: JSON.stringify({ model: "claude-opus-4-7", messages: [] }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const rows = getApiUsage(db, { taskId: "T403_FROM_HEADER" });
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.task_id).toBe("T403_FROM_HEADER");
+
+      // state 側の値が誤って使われていないこと
+      const stateRows = getApiUsage(db, { taskId: "T999_FROM_STATE" });
+      expect(stateRows.length).toBe(0);
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
+
+    test("T403: role=master の場合は state.conductors を引かない（誤マッチ防止）", async () => {
+      const upstream = Bun.serve({
+        port: 0,
+        fetch() {
+          return new Response(
+            JSON.stringify({
+              id: "msg_t403_master_no_lookup",
+              model: "claude-opus-4-7",
+              stop_reason: "end_turn",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      const origEnv = process.env.ANTHROPIC_API_URL;
+      process.env.ANTHROPIC_API_URL = `http://127.0.0.1:${upstream.port}`;
+
+      // master の surface 値が偶然 conductor surface と一致しても、
+      // role=master のときは state を引かない（master は task に紐付かない）。
+      const fakeState: any = {
+        conductors: new Map([
+          [
+            "surface:c1",
+            {
+              surface: "surface:c1",
+              taskId: "T403_SHOULD_NOT_BE_USED",
+              status: "running",
+              startedAt: new Date().toISOString(),
+              agents: [],
+            },
+          ],
+        ]),
+      };
+
+      const handle = await start(testDir, {
+        db,
+        getState: () => fakeState,
+      });
+
+      const res = await fetch(`http://127.0.0.1:${handle.port}/v1/messages`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test",
+          "x-cmux-role": "master",
+          "x-cmux-surface": "surface:c1",
+        },
+        body: JSON.stringify({ model: "claude-opus-4-7", messages: [] }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      // state.conductors を誤って引いていないことを保証する。
+      const leakedRows = getApiUsage(db, { taskId: "T403_SHOULD_NOT_BE_USED" });
+      expect(leakedRows.length).toBe(0);
+
+      // master の行は task_id NULL のまま記録される。
+      const allRows = db
+        .query<{ task_id: string | null; role: string; surface: string | null }, []>(
+          "SELECT task_id, role, surface FROM api_usage ORDER BY id DESC LIMIT 1",
+        )
+        .all();
+      expect(allRows.length).toBe(1);
+      expect(allRows[0]!.role).toBe("master");
+      expect(allRows[0]!.surface).toBe("surface:c1");
+      expect(allRows[0]!.task_id).toBeNull();
+
+      handle.stop();
+      upstream.stop();
+      if (origEnv !== undefined) {
+        process.env.ANTHROPIC_API_URL = origEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_URL;
+      }
+    });
   });
 });
 

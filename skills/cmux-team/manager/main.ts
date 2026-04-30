@@ -2204,13 +2204,24 @@ export function generateMasterSettings(projectRoot: string, surface: string): st
  * - SessionEnd hook: SESSION_ENDED 送信（logout/prompt_input_exit/other）
  * - statusLine: 存在する場合のみ付与
  */
-export function generateAgentSettings(projectRoot: string, surface: string): string {
+export function generateAgentSettings(
+  projectRoot: string,
+  surface: string,
+  taskId?: string,
+): string {
   const settingsPath = join(projectRoot, `.team/prompts/${surface}-agent-settings.json`);
   const askDetectorPath = ensureAskDetectorScript(projectRoot);
+  // T304/T355/T403: ANTHROPIC_CUSTOM_HEADERS は改行区切り（カンマ区切りは SDK が 1 ヘッダー値として送ってしまう）。
+  // T403: agent は 1 surface = 1 task で短命。spawn 時に確定した taskId を固定注入する。
+  // taskId 未指定時は x-cmux-task-id 行を出さない（壊れた値で api_usage を汚染しないため）。
+  const headerLines = [
+    "x-cmux-role: agent",
+    `x-cmux-surface: ${surface}`,
+    ...(taskId ? [`x-cmux-task-id: ${taskId}`] : []),
+  ];
   const settings: Record<string, any> = {
-    // T304: Claude Code native の ANTHROPIC_CUSTOM_HEADERS 経由でロール識別ヘッダーを注入。
     env: {
-      ANTHROPIC_CUSTOM_HEADERS: "x-cmux-role: agent",
+      ANTHROPIC_CUSTOM_HEADERS: headerLines.join("\n"),
     },
     hooks: {
       SessionStart: [
@@ -2871,7 +2882,10 @@ async function cmdSpawnAgent(): Promise<void> {
   const model = getModelForRole(config, "agent", getArg("model"));
 
   // Agent 用 settings.json 生成（T181: Stop / SessionEnd hook + statusLine）
-  const agentSettingsPath = generateAgentSettings(PROJECT_ROOT, surface);
+  // T403: cmdSpawnAgent では既に team.json から taskId を解決済み（line 2740 付近）。
+  // 同 taskId を ANTHROPIC_CUSTOM_HEADERS の x-cmux-task-id ヘッダに固定注入し、
+  // proxy 側 (proxy.ts:738) で api_usage.task_id 列に保存できるようにする。
+  const agentSettingsPath = generateAgentSettings(PROJECT_ROOT, surface, taskId);
   const agentSettingsFlag = `--settings '${agentSettingsPath}'`;
 
   // 環境変数をシェルに焼き付け
