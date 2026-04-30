@@ -15,7 +15,7 @@ import {
   computePoolCapacity,
   type TokenForCapacity,
 } from "./token-store";
-import { formatUtil, formatReset, formatSelectable } from "./token-format";
+import { formatReset, formatSelectable, formatPerHandleUtilCell } from "./token-format";
 
 /** `cmux-team pool status` 本体。引数なしで呼ばれる。 */
 export async function cmdPoolStatus(projectRoot: string): Promise<void> {
@@ -57,7 +57,7 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
   const cap = computePoolCapacity(forCap);
   const capByHandle = new Map(cap.per_token.map((p) => [p.handle, p.cap_pct]));
 
-  // ヘッダー
+  // ヘッダー（T390: 行末に独立した MARK 列を置き、5H/7D と reset 通過マーカーを混同しないようにする）
   const header = [
     "HANDLE  ",
     "PLAN    ",
@@ -66,10 +66,15 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
     "CAP   ",
     "5H USE",
     "7D USE",
-    "NEXT_RESET",
+    "NEXT_RESET    ",
+    "MARK",
   ].join("  ");
   console.log(header);
   console.log("-".repeat(header.length));
+
+  // T390: marker 凡例を出すかの判定用。ループ内で 1 つでも marker が出れば true。
+  const nowMs = Date.now();
+  let anyMarker = false;
 
   for (const tok of tokens) {
     const snap = getLatestUsageSnapshot(db, tok.id);
@@ -79,17 +84,20 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
 
     // NEXT_RESET: 5h / 7d で先に到来する方
     const candidates: Array<{ label: string; ms: number }> = [];
-    const now = Date.now();
     if (snap?.reset_5h_at) {
-      const t = new Date(snap.reset_5h_at).getTime() - now;
+      const t = new Date(snap.reset_5h_at).getTime() - nowMs;
       if (t > 0) candidates.push({ label: `5h ${formatReset(snap.reset_5h_at)}`, ms: t });
     }
     if (snap?.reset_7d_at) {
-      const t = new Date(snap.reset_7d_at).getTime() - now;
+      const t = new Date(snap.reset_7d_at).getTime() - nowMs;
       if (t > 0) candidates.push({ label: `7d ${formatReset(snap.reset_7d_at)}`, ms: t });
     }
     candidates.sort((a, b) => a.ms - b.ms);
     const nextReset = candidates[0]?.label ?? "--";
+
+    // T390: per-handle 行は effUtil 表示。reset 通過済み stale token は MARK 列に "*"。
+    const fmt = formatPerHandleUtilCell(snap, nowMs);
+    if (fmt.marker !== "") anyMarker = true;
 
     const row = [
       tok.handle.padEnd(8),
@@ -97,9 +105,10 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
       tok.tags.join(",").slice(0, 10).padEnd(10),
       sel.padEnd(5),
       capStr.padEnd(6),
-      formatUtil(snap?.util_5h ?? null).padEnd(6),
-      formatUtil(snap?.util_7d ?? null).padEnd(6),
-      nextReset,
+      fmt.display5h.padEnd(6),
+      fmt.display7d.padEnd(6),
+      nextReset.padEnd(14),
+      fmt.marker,
     ].join("  ");
     console.log(row);
   }
@@ -108,6 +117,9 @@ export async function cmdPoolStatus(projectRoot: string): Promise<void> {
   console.log(
     `pool capacity: 5h ${Math.round(cap.capacity_5h_pct)}% / 7d ${Math.round(cap.capacity_7d_pct)}%`,
   );
+  if (anyMarker) {
+    console.log("(* = reset 通過済みで実質クリア)");
+  }
 
   db.close();
 }

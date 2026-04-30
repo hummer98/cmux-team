@@ -20,6 +20,13 @@ import { spawnSync } from "child_process";
 export const BLOCKER_5H = 0.95;
 /** admit blocker: stale 救済反映後の effUtil_7d がこの値を超える token は除外する（T382）。 */
 export const BLOCKER_7D = 0.95;
+/**
+ * snapshot stale 判定の閾値（30 分）。
+ *
+ * admit (`admitCandidates`) / throttle (`countPoolTokens`) / 表示 (`formatPerHandleUtilCell`) の
+ * 3 箇所で同じ値を共有する必要があるため、ここを唯一の真理とする（T390）。
+ */
+export const STALE_THRESHOLD_MS = 30 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 型定義
@@ -915,6 +922,67 @@ export function parseResetEpochMs(v: string): number {
   return Number.isFinite(t) ? t : NaN;
 }
 
+/**
+ * snapshot の stale 判定 + reset 軸ごとの 0 上書きを反映した effUtil を算出する pure 関数（T390）。
+ *
+ * - admit (`admitCandidates`) / throttle (`countPoolTokens`) / 表示 (`formatPerHandleUtilCell`) の
+ *   3 箇所が共有する唯一の実装。inline 重複を解消し「3 箇所で実装が乖離した結果 spawn-agent と
+ *   表示が食い違う」事故を構造的に防ぐ。
+ * - `snap=null`（snapshot 不在）は effUtil=0、hasSnapshot=false、isStale=false、reset*Passed=false を返す
+ * - `reset_*_at` が不正値・空文字なら `parseResetEpochMs` が NaN を返し、`<=` 比較が常に false に
+ *   なるので未到達扱い（snap 値そのまま）— spec 09-token-pool.md line 274 の挙動を担保
+ */
+export function computeEffUtil(
+  snap: UsageSnapshot | null,
+  nowMs: number,
+  staleThresholdMs: number = STALE_THRESHOLD_MS,
+): {
+  effUtil5h: number;
+  effUtil7d: number;
+  hasSnapshot: boolean;
+  isStale: boolean;
+  reset5hPassed: boolean;
+  reset7dPassed: boolean;
+} {
+  if (snap === null) {
+    return {
+      effUtil5h: 0,
+      effUtil7d: 0,
+      hasSnapshot: false,
+      isStale: false,
+      reset5hPassed: false,
+      reset7dPassed: false,
+    };
+  }
+
+  let effUtil5h = snap.util_5h ?? 0;
+  let effUtil7d = snap.util_7d ?? 0;
+  const recAt = new Date(snap.recorded_at).getTime();
+  const isStale = nowMs - recAt > staleThresholdMs;
+  let reset5hPassed = false;
+  let reset7dPassed = false;
+
+  if (isStale) {
+    if (snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= nowMs) {
+      effUtil5h = 0;
+      reset5hPassed = true;
+    }
+    if (snap.reset_7d_at != null && parseResetEpochMs(snap.reset_7d_at) <= nowMs) {
+      effUtil7d = 0;
+      reset7dPassed = true;
+    }
+  }
+
+  return {
+    effUtil5h,
+    effUtil7d,
+    hasSnapshot: true,
+    isStale,
+    reset5hPassed,
+    reset7dPassed,
+  };
+}
+
 export function computePoolCapacity(
   tokens: TokenForCapacity[],
   nowIso: string = new Date().toISOString(),
@@ -1069,7 +1137,6 @@ function admitCandidates(
     policy.projectDefault !== null ? policy.projectDefault : policy.isOss ? policy.ossDefault : null;
 
   const now = new Date(nowIso).getTime();
-  const staleThresholdMs = 30 * 60 * 1000;
 
   // T335: selectable=0 でも default の runtime 昇格に対応するため、全 token を取得して内部で絞る
   const tokens = listTokens(db, { selectableOnly: false });
@@ -1095,32 +1162,17 @@ function admitCandidates(
 
     const snap = getLatestUsageSnapshot(db, tok.id);
 
-    // 4) stale 判定 + reset 反映による util 上書き（T373）
+    // 4) stale 判定 + reset 反映による util 上書き（T373 / T390 抽出）
     //    snapshot が 30 分以上前でも除外しない。reset_*_at を過ぎた軸は effUtil*=0、
     //    未到達 / null の軸は snap.util_* を下限としてそのまま残す。
     //    高 util の stale token はこの後の 5) ブロッカーで止まる。
-    let effUtil5h = snap?.util_5h ?? 0;
-    let effUtil7d = snap?.util_7d ?? 0;
-
-    if (snap) {
-      const recAt = new Date(snap.recorded_at).getTime();
-      const isStale = now - recAt > staleThresholdMs;
-
-      if (isStale) {
-        if (snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= now) {
-          effUtil5h = 0;
-        }
-        if (snap.reset_7d_at != null && parseResetEpochMs(snap.reset_7d_at) <= now) {
-          effUtil7d = 0;
-        }
-      }
-    }
+    const eff = computeEffUtil(snap, now);
 
     // 5) ブロッカー除外: 5h or 7d > BLOCKER_*（T382: 7d 軸を追加）
     //    Dear T318 で発生した「5h は余裕があるが 7d 月次枠ほぼ枯渇」 token が落札 → monthly limit hit
     //    を回避するため、5h と 7d を対称な blocker 軸として扱う。
-    if (effUtil5h > BLOCKER_5H) continue;
-    if (effUtil7d > BLOCKER_7D) continue;
+    if (eff.effUtil5h > BLOCKER_5H) continue;
+    if (eff.effUtil7d > BLOCKER_7D) continue;
 
     // 6) admit 判定（順序: default → include → OSS → tag マッチ）
     let admitted = false;
@@ -1141,13 +1193,13 @@ function admitCandidates(
     }
     if (!admitted) continue;
 
-    const score = 0.3 * effUtil5h + 0.7 * effUtil7d;
+    const score = 0.3 * eff.effUtil5h + 0.7 * eff.effUtil7d;
     candidates.push({
       token: tok,
       score,
-      effUtil5h,
-      effUtil7d,
-      hasSnapshot: snap !== null,
+      effUtil5h: eff.effUtil5h,
+      effUtil7d: eff.effUtil7d,
+      hasSnapshot: eff.hasSnapshot,
     });
   }
 

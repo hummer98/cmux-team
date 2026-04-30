@@ -38,6 +38,8 @@ import {
   peekNextToken,
   shouldInjectCredential,
   assertCanRetrieveFromKeychain,
+  computeEffUtil,
+  STALE_THRESHOLD_MS,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -46,6 +48,7 @@ import {
   __statMode,
   type InsertTokenInput,
   type TokenForCapacity,
+  type UsageSnapshot,
 } from "./token-store";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2696,5 +2699,169 @@ describe("schema migration (T391: claude-credentials → subscription)", () => {
     } finally {
       db2.close();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeEffUtil (T390) — admit / throttle / 表示 で共有する pure 関数
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("computeEffUtil (T390)", () => {
+  // 固定 now で動かす（pool-throttle.test.ts と同パターン）
+  const NOW_MS = new Date("2026-04-25T10:00:00.000Z").getTime();
+  // 35 分前に観測された snapshot は stale 判定（>30 分）
+  const STALE_RECORDED = new Date(NOW_MS - 35 * 60 * 1000).toISOString();
+  const FRESH_RECORDED = new Date(NOW_MS).toISOString();
+
+  function snap(partial: Partial<UsageSnapshot>): UsageSnapshot {
+    return {
+      id: 1,
+      token_id: 1,
+      util_5h: 0,
+      util_7d: 0,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+      recorded_at: FRESH_RECORDED,
+      ...partial,
+    };
+  }
+
+  test("STALE_THRESHOLD_MS は 30 分（30 * 60 * 1000）", () => {
+    expect(STALE_THRESHOLD_MS).toBe(30 * 60 * 1000);
+  });
+
+  test("snap=null → effUtil=0、hasSnapshot=false、isStale=false", () => {
+    const r = computeEffUtil(null, NOW_MS);
+    expect(r).toEqual({
+      effUtil5h: 0,
+      effUtil7d: 0,
+      hasSnapshot: false,
+      isStale: false,
+      reset5hPassed: false,
+      reset7dPassed: false,
+    });
+  });
+
+  test("fresh + reset 情報なし → snap そのまま", () => {
+    const r = computeEffUtil(
+      snap({ util_5h: 0.5, util_7d: 0.5, recorded_at: FRESH_RECORDED }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.5);
+    expect(r.effUtil7d).toBe(0.5);
+    expect(r.hasSnapshot).toBe(true);
+    expect(r.isStale).toBe(false);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("stale + reset 情報なし → 救済しない（@kami 系）", () => {
+    const r = computeEffUtil(
+      snap({ util_5h: 0.5, util_7d: 0.5, recorded_at: STALE_RECORDED }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.5);
+    expect(r.effUtil7d).toBe(0.5);
+    expect(r.hasSnapshot).toBe(true);
+    expect(r.isStale).toBe(true);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("@tayo 想定: stale + 5h reset 通過 + 7d 未到達 → 5h=0、7d はそのまま", () => {
+    const r = computeEffUtil(
+      snap({
+        util_5h: 0.02,
+        util_7d: 0.91,
+        reset_5h_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0);
+    expect(r.effUtil7d).toBe(0.91);
+    expect(r.hasSnapshot).toBe(true);
+    expect(r.isStale).toBe(true);
+    expect(r.reset5hPassed).toBe(true);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("@kddi 想定: stale + reset 両軸未到達 → snap そのまま、reset*Passed=false", () => {
+    const r = computeEffUtil(
+      snap({
+        util_5h: 0.02,
+        util_7d: 0.97,
+        reset_5h_at: new Date(NOW_MS + 30 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.02);
+    expect(r.effUtil7d).toBe(0.97);
+    expect(r.isStale).toBe(true);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("@reset7d 想定: stale + 7d reset 通過 → 7d=0", () => {
+    const r = computeEffUtil(
+      snap({
+        util_5h: 0.5,
+        util_7d: 0.99,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.5);
+    expect(r.effUtil7d).toBe(0);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(true);
+  });
+
+  test("高 util stale + reset 未到達 → snap のまま（呼び出し側でブロック）", () => {
+    const r = computeEffUtil(
+      snap({
+        util_5h: 0.97,
+        util_7d: 0.5,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.97);
+    expect(r.effUtil7d).toBe(0.5);
+    expect(r.isStale).toBe(true);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("reset_5h_at が不正値 → parseResetEpochMs が NaN → 救済しない（spec line 274）", () => {
+    const r = computeEffUtil(
+      snap({
+        util_5h: 0.5,
+        util_7d: 0.99,
+        reset_5h_at: "garbage",
+        reset_7d_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.effUtil5h).toBe(0.5);
+    expect(r.effUtil7d).toBe(0);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(true);
+  });
+
+  test("util_*=null → effUtil*=0", () => {
+    const r = computeEffUtil(snap({ util_5h: null, util_7d: null }), NOW_MS);
+    expect(r.effUtil5h).toBe(0);
+    expect(r.effUtil7d).toBe(0);
+    expect(r.hasSnapshot).toBe(true);
   });
 });

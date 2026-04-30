@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { formatUtil, formatReset, formatSelectable } from "./token-format";
+import {
+  formatUtil,
+  formatReset,
+  formatSelectable,
+  formatPerHandleUtilCell,
+} from "./token-format";
 import type { Token, UsageSnapshot } from "./token-store";
 
 describe("formatUtil", () => {
@@ -84,5 +89,113 @@ describe("formatSelectable", () => {
       recorded_at: new Date().toISOString(),
     };
     expect(formatSelectable(baseToken, snap)).toBe("yes");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// formatPerHandleUtilCell (T390) — per-handle 行は effUtil 表示 + 救済マーカー
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("formatPerHandleUtilCell (T390)", () => {
+  // 固定 now で動かす（pool-throttle.test.ts 系と同パターン）
+  const NOW_MS = new Date("2026-04-25T10:00:00.000Z").getTime();
+  const STALE_RECORDED = new Date(NOW_MS - 35 * 60 * 1000).toISOString();
+  const FRESH_RECORDED = new Date(NOW_MS).toISOString();
+
+  function snap(partial: Partial<UsageSnapshot>): UsageSnapshot {
+    return {
+      id: 1,
+      token_id: 1,
+      util_5h: 0,
+      util_7d: 0,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+      recorded_at: FRESH_RECORDED,
+      ...partial,
+    };
+  }
+
+  test("snap=null → display=--、marker なし", () => {
+    const r = formatPerHandleUtilCell(null, NOW_MS);
+    expect(r).toEqual({ display5h: "--", display7d: "--", marker: "" });
+  });
+
+  test("fresh + マーカーなし", () => {
+    const r = formatPerHandleUtilCell(
+      snap({ util_5h: 0.5, util_7d: 0.5, recorded_at: FRESH_RECORDED }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "50%", display7d: "50%", marker: "" });
+  });
+
+  test("@tayo 想定: 5h reset 通過済み stale → 5H=0%, marker=*", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: 0.02,
+        util_7d: 0.91,
+        reset_5h_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "0%", display7d: "91%", marker: "*" });
+  });
+
+  test("@kddi 想定: stale + reset 両軸未到達 → 乖離なし、marker なし", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: 0.02,
+        util_7d: 0.97,
+        reset_5h_at: new Date(NOW_MS + 30 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "2%", display7d: "97%", marker: "" });
+  });
+
+  test("7d reset 通過済み stale → 7D=0%, marker=*", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: 0.5,
+        util_7d: 0.99,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "50%", display7d: "0%", marker: "*" });
+  });
+
+  test("高 util stale だが reset 未到達 → snap のまま、marker なし", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: 0.97,
+        util_7d: 0.5,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "97%", display7d: "50%", marker: "" });
+  });
+
+  test("stale だが reset 情報なし → 救済も乖離も発生しない", () => {
+    const r = formatPerHandleUtilCell(
+      snap({
+        util_5h: 0.5,
+        util_7d: 0.5,
+        reset_5h_at: null,
+        reset_7d_at: null,
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r).toEqual({ display5h: "50%", display7d: "50%", marker: "" });
   });
 });

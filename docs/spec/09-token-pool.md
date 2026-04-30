@@ -71,7 +71,9 @@ Registered: @pers  max-x20  tags:[any]  ✓
 
 ### `cmux-team token list`
 
-登録済み token の一覧表示（handle / plan / tags / selectable / cap / util_5h / util_7d / next_reset）。
+登録済み token の一覧表示（handle / plan / tags / selectable / cap / util_5h / util_7d / next_reset / mark）。
+**`UTIL_5H` / `UTIL_7D` 列は stale 救済反映後の effUtil**（`spawn-agent` / `peekNextToken` と同じ値）を表示する（T390）。
+reset 通過済み stale token は行末の `MARK` 列に `*` が付く。詳細は `### per-handle 行の effUtil 表示 (T390)`。
 
 ### `cmux-team token remove @handle`
 
@@ -305,7 +307,14 @@ stale snapshot の effUtil 算出と admit 結果のサンプル:
 
 `reset_*_at` が不正値・空文字の場合は `parseResetEpochMs` が `NaN` を返し、`<=` 比較が常に false になるため
 未到達扱い（snap 値そのまま）になる。`pool-throttle.ts: countPoolTokens` の `available` 計数も同じロジックを共有する
-（`parseResetEpochMs` を export して両方で再利用、5h / 7d 両軸の stale 救済を行う）。
+（T390: `computeEffUtil` を `token-store.ts` から export し、admit / throttle / per-handle 表示の 3 箇所で
+同一実装を再利用、5h / 7d 両軸の stale 救済を行う）。
+
+**CLI 表示**: `cmux-team pool status` / `cmux-team token list` の per-handle 行の `5H USE` / `7D USE`
+（`UTIL_5H` / `UTIL_7D`）列は上表の `effUtil_*` 列を表示する（T390）。
+たとえば `@tayo` 行は `5H USE=0%` / `7D USE=91%` で行末に `*` マーカーが付く（snap 生値 `0.02` ではなく
+救済後の `0` を表示）。`@kddi` のように reset 両軸未到達の場合は snap そのまま `5H USE=51%` / `7D USE=85%`
+でマーカーなし。
 
 ---
 
@@ -502,6 +511,33 @@ snapshot 不在の token が選ばれた場合 `util_5h=null` / `util_7d=null` �
 | 候補有 + util_5h null（snapshot 待ち） | `next: @kddi 5h:—` |
 | 全アカウントの reset_7d_at が null | 7d スパークラインを出さず `next:` だけ表示 |
 
+### per-handle 行の effUtil 表示 (T390)
+
+`cmux-team pool status` / `cmux-team token list` の per-handle 行は **stale 救済反映後の effUtil**
+（admit / throttle 判定と同一値）を表示する。これにより spawn-agent の挙動と CLI 表示が乖離しない。
+
+実装は `token-store.ts: computeEffUtil(snap, nowMs)` を `admitCandidates`（admit 経路）/
+`countPoolTokens`（throttle 経路）/ `formatPerHandleUtilCell`（表示経路）の 3 箇所で共有する。
+`STALE_THRESHOLD_MS` も `token-store.ts` の export 定数を全箇所で参照する（30 分）。
+
+**マーカー `*`**: snap 生値が effUtil と乖離する行（= snapshot は stale だが reset_*_at を
+通過しており、実質的に該当軸の制限がクリアされている token）の行末 `MARK` 列に `*` が付く。
+レイアウトは「行末（`NEXT_RESET` の右）に独立した `MARK` 列」を採用する（5h 軸だけ reset 通過した
+ケースで 7D 列に `*` が付くと誤読される懸念を避けるため）。
+
+凡例 `(* = reset 通過済みで実質クリア)` は、当該実行で 1 つでも `*` 付き行があるときのみ
+最終行に追加される（意味のないノイズを増やさない）。
+
+例: snap 観測時刻が 35 分前で `recorded_at` が stale、`reset_5h_at` 通過済み、`reset_7d_at` 未到達、
+snap 値 `(util_5h=0.02, util_7d=0.91)` の `@tayo` →
+
+```
+HANDLE    PLAN      TAGS        SEL    CAP    5H USE  7D USE  NEXT_RESET      MARK
+@tayo     max-x20   any         yes    --     0%      91%     7d 0.9d         *
+...
+(* = reset 通過済みで実質クリア)
+```
+
 ### per-handle 行は出さない
 
 旧 A019 §TUI 表示の `Master [969] @pers <5h:10%/7d:30%> cap:100%` 形式の per-surface decoration は **撤去**（A024 §per-handle 行は出さない）。アカウント別の詳細は `cmux-team token list` / `cmux-team pool status` で確認する。
@@ -580,13 +616,15 @@ Agent 実行中（proxy 経由）
 
 | ファイル | 役割 |
 |---------|------|
-| `skills/cmux-team/manager/token-store.ts` | DB 初期化・CRUD・Keychain 連携・`selectToken`・`peekNextToken`・`computePoolCapacity` |
+| `skills/cmux-team/manager/token-store.ts` | DB 初期化・CRUD・Keychain 連携・`selectToken`・`peekNextToken`・`computePoolCapacity`・`computeEffUtil` (T390) |
 | `skills/cmux-team/manager/forecast.ts` | A024 §計算式 — 7d 日次割当 forecast の純関数 (`computePool7dForecast`) |
 | `skills/cmux-team/manager/pool-summary.ts` | `buildPoolSummary` — forecast7d / nextCandidate / perHandle を集約 |
 | `skills/cmux-team/manager/pool-status-header.ts` | CLI ヘッダー文字列組み立て + スパークライン helper (`mapBarToSparkline` / `pickSparklineColor`) |
 | `skills/cmux-team/manager/pool-header-display.ts` | dashboard ヘッダー parts 組み立て (Ink RateLimitPart) |
-| `skills/cmux-team/manager/token-cli.ts` | `cmux-team token` サブコマンド実装 |
-| `skills/cmux-team/manager/token-format.ts` | `token list` / `pool status` 共有フォーマッタ |
+| `skills/cmux-team/manager/pool-cli.ts` | `cmux-team pool status` サブコマンド実装（T390 で per-handle 行を effUtil 表示化） |
+| `skills/cmux-team/manager/pool-throttle.ts` | `isThrottled5h` / `countPoolTokens` / `hasPoolHeadroomFromSummary` — pool-aware THROTTLE 判定（T390 で `computeEffUtil` を共有） |
+| `skills/cmux-team/manager/token-cli.ts` | `cmux-team token` サブコマンド実装（T390 で per-handle 行を effUtil 表示化） |
+| `skills/cmux-team/manager/token-format.ts` | `token list` / `pool status` 共有フォーマッタ + `formatPerHandleUtilCell`（T390） |
 | `~/.cmux-team/tokens.db` | グローバルトークンストア |
 | `~/.cmux-team/config.yaml` | グローバル設定（`token_pool.*`） |
 | `.team/config.json` | プロジェクト設定（`tokenPool.*`） |

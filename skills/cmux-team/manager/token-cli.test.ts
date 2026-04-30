@@ -779,6 +779,52 @@ describe("cmdTokenList (integration)", () => {
     const output = consoleLogs.join("\n");
     expect(output).toContain("登録済みトークンがありません");
   });
+
+  test("T390: reset 通過済み stale token は UTIL_5H 列が effUtil=0%、行末に * マーカー、フッタに凡例", async () => {
+    {
+      const db = initTokenDB();
+      try {
+        const t = insertToken(
+          db,
+          makeToken({
+            handle: "@tayo",
+            organization_id: "org-tayo-T390",
+            plan: "max-x20",
+            plan_ratio: 20.0,
+            tags: ["any"],
+          }),
+        );
+        upsertUsageSnapshot(db, {
+          token_id: t.id,
+          util_5h: 0.02,
+          util_7d: 0.91,
+          reset_5h_at: new Date(Date.now() - 60 * 1000).toISOString(),
+          reset_7d_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          unified_status: null,
+        });
+        // T390: stale を作るため recorded_at を 35 分前に巻き戻す
+        const STALE_RECORDED = new Date(Date.now() - 35 * 60 * 1000).toISOString();
+        db.prepare("UPDATE usage_snapshots SET recorded_at = ? WHERE token_id = ?")
+          .run(STALE_RECORDED, t.id);
+      } finally {
+        db.close();
+      }
+    }
+
+    setArgv("list");
+    await cmdTokenList();
+    const out = consoleLogs.join("\n");
+    expect(out).toContain("@tayo");
+    const lines = out.split("\n");
+    const tayoLine = lines.find((l) => l.startsWith("@tayo"));
+    // UTIL_5H 列は effUtil=0% を表示（snap 0.02 ではなく救済された 0%）
+    expect(tayoLine).toContain("0%");
+    expect(tayoLine).toContain("91%");
+    // 行末（NEXT_RESET の右）に独立した * マーカー
+    expect(tayoLine?.trim().endsWith("*")).toBe(true);
+    // フッタ凡例
+    expect(out).toContain("(* = reset 通過済みで実質クリア)");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

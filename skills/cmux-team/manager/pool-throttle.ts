@@ -21,7 +21,8 @@ import {
   canSelectAnyToken,
   listTokens,
   getLatestUsageSnapshot,
-  parseResetEpochMs,
+  computeEffUtil,
+  STALE_THRESHOLD_MS,
   BLOCKER_5H,
   BLOCKER_7D,
   type SelectTokenPolicy,
@@ -38,8 +39,6 @@ const DEFAULT_POLICY: SelectTokenPolicy = {
   isOss: false,
   ossDefault: null,
 };
-
-const STALE_THRESHOLD_MS = 30 * 60 * 1000;
 
 export interface ThrottleOpts {
   /** daemon が running 状態か */
@@ -108,18 +107,12 @@ export function countPoolTokens(
   const selectableTokens = listTokens(db, { selectableOnly: true });
 
   const nowMs = new Date(nowIso).getTime();
-  let stale = 0;
-  for (const t of allTokens) {
-    const snap = getLatestUsageSnapshot(db, t.id);
-    if (snap) {
-      const recAt = new Date(snap.recorded_at).getTime();
-      if (nowMs - recAt > STALE_THRESHOLD_MS) stale++;
-    }
-  }
 
   // available は admit 候補数。canSelectAnyToken と同じ閾値で数える。
   // canSelectAnyToken は length>0 だけ返すため、ここでは admitCandidates 相当を再現する。
   // selectToken の admit と同一に揃える（B1: default 昇格、B2: exclude、B3: lease、B4: BLOCKER_5H/7D 以下、stale 救済 5h/7d）。
+  // T390: stale 判定 + reset 救済を `computeEffUtil` に集約し、`token-store` 側の admitCandidates と
+  // 同一実装を共有する。stale カウントは isStale フラグで同じループ内で計上する。
   const effectiveDefault: string | null =
     policy.projectDefault !== null ? policy.projectDefault : policy.isOss ? policy.ossDefault : null;
   const projectTagSet = new Set(policy.projectTags);
@@ -132,28 +125,18 @@ export function countPoolTokens(
   );
 
   let available = 0;
+  let stale = 0;
   for (const tok of allTokens) {
+    const snap = getLatestUsageSnapshot(db, tok.id);
+    const eff = computeEffUtil(snap, nowMs);
+    if (eff.isStale) stale++;
+
     if (excludeSet.has(tok.handle)) continue;
     if (!tok.selectable && tok.handle !== effectiveDefault) continue;
     if (activeLeases.has(tok.id)) continue;
-    const snap = getLatestUsageSnapshot(db, tok.id);
-    // T373 / T382: stale でも除外しない。reset_*_at が過去なら effUtil*=0 で評価。
-    let effUtil5h = snap?.util_5h ?? 0;
-    let effUtil7d = snap?.util_7d ?? 0;
-    if (snap) {
-      const recAt = new Date(snap.recorded_at).getTime();
-      const isStale = nowMs - recAt > STALE_THRESHOLD_MS;
-      if (isStale) {
-        if (snap.reset_5h_at != null && parseResetEpochMs(snap.reset_5h_at) <= nowMs) {
-          effUtil5h = 0;
-        }
-        if (snap.reset_7d_at != null && parseResetEpochMs(snap.reset_7d_at) <= nowMs) {
-          effUtil7d = 0;
-        }
-      }
-    }
-    if (effUtil5h > BLOCKER_5H) continue;
-    if (effUtil7d > BLOCKER_7D) continue;
+    if (eff.effUtil5h > BLOCKER_5H) continue;
+    if (eff.effUtil7d > BLOCKER_7D) continue;
+
     let admitted = false;
     if (tok.handle === effectiveDefault) {
       admitted = true;

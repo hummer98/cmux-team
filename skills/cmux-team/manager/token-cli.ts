@@ -28,7 +28,8 @@ import {
   type TokenPlan,
 } from "./token-store";
 // T323: 共有フォーマッタを token-format.ts に切り出し（pool-cli.ts と再利用）
-import { formatUtil, formatReset, formatSelectable } from "./token-format";
+// T390: per-handle 行は formatPerHandleUtilCell に切り替え（effUtil 表示 + reset 通過マーカー）
+import { formatReset, formatSelectable, formatPerHandleUtilCell } from "./token-format";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ユーティリティ
@@ -446,6 +447,7 @@ export async function cmdTokenList(): Promise<void> {
     return;
   }
 
+  // T390: 行末に独立した MARK 列を置き、reset 通過済み stale token を視認できるようにする
   const header = [
     "HANDLE  ",
     "PLAN    ",
@@ -455,10 +457,15 @@ export async function cmdTokenList(): Promise<void> {
     "CAP   ",
     "UTIL_5H",
     "UTIL_7D",
-    "NEXT_RESET",
+    "NEXT_RESET    ",
+    "MARK",
   ].join("  ");
   console.log(header);
   console.log("-".repeat(header.length));
+
+  // T390: marker 凡例を出すかの判定用。ループ内で 1 つでも marker が出れば true。
+  const nowMs = Date.now();
+  let anyMarker = false;
 
   for (const tok of tokens) {
     const snap = getLatestUsageSnapshot(db, tok.id);
@@ -486,7 +493,11 @@ export async function cmdTokenList(): Promise<void> {
     const resetCandidates: string[] = [];
     if (snap?.reset_5h_at) resetCandidates.push(`5h@${formatReset(snap.reset_5h_at)}`);
     if (snap?.reset_7d_at) resetCandidates.push(`7d@${formatReset(snap.reset_7d_at)}`);
-    const nextReset = resetCandidates.length > 0 ? resetCandidates[0] : "--";
+    const nextReset = resetCandidates[0] ?? "--";
+
+    // T390: per-handle 行は effUtil 表示。reset 通過済み stale token は MARK 列に "*"。
+    const fmt = formatPerHandleUtilCell(snap, nowMs);
+    if (fmt.marker !== "") anyMarker = true;
 
     const row = [
       tok.handle.padEnd(8),
@@ -495,11 +506,16 @@ export async function cmdTokenList(): Promise<void> {
       tok.tags.join(",").slice(0, 10).padEnd(10),
       selectable.padEnd(10),
       capStr.padEnd(6),
-      formatUtil(snap?.util_5h ?? null).padEnd(7),
-      formatUtil(snap?.util_7d ?? null).padEnd(7),
-      nextReset,
+      fmt.display5h.padEnd(7),
+      fmt.display7d.padEnd(7),
+      nextReset.padEnd(14),
+      fmt.marker,
     ].join("  ");
     console.log(row);
+  }
+
+  if (anyMarker) {
+    console.log("(* = reset 通過済みで実質クリア)");
   }
 
   db.close();
