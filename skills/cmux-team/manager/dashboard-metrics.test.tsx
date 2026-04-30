@@ -9,11 +9,14 @@
 import { describe, test, expect } from "bun:test";
 import {
   buildMetricsRows,
+  buildPoolTokenRowFromSnapshot,
   computeRiskLevel,
   type MetricsData,
   type PoolTokenRow,
 } from "./dashboard-metrics";
 import type { ProjectionResult } from "./trace-store";
+import type { UsageSnapshot } from "./token-store";
+import { formatPerHandleUtilCell, formatUtil } from "./token-format";
 
 function stringifyRows(rows: any[]): string {
   return JSON.stringify(rows);
@@ -215,6 +218,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: 0.1,
         reset7dIso: new Date(FIXED_NOW + 86_400_000).toISOString(),
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -232,6 +237,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: false,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -249,6 +256,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@b",
@@ -257,6 +266,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@c",
@@ -265,6 +276,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     // 注: dashboard.tsx の buildPoolTokenRows がソート責務。本テストはソート済み入力で
@@ -290,6 +303,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@bbb",
@@ -298,6 +313,8 @@ describe("buildMetricsRows: Pool Tokens section (T354 S8)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -317,6 +334,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@b",
@@ -326,6 +345,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -346,6 +367,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         // 12h → "12h"
         reset7dIso: new Date(FIXED_NOW + 12 * 3600 * 1000).toISOString(),
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@b",
@@ -355,6 +378,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         // 1d → "1d"
         reset7dIso: new Date(FIXED_NOW + 86_400 * 1000).toISOString(),
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -373,6 +398,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: false,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@a",
@@ -381,6 +408,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
       {
         handle: "@b",
@@ -389,6 +418,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -407,6 +438,8 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
         util7d: null,
         reset7dIso: null,
         hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
       },
     ];
     const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
@@ -463,5 +496,191 @@ describe("buildMetricsRows: role / task aggregations (T354 S9 桁揃え)", () =>
         s.includes("—") ||
         s.includes("なし"),
     ).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T401: buildPoolTokenRowFromSnapshot — CLI (formatPerHandleUtilCell) との等価性
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildPoolTokenRowFromSnapshot (CLI consistency)", () => {
+  // token-format.test.ts と同じ固定 now / fixture パターンを採用
+  const NOW_MS = new Date("2026-04-25T10:00:00.000Z").getTime();
+  const STALE_RECORDED = new Date(NOW_MS - 35 * 60 * 1000).toISOString();
+  const FRESH_RECORDED = new Date(NOW_MS).toISOString();
+
+  function snap(partial: Partial<UsageSnapshot>): UsageSnapshot {
+    return {
+      id: 1,
+      token_id: 1,
+      util_5h: 0,
+      util_7d: 0,
+      reset_5h_at: null,
+      reset_7d_at: null,
+      unified_status: null,
+      recorded_at: FRESH_RECORDED,
+      ...partial,
+    };
+  }
+
+  test("(a) snap=null → util/reset 全 null、hasSnapshot=false、reset*Passed=false", () => {
+    const r = buildPoolTokenRowFromSnapshot("@x", null, NOW_MS);
+    expect(r).toEqual({
+      handle: "@x",
+      util5h: null,
+      reset5hIso: null,
+      util7d: null,
+      reset7dIso: null,
+      hasSnapshot: false,
+      reset5hPassed: false,
+      reset7dPassed: false,
+    });
+  });
+
+  test("(b) fresh snap → effUtil = snapshot 生値、reset*Passed=false", () => {
+    const r = buildPoolTokenRowFromSnapshot(
+      "@fresh",
+      snap({
+        util_5h: 0.5,
+        util_7d: 0.3,
+        reset_5h_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+        recorded_at: FRESH_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.handle).toBe("@fresh");
+    expect(r.util5h).toBe(0.5);
+    expect(r.util7d).toBe(0.3);
+    expect(r.hasSnapshot).toBe(true);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(false);
+  });
+
+  test("(c) T401 reset_7d 通過例 (stale + reset_5h 未到達 + reset_7d 通過 + util_7d=0.97)", () => {
+    // 今回バグ報告された @kddi の挙動: util_7d=0.97 のまま reset_7d_at を通過 → effUtil7d=0
+    const r = buildPoolTokenRowFromSnapshot(
+      "@example",
+      snap({
+        util_5h: 0.02,
+        util_7d: 0.97,
+        reset_5h_at: new Date(NOW_MS + 30 * 60 * 1000).toISOString(),
+        reset_7d_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+        recorded_at: STALE_RECORDED,
+      }),
+      NOW_MS,
+    );
+    expect(r.util5h).toBe(0.02);
+    expect(r.util7d).toBe(0);
+    expect(r.reset5hPassed).toBe(false);
+    expect(r.reset7dPassed).toBe(true);
+    expect(r.hasSnapshot).toBe(true);
+  });
+
+  test("(d) CLI 等価性: token-format.test.ts と同 fixture で formatUtil 経由の値が一致 (5h reset 通過)", () => {
+    // token-format.test.ts:132 "@tayo 想定" と同じ fixture: 5h reset 通過済み stale
+    const fixture = snap({
+      util_5h: 0.02,
+      util_7d: 0.91,
+      reset_5h_at: new Date(NOW_MS - 60 * 1000).toISOString(),
+      reset_7d_at: new Date(NOW_MS + 60 * 60 * 1000).toISOString(),
+      recorded_at: STALE_RECORDED,
+    });
+    const cli = formatPerHandleUtilCell(fixture, NOW_MS);
+    const metrics = buildPoolTokenRowFromSnapshot("@tayo", fixture, NOW_MS);
+
+    // CLI 側: display5h="0%", display7d="91%", marker="*"
+    expect(cli).toEqual({ display5h: "0%", display7d: "91%", marker: "*" });
+    // Metrics 側: 数値 + フラグレベル
+    expect(metrics.util5h).toBe(0);
+    expect(metrics.util7d).toBe(0.91);
+    expect(metrics.reset5hPassed).toBe(true);
+    expect(metrics.reset7dPassed).toBe(false);
+
+    // formatUtil 経由で文字列レベルでも CLI と一致 (R2)
+    expect(formatUtil(metrics.util5h)).toBe(cli.display5h);
+    expect(formatUtil(metrics.util7d)).toBe(cli.display7d);
+    expect(metrics.reset5hPassed || metrics.reset7dPassed ? "*" : "").toBe(
+      cli.marker,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T401: buildMetricsRows — pool tokens marker + フッタ凡例
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildMetricsRows: pool tokens marker (T401)", () => {
+  test("(e) 1 行でも reset5hPassed=true なら '*' マーカー + 凡例が出る", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@hot",
+        util5h: 0,
+        reset5hIso: new Date(FIXED_NOW - 60 * 1000).toISOString(),
+        util7d: 0.5,
+        reset7dIso: new Date(FIXED_NOW + 60 * 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: true,
+        reset7dPassed: false,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    expect(s).toContain("*");
+    // 凡例 (en or ja)
+    expect(
+      s.includes("reset passed") || s.includes("reset 通過済み"),
+    ).toBe(true);
+  });
+
+  test("(e2) reset7dPassed=true でも '*' マーカー + 凡例が出る", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@kddi-like",
+        util5h: 0.02,
+        reset5hIso: new Date(FIXED_NOW + 30 * 60 * 1000).toISOString(),
+        util7d: 0,
+        reset7dIso: new Date(FIXED_NOW - 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: true,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    expect(s).toContain("*");
+    expect(
+      s.includes("reset passed") || s.includes("reset 通過済み"),
+    ).toBe(true);
+  });
+
+  test("(f) 全行 reset*Passed=false なら '*' / 凡例とも出ない", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@a",
+        util5h: 0.42,
+        reset5hIso: new Date(FIXED_NOW + 60 * 60 * 1000).toISOString(),
+        util7d: 0.1,
+        reset7dIso: new Date(FIXED_NOW + 24 * 60 * 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
+      },
+      {
+        handle: "@b",
+        util5h: 0.78,
+        reset5hIso: new Date(FIXED_NOW + 90 * 60 * 1000).toISOString(),
+        util7d: 0.2,
+        reset7dIso: new Date(FIXED_NOW + 24 * 60 * 60 * 1000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
+      },
+    ];
+    const rows = buildMetricsRows(makeData({ poolTokens: tokens }), null);
+    const s = stringifyRows(rows);
+    expect(s).not.toContain("*");
+    expect(s).not.toContain("reset passed");
+    expect(s).not.toContain("reset 通過済み");
   });
 });

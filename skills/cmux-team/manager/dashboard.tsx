@@ -55,6 +55,7 @@ import {
 } from "./trace-store";
 import {
   buildMetricsRows,
+  buildPoolTokenRowFromSnapshot,
   type MetricsData,
   type PoolTokenRow,
 } from "./dashboard-metrics";
@@ -2076,18 +2077,10 @@ export async function startDashboard(
         }
       }
 
+      const now = Date.now();
       const rows: PoolTokenRow[] = candidates.map((tok) => {
         const snap = getLatestUsageSnapshot(daemon.tokenDb!, tok.id);
-        return {
-          handle: tok.handle,
-          util5h: snap?.util_5h ?? null,
-          reset5hIso: snap?.reset_5h_at ?? null,
-          util7d: snap?.util_7d ?? null,
-          reset7dIso: snap?.reset_7d_at ?? null,
-          hasSnapshot:
-            snap !== null &&
-            (snap.util_5h !== null || snap.util_7d !== null),
-        };
+        return buildPoolTokenRowFromSnapshot(tok.handle, snap, now);
       });
       // util_5h DESC、同 util は handle ASC（plan §2-5 / S14 確認順）
       rows.sort((a, b) => {

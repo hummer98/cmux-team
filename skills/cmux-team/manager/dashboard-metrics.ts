@@ -22,6 +22,7 @@ import type {
 import { normalizeRole } from "./trace-store";
 import { buildUtilizationBar, type RateLimitPart } from "./rate-limit-display";
 import { t } from "./i18n";
+import { computeEffUtil, type UsageSnapshot } from "./token-store";
 
 const GREEN = rgb(0, 160, 0);
 const YELLOW = rgb(200, 160, 0);
@@ -37,6 +38,10 @@ export interface PoolTokenRow {
   reset7dIso: string | null;
   /** snapshot 列が 1 つでも non-null なら true（"no data" 表示の判定） */
   hasSnapshot: boolean;
+  /** stale + reset_5h_at 通過済みで effUtil5h が 0 に上書きされた場合 true。CLI の MARK 列と同じ判定 */
+  reset5hPassed: boolean;
+  /** stale + reset_7d_at 通過済みで effUtil7d が 0 に上書きされた場合 true */
+  reset7dPassed: boolean;
 }
 
 /** Metrics タブで描画する全データ。loadMetricsData が 1 tick 分を構築する。 */
@@ -195,6 +200,35 @@ function buildProjectionRows(
 }
 
 /**
+ * T401: token snapshot から 1 行分の PoolTokenRow を組み立てる pure 関数。
+ *
+ * - `computeEffUtil` の effUtil5h/7d をそのまま `util5h/7d` に詰める (stale + reset 通過軸は 0)。
+ * - `snap.util_5h === null` 等の null 値は null のまま保持 (UI で bar 非描画)。
+ *   `effUtil*` は 0 になるが `util5h: null` を返すことで bar 描画を skip する従来挙動と整合。
+ * - admit / throttle / CLI 表示と同一の `computeEffUtil` を経由するため、Metrics と
+ *   `cmux-team token list` で同一値が表示される (T390 の "3 箇所共有" 原則を 4 箇所に拡張)。
+ */
+export function buildPoolTokenRowFromSnapshot(
+  handle: string,
+  snap: UsageSnapshot | null,
+  nowMs: number,
+): PoolTokenRow {
+  const eff = computeEffUtil(snap, nowMs);
+  const util5h = snap?.util_5h == null ? null : eff.effUtil5h;
+  const util7d = snap?.util_7d == null ? null : eff.effUtil7d;
+  return {
+    handle,
+    util5h,
+    reset5hIso: snap?.reset_5h_at ?? null,
+    util7d,
+    reset7dIso: snap?.reset_7d_at ?? null,
+    hasSnapshot: snap !== null && (util5h !== null || util7d !== null),
+    reset5hPassed: eff.reset5hPassed,
+    reset7dPassed: eff.reset7dPassed,
+  };
+}
+
+/**
  * T354 S8: Pool Tokens セクションを組み立てる。
  *
  * - poolTokens === null → 何も出さない（pool 無効）
@@ -238,6 +272,7 @@ function buildPoolTokensSection(
   }));
   const max5hGray = maxGrayPartLen(computed.map((c) => c.bar5h));
   const max7dGray = maxGrayPartLen(computed.map((c) => c.bar7d));
+  let anyMarker = false;
   for (const c of computed) {
     if (!c.row.hasSnapshot) {
       rows.push(
@@ -253,7 +288,14 @@ function buildPoolTokensSection(
       cells.push(...partsToUiText(padGrayParts(c.bar5h.parts, max5hGray)));
     if (c.bar7d)
       cells.push(...partsToUiText(padGrayParts(c.bar7d.parts, max7dGray)));
+    if (c.row.reset5hPassed || c.row.reset7dPassed) {
+      cells.push(ui.text("*", { dim: true }));
+      anyMarker = true;
+    }
     rows.push(ui.row({ gap: 1 }, cells));
+  }
+  if (anyMarker) {
+    rows.push(ui.text(t("metrics_pool_marker_legend"), { dim: true }));
   }
   return rows;
 }
