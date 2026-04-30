@@ -80,6 +80,7 @@ cmux-team/
 | `docs/spec/07-state-machine.md` | Conductor / Task FSM・cascade・CONDUCTOR_DONE・Ready sync guard |
 | `docs/spec/08-runtime-boundary.md` | Deliverable 型・close-task 仕様 |
 | `docs/spec/09-token-pool.md` | Token pool — `cmux-team token` CLI・DB スキーマ・選択アルゴリズム・設定 |
+| `docs/spec/11-metrics.md` | Metrics taxonomy（6 軸）・data source・CodeDNA 評価判定基準 |
 
 ## スキル・コマンドの追加・修正方法
 
@@ -194,6 +195,7 @@ cmux-team update-task --task-id 112 --status ready
 | Manager の状態 | `cmux-team status` または `cat .team/logs/manager.log` |
 | 稼働中 Master / Conductor | `jq .masters .team/team.json` / `jq .conductors .team/team.json` |
 | open task 数 | `cat .team/task-state.json` |
+| metric サマリ（task lifecycle / tool call / token） | `cmux-team metrics --since 7d` または `cmux-team metrics --group-by day --format csv` |
 
 ## Ready 昇格時の sync state ガード
 

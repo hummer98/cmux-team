@@ -18,6 +18,7 @@ glossary には要約と一次リンクのみを置く方針を取る。
 8. [Sync state](#8-sync-stategit-同期判定)
 9. [Worktree / start-point](#9-worktree--start-point-解決)
 10. [コミュニケーション系](#10-コミュニケーション系)
+11. [Metrics 関連](#11-metrics-関連)
 
 ---
 
@@ -168,3 +169,16 @@ glossary には要約と一次リンクのみを置く方針を取る。
 | CONDUCTOR_DONE | Conductor から daemon に送る完了メッセージ。`success: true` で正常 close、`unresolved: true` で `aborted` + cascade（preserveWorktree）。 | [`07-state-machine.md#3-conductor--task-の同時遷移`](07-state-machine.md#3-conductor--task-の同時遷移), [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | DONE / Task FSM |
 
 **関連 spec**: [`05-install-and-infrastructure.md`](05-install-and-infrastructure.md) / [`07-state-machine.md`](07-state-machine.md) / [`10-events-stream.md`](10-events-stream.md) / [`../../CLAUDE.md`](../../CLAUDE.md)
+
+## 11. Metrics 関連
+
+| 用語 | 定義 | 一次リンク | 関連 |
+|------|------|-----------|------|
+| metrics SSOT | `cmux-team metrics` サブコマンドの計算ロジック（`metrics-aggregate.ts`）と本 spec が metric の単一情報源。CLI 出力・spec・解釈はここから派生する。 | [`11-metrics.md#1-概要`](11-metrics.md#1-概要) | `cmux-team metrics` / Trace DB / events stream |
+| cohort comparison | 介入前後の同一プロジェクト内 task 群を「baseline cohort」「evaluation cohort」に分け、metric 平均と分布を統計検定で比較する評価方式。 | [`11-metrics.md#42-cohort-comparison-の手順`](11-metrics.md#42-cohort-comparison-の手順) | baseline period / evaluation period |
+| baseline period | 介入導入前に連続 N day 取得する metric 観測期間。CodeDNA 評価の比較基準点。N=14 day を暫定値とする。 | [`11-metrics.md#41-baseline-period--evaluation-period-の定義`](11-metrics.md#41-baseline-period--evaluation-period-の定義) | cohort comparison / evaluation period |
+| evaluation period | 介入導入後に連続 N day 取得する metric 観測期間。baseline と統計検定で比較する。 | [`11-metrics.md#41-baseline-period--evaluation-period-の定義`](11-metrics.md#41-baseline-period--evaluation-period-の定義) | cohort comparison / baseline period |
+| header rot | エージェント `{{COMMON_HEADER}}` 等のテンプレートヘッダーが古くなり、現行の運用と乖離した状態。副作用系 metric として観測対象。 | [`11-metrics.md#25-副作用系`](11-metrics.md#25-副作用系) | agent message GC / `{{COMMON_HEADER}}` |
+| agent message GC | サブエージェント実行時に蓄積するメッセージ履歴の累積 token 量、および定期的な剪定処理。副作用系 metric として観測対象。 | [`11-metrics.md#25-副作用系`](11-metrics.md#25-副作用系) | header rot / token consumption |
+
+**関連 spec**: [`11-metrics.md`](11-metrics.md)
