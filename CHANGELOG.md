@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [4.20.0] - 2026-04-30
+
+### Breaking
+
+- **token pool: `claude-credentials` credential_source を廃止し `subscription` source に置換（T391）**。Claude Max 等の subscription token を `cmux-team token add --from-claude-credentials` で keychain に snapshot していた旧設計は、Claude Code 本体が `~/.claude/.credentials.json` で行う OAuth refresh と整合せず、stale token が `CMUX_CLAUDE_TOKEN` として export → spawn-agent で 401 authentication_error → idle stuck → crash する障害（Dear T340, 2026-04-30）の根本原因だった。新 source `subscription` は **keychain に保存せず spawn-agent でも inject しない** 設計とし、Claude Code 本体の認証経路に refresh を委ねる。proxy が `ANTHROPIC_BASE_URL` 経由でリクエストを観測し `auth_hash` / `organization_id` を初回観測時に UPDATE する経路を追加（`updateTokensDB` Phase 2 / Phase 2.5）。T384 auto-rotate も subscription の auth_hash 乖離を継続吸収する
+- **`cmux-team token add --from-claude-credentials` を削除**。実行すると `--from-claude-credentials は v4.20.0 で削除されました。Use --subscription <handle> instead.` で exit 1。後方互換は取らない（CLAUDE.md feedback 「後方互換コードは不要」）
+- **tokens.db schema: `organization_id` / `auth_hash` を NULL 許容に変更**。subscription 登録時点では両カラム未確定なため `NOT NULL` 制約を解除（SQLite では table re-create で実現）。起動時 migration が旧 schema を自動的に新 schema に書き換える
+
+### Added
+
+- **`cmux-team token add --subscription <handle> [--plan ...] [--tags ...] [--organization-id ...]`**: keychain に書き込まず subscription source で登録。`--plan` 省略時は `unknown`、`--tags` 省略時は `["any"]`、`--organization-id` 省略時は proxy 初観測で UPDATE される
+- **`cmux-team token migrate-subscription`**: subscription source の row 全件について cmux-team が過去に snapshot した keychain entry（service `cmux-team-token`）を `security delete-generic-password` で削除する冪等コマンド。v4.20.0 へ migration した既存ユーザー向け
+- **`cmux-team token list` の CRED 列**: credential_source を `manual` / `oauth-native`（subscription）/ `auto` で表示
+- **`shouldInjectCredential(source)` / `assertCanRetrieveFromKeychain(source)` を `token-store.ts` から export**。spawn-agent の inject 判定を pure function に抽出し、subscription source で keychain を誤参照した場合の guard を提供
+- **proxy `updateTokensDB` の Phase 構成を再整理**: Phase 1 (auth_hash 検索) / Phase 2 (auto-rotate or subscription auth_hash 初観測) / **Phase 2.5 (subscription organization_id 初観測 — 新規)** / Phase 3 (usage_snapshots UPSERT) / Phase 4 (auto-discover INSERT)。Phase 1〜2.5 は `rl=null` でも動作する（401 等で rate-limit ヘッダ不在でも auth_hash / organization_id の同期だけは進める）
+
+### Migration
+
+- 既存 `claude-credentials` source の row は initTokenDB 起動時の data migration で自動的に `subscription` + `auth_hash=NULL` に変換される（冪等、変換時に 1 行 console.warn）
+- 旧 NOT NULL 制約を持つ tokens table は schema migration で table re-create される（変換時に 1 行 console.warn）
+- keychain entry の cleanup を行いたい場合は `cmux-team token migrate-subscription` を実行
+
+### Related
+
+- 起因 incident: Dear T340 (2026-04-30) — `credential_source=claude-credentials` で snapshot した OAuth token が stale 化し A[467] が 401 で crash。trace は `Dear/.team/traces/traces.db` 2026-04-30T06:37:29Z〜32Z UTC
+- 関連実装: T384 (`feat(proxy): auth_hash mismatch 時の auto rotate を追加`、commit `da1dd0d`) — subscription の OAuth refresh による auth_hash 乖離を proxy が吸収する経路と相補
+
 ## [4.19.0] - 2026-04-29
 
 ### Added

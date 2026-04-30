@@ -24,6 +24,7 @@ import {
   getTokenByAuthHash,
   getTokenByOrganizationId,
   updateTokenAuth,
+  updateTokenOrganizationId,
   insertToken,
   getLatestUsageSnapshot,
   upsertUsageSnapshot,
@@ -85,15 +86,23 @@ function genAutoDiscoverHandle(
 }
 
 /**
- * Anthropic レスポンス 1 件につき tokens.db を更新する（T320 / T384）。
- * - auth_hash が既知 (`getTokenByAuthHash`): utilization 変化時のみ throttled UPSERT
- * - auth_hash 未知 + organization_id 既知 (`getTokenByOrganizationId`):
- *     auto-rotate（既存 token の auth_hash を UPDATE してから UPSERT 経路に合流）。
- *     OAuth refresh で auth_hash が乖離した token の usage_snapshots 更新を再開させる（T384）。
- *     `tokenPoolEnabled` には依存しない（手動 add の正規 token も rotate 対象）。
- * - auth_hash も organization_id も未知 + tokenPoolEnabled=true:
- *     auto-discover INSERT（selectable=0）
- * - tokenPoolEnabled=false かつ未知 token: skip
+ * Anthropic レスポンス 1 件につき tokens.db を更新する（T320 / T384 / T391）。
+ *
+ * Phase 構成（T391 で整理）:
+ * - **Phase 1**: `getTokenByAuthHash(authHash)` で既存 token を検索
+ * - **Phase 2 (auto-rotate)**: Phase 1 ヒットしない場合 `getTokenByOrganizationId(orgId)` でフォールバック検索。
+ *   既存 row があり auth_hash が異なれば UPDATE して新値で Phase 3 に合流する。
+ *   subscription row の `auth_hash IS NULL` 状態（T391: 登録時点では未確定）も同経路で初回 UPDATE される
+ * - **Phase 2.5 (subscription orgId 初観測)**: Phase 1 が auth_hash でヒットしたが、その row の
+ *   `organization_id IS NULL` ならば proxy が観測した `organizationId` を埋める（T391）。
+ *   subscription row の組織 ID を初回 proxy 観測で確定させる経路
+ * - **Phase 3**: tok が確定したら usage_snapshots を utilization 変化時のみ UPSERT
+ * - **Phase 4**: 真の新規 token（auth_hash も organization_id も未知）は tokenPoolEnabled=true 時のみ
+ *   auto-discover INSERT（selectable=0）
+ *
+ * T391: Phase 1〜2 の auth_hash UPDATE は `rl` の有無に依存しない（401 等で rl=null でも
+ *   subscription row の初回 organization_id / auth_hash 確定だけは進めたいため）。
+ *   Phase 3 (usage_snapshots UPSERT) と Phase 4 (auto-discover INSERT) は `rl` が必要。
  *
  * T323: 既知 token ヒット時（rotate 経路含む）に role が `master` / `conductor` の場合、
  *   `getState().masters.get(surface)?.tokenHandle` / `findConductor(state, surface)?.tokenHandle`
@@ -117,7 +126,6 @@ function updateTokensDB(
   if (!authHash) return;
   const db = getTokensDB();
   if (!db) return;
-  if (!rl) return;
 
   const { tokenPoolEnabled, getState } = opts;
 
@@ -125,8 +133,10 @@ function updateTokensDB(
     // ── Phase 1: auth_hash で検索 ──
     let tok = getTokenByAuthHash(db, authHash);
 
-    // ── Phase 2: auto-rotate（auth_hash mismatch だが organization_id 一致）──
-    // OAuth refresh で auth_hash が乖離した既存 token を自動修復する（T384）。
+    // ── Phase 2: auto-rotate / subscription auth_hash 初観測（T384 / T391）──
+    // - 既知 token (auth_hash mismatch だが organization_id 一致): OAuth refresh で auth_hash が
+    //   乖離した既存 token を自動修復する（T384）
+    // - subscription token (登録時点では auth_hash IS NULL): proxy 観測した auth_hash で埋める（T391）
     // tokenPoolEnabled には依存しない: pool OFF の手動運用でも rotate されないと
     // usage_snapshots の更新が永久に止まるため。
     if (!tok && organizationId) {
@@ -137,13 +147,40 @@ function updateTokensDB(
         // 後続 UPSERT で参照する byOrg を新 auth_hash に差し替えて Phase 3 に流す
         tok = { ...byOrg, auth_hash: authHash };
         // ログ上は auth_hash 6 文字 / organization_id 8 文字に丸める
+        const oldLabel = oldAuthHash ? oldAuthHash.slice(0, 6) : "null";
         log(
           "token_auto_rotated",
-          `handle=${tok.handle} old_auth=${oldAuthHash.slice(0, 6)} ` +
-            `new_auth=${authHash.slice(0, 6)} org=${organizationId.slice(0, 8)}`,
+          `handle=${tok.handle} old_auth=${oldLabel} ` +
+            `new_auth=${authHash.slice(0, 6)} org=${organizationId.slice(0, 8)} ` +
+            `source=${tok.credential_source ?? "null"}`,
         ).catch(() => {});
       }
     }
+
+    // ── Phase 2.5: subscription row の organization_id 初観測（T391）──
+    // Phase 1 で auth_hash ヒット済み + その row の organization_id IS NULL の場合、
+    // proxy 観測した organizationId を埋める（subscription token の登録時点で organization_id 未指定の経路）。
+    if (tok && !tok.organization_id && organizationId) {
+      try {
+        updateTokenOrganizationId(db, tok.id, organizationId);
+        log(
+          "token_organization_id_resolved",
+          `handle=${tok.handle} org=${organizationId.slice(0, 8)} source=${tok.credential_source ?? "null"}`,
+        ).catch(() => {});
+        tok = { ...tok, organization_id: organizationId };
+      } catch (e: any) {
+        // UNIQUE 違反（同一 organization_id を持つ row が別に存在）は warn ログのみで続行
+        log(
+          "token_organization_id_resolve_failed",
+          `handle=${tok.handle} org=${organizationId.slice(0, 8)} err=${e?.message ?? e}`,
+        ).catch(() => {});
+      }
+    }
+
+    // ── Phase 3 以降は rate-limit 情報（utilization）が必要 ──
+    // 401 等の応答では rl=null になる。auth_hash / organization_id の同期は
+    // 上の Phase 1〜2.5 で済んでいるためここで return しても安全。
+    if (!rl) return;
 
     // ── Phase 3: tok があれば UPSERT 経路（既存 + auto-rotate 直後の合流点）──
     if (tok) {

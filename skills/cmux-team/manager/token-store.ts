@@ -26,19 +26,64 @@ export const BLOCKER_7D = 0.95;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type TokenPlan = "pro" | "max-x5" | "max-x20" | "unknown";
-export type CredentialSource = "claude-credentials" | "manual" | "auto-discover";
+
+/**
+ * credential_source（T391 で `claude-credentials` を廃止し subscription に置換）。
+ *
+ * - `manual`: API key / 永続的なアクセストークン。keychain に保存し spawn-agent で inject する
+ * - `subscription`: Claude Max 等の subscription。**Claude Code 本体が `~/.claude/.credentials.json`
+ *   で refresh 管理する**ため、cmux-team は keychain に保存せず spawn-agent でも inject しない。
+ *   proxy が `ANTHROPIC_BASE_URL` 経由でリクエストを観測し organization_id / auth_hash を埋める
+ * - `auto-discover`: proxy 観測のみで自動登録された token。selectable=0 で固定
+ */
+export type CredentialSource = "manual" | "subscription" | "auto-discover";
 
 export interface Token {
   id: number;
   handle: string;
-  organization_id: string;
-  auth_hash: string;
+  /**
+   * organization_id（subscription 登録直後は null。proxy が初回観測時に埋める）。
+   * `manual` / `auto-discover` は登録時点で必ず確定している。
+   */
+  organization_id: string | null;
+  /**
+   * auth_hash（subscription 登録直後は null。proxy が初回観測時に埋める）。
+   * `manual` / `auto-discover` は登録時点で必ず確定している。
+   */
+  auth_hash: string | null;
   plan: TokenPlan;
   plan_ratio: number | null;
   credential_source: CredentialSource | null;
   tags: string[];
   selectable: boolean;
   created_at: string;
+}
+
+/**
+ * spawn-agent が `CMUX_CLAUDE_TOKEN` を inject すべき credential_source か判定する（T391）。
+ *
+ * - `subscription` / `auto-discover` / null → false（inject しない）
+ * - `manual` → true
+ *
+ * subscription は Claude Code 本体が refresh 管理するため inject すると stale token 障害になる。
+ * auto-discover は proxy 観測専用で keychain に有効 token を保持していない可能性が高いため inject しない。
+ */
+export function shouldInjectCredential(source: CredentialSource | null): boolean {
+  return source === "manual";
+}
+
+/**
+ * 指定した credential_source が keychain に token を保持しているか判定する（T391）。
+ *
+ * `subscription` source は keychain に書き込まないため `retrieveTokenFromKeychain` を
+ * 呼んではならない。誤呼び出しを検出するため呼び出し前に本関数で assert する。
+ *
+ * @throws keychain 参照不可 source の場合 Error
+ */
+export function assertCanRetrieveFromKeychain(source: CredentialSource | null): void {
+  if (source === "subscription") {
+    throw new Error("subscription token must not be retrieved from keychain");
+  }
 }
 
 export interface UsageSnapshot {
@@ -133,8 +178,8 @@ const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS tokens (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   handle            TEXT    NOT NULL UNIQUE,
-  organization_id   TEXT    NOT NULL UNIQUE,
-  auth_hash         TEXT    NOT NULL,
+  organization_id   TEXT    UNIQUE,
+  auth_hash         TEXT,
   plan              TEXT    NOT NULL DEFAULT 'unknown',
   plan_ratio        REAL,
   credential_source TEXT,
@@ -197,8 +242,95 @@ export function initTokenDB(opts?: InitTokenDBOptions): Database {
   ensureTokensColumns(db);
   ensureUsageSnapshotsColumns(db);
   ensureLeasesColumns(db);
+  // T391: claude-credentials 旧 source を持つ row を subscription に変換し
+  // auth_hash を NULL に倒す。同時に旧 NOT NULL 制約を持つ table は re-create する。
+  migrateTokensSchemaT391(db);
+  migrateClaudeCredentialsToSubscription(db);
 
   return db;
+}
+
+/**
+ * T391: tokens.organization_id / auth_hash の `NOT NULL` 制約を解除する schema migration。
+ *
+ * - subscription token は登録時点では organization_id / auth_hash 未確定のため
+ *   両カラムを NULL 許容に変更する必要がある
+ * - SQLite は ALTER COLUMN で `NOT NULL` を緩めることができないので table を re-create する
+ * - 既に NULL 許容なら no-op（冪等）
+ */
+function migrateTokensSchemaT391(db: Database): void {
+  const cols = db.prepare("PRAGMA table_info(tokens)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const orgCol = cols.find((c) => c.name === "organization_id");
+  const authCol = cols.find((c) => c.name === "auth_hash");
+  // 旧 schema は org/auth とも NOT NULL=1。両方とも NULL 許容になっていれば skip。
+  if (!orgCol || !authCol) return;
+  if (orgCol.notnull === 0 && authCol.notnull === 0) return;
+
+  console.warn("[token-store] T391 migration: relaxing NOT NULL on tokens.organization_id / auth_hash");
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE tokens_new (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        handle            TEXT    NOT NULL UNIQUE,
+        organization_id   TEXT    UNIQUE,
+        auth_hash         TEXT,
+        plan              TEXT    NOT NULL DEFAULT 'unknown',
+        plan_ratio        REAL,
+        credential_source TEXT,
+        tags              TEXT    NOT NULL DEFAULT '["any"]',
+        selectable        INTEGER NOT NULL DEFAULT 1,
+        created_at        TEXT    NOT NULL
+      )
+    `);
+    db.exec(`
+      INSERT INTO tokens_new
+        (id, handle, organization_id, auth_hash, plan, plan_ratio,
+         credential_source, tags, selectable, created_at)
+      SELECT
+        id, handle, organization_id, auth_hash, plan, plan_ratio,
+        credential_source, tags, selectable, created_at
+      FROM tokens
+    `);
+    db.exec("DROP TABLE tokens");
+    db.exec("ALTER TABLE tokens_new RENAME TO tokens");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_tokens_selectable ON tokens(selectable)");
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+/**
+ * T391: 旧 `claude-credentials` source の row を `subscription` に変換し
+ * auth_hash を NULL に倒す（Claude Code 本体が refresh 管理する snapshot を
+ * cmux-team が持ち回ると stale 化するため）。
+ *
+ * - 後方互換は取らない（CLAUDE.md feedback 「後方互換コードは不要」）
+ * - 冪等。`claude-credentials` row が無ければ no-op
+ * - 1 件以上書き換わったら 1 行 console.warn してログに残す
+ * - 必須カラム（credential_source / auth_hash）が schema に無ければ skip
+ *   （壊れた DB / テストで意図的に schema を歪めた場合の防御）
+ */
+function migrateClaudeCredentialsToSubscription(db: Database): void {
+  const cols = db.prepare("PRAGMA table_info(tokens)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map((c) => c.name));
+  if (!colNames.has("credential_source") || !colNames.has("auth_hash")) {
+    return;
+  }
+  const result = db
+    .prepare(
+      "UPDATE tokens SET credential_source = 'subscription', auth_hash = NULL WHERE credential_source = 'claude-credentials'",
+    )
+    .run();
+  const changed = Number(result.changes);
+  if (changed > 0) {
+    console.warn(`[token-store] T391 migrated ${changed} row(s): claude-credentials → subscription`);
+  }
 }
 
 function ensureTokensColumns(db: Database): void {
@@ -251,8 +383,10 @@ function ensureLeasesColumns(db: Database): void {
 
 export interface InsertTokenInput {
   handle: string;
-  organization_id: string;
-  auth_hash: string;
+  /** subscription の登録時は null 可（proxy が初観測時に埋める）。manual / auto-discover は必須。 */
+  organization_id: string | null;
+  /** subscription の登録時は null 可。manual / auto-discover は必須。 */
+  auth_hash: string | null;
   plan: TokenPlan;
   plan_ratio: number | null;
   tags: string[];
@@ -263,8 +397,8 @@ export interface InsertTokenInput {
 interface TokenRow {
   id: number;
   handle: string;
-  organization_id: string;
-  auth_hash: string;
+  organization_id: string | null;
+  auth_hash: string | null;
   plan: string;
   plan_ratio: number | null;
   credential_source: string | null;
@@ -382,10 +516,31 @@ export function deleteToken(db: Database, token_id: number): void {
 export function updateTokenAuth(
   db: Database,
   token_id: number,
-  new_auth_hash: string,
+  new_auth_hash: string | null,
 ): void {
   db.prepare("UPDATE tokens SET auth_hash = ? WHERE id = ?").run(
     new_auth_hash,
+    token_id,
+  );
+}
+
+/**
+ * T391: subscription token の `organization_id` を proxy 初観測時に埋める。
+ *
+ * subscription 登録時は organization_id が null の状態で row を作る。proxy が
+ * 初回リクエストのレスポンスヘッダ `anthropic-organization-id` を観測したら
+ * 本関数で UPDATE する。
+ *
+ * 競合の組（同一 organization_id を持つ別 row が既に存在する場合）は
+ * UNIQUE 制約違反で SQLite が throw するため、呼び出し側で try/catch する。
+ */
+export function updateTokenOrganizationId(
+  db: Database,
+  token_id: number,
+  organization_id: string,
+): void {
+  db.prepare("UPDATE tokens SET organization_id = ? WHERE id = ?").run(
+    organization_id,
     token_id,
   );
 }

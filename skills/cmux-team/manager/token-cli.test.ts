@@ -69,6 +69,7 @@ import {
   cmdTokenRotate,
   cmdTokenSetPlan,
   cmdTokenPromote,
+  cmdTokenMigrateSubscription,
 } from "./token-cli";
 import {
   initTokenDB,
@@ -78,6 +79,7 @@ import {
   retrieveTokenFromKeychain,
   storeTokenInKeychain,
   upsertUsageSnapshot,
+  KeychainNotFoundError,
   __resetInMemoryKeychainForTest,
   __setClaudeCodeKeychainForTest,
   __resetClaudeCodeKeychainForTest,
@@ -260,41 +262,14 @@ function writeClaudeCredentials(opts: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("cmdTokenAdd (integration)", () => {
-  test("credentials 経路成功 → DB / Keychain に登録される (org_id は probe 結果)", async () => {
-    setArgv("add");
-    writeClaudeCredentials({
-      accessToken: "cred-token-AAA",
-      rateLimitTier: "default_claude_max_20x",
-    });
-    setReadlineAnswers(
-      "1", // source = credential
-      "kddi-dev", // display name → @kddi
-      "any,kddi", // tags
-    );
-    await withMockedFetch("org-cred-1", async () => {
-      await cmdTokenAdd();
-    });
-
-    const db = initTokenDB();
-    try {
-      const tok = getTokenByHandle(db, "@kddi");
-      expect(tok).not.toBeNull();
-      expect(tok?.organization_id).toBe("org-cred-1");
-      expect(tok?.plan).toBe("max-x20");
-      expect(tok?.plan_ratio).toBe(20.0);
-      expect(tok?.auth_hash).toMatch(/^[a-f0-9]{12}$/); // R7
-      expect(tok?.credential_source).toBe("claude-credentials"); // R9
-      expect(tok?.tags).toEqual(["any", "kddi"]);
-      expect(retrieveTokenFromKeychain("@kddi")).toBe("cred-token-AAA");
-    } finally {
-      db.close();
-    }
-  });
+  // T391: 旧 "credentials 経路成功" テスト（source=1 = cred 自動読み込み）は
+  // claude-credentials credential_source の廃止により無効化。代わりに
+  // `--subscription` flag のテスト群を後段の `describe("cmdTokenAdd --subscription")` に追加した。
 
   test("organization_id を probe できないと exit 1", async () => {
     setArgv("add");
     setReadlineAnswers(
-      "2", // manual
+      "1", // T391: 新仕様では [1] = manual (token 貼り付け)
       "tok-no-probe",
       "personal",
       "any",
@@ -333,7 +308,7 @@ describe("cmdTokenAdd (integration)", () => {
 
     setArgv("add");
     setReadlineAnswers(
-      "2", // manual
+      "1", // T391: source = manual (旧 [2])
       "new-token",
       "", // plan prompt = unknown (T349)
       "neww",
@@ -366,7 +341,7 @@ describe("cmdTokenAdd (integration)", () => {
 
     setArgv("add");
     setReadlineAnswers(
-      "2", // manual
+      "1", // T391: source = manual (旧 [2])
       "new-token",
       "", // plan prompt = unknown (T349)
       "personal", // → @pers (重複)
@@ -388,7 +363,7 @@ describe("cmdTokenAdd (integration)", () => {
   test("manual 経路成功 (readline で token 貼り付け)", async () => {
     setArgv("add");
     setReadlineAnswers(
-      "2", // source = manual
+      "1", // T391: source = manual (旧 [2] が [1] に統一された)
       "manual-test-token-XYZ", // token
       "", // plan prompt = unknown (T349)
       "personal", // display name
@@ -413,10 +388,10 @@ describe("cmdTokenAdd (integration)", () => {
   });
 
   // T349: rateLimitTier 由来で plan が解決できない場合の対話 prompt
-  test("T1: source=2 で plan prompt に max-x20 を入力すると plan/plan_ratio が確定する (T349)", async () => {
+  test("T1: source=1 (manual) で plan prompt に max-x20 を入力すると plan/plan_ratio が確定する (T349)", async () => {
     setArgv("add");
     setReadlineAnswers(
-      "2", // source = manual
+      "1", // T391: source = manual
       "tok-T1", // token
       "max-x20", // plan prompt
       "personal", // display name → @pers
@@ -437,10 +412,10 @@ describe("cmdTokenAdd (integration)", () => {
     }
   });
 
-  test("T2: source=2 で plan prompt に空 Enter で plan=unknown / plan_ratio=null、organizationId 行と prompt 行の間に空行 (T349)", async () => {
+  test("T2: source=1 (manual) で plan prompt に空 Enter で plan=unknown / plan_ratio=null、organizationId 行と prompt 行の間に空行 (T349)", async () => {
     setArgv("add");
     setReadlineAnswers(
-      "2",
+      "1", // T391: source = manual
       "tok-T2",
       "", // plan prompt → unknown
       "personal",
@@ -468,10 +443,10 @@ describe("cmdTokenAdd (integration)", () => {
     expect(consoleLogs.join("\n")).not.toContain("rateLimitTier:");
   });
 
-  test("T3: source=2 で plan prompt に wrong-plan を入力するとエラー後に再入力で max-x5 が確定する (T349)", async () => {
+  test("T3: source=1 (manual) で plan prompt に wrong-plan を入力するとエラー後に再入力で max-x5 が確定する (T349)", async () => {
     setArgv("add");
     setReadlineAnswers(
-      "2",
+      "1", // T391: source = manual
       "tok-T3",
       "wrong-plan", // 不正値 → 再入力
       "max-x5",
@@ -496,64 +471,9 @@ describe("cmdTokenAdd (integration)", () => {
     expect(consoleErrors.join("\n")).toContain("pro / max-x5 / max-x20");
   });
 
-  test("T4: source=1 + rateLimitTier=default_claude_max_20x なら plan prompt は出ない (T349)", async () => {
-    setArgv("add");
-    writeClaudeCredentials({
-      accessToken: "cred-token-T4",
-      rateLimitTier: "default_claude_max_20x",
-    });
-    setReadlineAnswers(
-      "1", // source = credential
-      "personal",
-      "any",
-    );
-    await withMockedFetch("org-T4", async () => {
-      await cmdTokenAdd();
-    });
-
-    const db = initTokenDB();
-    try {
-      const tok = getTokenByHandle(db, "@pers");
-      expect(tok).not.toBeNull();
-      expect(tok?.plan).toBe("max-x20");
-      expect(tok?.plan_ratio).toBe(20.0);
-    } finally {
-      db.close();
-    }
-
-    // plan prompt が console に出ていないことを explicit に検証
-    expect(consoleLogs.join("\n")).not.toContain("plan (pro / max-x5 / max-x20");
-  });
-
-  test("T6: source=1 + 未知 rateLimitTier では plan prompt が出る、未知 tier ログは出ない (T349)", async () => {
-    setArgv("add");
-    writeClaudeCredentials({
-      accessToken: "cred-token-T6",
-      rateLimitTier: "default_claude_max_50x", // 未知 tier
-    });
-    setReadlineAnswers(
-      "1",
-      "max-x20", // plan prompt
-      "personal",
-      "any",
-    );
-    await withMockedFetch("org-T6", async () => {
-      await cmdTokenAdd();
-    });
-
-    const db = initTokenDB();
-    try {
-      const tok = getTokenByHandle(db, "@pers");
-      expect(tok).not.toBeNull();
-      expect(tok?.plan).toBe("max-x20");
-      expect(tok?.plan_ratio).toBe(20.0);
-    } finally {
-      db.close();
-    }
-
-    // 未知 tier をそのままログに出していないこと
-    expect(consoleLogs.join("\n")).not.toContain("default_claude_max_50x");
-  });
+  // T391: T4 / T6（旧 source=1 = cred 自動読み込みの rateLimitTier 由来 plan 解決）は
+  // claude-credentials credential_source の廃止により無効化。promote の `[1]` 経路は
+  // 残っているため rateLimitTier 由来の plan 解決は cmdTokenPromote で引き続きカバーされる。
 
   // skip: tags=auto 警告ロジックは main の cmdTokenAdd に存在しない。
   // 移植には main 側の token-cli.ts に warning 分岐を追加する必要があり、
@@ -564,6 +484,213 @@ describe("cmdTokenAdd (integration)", () => {
   // abort 版の `__setKeychainTestFailureMode` フックも main の token-cli.ts には存在しない。
   // フォローアップタスク「T319 補償 tx 追加」で対応予定。(R3)
   test.skip("Keychain 失敗 → DB 巻き戻し: main に補償 tx 未実装 (R3)", () => {});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// cmdTokenAdd --subscription / --from-claude-credentials (T391)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("cmdTokenAdd --subscription (T391)", () => {
+  test("--subscription <handle> --plan max-x20 --tags any で keychain に書かれず subscription source で登録される", async () => {
+    setArgv("add", "--subscription", "@tayo", "--plan", "max-x20", "--tags", "any,oss");
+
+    await cmdTokenAdd();
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@tayo");
+      expect(tok).not.toBeNull();
+      expect(tok?.handle).toBe("@tayo");
+      expect(tok?.plan).toBe("max-x20");
+      expect(tok?.plan_ratio).toBe(20.0);
+      expect(tok?.tags).toEqual(["any", "oss"]);
+      expect(tok?.credential_source).toBe("subscription");
+      expect(tok?.auth_hash).toBeNull();
+      expect(tok?.organization_id).toBeNull();
+      expect(tok?.selectable).toBe(true);
+    } finally {
+      db.close();
+    }
+
+    // keychain に entry が無いこと（in-memory keychain から throw）
+    let caught: KeychainNotFoundError | null = null;
+    try {
+      retrieveTokenFromKeychain("@tayo");
+    } catch (e: any) {
+      if (e instanceof KeychainNotFoundError) caught = e;
+    }
+    expect(caught).toBeInstanceOf(KeychainNotFoundError);
+  });
+
+  test("--subscription @ なし handle の場合 @ を自動で補正する", async () => {
+    setArgv("add", "--subscription", "tayo");
+    await cmdTokenAdd();
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@tayo");
+      expect(tok).not.toBeNull();
+      expect(tok?.credential_source).toBe("subscription");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("--subscription --plan / --tags 省略時は plan=unknown / tags=[any]", async () => {
+    setArgv("add", "--subscription", "@def");
+    await cmdTokenAdd();
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@def");
+      expect(tok?.plan).toBe("unknown");
+      expect(tok?.plan_ratio).toBeNull();
+      expect(tok?.tags).toEqual(["any"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("--subscription --organization-id を指定すると DB に反映される", async () => {
+    setArgv(
+      "add",
+      "--subscription",
+      "@orgz",
+      "--plan",
+      "max-x5",
+      "--organization-id",
+      "org-explicit-1",
+    );
+    await cmdTokenAdd();
+
+    const db = initTokenDB();
+    try {
+      const tok = getTokenByHandle(db, "@orgz");
+      expect(tok?.organization_id).toBe("org-explicit-1");
+      expect(tok?.plan).toBe("max-x5");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("--subscription handle 重複で exit 1", async () => {
+    {
+      const db = initTokenDB();
+      try {
+        insertToken(db, makeToken({ handle: "@dup", organization_id: "org-dup-existing" }));
+      } finally {
+        db.close();
+      }
+    }
+    setArgv("add", "--subscription", "@dup");
+
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenAdd();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("@dup");
+  });
+
+  test("--subscription --plan に不正値を渡すと exit 1", async () => {
+    setArgv("add", "--subscription", "@bad", "--plan", "max-x999");
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenAdd();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    expect(consoleErrors.join("\n")).toContain("max-x999");
+  });
+
+  test("--from-claude-credentials は v4.20.0 で削除されたエラーで exit 1", async () => {
+    setArgv("add", "--from-claude-credentials", "@x");
+    let caught: TestExitError | null = null;
+    try {
+      await cmdTokenAdd();
+    } catch (e) {
+      caught = e as TestExitError;
+    }
+    expect(caught).toBeInstanceOf(TestExitError);
+    expect(caught?.code).toBe(1);
+    const errs = consoleErrors.join("\n");
+    expect(errs).toContain("--from-claude-credentials");
+    expect(errs).toContain("v4.20.0");
+    expect(errs).toContain("--subscription");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// cmdTokenMigrateSubscription (T391)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("cmdTokenMigrateSubscription (T391)", () => {
+  test("0 件のときは案内のみで成功", async () => {
+    setArgv("migrate-subscription");
+    await cmdTokenMigrateSubscription();
+    expect(consoleLogs.join("\n")).toContain("subscription source の token はありません");
+  });
+
+  test("subscription row の keychain entry を冪等に削除する", async () => {
+    // arrange: subscription row を 2 件追加し、keychain に偽の entry を仕込む
+    {
+      const db = initTokenDB();
+      try {
+        insertToken(db, {
+          handle: "@tayo",
+          organization_id: null,
+          auth_hash: null,
+          plan: "max-x20",
+          plan_ratio: 20.0,
+          tags: ["any"],
+          credential_source: "subscription",
+          selectable: true,
+        });
+        insertToken(db, {
+          handle: "@dear",
+          organization_id: "org-dear",
+          auth_hash: null,
+          plan: "max-x20",
+          plan_ratio: 20.0,
+          tags: ["dear"],
+          credential_source: "subscription",
+          selectable: true,
+        });
+        // manual row は対象外であることを確認するためのコントロール
+        insertToken(
+          db,
+          makeToken({
+            handle: "@kept",
+            organization_id: "org-kept",
+            credential_source: "manual",
+          }),
+        );
+      } finally {
+        db.close();
+      }
+    }
+    storeTokenInKeychain("@tayo", "stale-token-AAA");
+    storeTokenInKeychain("@dear", "stale-token-BBB");
+    storeTokenInKeychain("@kept", "manual-token-CCC");
+
+    setArgv("migrate-subscription");
+    await cmdTokenMigrateSubscription();
+
+    // subscription row の keychain entry は削除済み
+    expect(() => retrieveTokenFromKeychain("@tayo")).toThrow(KeychainNotFoundError);
+    expect(() => retrieveTokenFromKeychain("@dear")).toThrow(KeychainNotFoundError);
+    // manual row の keychain entry は維持
+    expect(retrieveTokenFromKeychain("@kept")).toBe("manual-token-CCC");
+
+    // 冪等性: 2 回目の実行も成功する
+    await cmdTokenMigrateSubscription();
+    expect(consoleErrors.join("\n")).not.toContain("Error:");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -710,7 +837,8 @@ describe("cmdTokenRotate (integration)", () => {
       const db = initTokenDB();
       try {
         const t = insertToken(db, makeToken({ handle: "@rot", organization_id: "org-rot" }));
-        oldAuthHash = t.auth_hash;
+        // T391: makeToken は manual default で auth_hash を必ず string で渡すため non-null
+        oldAuthHash = t.auth_hash!;
       } finally {
         db.close();
       }
@@ -841,13 +969,14 @@ describe("cmdTokenPromote (integration)", () => {
         credential_source: "auto-discover",
         selectable: false,
       });
-      return { id: tok.id, organization_id: tok.organization_id };
+      // T391: seedAutoDiscover では organization_id を必ず string で渡しているため non-null
+      return { id: tok.id, organization_id: tok.organization_id! };
     } finally {
       db.close();
     }
   }
 
-  test("R-promote-1: 正常系 credential 経路で promote 成功", async () => {
+  test("R-promote-1: 正常系 credential 経路で promote 成功 (T391: credential_source=manual)", async () => {
     const { id, organization_id } = seedAutoDiscover();
     writeClaudeCredentials({
       accessToken: "new-cred-token-XYZ",
@@ -855,7 +984,7 @@ describe("cmdTokenPromote (integration)", () => {
     });
     setArgv("promote", "@cd8d", "kddi");
     setReadlineAnswers(
-      "1", // source = credential
+      "1", // source = credential（promote では cred 経路は残る、ただし保存は manual として）
       "any", // tags
     );
     await withMockedFetch(organization_id, async () => {
@@ -871,7 +1000,8 @@ describe("cmdTokenPromote (integration)", () => {
       expect(tok?.plan).toBe("max-x20");
       expect(tok?.plan_ratio).toBe(20.0);
       expect(tok?.selectable).toBe(true);
-      expect(tok?.credential_source).toBe("claude-credentials");
+      // T391: claude-credentials を廃止。promote の保存先は manual に統一
+      expect(tok?.credential_source).toBe("manual");
       expect(tok?.tags).toEqual(["any"]);
       expect(retrieveTokenFromKeychain("@kddi")).toBe("new-cred-token-XYZ");
     } finally {
@@ -1173,7 +1303,11 @@ describe("readClaudeCredentials priority (T345)", () => {
     });
   }
 
-  test("T1: macOS Keychain 成功 → Keychain 値が使われる (file 値は無視)", async () => {
+  // T391: T1〜T5 は cmdTokenAdd の `[1] Claude Code credential` 自動読み込み経路を前提としていたが、
+  // claude-credentials credential_source の廃止により cmdTokenAdd は manual のみに簡略化されたため
+  // 以下の T1〜T5 は skip。`readClaudeCredentials` の優先順位ロジック自体は cmdTokenPromote の T7 以降で
+  // 引き続き検証される（promote では cred 読み込みは残るが credential_source=manual で保存される）。
+  test.skip("T1: macOS Keychain 成功 → Keychain 値が使われる (file 値は無視) [T391: cmdTokenAdd cred 経路廃止により skip]", async () => {
     __setClaudeCodeKeychainForTest(
       "testuser",
       makeKeychainJson({
@@ -1209,7 +1343,7 @@ describe("readClaudeCredentials priority (T345)", () => {
     }
   });
 
-  test("T2: Keychain 未登録 → ~/.claude/.credentials.json fallback", async () => {
+  test.skip("T2: Keychain 未登録 → ~/.claude/.credentials.json fallback [T391: skip]", async () => {
     // Keychain は空のまま
     writeClaudeCredentials({
       accessToken: "file-BBB",
@@ -1237,7 +1371,7 @@ describe("readClaudeCredentials priority (T345)", () => {
     }
   });
 
-  test("T3: 両方失敗 → exit 1 (新エラー文言)", async () => {
+  test.skip("T3: 両方失敗 → exit 1 (新エラー文言) [T391: skip]", async () => {
     // Keychain 空、ファイルも書き出さない
     setArgv("add");
     setReadlineAnswers("1", "noavail", "any");
@@ -1257,7 +1391,7 @@ describe("readClaudeCredentials priority (T345)", () => {
     expect(errs).toContain(".credentials.json");
   });
 
-  test("T4: Keychain JSON 破損 → file fallback", async () => {
+  test.skip("T4: Keychain JSON 破損 → file fallback [T391: skip]", async () => {
     __setClaudeCodeKeychainForTest("testuser", "this is not json");
     writeClaudeCredentials({
       accessToken: "file-CCC",
@@ -1281,7 +1415,7 @@ describe("readClaudeCredentials priority (T345)", () => {
     }
   });
 
-  test("T5: Keychain JSON は valid だが claudeAiOauth.accessToken 欠損 → file fallback", async () => {
+  test.skip("T5: Keychain JSON は valid だが claudeAiOauth.accessToken 欠損 → file fallback [T391: skip]", async () => {
     __setClaudeCodeKeychainForTest(
       "testuser",
       JSON.stringify({ claudeAiOauth: {} }),
@@ -1370,7 +1504,8 @@ describe("readClaudeCredentials priority (T345)", () => {
           db,
           makeToken({ handle: "@rotk", organization_id: "rot-org" }),
         );
-        oldAuthHash = t.auth_hash;
+        // T391: makeToken は manual default で auth_hash を必ず string で渡すため non-null
+        oldAuthHash = t.auth_hash!;
       } finally {
         db.close();
       }

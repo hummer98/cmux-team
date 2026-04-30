@@ -24,6 +24,7 @@ import {
   readClaudeCodeKeychain,
   updateTokenPromoteFields,
   KeychainUnsupportedError,
+  type CredentialSource,
   type TokenPlan,
 } from "./token-store";
 // T323: 共有フォーマッタを token-format.ts に切り出し（pool-cli.ts と再利用）
@@ -174,11 +175,103 @@ async function probeOrganizationId(accessToken: string): Promise<string | null> 
 // T323: formatUtil / formatReset / formatSelectable は token-format.ts に移管
 
 // ─────────────────────────────────────────────────────────────────────────────
-// token add
+// token add 引数解析（T391）
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface SubscriptionAddArgs {
+  /** `--subscription <handle>` で渡される handle（例 `@tayo`）。`@` 抜きで渡された場合は補正する */
+  handle: string;
+  plan: TokenPlan;
+  planRatio: number | null;
+  tags: string[];
+  organizationId: string | null;
+}
+
+/**
+ * `cmux-team token add ...` の追加引数（T391）から subscription mode かを判定し
+ * 必要なら引数を返す。
+ *
+ * - `--from-claude-credentials` flag が含まれる場合は v4.20.0 で削除済みエラーで exit 1
+ * - `--subscription <handle>` 形式なら subscription mode で `SubscriptionAddArgs` を返す
+ * - それ以外は null を返す（呼び出し側は対話 UI へフォールバック）
+ *
+ * tokens 引数は `cmux-team token add` 以降（`process.argv.slice(4)`）を想定。
+ */
+function parseTokenAddArgs(argv: string[]): SubscriptionAddArgs | null {
+  // `--from-claude-credentials` は T391 で削除（後方互換なし）
+  if (argv.includes("--from-claude-credentials")) {
+    console.error(
+      "Error: --from-claude-credentials は v4.20.0 で削除されました。Use --subscription <handle> instead.",
+    );
+    process.exit(1);
+  }
+
+  const subIdx = argv.indexOf("--subscription");
+  if (subIdx === -1) return null;
+
+  // --subscription の直後の引数を handle として扱う。flag-style の `--xxx` は弾く。
+  const handleRaw = argv[subIdx + 1];
+  if (!handleRaw || handleRaw.startsWith("--")) {
+    console.error("Error: --subscription <handle> を指定してください（例: --subscription @tayo）");
+    process.exit(1);
+  }
+  const handle = handleRaw.startsWith("@") ? handleRaw : `@${handleRaw}`;
+
+  // --plan
+  const planArg = readFlag(argv, "--plan");
+  let plan: TokenPlan = "unknown";
+  let planRatio: number | null = null;
+  if (planArg) {
+    const entry = PLAN_BY_NAME[planArg];
+    if (!entry) {
+      console.error(`Error: 不正な plan: ${planArg}（pro / max-x5 / max-x20 のいずれかを指定）`);
+      process.exit(1);
+    }
+    plan = entry.plan;
+    planRatio = entry.ratio;
+  }
+
+  // --tags（comma-separated）
+  const tagsArg = readFlag(argv, "--tags");
+  const tags = tagsArg
+    ? tagsArg.split(",").map((t) => t.trim()).filter(Boolean)
+    : ["any"];
+
+  // --organization-id（任意）
+  const organizationId = readFlag(argv, "--organization-id");
+
+  return { handle, plan, planRatio, tags, organizationId };
+}
+
+/** `argv` から `--<name> <value>` 形式の値を取り出す（無ければ null）。 */
+function readFlag(argv: string[], name: string): string | null {
+  const idx = argv.indexOf(name);
+  if (idx === -1) return null;
+  const v = argv[idx + 1];
+  if (!v || v.startsWith("--")) return null;
+  return v;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token add（T391: --subscription / --from-claude-credentials を処理）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `cmux-team token add` のエントリ。
+ *
+ * - `--subscription <handle>` flag があれば非対話で subscription source として登録（keychain 不参照）
+ * - `--from-claude-credentials` は v4.20.0 で削除（exit 1）
+ * - flag なしなら従来の対話 UI（manual のみ。`[1] claude-credentials` は T391 で削除）
+ */
 export async function cmdTokenAdd(): Promise<void> {
-  // KEYCHAIN_TEST_MODE=1 の場合は in-memory Keychain でフォールバック（テスト用）
+  const extraArgs = process.argv.slice(4);
+  const subArgs = parseTokenAddArgs(extraArgs);
+  if (subArgs) {
+    await cmdTokenAddSubscription(subArgs);
+    return;
+  }
+
+  // Keychain が必要な経路（manual）のみ macOS / KEYCHAIN_TEST_MODE をチェック
   if (process.platform !== "darwin" && process.env.KEYCHAIN_TEST_MODE !== "1") {
     console.error("Error: token pool は macOS Keychain が必要です（macOS 以外は未対応）");
     process.exit(1);
@@ -187,33 +280,27 @@ export async function cmdTokenAdd(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   try {
+    // T391: 対話 UI の `[1] Claude Code credential` を削除し manual のみに簡略化。
+    // subscription を対話で登録したい場合は `--subscription <handle>` flag を使う旨を案内する。
     console.log("source:");
-    console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json)");
-    console.log("  [2] 手動入力（token を貼り付け）");
+    console.log("  [1] 手動入力（token を貼り付け）");
+    console.log("");
+    console.log("Note: Claude Max などの subscription token は");
+    console.log("      `cmux-team token add --subscription <handle> [--plan max-x20] [--tags any]` を使ってください。");
+    console.log("      （Claude Code 本体が認証管理するため keychain には保存しません）");
     const source = (await prompt(rl, "> ")).trim();
 
-    let accessToken: string;
-    let rateLimitTier: string | undefined;
-
-    if (source === "1") {
-      const cred = await readClaudeCredentials();
-      if (!cred) {
-        console.error("Error: Claude Code credential が見つかりません（macOS Keychain / ~/.claude/.credentials.json のどちらも読めませんでした）");
-        process.exit(1);
-      }
-      accessToken = cred.accessToken;
-      rateLimitTier = cred.rateLimitTier;
-    } else if (source === "2") {
-      accessToken = (await prompt(rl, "token を貼り付け: ")).trim();
-      if (!accessToken) {
-        console.error("Error: token が空です");
-        process.exit(1);
-      }
-      rateLimitTier = undefined;
-    } else {
-      console.error("Error: 1 または 2 を選択してください");
+    if (source !== "1") {
+      console.error("Error: 1 を選択してください（subscription は --subscription flag を使用）");
       process.exit(1);
     }
+
+    const accessToken = (await prompt(rl, "token を貼り付け: ")).trim();
+    if (!accessToken) {
+      console.error("Error: token が空です");
+      process.exit(1);
+    }
+    const rateLimitTier: string | undefined = undefined;
 
     // organization_id を probe
     process.stdout.write("organization_id を取得中...");
@@ -276,7 +363,7 @@ export async function cmdTokenAdd(): Promise<void> {
       plan,
       plan_ratio: planRatio,
       tags,
-      credential_source: source === "1" ? "claude-credentials" : "manual",
+      credential_source: "manual",
       selectable: true,
     });
     db.close();
@@ -287,9 +374,67 @@ export async function cmdTokenAdd(): Promise<void> {
   }
 }
 
+/**
+ * `cmux-team token add --subscription <handle> [--plan ...] [--tags ...] [--organization-id ...]`（T391）。
+ *
+ * - keychain には書き込まない（Claude Code 本体が `~/.claude/.credentials.json` で管理）
+ * - `auth_hash` / `organization_id` は省略可。proxy が初観測時に UPDATE する
+ * - 既存 handle と衝突したら exit 1
+ */
+async function cmdTokenAddSubscription(args: SubscriptionAddArgs): Promise<void> {
+  const db = initTokenDB();
+  try {
+    const existing = getTokenByHandle(db, args.handle);
+    if (existing) {
+      console.error(`Error: handle ${args.handle} は既に使用されています。別の名前を指定してください。`);
+      process.exit(1);
+    }
+    if (args.organizationId) {
+      const dup = db
+        .prepare("SELECT handle FROM tokens WHERE organization_id = ?")
+        .get(args.organizationId) as { handle: string } | undefined;
+      if (dup) {
+        console.error(`Error: organization_id が既に ${dup.handle} として登録されています。`);
+        process.exit(1);
+      }
+    }
+
+    insertToken(db, {
+      handle: args.handle,
+      organization_id: args.organizationId,
+      auth_hash: null,
+      plan: args.plan,
+      plan_ratio: args.planRatio,
+      tags: args.tags,
+      credential_source: "subscription",
+      selectable: true,
+    });
+    console.log(
+      `Registered subscription: ${args.handle}  ${args.plan}  tags:[${args.tags.join(", ")}]  ✓`,
+    );
+    console.log("Note: keychain には保存しません（Claude Code 本体が認証管理）");
+  } finally {
+    db.close();
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // token list
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** T391: credential_source を list 表示用ラベルに整形する。 */
+function formatCredLabel(source: CredentialSource | null): string {
+  switch (source) {
+    case "manual":
+      return "manual";
+    case "subscription":
+      return "oauth-native";
+    case "auto-discover":
+      return "auto";
+    default:
+      return "-";
+  }
+}
 
 export async function cmdTokenList(): Promise<void> {
   const db = initTokenDB();
@@ -304,6 +449,7 @@ export async function cmdTokenList(): Promise<void> {
   const header = [
     "HANDLE  ",
     "PLAN    ",
+    "CRED        ",
     "TAGS      ",
     "SELECTABLE",
     "CAP   ",
@@ -345,6 +491,7 @@ export async function cmdTokenList(): Promise<void> {
     const row = [
       tok.handle.padEnd(8),
       tok.plan.padEnd(8),
+      formatCredLabel(tok.credential_source).padEnd(12),
       tok.tags.join(",").slice(0, 10).padEnd(10),
       selectable.padEnd(10),
       capStr.padEnd(6),
@@ -356,6 +503,54 @@ export async function cmdTokenList(): Promise<void> {
   }
 
   db.close();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// token migrate-subscription (T391)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `cmux-team token migrate-subscription`（T391）。
+ *
+ * 旧 `claude-credentials` source は initTokenDB の起動時 migration で
+ * 既に `subscription` + `auth_hash=NULL` に変換されている。本コマンドは
+ * その row 群について cmux-team が過去に snapshot した keychain entry
+ * （`security` service=`cmux-team-token`）を `delete-generic-password` で消す。
+ *
+ * - 冪等。entry が無ければ 44 (errSecItemNotFound) を成功扱いで握りつぶす
+ * - subscription source の row 全件を対象とする（旧 claude-credentials 由来かは
+ *   migration 後では判別できないため、subscription 全体を一律 cleanup する）
+ */
+export async function cmdTokenMigrateSubscription(): Promise<void> {
+  const db = initTokenDB();
+  try {
+    const tokens = listTokens(db).filter((t) => t.credential_source === "subscription");
+    if (tokens.length === 0) {
+      console.log("subscription source の token はありません。");
+      return;
+    }
+    let removed = 0;
+    let skipped = 0;
+    for (const tok of tokens) {
+      try {
+        deleteTokenFromKeychain(tok.handle);
+        removed++;
+        console.log(`  ${tok.handle}  keychain entry を削除（または不在）`);
+      } catch (e: any) {
+        if (e instanceof KeychainUnsupportedError) {
+          // 非 macOS は skip（CI 等）
+          skipped++;
+          continue;
+        }
+        // 想定外エラーは warn で続行（冪等性を維持）
+        console.warn(`  ${tok.handle}  Warning: ${e?.message ?? e}`);
+        skipped++;
+      }
+    }
+    console.log(`Done: removed=${removed}, skipped=${skipped}, total=${tokens.length}`);
+  } finally {
+    db.close();
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -556,13 +751,17 @@ export async function cmdTokenPromote(): Promise<void> {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     let accessToken: string;
     let rateLimitTier: string | undefined;
-    let credentialSource: "claude-credentials" | "manual";
+    // T391: promote の credential_source は manual のみに統一する。
+    // subscription source は keychain を持たないため probe → keychain 保存の
+    // promote フローと相容れない。subscription を新規追加する場合は
+    // `cmux-team token add --subscription <handle>` を使う。
+    const credentialSource: CredentialSource = "manual";
     let tags: string[];
     let plan: TokenPlan;
     let planRatio: number | null;
     try {
       console.log("source:");
-      console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json)");
+      console.log("  [1] Claude Code credential (macOS Keychain / ~/.claude/.credentials.json) — manual として保存");
       console.log("  [2] 手動入力（token を貼り付け）");
       const source = (await prompt(rl, "> ")).trim();
       if (source === "1") {
@@ -573,7 +772,6 @@ export async function cmdTokenPromote(): Promise<void> {
         }
         accessToken = cred.accessToken;
         rateLimitTier = cred.rateLimitTier;
-        credentialSource = "claude-credentials";
       } else if (source === "2") {
         accessToken = (await prompt(rl, "token を貼り付け: ")).trim();
         if (!accessToken) {
@@ -581,7 +779,6 @@ export async function cmdTokenPromote(): Promise<void> {
           process.exit(1);
         }
         rateLimitTier = undefined;
-        credentialSource = "manual";
       } else {
         console.error("Error: 1 または 2 を選択してください");
         process.exit(1);
@@ -595,9 +792,10 @@ export async function cmdTokenPromote(): Promise<void> {
         process.exit(1);
       }
       if (probedOrgId !== existing.organization_id) {
+        const existingLabel = existing.organization_id ? `${existing.organization_id.slice(0, 8)}...` : "(null)";
         console.error(
           `Error: 取得した token は ${oldHandle} とは別アカウントです`
-          + ` (existing=${existing.organization_id.slice(0, 8)}... probed=${probedOrgId.slice(0, 8)}...)`,
+          + ` (existing=${existingLabel} probed=${probedOrgId.slice(0, 8)}...)`,
         );
         process.exit(1);
       }

@@ -30,11 +30,14 @@ import {
   computePoolCapacity,
   deleteToken,
   updateTokenAuth,
+  updateTokenOrganizationId,
   updateTokenPlan,
   updateTokenPromoteFields,
   selectToken,
   canSelectAnyToken,
   peekNextToken,
+  shouldInjectCredential,
+  assertCanRetrieveFromKeychain,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -1094,7 +1097,8 @@ describe("updateTokenPromoteFields (T341)", () => {
       plan: "max-x20",
       plan_ratio: 20.0,
       tags: ["any", "kddi"],
-      credential_source: "claude-credentials",
+      // T391: claude-credentials を廃止。promote は manual に統一。
+      credential_source: "manual",
     });
 
     expect(getTokenByHandle(db, "@cd8d")).toBeNull();
@@ -1106,7 +1110,7 @@ describe("updateTokenPromoteFields (T341)", () => {
     expect(got?.plan).toBe("max-x20");
     expect(got?.plan_ratio).toBe(20.0);
     expect(got?.tags).toEqual(["any", "kddi"]);
-    expect(got?.credential_source).toBe("claude-credentials");
+    expect(got?.credential_source).toBe("manual");
     expect(got?.selectable).toBe(true);
   });
 
@@ -2484,5 +2488,213 @@ describe("peekNextToken (T374 / A024)", () => {
     const peek = peekNextToken(db, ["any"]);
     // score 同点 → 安定ソートで先に push された方
     expect(peek?.handle).toBeOneOf(["@a", "@b"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T391: subscription source 関連
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("shouldInjectCredential (T391)", () => {
+  test("manual のみ true、subscription / auto-discover / null は false", () => {
+    expect(shouldInjectCredential("manual")).toBe(true);
+    expect(shouldInjectCredential("subscription")).toBe(false);
+    expect(shouldInjectCredential("auto-discover")).toBe(false);
+    expect(shouldInjectCredential(null)).toBe(false);
+  });
+});
+
+describe("assertCanRetrieveFromKeychain (T391)", () => {
+  test("subscription source は throw する", () => {
+    expect(() => assertCanRetrieveFromKeychain("subscription")).toThrow(
+      "subscription token must not be retrieved from keychain",
+    );
+  });
+
+  test("manual / auto-discover / null は throw しない", () => {
+    expect(() => assertCanRetrieveFromKeychain("manual")).not.toThrow();
+    expect(() => assertCanRetrieveFromKeychain("auto-discover")).not.toThrow();
+    expect(() => assertCanRetrieveFromKeychain(null)).not.toThrow();
+  });
+});
+
+describe("subscription source: organization_id / auth_hash NULL の扱い (T391)", () => {
+  test("subscription row は organization_id / auth_hash null で挿入できる", () => {
+    const tok = insertToken(db, {
+      handle: "@sub1",
+      organization_id: null,
+      auth_hash: null,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "subscription",
+      selectable: true,
+    });
+    expect(tok.organization_id).toBeNull();
+    expect(tok.auth_hash).toBeNull();
+    expect(tok.credential_source).toBe("subscription");
+
+    const got = getTokenByHandle(db, "@sub1");
+    expect(got?.organization_id).toBeNull();
+    expect(got?.auth_hash).toBeNull();
+  });
+
+  test("updateTokenAuth で null → 値の transition が可能（subscription 初観測経路）", () => {
+    const tok = insertToken(db, {
+      handle: "@sub2",
+      organization_id: null,
+      auth_hash: null,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "subscription",
+      selectable: true,
+    });
+    updateTokenAuth(db, tok.id, "abc123def456");
+    expect(getTokenByHandle(db, "@sub2")?.auth_hash).toBe("abc123def456");
+  });
+
+  test("updateTokenOrganizationId で null → 値の transition が可能", () => {
+    const tok = insertToken(db, {
+      handle: "@sub3",
+      organization_id: null,
+      auth_hash: null,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "subscription",
+      selectable: true,
+    });
+    updateTokenOrganizationId(db, tok.id, "org-resolved-001");
+    expect(getTokenByHandle(db, "@sub3")?.organization_id).toBe("org-resolved-001");
+  });
+
+  test("auth_hash IS NULL の row は getTokenByAuthHash でヒットしない", () => {
+    insertToken(db, {
+      handle: "@sub4",
+      organization_id: null,
+      auth_hash: null,
+      plan: "max-x20",
+      plan_ratio: 20.0,
+      tags: ["any"],
+      credential_source: "subscription",
+      selectable: true,
+    });
+    // 任意の auth_hash で検索しても NULL は SQL `=` に常に false で除外される
+    expect(getTokenByAuthHash(db, "anyhash00000")).toBeNull();
+  });
+});
+
+describe("schema migration (T391: claude-credentials → subscription)", () => {
+  test("既存の claude-credentials row は subscription / auth_hash=NULL に変換される", () => {
+    // T391 schema は auth_hash NULL 許容なので、生 SQL で claude-credentials row を仕込んでから
+    // 再 init して migration が走ることを確認する
+    db.exec(`
+      INSERT INTO tokens (handle, organization_id, auth_hash, plan, plan_ratio,
+                          credential_source, tags, selectable, created_at)
+      VALUES ('@legacy', 'org-legacy-001', 'oldhash00aa', 'max-x20', 20.0,
+              'claude-credentials', '["any"]', 1, '2026-04-01T00:00:00.000Z')
+    `);
+    db.close();
+
+    // 再 init で migration を発火
+    const db2 = initTokenDB({
+      dirPath: testDir,
+      dbPath: join(testDir, "tokens.db"),
+    });
+    try {
+      const tok = getTokenByHandle(db2, "@legacy");
+      expect(tok).not.toBeNull();
+      expect(tok?.credential_source).toBe("subscription");
+      expect(tok?.auth_hash).toBeNull();
+      // organization_id は migration では触らない
+      expect(tok?.organization_id).toBe("org-legacy-001");
+    } finally {
+      db2.close();
+    }
+  });
+
+  test("既存に claude-credentials row が無い場合は no-op", () => {
+    insertToken(db, makeToken({ handle: "@m", organization_id: "org-m-mig-noop", credential_source: "manual" }));
+    db.close();
+    const db2 = initTokenDB({
+      dirPath: testDir,
+      dbPath: join(testDir, "tokens.db"),
+    });
+    try {
+      // manual row は触らない
+      expect(getTokenByHandle(db2, "@m")?.credential_source).toBe("manual");
+    } finally {
+      db2.close();
+    }
+  });
+
+  test("旧 NOT NULL 制約 schema を持つ DB を読み込むと auth_hash / organization_id が NULL 許容に re-create される", () => {
+    db.close();
+    // 旧 schema (NOT NULL) を直接作る
+    const oldDbPath = join(testDir, "old-schema.db");
+    const old = new Database(oldDbPath);
+    old.exec(`
+      CREATE TABLE tokens (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        handle            TEXT    NOT NULL UNIQUE,
+        organization_id   TEXT    NOT NULL UNIQUE,
+        auth_hash         TEXT    NOT NULL,
+        plan              TEXT    NOT NULL DEFAULT 'unknown',
+        plan_ratio        REAL,
+        credential_source TEXT,
+        tags              TEXT    NOT NULL DEFAULT '["any"]',
+        selectable        INTEGER NOT NULL DEFAULT 1,
+        created_at        TEXT    NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_tokens_selectable ON tokens(selectable);
+      CREATE TABLE usage_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_id INTEGER NOT NULL UNIQUE,
+        util_5h REAL, util_7d REAL,
+        reset_5h_at TEXT, reset_7d_at TEXT,
+        unified_status TEXT, recorded_at TEXT NOT NULL
+      );
+      CREATE TABLE leases (
+        token_id INTEGER NOT NULL UNIQUE,
+        holder TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (token_id, holder)
+      );
+      INSERT INTO tokens (handle, organization_id, auth_hash, plan, plan_ratio,
+                          credential_source, tags, selectable, created_at)
+      VALUES ('@kept', 'org-kept-001', 'keep0000aaaa', 'max-x20', 20.0,
+              'manual', '["any"]', 1, '2026-04-01T00:00:00.000Z');
+    `);
+    old.close();
+
+    // initTokenDB で migration が走る
+    const db2 = initTokenDB({
+      dirPath: testDir,
+      dbPath: oldDbPath,
+    });
+    try {
+      // 既存 row が維持されていること
+      const tok = getTokenByHandle(db2, "@kept");
+      expect(tok).not.toBeNull();
+      expect(tok?.credential_source).toBe("manual");
+
+      // schema が NULL 許容になっていること（NULL row を挿入できるかで検証）
+      const subTok = insertToken(db2, {
+        handle: "@subA",
+        organization_id: null,
+        auth_hash: null,
+        plan: "max-x20",
+        plan_ratio: 20.0,
+        tags: ["any"],
+        credential_source: "subscription",
+        selectable: true,
+      });
+      expect(subTok.organization_id).toBeNull();
+      expect(subTok.auth_hash).toBeNull();
+    } finally {
+      db2.close();
+    }
   });
 });

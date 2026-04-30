@@ -124,12 +124,14 @@ import {
   cmdTokenRotate,
   cmdTokenSetPlan,
   cmdTokenPromote,
+  cmdTokenMigrateSubscription,
 } from "./token-cli";
 import { cmdPoolStatus, showPoolUsage } from "./pool-cli";
 import {
   initTokenDB,
   selectToken,
   retrieveTokenFromKeychain,
+  shouldInjectCredential,
   KeychainNotFoundError,
 } from "./token-store";
 import { buildPoolHeaderLines } from "./pool-status-header";
@@ -2665,34 +2667,44 @@ async function cmdSpawnAgent(): Promise<void> {
       const selected = selectToken(tokDb, surface, policy);
 
       if (selected) {
-        // T335 M3: Keychain から実 token を取得。不在なら env 注入のみスキップ
-        let tokenStr: string | null = null;
-        try {
-          tokenStr = retrieveTokenFromKeychain(selected.token.handle);
-        } catch (e: any) {
-          if (e instanceof KeychainNotFoundError) {
-            tokenStr = null;
-          } else {
-            throw e;
-          }
-        }
-
-        if (tokenStr) {
-          // T371: direnv の .envrc.local が CLAUDE_CODE_OAUTH_TOKEN を上書きするため、
-          // ここでは中継変数 CMUX_CLAUDE_TOKEN として export し、claude 起動時に
-          // inline env prefix で CLAUDE_CODE_OAUTH_TOKEN にリネームする。
-          exportVars.push(`CMUX_CLAUDE_TOKEN=${tokenStr}`);
-          tokenInjected = true;
+        // T391: subscription token は Claude Code 本体が refresh 管理するため
+        // CMUX_CLAUDE_TOKEN を inject せず Claude Code の認証経路に委ねる。
+        // inject すると Claude Code 側 refresh で乖離した snapshot で 401 を引く。
+        if (!shouldInjectCredential(selected.token.credential_source)) {
           await log(
-            "token_pool_assigned",
-            `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source} is_oss=${isOss}`,
+            "token_pool_subscription_no_inject",
+            `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${selected.token.credential_source ?? "null"}`,
           );
         } else {
-          // M3 確定動作: env 注入は skip、AGENT_TOKEN_BOUND は post、lease は維持、warn ログ
-          await log(
-            "token_pool_fallback",
-            `${formatSurface(surface, "A")} reason=keychain_missing handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`,
-          );
+          // T335 M3: Keychain から実 token を取得。不在なら env 注入のみスキップ
+          let tokenStr: string | null = null;
+          try {
+            tokenStr = retrieveTokenFromKeychain(selected.token.handle);
+          } catch (e: any) {
+            if (e instanceof KeychainNotFoundError) {
+              tokenStr = null;
+            } else {
+              throw e;
+            }
+          }
+
+          if (tokenStr) {
+            // T371: direnv の .envrc.local が CLAUDE_CODE_OAUTH_TOKEN を上書きするため、
+            // ここでは中継変数 CMUX_CLAUDE_TOKEN として export し、claude 起動時に
+            // inline env prefix で CLAUDE_CODE_OAUTH_TOKEN にリネームする。
+            exportVars.push(`CMUX_CLAUDE_TOKEN=${tokenStr}`);
+            tokenInjected = true;
+            await log(
+              "token_pool_assigned",
+              `${formatSurface(surface, "A")} handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source} is_oss=${isOss}`,
+            );
+          } else {
+            // M3 確定動作: env 注入は skip、AGENT_TOKEN_BOUND は post、lease は維持、warn ログ
+            await log(
+              "token_pool_fallback",
+              `${formatSurface(surface, "A")} reason=keychain_missing handle=${selected.token.handle} token_id=${selected.token.id} source=${poolDecision.source}`,
+            );
+          }
         }
 
         // T323/T335: tokenStr 有無に関わらず AGENT_TOKEN_BOUND を post（dashboard が handle を表示するため）。
@@ -5438,9 +5450,11 @@ switch (command) {
       case "rotate": await cmdTokenRotate();  break;
       case "set-plan": await cmdTokenSetPlan(); break;
       case "promote": await cmdTokenPromote(); break;
+      // T391: 旧 claude-credentials 由来 row の keychain entry を一括削除
+      case "migrate-subscription": await cmdTokenMigrateSubscription(); break;
       default:
         console.error(`Unknown token subcommand: ${tokenSub ?? "(none)"}`);
-        console.error("Usage: cmux-team token add|list|remove|rotate|set-plan|promote");
+        console.error("Usage: cmux-team token add|list|remove|rotate|set-plan|promote|migrate-subscription");
         process.exit(1);
     }
     break;

@@ -171,13 +171,25 @@ See `cmux-team --help` for the full list. Common commands:
 **Token Pool**
 | Command | What it does |
 |---------|-------------|
-| `cmux-team token add` | Register a Claude OAuth token interactively |
+| `cmux-team token add` | Register a manual API key interactively (paste token) |
+| `cmux-team token add --subscription <handle> [--plan max-x20] [--tags any]` | Register a Claude Max / subscription token (no keychain snapshot, Claude Code-managed auth) |
 | `cmux-team token list` | List registered tokens with utilization |
 | `cmux-team token remove --handle <h>` | Remove a token |
 | `cmux-team token rotate --handle <h>` | Re-probe credential and update auth hash |
 | `cmux-team token set-plan --handle <h> --plan <p>` | Override plan/ratio manually |
 | `cmux-team token promote --handle <h>` | Set `selectable=true` on an auto-discovered token |
+| `cmux-team token migrate-subscription` | Delete cmux-team-token keychain entries for subscription rows (idempotent) |
 | `cmux-team pool status` | Show pool capacity dashboard |
+
+#### Manual vs subscription tokens
+
+- **`manual`** — A persistent API key. cmux-team stores the token in macOS keychain
+  (service `cmux-team-token`) and injects `CLAUDE_CODE_OAUTH_TOKEN` into spawned agents.
+- **`--subscription`** — A Claude Max subscription. Claude Code itself manages auth
+  via `~/.claude/.credentials.json` and refreshes the token as needed. cmux-team does
+  **not** keep a keychain snapshot and does **not** inject the token into agents — it
+  lets Claude Code handle authentication and only observes the requests through the
+  proxy to track utilization. Use this for any subscription-backed handle.
 
 **Diagnostics**
 | Command | What it does |
@@ -287,10 +299,15 @@ When you have multiple Claude accounts, cmux-team can automatically distribute A
 
 Or via env: `CMUX_TEAM_TOKEN_POOL=1`.
 
-**Register tokens** (macOS Keychain required):
+**Register tokens** (macOS Keychain required for `manual`; subscription does not use keychain):
 
 ```bash
-cmux-team token add      # interactive — reads from ~/.claude/.credentials.json or manual paste
+# Manual API key (interactive, stored in keychain)
+cmux-team token add
+
+# Claude Max subscription (no keychain, Claude Code-managed auth)
+cmux-team token add --subscription @tayo --plan max-x20 --tags any
+
 cmux-team token list     # show all tokens with 5h/7d utilization
 ```
 

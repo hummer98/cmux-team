@@ -121,6 +121,38 @@ Promoted: @cd8d → @kddi  max-x20  tags:[any]  ✓
 
 ---
 
+## credential_source（T391 で再整理）
+
+`credential_source` は token の認証情報をどこが管理しているかを示し、cmux-team の挙動を分岐させる。
+
+| source | keychain 保存 | spawn-agent inject | 用途 |
+|---|---|---|---|
+| `manual` | あり | あり | 永続的な API key。`cmux-team token add` の対話 UI で登録 |
+| `subscription` | **なし** | **なし** | Claude Max などの subscription token。**Claude Code 本体が `~/.claude/.credentials.json` で refresh 管理する**ため cmux-team は keychain に snapshot しない。`cmux-team token add --subscription <handle>` で登録。proxy が `ANTHROPIC_BASE_URL` 経由でリクエストを観測し organization_id / auth_hash を埋める |
+| `auto-discover` | あり | n/a | proxy が観測した未知 organization を `selectable=0` で自動登録。正規 handle に昇格させたい場合は `cmux-team token promote @auto-handle <new-display-name>` |
+
+### subscription の認証フロー
+
+1. `cmux-team token add --subscription @newsub --plan max-x20 [--tags any] [--organization-id ...]`
+   - DB に row を追加（`auth_hash=NULL`、`organization_id` は引数で指定しなければ NULL）
+   - keychain には**書き込まない**
+2. spawn-agent が pool から subscription を選ぶと、`shouldInjectCredential('subscription') = false` で
+   `CMUX_CLAUDE_TOKEN` を export しない（`token_pool_subscription_no_inject` ログ）
+3. Agent は Claude Code 本体の認証経路で API を叩き、proxy が auth_hash / organization_id を観測
+4. proxy の Phase 2 / Phase 2.5 で row の `auth_hash IS NULL` / `organization_id IS NULL` を埋める
+5. Claude Code 本体が refresh するたびに新 auth_hash が proxy 経由で観測され、Phase 2 (auto-rotate, T384) が
+   `auth_hash` を最新に保つ
+
+### v4.20.0 migration
+
+- 既存 `claude-credentials` source の row は initTokenDB 起動時に自動で `subscription` に変換され、
+  `auth_hash` が NULL に倒される
+- `cmux-team token migrate-subscription` を実行すると subscription source の row 全件について
+  cmux-team が過去に snapshot した keychain entry（service=`cmux-team-token`）を `security delete-generic-password`
+  で消す（冪等）
+
+---
+
 ## DB スキーマ（`~/.cmux-team/tokens.db`）
 
 ファイル権限 0600。
@@ -130,11 +162,11 @@ Promoted: @cd8d → @kddi  max-x20  tags:[any]  ✓
 CREATE TABLE tokens (
   id              INTEGER PRIMARY KEY,
   handle          TEXT NOT NULL UNIQUE,          -- @pers, @kddi
-  organization_id TEXT NOT NULL UNIQUE,          -- anthropic-organization-id UUID
-  auth_hash       TEXT NOT NULL,                 -- sha256("Bearer "+token) の 12 文字 prefix
+  organization_id TEXT UNIQUE,                   -- anthropic-organization-id UUID（subscription は NULL 許容）
+  auth_hash       TEXT,                          -- sha256("Bearer "+token) の 12 文字 prefix（subscription は NULL 許容）
   plan            TEXT NOT NULL DEFAULT 'unknown',
   plan_ratio      REAL,                          -- 1.0 / 5.0 / 20.0 / NULL
-  credential_source TEXT,                        -- claude-credentials / manual / auto-discover
+  credential_source TEXT,                        -- manual / subscription / auto-discover (T391 で claude-credentials を廃止)
   tags            TEXT NOT NULL DEFAULT '["any"]',
   selectable      INTEGER NOT NULL DEFAULT 1,    -- 0 = auto-discover / 手動無効化
   created_at      TEXT NOT NULL
