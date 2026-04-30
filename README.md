@@ -203,6 +203,7 @@ See `cmux-team --help` for the full list. Common commands:
 | Command | What it does | When to use |
 |---------|-------------|-------------|
 | `/master` | Reload Master role | After `/clear` |
+| `/cmux-team:watch` | Watch events stream and auto-handle PR merge / conflict resolve / pull (opt-in) | When you want Master to auto-merge completed PRs and surface escalations |
 | `/team-spec [summary]` | Brainstorm requirements | Deciding what to build |
 | `/team-task [action]` | Task management | Create / list / close tasks |
 | `/team-archive [range]` | Archive closed tasks | Task cleanup |
@@ -261,6 +262,7 @@ depends_on: [10, 11, 12]  # waits for all to complete
 | daemon ← Conductor | Done marker file (`.team/conductors/<id>/done`) + SESSION_* hook messages |
 | Conductor → Agent | `cmux-team send-agent` / `spawn-agent` (direct `cmux send` is blocked by hook) |
 | Conductor ← Agent | `cmux-team await-agent` (fs.watch on Agent done marker) |
+| daemon → external readers | events stream (`.team/logs/events.jsonl`, JSONL append-only) — opt-in, consumed by `cmux-team events --follow` and Master `/cmux-team:watch` |
 
 ## Project-Specific Agent Instructions
 

@@ -34,6 +34,19 @@ Master は共有ストア（`.team/` と Manager daemon）への CLI クライ�
     └─ 指示・確認
 ```
 
+### events channel（opt-in、Phase 1）
+
+Manager daemon は上記の pull 型の制御フローとは別に、**外向け event channel** として
+`.team/logs/events.jsonl` に状態変化（`task_completed` / `conductor_asking` /
+`task_sync_guard_rejected` 等）を JSONL で append-only に書き出す。`cmux-team events`
+CLI および Master の watch mode（`/cmux-team:watch`）が購読する一次ソースで、4 層の
+基本制御経路（Master → Manager → Conductor → Agent）には介在しない補助チャネル。
+
+**Phase 1 では opt-in**。default 無効で、user が `/cmux-team:watch` を能動 invoke した
+ときのみ Master が監視を開始する。daemon は events.jsonl への書き出し自体は常時行うため、
+`tail -F` や `cmux-team events --follow` で外部からも自由に購読できる。schema・event 一覧は
+[`10-events-stream.md`](10-events-stream.md) を参照。
+
 ## Target Users
 
 cmux 内で Claude Code を使用する開発者。開発ワークフローを並列化・自動化したい人。

@@ -197,6 +197,18 @@ cmux-team update-task --task-id 112 --status ready
 | open task 数 | `cat .team/task-state.json` |
 | metric サマリ（task lifecycle / tool call / token） | `cmux-team metrics --since 7d` または `cmux-team metrics --group-by day --format csv` |
 
+### events stream（opt-in watch mode 用）
+
+Manager daemon は外向け event channel として `.team/logs/events.jsonl` に
+状態変化を JSONL で append-only に書き出す（schema は `docs/spec/10-events-stream.md` 参照）。
+
+- **default 無効**。user が `/cmux-team:watch` を能動 invoke したときのみ Master が監視を開始する
+- 過去 event の遡及処理は行わない（state は外部に持たない）
+- `cmux-team events [--follow] [--types <names>] [--format json|tsv]` CLI で tail / filter 可能
+- 詳細仕様は `docs/spec/10-events-stream.md`、watch mode の挙動は `commands/watch.md` を参照
+
+> Master template (`skills/cmux-team/templates/master.md`) への自動 watch 組み込みは Phase 2 で別途検討（本節は外部公開チャネルの存在告知のみ）。将来 default 化を検討するかは別 issue で議論する。
+
 ## Ready 昇格時の sync state ガード
 
 `cmux-team create-task --status ready` / `update-task --status ready` は昇格前に local と `origin/<mainBranch>` の sync state を判定する。
