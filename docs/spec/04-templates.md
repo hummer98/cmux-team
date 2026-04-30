@@ -49,6 +49,21 @@ Project: {{PROJECT_ROOT}}
 - タスク作成は CLI 経由に変更（`$MAIN_TS` 環境変数で main.ts パスを参照）
 - 完了時の指示を「When done, just stop. Your supervisor will detect completion.」に変更
 
+### settings.json hook 一覧
+
+`generateMasterSettings` / `generateConductorSettings` / `generateAgentSettings`（`skills/cmux-team/manager/main.ts`）が生成する Claude Code 用 settings.json の hook 一覧。
+
+| hook | 役割 | Master | Conductor | Agent |
+|---|---|---|---|---|
+| `SessionStart` | `cmux-team send SESSION_STARTED` を呼び pid / sessionId を daemon へ通知 | ✅ | ✅ | ✅ |
+| `UserPromptSubmit` | Master 専用 — proxy `/master-state` に `status: busy` を POST | ✅ | — | — |
+| `PreToolUse` (Bash) | Conductor の `cmux-team send/send-key` 直接呼出を抑止 | — | ✅ | — |
+| `Notification` | Claude Code native の通知（permission / idle 等）を Manager に集約 | ✅ | ✅ | ✅ |
+| `StopFailure` (T392) | Claude Code 内部リトライが諦めた API エラー（rate_limit / authentication_failed / billing_error / server_error）を `cmux-team send STOP_FAILURE` で daemon へ通知 | ✅ | ✅ | ✅ |
+| `Stop` | Master は proxy idle 通知 / Conductor & Agent は `detect-ask.sh`（AskUserQuestion 検出 / SESSION_IDLE 送信） | ✅ | ✅ | ✅ |
+| `SessionEnd` | logout / prompt_input_exit / other を Manager に転送 | ✅ | ✅ | ✅ |
+| `SessionEnd` (matcher=clear) | `/clear` 時に SESSION_CLEAR を送信 | — | ✅ | — |
+
 ---
 
 ## `{{PROJECT_INSTRUCTIONS}}` プレースホルダ（T247 / T342）

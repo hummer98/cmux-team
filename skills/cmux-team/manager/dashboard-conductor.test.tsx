@@ -14,6 +14,7 @@ import type { ConductorState, AgentState } from "./schema";
 import { rgb } from "@rezi-ui/core";
 
 const YELLOW_VALUE = rgb(200, 160, 0);
+const RED_VALUE = rgb(180, 40, 40);
 
 function stringifyRow(row: any): string {
   return JSON.stringify(row);
@@ -111,6 +112,192 @@ describe("buildConductorRow: Agent asking サブツリー", () => {
 // 旧 T352 Agent 行 handle 表示テストは削除済み。
 // ─────────────────────────────────────────────────────────────────────────────
 
+function countRed(json: string): number {
+  const needle = `"fg":${RED_VALUE}`;
+  let count = 0;
+  let idx = 0;
+  while ((idx = json.indexOf(needle, idx)) !== -1) {
+    count++;
+    idx += needle.length;
+  }
+  return count;
+}
+
+// T392: error 表示テスト
+describe("buildConductorRow: Agent error サブツリー (T392)", () => {
+  test("kind=rate_limit で ⏳ + RED + truncated message を含む", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      taskTitle: "demo",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          role: "implementer",
+          taskTitle: "fix bug",
+          lastApiError: {
+            kind: "rate_limit",
+            message: "API Error: Server is temporarily limiting requests",
+            at: "2026-04-30T12:00:00.000Z",
+          },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("⏳");
+    expect(json).toContain("[a1]");
+    expect(json).toContain("API Error: Server is temporarily limiting requests");
+    expect(countRed(json)).toBeGreaterThanOrEqual(1);
+  });
+
+  test("kind=authentication_failed で 🔒", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          role: "implementer",
+          lastApiError: { kind: "authentication_failed", at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("🔒");
+  });
+
+  test("kind=billing_error で 💰", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          lastApiError: { kind: "billing_error", at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("💰");
+  });
+
+  test("kind=server_error で ⚡", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          lastApiError: { kind: "server_error", at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("⚡");
+  });
+
+  test("未知 kind で ⚠ fallback", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          lastApiError: { kind: "unknown_future", at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("⚠");
+  });
+
+  test("80 字超の message は 77 + '...' に truncate される", () => {
+    const long = "x".repeat(120);
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "error",
+          lastApiError: { kind: "rate_limit", message: long, at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    const truncated = "x".repeat(77) + "...";
+    expect(json).toContain(truncated);
+    expect(json.includes("x".repeat(120))).toBe(false);
+  });
+
+  test("asking と error が並立した場合は asking 優先 (?マーク表示)", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      taskId: "392",
+      agents: [
+        {
+          surface: "surface:a1",
+          spawnedAt: new Date().toISOString(),
+          status: "asking",
+          lastApiError: { kind: "rate_limit", at: "2026-04-30T12:00:00.000Z" },
+        },
+      ],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("?");
+    // ⏳ アイコンは表示されない
+    expect(json.includes("⏳")).toBe(false);
+  });
+});
+
+describe("buildConductorRow: Conductor error メイン行 (T392)", () => {
+  test("conductor.status='error' で RED + アイコン + label", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c2",
+      startedAt: new Date().toISOString(),
+      status: "error",
+      taskId: "392",
+      taskTitle: "demo",
+      lastApiError: {
+        kind: "rate_limit",
+        message: "rate limited",
+        at: "2026-04-30T12:00:00.000Z",
+      },
+      agents: [],
+    };
+    const json = JSON.stringify(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("⏳");
+    expect(json).toContain("[c2]");
+    expect(json).toContain("error");
+    expect(countRed(json)).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("formatConductorsSectionLabel", () => {
   test("各 status のカウントが正確に連結される", () => {
     const conductors = [
@@ -139,5 +326,15 @@ describe("formatConductorsSectionLabel", () => {
     ]);
     expect(label).toBe("Conductors 2 asking");
     expect(label).toContain("2 asking");
+  });
+
+  test("error 状態の Conductor がカウントされる (T392)", () => {
+    const label = formatConductorsSectionLabel([
+      { status: "error" },
+      { status: "running" },
+      { status: "idle" },
+    ]);
+    expect(label).toBe("Conductors 1 running 1 error");
+    expect(label).toContain("1 error");
   });
 });

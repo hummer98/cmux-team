@@ -169,7 +169,14 @@ export async function writeAgentDone(
   projectRoot: string,
   conductorSurface: string,
   agentSurface: string,
-  payload: { status: "completed" | "crashed" | "ask"; reason?: string; question?: string },
+  payload: {
+    status: "completed" | "crashed" | "ask" | "api_error";
+    reason?: string;
+    question?: string;
+    // T392: api_error のときに使う
+    kind?: string;
+    message?: string;
+  },
 ): Promise<void> {
   const dir = join(
     projectRoot,
@@ -189,6 +196,11 @@ export async function writeAgentDone(
   if (payload.question) {
     const q = payload.question.replace(/\r?\n/g, " ").slice(0, 4096);
     lines.push(`question=${q}`);
+  }
+  if (payload.kind) lines.push(`kind=${payload.kind}`);
+  if (payload.message) {
+    const m = payload.message.replace(/\r?\n/g, " ").slice(0, 4096);
+    lines.push(`message=${m}`);
   }
   await writeFile(file, lines.join("\n") + "\n");
 }
@@ -1632,6 +1644,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           taskTitle: message.taskTitle,
           spawnedAt: message.timestamp,
           status: "starting",
+          // T392: 新規 agent エントリは lastApiError を持たない
+          lastApiError: undefined,
         });
         notifyStateChanged("daemon.ts:handleMessage:agent-spawned");
         // T260: callerSurface/callerPid を agent_spawned ログに載せて、
@@ -1657,6 +1671,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         master.pid = message.pid;
         master.status = "idle";
         master.disconnectedAt = undefined;
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        master.lastApiError = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-started-master");
         spawnMasterPidWatcher(state, message.surface, message.pid);
         try {
@@ -1691,6 +1707,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           await logBrokenIgnore(conductor, "SESSION_STARTED");
           break;
         }
+        // T392: error 状態は SESSION_STARTED で自然解除する（taskRunId 有無で running/idle）
+        if (conductor.status === "error") {
+          conductor.status = conductor.taskRunId ? "running" : "idle";
+        }
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        conductor.lastApiError = undefined;
         // n1: 既存の starting/disconnected → idle 遷移ロジックは残す
         if (conductor.status === "starting" || conductor.status === "disconnected") {
           const prevStatus = conductor.status;
@@ -1816,6 +1838,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           agent.pid = message.pid;
           // T236: TUI spinner 用の status 遷移（starting/idle → running）
           agent.status = "running";
+          // T392: 通常状態に遷移したら API エラー情報をクリア
+          agent.lastApiError = undefined;
           spawnAgentPidWatcher(state, c, agent, message.pid);
           notifyStateChanged("daemon.ts:handleMessage:session-started-agent");
           await log(
@@ -2209,6 +2233,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           master.status = "idle";
           master.disconnectedAt = undefined;
           if (message.pid) master.pid = message.pid;
+          // T392: 通常状態に遷移したら API エラー情報をクリア
+          master.lastApiError = undefined;
           notifyStateChanged("daemon.ts:handleMessage:session-idle-master");
           try {
             await persistMasterFile(state.projectRoot, master);
@@ -2237,6 +2263,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T260: 最後に生存確認できた時刻を記録
         conductor.lastHookAt = message.timestamp;
         if (message.pid) conductor.pid = message.pid;
+        // T392: error 状態は SESSION_IDLE で taskRunId 有無で running/idle に戻す
+        if (conductor.status === "error") {
+          conductor.status = conductor.taskRunId ? "running" : "idle";
+        }
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        conductor.lastApiError = undefined;
         // T181: asking → idle/running に戻る経路（Ask 解決後の通常 stop）
         if (conductor.status === "asking") {
           conductor.askQuestion = undefined;
@@ -2317,6 +2349,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         }
         // T236: TUI spinner 用の status 遷移（running → idle）
         agent.status = "idle";
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        agent.lastApiError = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-idle-agent");
         // agents リストからは削除しない（idle 中の Agent も生存扱い。SESSION_ENDED / surface_lost で削除）
         await log(
@@ -2348,7 +2382,12 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T279: shadow observer 用の prev capture。
         const shadowPrevAsk: ConductorStatus = conductor.status;
         conductor.askQuestion = message.question;
+        // T392: error → asking 遷移を明示（status="asking" は無条件代入なので
+        //       実質的な分岐は不要だが、SESSION_STARTED / SESSION_IDLE と同じく
+        //       lastApiError は SESSION_ASK でも自然解除する）
         conductor.status = "asking";
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        conductor.lastApiError = undefined;
         if (message.pid) conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
         // T260: 最後に生存確認できた時刻を記録
@@ -2395,6 +2434,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T238: TUI spinner / 色変更のための status 遷移。
         //       SESSION_STARTED (running) / SESSION_IDLE (idle) の自然上書きで解除される。
         agent.status = "asking";
+        // T392: 通常状態に遷移したら API エラー情報をクリア
+        agent.lastApiError = undefined;
         notifyStateChanged("daemon.ts:handleMessage:session-ask-agent");
         // T238: OS 通知を Agent surface に送る (best-effort, fire-and-forget)。
         const subtitle = agent.taskTitle ?? agent.role ?? "Agent";
@@ -2583,6 +2624,97 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       break;
     }
 
+    case "STOP_FAILURE": {
+      // T392: Claude Code StopFailure hook 受信。target を逆引きして status="error" + lastApiError 上書き。
+      const target = resolveStopFailureTarget(state, message);
+      const kind = message.payload.error;
+      const errorMessage = message.payload.last_assistant_message;
+      const at = message.timestamp;
+
+      if (!target) {
+        await log(
+          "stop_failure_unknown_surface",
+          `${formatSurface(message.surface, "S")} kind=${kind}`,
+        );
+        await emitEvent({
+          event: "api_error_received",
+          role: "unknown",
+          surface: message.surface,
+          kind,
+          message: errorMessage,
+        });
+        break;
+      }
+
+      if (target.role === "master") {
+        const m = target.master;
+        m.status = "error";
+        m.lastApiError = { kind, message: errorMessage, at };
+        notifyStateChanged("daemon.ts:handleMessage:stop-failure-master");
+        try {
+          await persistMasterFile(state.projectRoot, m);
+        } catch (e: any) {
+          await log("error", `persistMasterFile failed (stop_failure): ${e?.message ?? e}`);
+        }
+        await log(
+          "api_error_received",
+          `${formatSurface(m.surface, "U")} role=master kind=${kind}`,
+        );
+        await emitEvent({
+          event: "api_error_received",
+          role: "master",
+          surface: m.surface,
+          kind,
+          message: errorMessage,
+        });
+      } else if (target.role === "conductor") {
+        const c = target.conductor;
+        c.status = "error";
+        c.lastApiError = { kind, message: errorMessage, at };
+        notifyStateChanged("daemon.ts:handleMessage:stop-failure-conductor");
+        await log(
+          "api_error_received",
+          `${formatSurface(c.surface, "C")} role=conductor kind=${kind}`,
+        );
+        await emitEvent({
+          event: "api_error_received",
+          role: "conductor",
+          surface: c.surface,
+          kind,
+          message: errorMessage,
+        });
+      } else {
+        // agent
+        const a = target.agent;
+        const c = target.parent;
+        a.status = "error";
+        a.lastApiError = { kind, message: errorMessage, at };
+        notifyStateChanged("daemon.ts:handleMessage:stop-failure-agent");
+        // done file を書いて Conductor の await-agent に伝える
+        try {
+          await writeAgentDone(state.projectRoot, c.surface, a.surface, {
+            status: "api_error",
+            kind,
+            message: errorMessage,
+          });
+        } catch (e: any) {
+          await log("error", `writeAgentDone failed (stop_failure): ${e?.message ?? e}`);
+        }
+        await log(
+          "api_error_received",
+          `${formatPair(c.surface, a.surface, "C", "A")} role=agent kind=${kind}`,
+        );
+        await emitEvent({
+          event: "api_error_received",
+          role: "agent",
+          surface: a.surface,
+          kind,
+          message: errorMessage,
+        });
+      }
+      break;
+    }
+
     case "SHUTDOWN":
       await log("shutdown_requested");
       // T234: 全 pidWatcher の clearInterval も同時に実行
@@ -2590,6 +2722,50 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       notifyStateChanged("daemon.ts:handleMessage:shutdown");
       break;
   }
+}
+
+/**
+ * T392: STOP_FAILURE hook の送信元 surface から target (master / conductor / agent) を逆引きする。
+ * 優先順位は NotificationMessage と同じ:
+ *   1. message.role === "master" → state.masters.get(surface)
+ *   2. message.role === "conductor" → findConductor(state, surface)
+ *   3. message.role === "agent" → conductors.agents[] を走査
+ *   4. role 不在の場合 fallback: masters.has → conductors.get → agents 走査
+ *   ※ settings.json は --role を必ず送る契約なので 4 は実質 dead code（将来互換のため維持）
+ *   5. 全部 miss → undefined
+ */
+type StopFailureTarget =
+  | { role: "master"; master: MasterState }
+  | { role: "conductor"; conductor: ConductorState }
+  | { role: "agent"; agent: AgentState; parent: ConductorState };
+
+export function resolveStopFailureTarget(
+  state: DaemonState,
+  message: import("./schema").StopFailureMessage,
+): StopFailureTarget | undefined {
+  const surface = message.surface;
+  if (message.role === "master") {
+    const m = state.masters.get(surface);
+    if (m) return { role: "master", master: m };
+  } else if (message.role === "conductor") {
+    const c = findConductor(state, surface);
+    if (c) return { role: "conductor", conductor: c };
+  } else if (message.role === "agent") {
+    for (const c of state.conductors.values()) {
+      const agent = c.agents.find((a) => a.surface === surface);
+      if (agent) return { role: "agent", agent, parent: c };
+    }
+  }
+  // fallback (契約上 role は常に来る、将来互換のため経路を維持)
+  const m = state.masters.get(surface);
+  if (m) return { role: "master", master: m };
+  const c = findConductor(state, surface);
+  if (c) return { role: "conductor", conductor: c };
+  for (const conductor of state.conductors.values()) {
+    const agent = conductor.agents.find((a) => a.surface === surface);
+    if (agent) return { role: "agent", agent, parent: conductor };
+  }
+  return undefined;
 }
 
 /**

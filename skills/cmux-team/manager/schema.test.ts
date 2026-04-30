@@ -8,6 +8,7 @@ import {
   OVERLAY_ROLES,
   OverlayRole,
   QueueMessage,
+  StopFailureMessage,
   normalizeOverlayRole,
 } from "./schema";
 
@@ -189,6 +190,122 @@ describe("OverlayRole / OVERLAY_ROLES (T342)", () => {
   test("OverlayRole.options preserves AgentRole order then appends master, conductor", () => {
     expect(OverlayRole.options[OverlayRole.options.length - 2]).toBe("master");
     expect(OverlayRole.options[OverlayRole.options.length - 1]).toBe("conductor");
+  });
+});
+
+// --- T392: StopFailureMessage ---
+
+describe("StopFailureMessage (T392)", () => {
+  const base = {
+    type: "STOP_FAILURE" as const,
+    surface: "surface:100",
+    pid: 12345,
+    payload: { error: "rate_limit" },
+    timestamp: "2026-04-30T10:00:00.000Z",
+  };
+
+  test("正常系: 最小構成でパース成功", () => {
+    const parsed = StopFailureMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: payload に session_id / transcript_path / last_assistant_message を含めても OK", () => {
+    const parsed = StopFailureMessage.safeParse({
+      ...base,
+      payload: {
+        error: "server_error",
+        session_id: "fake-uuid",
+        transcript_path: "/tmp/t.jsonl",
+        last_assistant_message: "API Error: ...",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: role は master/conductor/agent のいずれか", () => {
+    for (const role of ["master", "conductor", "agent"] as const) {
+      const parsed = StopFailureMessage.safeParse({ ...base, role });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  test("異常系: pid 未指定は reject (required 契約)", () => {
+    const { pid: _pid, ...withoutPid } = base;
+    const parsed = StopFailureMessage.safeParse(withoutPid);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: payload.error 欠落は reject", () => {
+    const parsed = StopFailureMessage.safeParse({ ...base, payload: {} });
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: surface 未指定は reject", () => {
+    const { surface: _surface, ...withoutSurface } = base;
+    const parsed = StopFailureMessage.safeParse(withoutSurface);
+    expect(parsed.success).toBe(false);
+  });
+
+  test("QueueMessage 経由でも parse 可能", () => {
+    const parsed = QueueMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("AgentState (T392) lastApiError + status='error'", () => {
+  test("型定義レベル: AgentState の status は 'error' を許容、lastApiError optional", () => {
+    // この test は実質コンパイルチェック。型が合っていれば通る
+    const a: import("./schema").AgentState = {
+      surface: "surface:5",
+      spawnedAt: "2026-04-30T10:00:00.000Z",
+      status: "error",
+      lastApiError: {
+        kind: "rate_limit",
+        message: "API Error: ...",
+        at: "2026-04-30T10:00:00.000Z",
+      },
+    };
+    expect(a.status).toBe("error");
+    expect(a.lastApiError?.kind).toBe("rate_limit");
+  });
+});
+
+describe("MasterState (T392) lastApiError + status='error'", () => {
+  test("正常系: status='error' + lastApiError でパース成功", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "error",
+      startedAt: "2026-04-30T10:00:00.000Z",
+      lastApiError: {
+        kind: "billing_error",
+        message: "credit balance is too low",
+        at: "2026-04-30T10:00:00.000Z",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: lastApiError なしでも従来通り parse できる", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "idle",
+      startedAt: "2026-04-30T10:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("ConductorState (T392) lastApiError", () => {
+  test("正常系: lastApiError でパース成功", () => {
+    const parsed = ConductorState.safeParse({
+      surface: "surface:200",
+      startedAt: "2026-04-30T10:00:00.000Z",
+      lastApiError: {
+        kind: "authentication_failed",
+        at: "2026-04-30T10:00:00.000Z",
+      },
+    });
+    expect(parsed.success).toBe(true);
   });
 });
 

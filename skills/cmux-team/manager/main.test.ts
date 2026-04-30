@@ -1302,6 +1302,38 @@ describe("cmdAwaitAgent — done marker race (T181 §12.1)", () => {
     const { existsSync: ex } = await import("fs");
     expect(ex(doneFile)).toBe(false);
   }, 15000);
+
+  // T392: api_error → exit 11 + STATUS=api_error / KIND=<kind>
+  test("T392: status=api_error の done で exit 11 / STATUS=api_error / KIND= が出る", async () => {
+    const { doneFile } = await setupForAwait();
+    const ts = Date.now() + 3_000;
+    await writeFile(
+      doneFile,
+      `status=api_error\ntimestamp_ms=${ts}\ntimestamp=${new Date(ts).toISOString()}\nkind=rate_limit\nmessage=API Error: limit\n`,
+    );
+    const proc = spawnAwait(10);
+    const r = await proc.done;
+    expect(r.code).toBe(11);
+    expect(r.stdout).toContain("STATUS=api_error");
+    expect(r.stdout).toContain("KIND=rate_limit");
+    expect(r.stdout).toContain("MESSAGE=API Error: limit");
+  }, 15000);
+
+  test("T392: --help に Exit codes 表に 11 api_error が含まれる", async () => {
+    const proc = spawn("bun", [
+      "run", MAIN_TS,
+      "await-agent",
+      "--help",
+    ], {
+      cwd: testDir,
+      env: { ...process.env, PROJECT_ROOT: testDir },
+    }) as any;
+    let stdout = "";
+    proc.stdout!.on("data", (d: Buffer) => { stdout += d.toString(); });
+    await new Promise<void>((resolve) => proc.on("close", () => resolve()));
+    expect(stdout).toContain("11");
+    expect(stdout).toContain("api_error");
+  }, 10000);
 });
 
 // --- T203: buildMessageFromHookInput 単体テスト ---
@@ -1487,6 +1519,57 @@ describe("buildMessageFromHookInput (T203)", () => {
     const raw = JSON.stringify({ message: "x" });
     expect(() =>
       buildMessageFromHookInput("NOTIFICATION", raw, { ...opts, role: "hacker" }),
+    ).toThrow();
+  });
+
+  // --- T392: STOP_FAILURE branch ---
+
+  test("T392: STOP_FAILURE — happy path で error / payload / role が反映される", () => {
+    const raw = JSON.stringify({
+      hook_event_name: "StopFailure",
+      session_id: "fake-uuid",
+      transcript_path: "/tmp/t.jsonl",
+      error: "rate_limit",
+      last_assistant_message: "API Error: Server is temporarily limiting requests...",
+    });
+    const msg = buildMessageFromHookInput("STOP_FAILURE", raw, {
+      ...opts,
+      role: "agent",
+    });
+    expect(msg.type).toBe("STOP_FAILURE");
+    if (msg.type === "STOP_FAILURE") {
+      expect(msg.surface).toBe("surface:100");
+      expect(msg.pid).toBe(12345);
+      expect(msg.role).toBe("agent");
+      expect(msg.payload.error).toBe("rate_limit");
+      expect(msg.payload.session_id).toBe("fake-uuid");
+      expect(msg.payload.transcript_path).toBe("/tmp/t.jsonl");
+      expect(msg.payload.last_assistant_message).toBe(
+        "API Error: Server is temporarily limiting requests...",
+      );
+    }
+  });
+
+  test("T392: STOP_FAILURE — role flag が無くても通る (fallback)", () => {
+    const raw = JSON.stringify({ error: "server_error" });
+    const msg = buildMessageFromHookInput("STOP_FAILURE", raw, opts);
+    if (msg.type === "STOP_FAILURE") {
+      expect(msg.role).toBeUndefined();
+      expect(msg.payload.error).toBe("server_error");
+    }
+  });
+
+  test("T392: STOP_FAILURE — error フィールド欠落は zod throw", () => {
+    const raw = JSON.stringify({ session_id: "x" });
+    expect(() =>
+      buildMessageFromHookInput("STOP_FAILURE", raw, opts),
+    ).toThrow();
+  });
+
+  test("T392: STOP_FAILURE — role enum 範囲外は schema で throw", () => {
+    const raw = JSON.stringify({ error: "rate_limit" });
+    expect(() =>
+      buildMessageFromHookInput("STOP_FAILURE", raw, { ...opts, role: "hacker" }),
     ).toThrow();
   });
 });
@@ -1739,6 +1822,41 @@ describe("SessionStart hook generation (T203)", () => {
     expect(cmd).toContain("--role agent");
     expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(5000);
   });
+
+  // T392: StopFailure hook (Conductor / Agent)
+  test("T392: Conductor settings に StopFailure hook があり role=conductor で送信する", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateConductorSettings(testDir, "surface:200");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.StopFailure)).toBe(true);
+    expect(settings.hooks.StopFailure.length).toBe(1);
+    expect(settings.hooks.StopFailure[0].matcher).toBe("");
+    const cmd: string = settings.hooks.StopFailure[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send STOP_FAILURE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--role conductor");
+    expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(5000);
+  });
+
+  test("T392: Agent settings に StopFailure hook があり role=agent で送信する", async () => {
+    await mkdir(join(testDir, ".team/prompts"), { recursive: true });
+    const settingsPath = generateAgentSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.StopFailure)).toBe(true);
+    expect(settings.hooks.StopFailure.length).toBe(1);
+    expect(settings.hooks.StopFailure[0].matcher).toBe("");
+    const cmd: string = settings.hooks.StopFailure[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send STOP_FAILURE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain('--surface "surface:100"');
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--role agent");
+    expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(5000);
+  });
 });
 
 // --- T211: generateMasterSettings ---
@@ -1872,6 +1990,23 @@ describe("generateMasterSettings (T211)", () => {
     expect(cmd).toContain("${CMUX_WORKSPACE_UUID:-}");
     expect(cmd).toContain("--role master");
     expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(5000);
+  });
+
+  // T392: StopFailure hook
+  test("T392: settings.hooks.StopFailure が cmux-team send STOP_FAILURE --from-stdin を呼ぶ (role=master)", async () => {
+    const settingsPath = generateMasterSettings(testDir, "surface:100");
+    const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+    expect(Array.isArray(settings.hooks.StopFailure)).toBe(true);
+    expect(settings.hooks.StopFailure.length).toBe(1);
+    expect(settings.hooks.StopFailure[0].matcher).toBe("");
+    const cmd: string = settings.hooks.StopFailure[0].hooks[0].command;
+    expect(cmd).toContain("cmux-team send STOP_FAILURE");
+    expect(cmd).toContain("--from-stdin");
+    expect(cmd).toContain("${CMUX_SURFACE}");
+    expect(cmd).toContain("$PPID");
+    expect(cmd).toContain("--role master");
+    expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(5000);
   });
 });
 

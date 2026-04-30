@@ -216,6 +216,26 @@ function nerdIcon(nerd: string, fallback: string): string {
   return process.env.CMUX_NERD_FONT === "0" ? fallback : nerd;
 }
 
+// T392: API エラー種別ごとのアイコン。未知 kind は ⚠ を fallback として返す。
+export const API_ERROR_ICONS: Record<string, string> = {
+  rate_limit: "⏳",
+  authentication_failed: "🔒",
+  billing_error: "💰",
+  server_error: "⚡",
+};
+
+export function apiErrorIcon(kind: string | undefined): string {
+  if (!kind) return "⚠";
+  return API_ERROR_ICONS[kind] ?? "⚠";
+}
+
+/** API エラーメッセージを 80 字 truncate（改行は空白に置換） */
+export function truncateApiErrorMessage(msg: string | undefined): string {
+  if (!msg) return "";
+  const oneLine = msg.replace(/\r?\n/g, " ");
+  return oneLine.length > 80 ? oneLine.slice(0, 77) + "..." : oneLine;
+}
+
 let spinnerTick = 0;
 
 // --- ジャーナルエントリ ---
@@ -510,7 +530,7 @@ function sectionTitle(label: string) {
 
 // --- ビュー構築 ---
 
-function buildMasterSection(state: DaemonState) {
+export function buildMasterSection(state: DaemonState) {
   const masters = [...state.masters.values()];
   if (masters.length === 0) {
     return ui.row({ gap: 1 }, [
@@ -531,6 +551,21 @@ function buildMasterSection(state: DaemonState) {
         ui.text(surfaceLabel),
         ui.text("disconnected", { style: { fg: YELLOW } }),
       ]);
+    }
+
+    if (status === "error") {
+      // T392: API エラー表示。kind 別アイコン + RED + 80 字 truncated message。
+      const icon = apiErrorIcon(m.lastApiError?.kind);
+      const truncated = truncateApiErrorMessage(m.lastApiError?.message);
+      const children = [
+        ui.text(icon, { style: { fg: RED } }),
+        ui.text(surfaceLabel),
+        ui.text(`error ${m.lastApiError?.kind ?? ""}`.trim(), { style: { fg: RED } }),
+      ];
+      if (truncated) {
+        children.push(ui.text(truncated, { style: { fg: GRAY } }));
+      }
+      return ui.row({ gap: 1 }, children);
     }
 
     if (status === "running") {
@@ -572,8 +607,11 @@ export function buildConductorRow(
   const isDisconnected = c.status === "disconnected";
   const isBroken = c.status === "broken";
   const isAsking = c.status === "asking";
+  const isError = !isAsking && c.status === "error";
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
+  // T392: lastApiError は AgentState/MasterState/ConductorState のオプション拡張。
+  const cLastApiError = (c as ConductorState).lastApiError;
 
   const children = [];
 
@@ -642,6 +680,33 @@ export function buildConductorRow(
         ])
       );
     }
+  } else if (isError) {
+    // T392: API エラー表示 (StopFailure hook 受信)。kind 別アイコン + RED + 80 字 truncated message。
+    const icon = apiErrorIcon(cLastApiError?.kind);
+    const truncated = truncateApiErrorMessage(cLastApiError?.message);
+    const taskParts: ReturnType<typeof ui.text>[] = [];
+    if (c.taskId) {
+      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+    }
+    if (c.taskTitle) {
+      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+    }
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text(icon, { style: { fg: RED } }),
+        ui.text(`[${surface}]`),
+        ...taskParts,
+        ui.text(`error ${cLastApiError?.kind ?? ""}`.trim(), { style: { fg: RED } }),
+      ])
+    );
+    if (truncated) {
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text("  ", { dim: true }),
+          ui.text(truncated, { style: { fg: GRAY } }),
+        ])
+      );
+    }
   } else if (isDisconnected) {
     const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
     const taskParts: ReturnType<typeof ui.text>[] = [];
@@ -703,8 +768,11 @@ export function buildConductorRow(
     // T236: status に応じて spinner / role アイコンを切り替え。
     //       status undefined は古い team.json 復元経路で起きうる → idle 相当で描画。
     // T238: status === "asking" のときは YELLOW + ? マーク + ラベル YELLOW で強調。
+    // T392: status === "error" のときは RED + kind 別アイコン + truncated message。
+    //       asking 優先（asking と error が並立した瞬間でも asking を優先表示）。
     const isAgentAsking = a.status === "asking";
-    const isAgentRunning = a.status === "running" || a.status === "starting";
+    const isAgentError = !isAgentAsking && a.status === "error";
+    const isAgentRunning = !isAgentError && (a.status === "running" || a.status === "starting");
     if (isAgentAsking) {
       children.push(
         ui.row({ gap: 1 }, [
@@ -715,6 +783,24 @@ export function buildConductorRow(
           ui.text(label, { style: { fg: YELLOW } }),
         ])
       );
+    } else if (isAgentError) {
+      const icon = apiErrorIcon(a.lastApiError?.kind);
+      const truncated = truncateApiErrorMessage(a.lastApiError?.message);
+      const row1 = [
+        ui.text(`   ${prefix}`, { dim: true }),
+        ui.text(`[${a.surface.replace("surface:", "")}]`, { style: { fg: RED } }),
+        ui.text(icon, { style: { fg: RED } }),
+        ui.text(label, { style: { fg: RED } }),
+      ];
+      children.push(ui.row({ gap: 1 }, row1));
+      if (truncated) {
+        children.push(
+          ui.row({ gap: 1 }, [
+            ui.text(`     `, { dim: true }),
+            ui.text(truncated, { style: { fg: GRAY } }),
+          ])
+        );
+      }
     } else if (isAgentRunning) {
       const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
       children.push(
@@ -767,6 +853,7 @@ export function formatConductorsSectionLabel(conductors: readonly { status: stri
   let askingCount = 0;
   let runningCount = 0;
   let brokenCount = 0;
+  let errorCount = 0;
   for (const c of conductors) {
     switch (c.status) {
       case "starting": startingCount++; break;
@@ -774,9 +861,10 @@ export function formatConductorsSectionLabel(conductors: readonly { status: stri
       case "asking": askingCount++; break;
       case "running": runningCount++; break;
       case "broken": brokenCount++; break;
+      case "error": errorCount++; break;
     }
   }
-  return `Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}${brokenCount > 0 ? ` ${brokenCount} broken` : ""}`;
+  return `Conductors${startingCount > 0 ? ` ${startingCount} starting` : ""}${assigningCount > 0 ? ` ${assigningCount} assigning` : ""}${askingCount > 0 ? ` ${askingCount} asking` : ""}${runningCount > 0 ? ` ${runningCount} running` : ""}${brokenCount > 0 ? ` ${brokenCount} broken` : ""}${errorCount > 0 ? ` ${errorCount} error` : ""}`;
 }
 
 function buildTaskRow(

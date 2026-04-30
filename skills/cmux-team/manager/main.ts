@@ -67,8 +67,8 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, Deliverable } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, Deliverable as DeliverableSchema } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, Deliverable } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, StopFailureMessage as StopFailureMessageSchema, Deliverable as DeliverableSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import {
   loadConfig,
@@ -1251,6 +1251,7 @@ async function cmdSend(): Promise<void> {
     "SESSION_IDLE",
     "SESSION_ASK",
     "SESSION_CLEAR",
+    "STOP_FAILURE",
   ]);
   let normalizedSurface: string | undefined;
   let normalizedConductorSurface: string | undefined;
@@ -1386,7 +1387,7 @@ async function cmdSend(): Promise<void> {
       break;
 
     default:
-      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|SHUTDOWN> [--from-stdin]");
+      console.error("Usage: send <TASK_CREATED|TASK_UPDATED|CONDUCTOR_DONE|CONDUCTOR_REGISTERED|AGENT_SPAWNED|SESSION_STARTED|SESSION_ENDED|SESSION_ACTIVE|SESSION_IDLE|SESSION_ASK|SESSION_STOP|SESSION_CLEAR|NOTIFICATION|STOP_FAILURE|SHUTDOWN> [--from-stdin]");
       process.exit(1);
   }
 
@@ -1783,6 +1784,36 @@ export function buildMessageFromHookInput(
     return NotificationMessageSchema.parse(message);
   }
 
+  if (type === "STOP_FAILURE") {
+    // T392: Claude Code StopFailure hook payload を schema 形式に整形。
+    //       hook 側は `--role` を flag 経由で渡す契約（空文字は undefined 正規化）。
+    const emptyToUndef = (s: string | undefined): string | undefined =>
+      s === undefined || s === "" ? undefined : s;
+    const role = emptyToUndef(opts.role);
+    const errorRaw = obj.error;
+    if (typeof errorRaw !== "string") {
+      throw new Error("STOP_FAILURE: payload.error is required (string)");
+    }
+    const sessionId = typeof obj.session_id === "string" ? obj.session_id : undefined;
+    const transcriptPath = typeof obj.transcript_path === "string" ? obj.transcript_path : undefined;
+    const lastAssistantMessage =
+      typeof obj.last_assistant_message === "string" ? obj.last_assistant_message : undefined;
+    const message: StopFailureMessage = {
+      type: "STOP_FAILURE",
+      surface: opts.surface,
+      pid: opts.pid,
+      role: role as StopFailureMessage["role"],
+      payload: {
+        error: errorRaw,
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        last_assistant_message: lastAssistantMessage,
+      },
+      timestamp: opts.now,
+    };
+    return StopFailureMessageSchema.parse(message);
+  }
+
   throw new Error(`unsupported hook message type: ${type}`);
 }
 
@@ -1974,6 +2005,18 @@ export function generateMasterSettings(projectRoot: string, surface: string): st
           }],
         },
       ],
+      // T392: StopFailure hook で Claude Code 内部リトライが諦めた API エラーを daemon に通知する。
+      // payload.error は rate_limit / authentication_failed / billing_error / server_error の 4 種別。
+      StopFailure: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send STOP_FAILURE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role master 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
       Stop: [
         {
           matcher: "",
@@ -2045,6 +2088,17 @@ export function generateAgentSettings(projectRoot: string, surface: string): str
           hooks: [{
             type: "command",
             command: `bash -c 'cmux-team send NOTIFICATION --from-stdin --surface "${surface}" --pid "$PPID" --surface-uuid "\${CMUX_SURFACE_UUID:-}" --workspace-uuid "\${CMUX_WORKSPACE_UUID:-}" --role agent 2>/dev/null || true'`,
+            timeout: 5000,
+          }],
+        },
+      ],
+      // T392: StopFailure hook で API エラーを daemon に通知する。
+      StopFailure: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: `bash -c 'cmux-team send STOP_FAILURE --from-stdin --surface "${surface}" --pid "$PPID" --role agent 2>/dev/null || true'`,
             timeout: 5000,
           }],
         },
@@ -2126,6 +2180,17 @@ export function generateConductorSettings(projectRoot: string, surface: string):
           hooks: [{
             type: "command",
             command: "bash -c 'cmux-team send NOTIFICATION --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --surface-uuid \"${CMUX_SURFACE_UUID:-}\" --workspace-uuid \"${CMUX_WORKSPACE_UUID:-}\" --role conductor 2>/dev/null || true'",
+            timeout: 5000,
+          }],
+        },
+      ],
+      // T392: StopFailure hook で API エラーを daemon に通知する。
+      StopFailure: [
+        {
+          matcher: "",
+          hooks: [{
+            type: "command",
+            command: "bash -c 'cmux-team send STOP_FAILURE --from-stdin --surface \"${CMUX_SURFACE}\" --pid \"$PPID\" --role conductor 2>/dev/null || true'",
             timeout: 5000,
           }],
         },
@@ -3824,7 +3889,7 @@ async function cmdAwaitAgent(): Promise<void> {
     showHelp([
       "Usage: cmux-team await-agent --surface <agent-surface> [--timeout <sec>]",
       "",
-      "Wait for an agent's done marker (completed / ask / crashed / timeout).",
+      "Wait for an agent's done marker (completed / ask / crashed / api_error / timeout).",
       "",
       "Options:",
       "  --surface <s>   Target agent surface (required)",
@@ -3834,6 +3899,7 @@ async function cmdAwaitAgent(): Promise<void> {
       "  0  completed or ask",
       "  2  timeout",
       "  10 crashed",
+      "  11 api_error (T392: StopFailure hook 経由の確定 API エラー — KIND/MESSAGE も出る)",
       "  1  internal error",
     ].join("\n"));
   }
@@ -3939,6 +4005,8 @@ async function printAgentDoneAndExit(doneFile: string, content: string): Promise
   const code =
     status === "completed" || status === "ask" ? 0 :
     status === "crashed" ? 10 :
+    // T392: StopFailure hook 経由の確定 API エラー → exit 11
+    status === "api_error" ? 11 :
     1;
 
   // 次回 await-agent が古い done を誤検出しないよう削除する（同期点）

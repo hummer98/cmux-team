@@ -122,6 +122,15 @@ export type EventStreamRecord =
       conductor_surface: string;
       task_id?: string;
       elapsed_ms: number;
+    }
+  | {
+      // T392: StopFailure hook 経由で確定した API エラー（rate_limit / authentication_failed
+      // / billing_error / server_error / forward-compat）。schema_version は bump しない（add-only）。
+      event: "api_error_received";
+      role: "master" | "conductor" | "agent" | "unknown";
+      surface: string;
+      kind: string;
+      message?: string;
     };
 
 /**

@@ -126,6 +126,7 @@ Claude Code hook signal → 正規化イベントの対応:
 | `SESSION_CLEAR` | `session_reset` | N/A（`/clear` は opencode では session 再作成） |
 | `SESSION_ENDED` | `session_ended` | `session.error` or `session.status`(stopped) |
 | `NOTIFICATION` | `permission_asked` | `permission.asked` |
+| `STOP_FAILURE` (T392) | `api_error_received` | `session.error` (error=ApiError) |
 | `CONDUCTOR_DONE` | `task_completed` | （daemon 内部イベント、runtime 非依存） |
 | `AGENT_SPAWNED` | `agent_started` | （spawn-agent CLI 内部イベント） |
 

@@ -5503,6 +5503,346 @@ describe("handleMessage: NOTIFICATION case (T266)", () => {
   });
 });
 
+// T392: STOP_FAILURE handler tests
+describe("handleMessage: STOP_FAILURE (T392)", () => {
+  test("Master surface → master.status='error' + lastApiError 上書き", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.masters.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      pid: 1000,
+      startedAt: "2026-04-30T11:00:00.000Z",
+    });
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:100",
+      pid: 1000,
+      role: "master",
+      payload: {
+        error: "rate_limit",
+        last_assistant_message: "API Error: rate_limit hit",
+        session_id: "sess-1",
+      },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    const m = state.masters.get("surface:100")!;
+    expect(m.status).toBe("error");
+    expect(m.lastApiError).toBeDefined();
+    expect(m.lastApiError?.kind).toBe("rate_limit");
+    expect(m.lastApiError?.message).toBe("API Error: rate_limit hit");
+    expect(m.lastApiError?.at).toBe("2026-04-30T12:00:00.000Z");
+
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toContain("api_error_received");
+    const eventsContent = await readFile(join(testDir, ".team/logs/events.jsonl"), "utf-8");
+    expect(eventsContent).toContain("api_error_received");
+  });
+
+  test("Conductor surface → conductor.status='error' + lastApiError", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    const conductor: ConductorState = {
+      surface: "surface:200",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 2000,
+      taskId: "T1",
+      taskRunId: "task-1-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:200",
+      pid: 2000,
+      role: "conductor",
+      payload: { error: "billing_error", last_assistant_message: "credit balance too low" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    const c = state.conductors.get("surface:200")!;
+    expect(c.status).toBe("error");
+    expect(c.lastApiError?.kind).toBe("billing_error");
+    expect(c.lastApiError?.message).toBe("credit balance too low");
+  });
+
+  test("Agent surface → agent.status='error' + done file 'api_error'", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    const conductor: ConductorState = {
+      surface: "surface:665",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [
+        {
+          surface: "surface:719",
+          role: "implementer",
+          spawnedAt: "2026-04-30T11:05:00.000Z",
+          status: "running",
+          pid: 3001,
+        },
+      ],
+      status: "running",
+      pid: 3000,
+      taskId: "T2",
+      taskRunId: "task-2-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:719",
+      pid: 3001,
+      role: "agent",
+      payload: { error: "server_error" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    const a = state.conductors.get("surface:665")!.agents[0]!;
+    expect(a.status).toBe("error");
+    expect(a.lastApiError?.kind).toBe("server_error");
+
+    // done file が書かれている (writeAgentDone)
+    const { normalizeSurfaceForPath } = await import("./daemon");
+    const doneFile = join(
+      testDir,
+      ".team/conductors",
+      normalizeSurfaceForPath("surface:665"),
+      "agent-done",
+      `${normalizeSurfaceForPath("surface:719")}.done`,
+    );
+    expect(existsSync(doneFile)).toBe(true);
+    const content = await readFile(doneFile, "utf-8");
+    expect(content).toContain("status=api_error");
+    expect(content).toContain("kind=server_error");
+  });
+
+  test("role flag が無くても fallback 逆引きで解決できる (agent)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:701",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [
+        {
+          surface: "surface:702",
+          spawnedAt: "2026-04-30T11:05:00.000Z",
+          status: "running",
+          pid: 4000,
+        },
+      ],
+      status: "running",
+      pid: 3500,
+      taskId: "T3",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:702",
+      pid: 4000,
+      // no role
+      payload: { error: "authentication_failed" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    const a = state.conductors.get("surface:701")!.agents[0]!;
+    expect(a.status).toBe("error");
+    expect(a.lastApiError?.kind).toBe("authentication_failed");
+  });
+
+  test("未知 surface は stop_failure_unknown_surface ログ + state 不変", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:9999",
+      pid: 9999,
+      payload: { error: "rate_limit" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    expect(state.masters.size).toBe(0);
+    expect(state.conductors.size).toBe(0);
+    const logContent = await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    expect(logContent).toMatch(/stop_failure_unknown_surface/);
+  });
+
+  test("同 surface に連続 2 回 STOP_FAILURE → 最新 timestamp / kind / message で上書き", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    state.masters.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      pid: 1000,
+      startedAt: "2026-04-30T11:00:00.000Z",
+    });
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:100",
+      pid: 1000,
+      role: "master",
+      payload: { error: "rate_limit", last_assistant_message: "first" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:100",
+      pid: 1000,
+      role: "master",
+      payload: { error: "server_error", last_assistant_message: "second" },
+      timestamp: "2026-04-30T12:01:00.000Z",
+    } as any);
+
+    const m = state.masters.get("surface:100")!;
+    expect(m.lastApiError?.kind).toBe("server_error");
+    expect(m.lastApiError?.message).toBe("second");
+    expect(m.lastApiError?.at).toBe("2026-04-30T12:01:00.000Z");
+    expect(m.status).toBe("error");
+  });
+
+  test("STOP_FAILURE 受信後の SESSION_STARTED で lastApiError が undefined / status=running に解除される (Conductor)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:300",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 5000,
+      taskId: "T5",
+      taskRunId: "task-5-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:300",
+      pid: 5000,
+      role: "conductor",
+      payload: { error: "rate_limit" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+    expect(state.conductors.get("surface:300")!.status).toBe("error");
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:300",
+      pid: 5000,
+      sessionId: "sess-x",
+      timestamp: "2026-04-30T12:01:00.000Z",
+    } as any);
+    const c = state.conductors.get("surface:300")!;
+    // SESSION_STARTED が Conductor を running 等にしないケースもあるが、
+    // lastApiError は必ず undefined にリセットされる
+    expect(c.lastApiError).toBeUndefined();
+    expect(c.status).not.toBe("error");
+  });
+
+  test("STOP_FAILURE 受信後の SESSION_IDLE で lastApiError が undefined に解除される (Master)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    state.masters.set("surface:100", {
+      surface: "surface:100",
+      status: "running",
+      pid: 1000,
+      startedAt: "2026-04-30T11:00:00.000Z",
+    });
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:100",
+      pid: 1000,
+      role: "master",
+      payload: { error: "rate_limit" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+    expect(state.masters.get("surface:100")!.status).toBe("error");
+
+    await handleMessage(state, {
+      type: "SESSION_IDLE",
+      surface: "surface:100",
+      pid: 1000,
+      timestamp: "2026-04-30T12:01:00.000Z",
+    } as any);
+    const m = state.masters.get("surface:100")!;
+    expect(m.status).toBe("idle");
+    expect(m.lastApiError).toBeUndefined();
+  });
+
+  test("STOP_FAILURE 受信後の SESSION_ASK で lastApiError が undefined / status=asking に解除される (Conductor)", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:350",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 5500,
+      taskId: "T9",
+      taskRunId: "task-9-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "STOP_FAILURE",
+      surface: "surface:350",
+      pid: 5500,
+      role: "conductor",
+      payload: { error: "rate_limit" },
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+    expect(state.conductors.get("surface:350")!.status).toBe("error");
+    expect(state.conductors.get("surface:350")!.lastApiError).toBeDefined();
+
+    await handleMessage(state, {
+      type: "SESSION_ASK",
+      surface: "surface:350",
+      pid: 5500,
+      question: "確認: 続行しますか?",
+      timestamp: "2026-04-30T12:01:00.000Z",
+    } as any);
+    const c = state.conductors.get("surface:350")!;
+    expect(c.status).toBe("asking");
+    expect(c.lastApiError).toBeUndefined();
+  });
+
+  test("AGENT_SPAWNED 後に新規 agent の lastApiError は undefined", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+    const conductor: ConductorState = {
+      surface: "surface:400",
+      startedAt: "2026-04-30T11:00:00.000Z",
+      agents: [],
+      status: "running",
+      pid: 6000,
+      taskId: "T6",
+      taskRunId: "task-6-1",
+    };
+    state.conductors.set(conductor.surface, conductor);
+
+    await handleMessage(state, {
+      type: "AGENT_SPAWNED",
+      conductorSurface: "surface:400",
+      surface: "surface:401",
+      role: "implementer",
+      timestamp: "2026-04-30T12:00:00.000Z",
+    } as any);
+
+    const a = state.conductors.get("surface:400")!.agents[0]!;
+    expect(a.lastApiError).toBeUndefined();
+    expect(a.status).toBe("starting");
+  });
+});
+
 // T302 assign_skipped_terminal guard テストは T303 で reducer noop に吸収された。
 // applyTaskEvent(ASSIGN_OK) on terminal が committed=false を返す挙動は
 // state-machine/task-state-store.test.ts の以下テストでカバー:

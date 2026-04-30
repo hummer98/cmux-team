@@ -17,7 +17,7 @@
 
 ## 1. Conductor FSM
 
-### 1.1 状態一覧 (7 値)
+### 1.1 状態一覧 (8 値)
 
 `schema.ts` の `ConductorState.status` に対応。
 
@@ -30,34 +30,39 @@
 | `asking` | `AskUserQuestion` 受信 (Notification hook) | `SESSION_ASK` |
 | `disconnected` | Claude プロセス不在 / SessionEnd / PID 死 | `SESSION_ENDED` / PID watcher |
 | `broken` | disconnected 300s 超過で自動復帰停止 (T250) | `monitorConductors` timeout |
+| `error` | StopFailure hook 受信（API エラー確定）— `lastApiError` を伴う (T392) | `STOP_FAILURE` |
 
 `broken` は **終端状態**。`cmux-team clear-conductor` のみで解除される。
+`error` は次の `SESSION_STARTED` / `SESSION_IDLE` で自然解除される（`lastApiError` も undefined に戻る）。
+
+Master / Agent も同等に `status: "error"` バリアントと `lastApiError` を持つ（`MasterStateSchema` / `AgentState`）。
 
 ### 1.2 遷移表
 
 イベント × 現状態 → 次状態の真偽表。`—` は state 遷移なし (no-op)。
 
-| event \ state | `starting` | `idle` | `assigning` | `running` | `asking` | `disconnected` | `broken` |
-|---|---|---|---|---|---|---|---|
-| `REGISTERED` | — | — | — | — | — | — | — |
-| `SESSION_STARTED` (not master) | `idle` | — | `running` | — | — | `idle` | — |
-| `SESSION_IDLE` | `idle` | — | — | — | `running`/`idle` [^1] | `running`/`idle` [^1] | — |
-| `SESSION_CLEAR` (daemon) | `idle` | — | — (assigning 維持) | log only | — | `idle` | — |
-| `SESSION_CLEAR` (manual) | `idle` | — | — (assigning 維持) | `idle` + task abort | — | `idle` | — |
-| `SESSION_ACTIVE` | `idle` | — | `running` [^2] | — | — | `running` | — |
-| `SESSION_ASK` | `asking` | `asking` | `asking` | `asking` | — | `asking` | — |
-| `SESSION_ENDED` (stop) | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — |
-| `SESSION_ENDED` (other) | — | — | — | — | — | — | — |
-| `PID_DIED` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — |
-| `TIMEOUT(starting)` | `disconnected` | — | — | — | — | — | — |
-| `TIMEOUT(assigning)` | — | — | `disconnected` | — | — | — | — |
-| `TIMEOUT(disconnected)` | — | — | — | — | — | `broken` | — |
-| `ASSIGN(ok)` | — | `assigning` | — | — | — | — | — |
-| `ASSIGN(err=task)` | — | — | `disconnected` [^3] | — | — | — | — |
-| `ASSIGN(err=conductor)` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — |
-| `DONE(success=true)` | — | — | — | `idle` [+close_task_auto if assigned] | `idle` | — | — |
-| `DONE(unresolved)` | — | — | — | `idle` [+abort_task, preserveWorktree] | `idle` | — | — |
-| `CLEAR_MANUAL` [^4] | — | — | — | `idle` | `idle` | — | — |
+| event \ state | `starting` | `idle` | `assigning` | `running` | `asking` | `disconnected` | `broken` | `error` |
+|---|---|---|---|---|---|---|---|---|
+| `REGISTERED` | — | — | — | — | — | — | — | — |
+| `SESSION_STARTED` (not master) | `idle` | — | `running` | — | — | `idle` | — | `running`/`idle` [^1] |
+| `SESSION_IDLE` | `idle` | — | — | — | `running`/`idle` [^1] | `running`/`idle` [^1] | — | `running`/`idle` [^1] |
+| `SESSION_CLEAR` (daemon) | `idle` | — | — (assigning 維持) | log only | — | `idle` | — | — |
+| `SESSION_CLEAR` (manual) | `idle` | — | — (assigning 維持) | `idle` + task abort | — | `idle` | — | — |
+| `SESSION_ACTIVE` | `idle` | — | `running` [^2] | — | — | `running` | — | — |
+| `SESSION_ASK` | `asking` | `asking` | `asking` | `asking` | — | `asking` | — | `asking` |
+| `SESSION_ENDED` (stop) | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — | `disconnected` |
+| `SESSION_ENDED` (other) | — | — | — | — | — | — | — | — |
+| `PID_DIED` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — | `disconnected` |
+| `TIMEOUT(starting)` | `disconnected` | — | — | — | — | — | — | — |
+| `TIMEOUT(assigning)` | — | — | `disconnected` | — | — | — | — | — |
+| `TIMEOUT(disconnected)` | — | — | — | — | — | `broken` | — | — |
+| `ASSIGN(ok)` | — | `assigning` | — | — | — | — | — | — |
+| `ASSIGN(err=task)` | — | — | `disconnected` [^3] | — | — | — | — | — |
+| `ASSIGN(err=conductor)` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | `disconnected` | — | — | — |
+| `DONE(success=true)` | — | — | — | `idle` [+close_task_auto if assigned] | `idle` | — | — | — |
+| `DONE(unresolved)` | — | — | — | `idle` [+abort_task, preserveWorktree] | `idle` | — | — | — |
+| `CLEAR_MANUAL` [^4] | — | — | — | `idle` | `idle` | — | — | — |
+| `STOP_FAILURE` (T392) | `error` | `error` | `error` | `error` | `error` | `error` | — | — (上書き) |
 
 [^1]: `ctx.hasTaskRunId` が真なら `running`、偽なら `idle` (T181/T263 経路)。
 [^2]: `ctx.hasTaskRunId` が真のときのみ `running`。偽なら no-op (assigning 維持)。
@@ -96,6 +101,14 @@ stateDiagram-v2
     disconnected --> running : SESSION_ACTIVE / SESSION_IDLE (hasTaskRunId)
     disconnected --> broken : TIMEOUT(disconnected) 300s
     broken --> [*] : clear-conductor (manual only)
+    starting --> error : STOP_FAILURE
+    idle --> error : STOP_FAILURE
+    assigning --> error : STOP_FAILURE
+    running --> error : STOP_FAILURE
+    asking --> error : STOP_FAILURE
+    disconnected --> error : STOP_FAILURE
+    error --> idle : SESSION_STARTED / SESSION_IDLE (no taskRunId)
+    error --> running : SESSION_STARTED / SESSION_IDLE (hasTaskRunId)
 ```
 
 ### 1.5 不変条件
@@ -105,6 +118,7 @@ stateDiagram-v2
 | C-I1 | `status=running` ⇒ `taskRunId != null` | `checkConductorInvariants` |
 | C-I2 | `status=broken` ⇒ `taskRunId == null` | `checkConductorInvariants` |
 | C-I3 | `broken` 解除は `clear-conductor` のみ | reducer は `broken` で全 event no-op |
+| C-I4 | `status=error` ⇒ `lastApiError != null` (T392) | reducer 監視は P3 まで shadow only — 本タスクでは daemon の直接 mutation のみ |
 
 違反は `fsm_invariant_violation` ログに出る (P1 は log only、強制修正しない)。
 

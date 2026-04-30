@@ -155,6 +155,24 @@ export const NotificationMessage = z.object({
   timestamp: z.string().datetime(),
 });
 
+// T392: Claude Code StopFailure hook 受信時のメッセージ。
+// payload.error は 4 種別（rate_limit / authentication_failed / billing_error / server_error）+
+// forward-compat の string union。role は hook 側で hardcode する契約。
+// pid は NotificationMessage / SessionStopMessage と同じく required（settings.json は --pid "$PPID" を必ず付ける）。
+export const StopFailureMessage = z.object({
+  type: z.literal("STOP_FAILURE"),
+  surface: z.string(),
+  pid: z.number(),
+  role: z.enum(["master", "conductor", "agent"]).optional(),
+  payload: z.object({
+    session_id: z.string().optional(),
+    transcript_path: z.string().optional(),
+    error: z.string(),
+    last_assistant_message: z.string().optional(),
+  }),
+  timestamp: z.string().datetime(),
+});
+
 export const QueueMessage = z.discriminatedUnion("type", [
   TaskCreatedMessage,
   TaskUpdatedMessage,
@@ -172,6 +190,7 @@ export const QueueMessage = z.discriminatedUnion("type", [
   SessionStopMessage,
   SessionClearMessage,
   NotificationMessage,
+  StopFailureMessage,
   ShutdownMessage,
 ]);
 
@@ -187,6 +206,7 @@ export type SessionStopMessage = z.infer<typeof SessionStopMessage>;
 export type SessionStartedMessage = z.infer<typeof SessionStartedMessage>;
 export type SessionEndedMessage = z.infer<typeof SessionEndedMessage>;
 export type NotificationMessage = z.infer<typeof NotificationMessage>;
+export type StopFailureMessage = z.infer<typeof StopFailureMessage>;
 export type AgentTokenBoundMessage = z.infer<typeof AgentTokenBoundMessage>;
 
 // --- Deliverable (T295) ---
@@ -222,10 +242,19 @@ export interface AgentState {
   // T236: TUI spinner のために Conductor と対称の status を持つ。
   // AGENT_SPAWNED で "starting"、SESSION_STARTED で "running"、SESSION_IDLE で "idle"。
   // T238: SESSION_ASK で "asking"。SESSION_STARTED/IDLE で自然上書きにより解除される。
-  status: "starting" | "running" | "idle" | "asking";
+  // T392: StopFailure hook 受信で "error"。次の SESSION_STARTED/IDLE/ASK で自然解除。
+  status: "starting" | "running" | "idle" | "asking" | "error";
   // T323: token pool 機能でこの Agent が使用しているトークンの handle。
   // spawn-agent 経路で selectToken 成功時に AGENT_TOKEN_BOUND 経由で daemon へ反映される。
   tokenHandle?: string;
+  // T392: StopFailure hook 受信時の最新 API エラー情報。
+  // 上書きは hook 受信時のみ。AGENT_SPAWNED / SESSION_STARTED / SESSION_IDLE で undefined に戻る。
+  // team.json には永続化される（pidWatcherInterval と違い JSON serialize 可）。
+  lastApiError?: {
+    kind: string;
+    message?: string;
+    at: string;
+  };
 }
 
 // --- Master 状態 ---
@@ -236,13 +265,22 @@ export const MasterStateSchema = z.object({
   // T230: "starting" は MASTER_REGISTERED handler で set される初期状態。
   // SESSION_STARTED 到達で running へ遷移する。永続ファイルに "starting" が残っても
   // `restoreMasters` が idle に hardcode reset するため後方互換は壊れない。
-  status: z.enum(["starting", "idle", "running", "disconnected"]),
+  // T392: "error" = StopFailure hook 受信時。次の SESSION_STARTED/IDLE で自然解除。
+  status: z.enum(["starting", "idle", "running", "disconnected", "error"]),
   startedAt: z.string().datetime(),
   disconnectedAt: z.string().datetime().optional(),
   prompt: z.string().optional(),
   // T323: token pool 機能でこの Master が使用しているトークンの handle。
   // proxy.ts が auth_hash → tokens.db の handle を解決して書き戻す。
   tokenHandle: z.string().optional(),
+  // T392: StopFailure hook 受信時の最新 API エラー情報。team.json に永続化される。
+  lastApiError: z
+    .object({
+      kind: z.string(),
+      message: z.string().optional(),
+      at: z.string().datetime(),
+    })
+    .optional(),
 });
 
 export type MasterState = z.infer<typeof MasterStateSchema> & {
@@ -293,6 +331,14 @@ export const ConductorState = z.object({
   // T323: token pool 機能でこの Conductor が使用しているトークンの handle。
   // proxy.ts が auth_hash → tokens.db の handle を解決して書き戻す。
   tokenHandle: z.string().optional(),
+  // T392: StopFailure hook 受信時の最新 API エラー情報。team.json に永続化される。
+  lastApiError: z
+    .object({
+      kind: z.string(),
+      message: z.string().optional(),
+      at: z.string().datetime(),
+    })
+    .optional(),
 });
 
 export type ConductorState = z.infer<typeof ConductorState> & {
@@ -300,7 +346,16 @@ export type ConductorState = z.infer<typeof ConductorState> & {
   // T250: "broken" = disconnect timeout 到達後の確定した異常状態。
   // cleanup 済み（worktree / branch / siblings）だが、state.conductors には残す。
   // ユーザーが `cmux-team clear-conductor` で明示的に idle に戻すまで保持される。
-  status: "starting" | "assigning" | "idle" | "running" | "asking" | "disconnected" | "broken";
+  // T392: "error" = StopFailure hook 受信時。次の SESSION_STARTED/IDLE で自然解除。
+  status:
+    | "starting"
+    | "assigning"
+    | "idle"
+    | "running"
+    | "asking"
+    | "disconnected"
+    | "broken"
+    | "error";
   pidWatcherInterval?: ReturnType<typeof setInterval>;
   /** Issue #30 M3-b: spawn 時に backend から返却された SessionRef。
    *  opencode backend では opencode session ID、claude-code では surface 文字列。

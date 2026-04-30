@@ -198,6 +198,23 @@ describe("emitEvent: payload type 動作", () => {
     expect(rec.reason).toBe("session_ended");
     expect("task_id" in rec).toBe(false);
   });
+
+  // T392: api_error_received
+  test("T392: api_error_received は role/surface/kind/message を含む", async () => {
+    await emitEvent({
+      event: "api_error_received",
+      role: "agent",
+      surface: "surface:42",
+      kind: "rate_limit",
+      message: "API Error: Server is temporarily limiting requests",
+    });
+    const [rec] = (await readJsonl()) as [Record<string, unknown>];
+    expect(rec.event).toBe("api_error_received");
+    expect(rec.role).toBe("agent");
+    expect(rec.surface).toBe("surface:42");
+    expect(rec.kind).toBe("rate_limit");
+    expect(rec.message).toBe("API Error: Server is temporarily limiting requests");
+  });
 });
 
 describe("mapAbortReason: 8 値 → 6 値マップ全網羅", () => {
