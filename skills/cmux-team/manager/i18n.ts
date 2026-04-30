@@ -557,6 +557,37 @@ Notes:
   - question/message is truncated to 60 chars; use --json to see full payload
 `,
 
+  help_events: `
+cmux-team events -- tail / filter the events stream
+
+Usage:
+  cmux-team events [options]
+
+Options:
+  --follow, -f             tail -F equivalent (rotate aware). Stream new lines until SIGINT.
+  --types <list>           comma-separated event type filter (exact match).
+                           e.g. --types task_completed,task_aborted
+                           (empty list "" / ", ," is rejected with exit 1)
+  --since <when>           filter records older than the given threshold.
+                           duration: 5m / 1h / 2d
+                           ISO 8601: 2026-04-27T12:00:00Z
+  --format json|text       output format (default: json -- raw JSONL)
+                           text: <ts> <event> <key=value...> (debug only)
+
+Notes:
+  - Records that fail to parse, have unknown event, or unsupported schema_version
+    are skipped with a warning to stderr (spec section 8 forward-compat).
+  - --format text omits journal_summary fields to keep one record per line.
+  - --follow re-opens the file after rotate (inode change or size shrink),
+    re-emitting from the new file's head; the consumer must dedupe if needed.
+  - SIGINT exits with code 0 (graceful shutdown). If your CI scripts need to
+    distinguish SIGINT from normal EOF, this is a follow-up consideration.
+
+Exit codes:
+  0  normal exit (EOF without --follow, or SIGINT during --follow)
+  1  argument error / events.jsonl not found
+`,
+
   help_conductor: `
 cmux-team conductor -- launch Claude Code for Conductor (internal use)
 
@@ -735,6 +766,8 @@ Usage:
   cmux-team delete-task --task-id <id> [--journal <text>] delete a task
   cmux-team trace-task <task-id>              display session history for a task
   cmux-team trace-hooks                        display hook signal history
+  cmux-team events [--follow] [--types ...] [--since ...] [--format json|text]
+                                              tail / filter the events stream (.team/logs/events.jsonl)
   cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
@@ -1371,6 +1404,37 @@ Notes:
   - question/message は 60 文字で truncate されます。完全なデータは --json を使用
 `,
 
+  help_events: `
+cmux-team events -- tail / filter the events stream
+
+Usage:
+  cmux-team events [options]
+
+Options:
+  --follow, -f             tail -F equivalent (rotate aware). Stream new lines until SIGINT.
+  --types <list>           comma-separated event type filter (exact match).
+                           e.g. --types task_completed,task_aborted
+                           (empty list "" / ", ," is rejected with exit 1)
+  --since <when>           filter records older than the given threshold.
+                           duration: 5m / 1h / 2d
+                           ISO 8601: 2026-04-27T12:00:00Z
+  --format json|text       output format (default: json -- raw JSONL)
+                           text: <ts> <event> <key=value...> (debug only)
+
+Notes:
+  - Records that fail to parse, have unknown event, or unsupported schema_version
+    are skipped with a warning to stderr (spec section 8 forward-compat).
+  - --format text omits journal_summary fields to keep one record per line.
+  - --follow re-opens the file after rotate (inode change or size shrink),
+    re-emitting from the new file's head; the consumer must dedupe if needed.
+  - SIGINT exits with code 0 (graceful shutdown). If your CI scripts need to
+    distinguish SIGINT from normal EOF, this is a follow-up consideration.
+
+Exit codes:
+  0  normal exit (EOF without --follow, or SIGINT during --follow)
+  1  argument error / events.jsonl not found
+`,
+
   help_conductor: `
 cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
 
@@ -1550,6 +1614,8 @@ Usage:
   cmux-team delete-task --task-id <id> [--journal <text>] タスクを削除
   cmux-team trace-task <task-id>              タスクのセッション履歴を表示
   cmux-team trace-hooks                        hook シグナル履歴を表示
+  cmux-team events [--follow] [--types ...] [--since ...] [--format json|text]
+                                              events ストリームを tail / filter（.team/logs/events.jsonl）
   cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧

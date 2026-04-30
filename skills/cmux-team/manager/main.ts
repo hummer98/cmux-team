@@ -35,6 +35,7 @@ import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashb
 import { log, formatSurface } from "./logger";
 // T358: events.jsonl writer
 import { emitEvent } from "./events-writer";
+import { runEventsCli } from "./events-cli";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -4907,6 +4908,31 @@ async function cmdTraceHooks(): Promise<void> {
   }
 }
 
+// T359: events サブコマンド thin wrapper。
+// runEventsCli は process.exit せず exit code を返す。SIGINT/SIGTERM で AbortController
+// を発火してから try/finally で listener 解除し、try/finally の **外** で process.exit する
+// （process.exit 後の finally は実行されないため）。
+async function cmdEvents(): Promise<void> {
+  const ac = new AbortController();
+  const onSig = () => ac.abort();
+  process.on("SIGINT", onSig);
+  process.on("SIGTERM", onSig);
+  let exitCode = 1;
+  try {
+    exitCode = await runEventsCli({
+      args: args.slice(1),
+      projectRoot: PROJECT_ROOT,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      abortSignal: ac.signal,
+    });
+  } finally {
+    process.off("SIGINT", onSig);
+    process.off("SIGTERM", onSig);
+  }
+  process.exit(exitCode);
+}
+
 function deriveJsonlDir(worktreePath: string): string {
   const hash = createHash("sha256").update(worktreePath).digest("hex").slice(0, 16);
   return join(process.env.HOME ?? "~", ".claude/projects", hash);
@@ -5503,6 +5529,9 @@ switch (command) {
     break;
   case "trace-hooks":
     await cmdTraceHooks();
+    break;
+  case "events":
+    await cmdEvents();
     break;
   case "conductor":
     await cmdConductor();
