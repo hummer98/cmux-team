@@ -64,7 +64,7 @@ import {
   type TaskUsageByRole,
   type TaskUsageByModel,
 } from "./trace-store";
-import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, formatDeliverable, type TaskState, type TaskMeta } from "./task";
+import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascadeAbortToChildren, detectStartupUniqueViolations, classifyResumeAction, buildResumeAbortJournal, markTaskAborted, parseAbortJournal, normalizeTaskIdList, formatDeliverable, isTerminalStatus, type TaskState, type TaskMeta } from "./task";
 // T303: task-state mutation は applyTaskEvent / updateTaskSessionId 経由のみ
 import { applyTaskEvent, refreshTaskStateFromDisk } from "./state-machine/task-state-store";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
@@ -159,6 +159,14 @@ function findProjectRoot(): string {
   }
 
   return process.cwd();
+}
+
+/**
+ * T353: ISO 8601 形式の起動時刻から経過秒数を返す。
+ * 時刻巻き戻り (NTP step / clock skew) で負になる場合は 0 にフロアする。
+ */
+export function formatUptimeFromStartedAt(startedAtIso: string, now: number = Date.now()): number {
+  return Math.max(0, Math.floor((now - new Date(startedAtIso).getTime()) / 1000));
 }
 
 /** 最新の main.ts を検索（npm グローバル → ローカル → 自分自身） */
@@ -667,6 +675,8 @@ async function cmdStart(): Promise<void> {
 
   // T192: ルート package.json からバージョンを読み込み state と daemon_started ログに記録
   state.version = await loadVersion();
+  // T353: daemon プロセスの起動時刻を記録。daemon_stopped emit 時の uptime 計算に使う。
+  state.startedAt = new Date().toISOString();
   await log(
     "daemon_started",
     `${state.version} pid=${process.pid} poll=${state.pollInterval}ms max_conductors=${state.maxConductors} layout=${state.layout} sleep_prevention=${sleepPrevention}`
@@ -823,7 +833,9 @@ async function cmdStart(): Promise<void> {
         await log("rate_limit_persist_failed", `shutdown: ${e.message}`);
       }
     }
-    await log("daemon_stopped");
+    // T353: uptime_sec を detail に追加。state.startedAt が空（cmdStart 経由でない経路）なら 0 にフォールバック
+    const uptimeSec = state.startedAt ? formatUptimeFromStartedAt(state.startedAt) : 0;
+    await log("daemon_stopped", `uptime_sec=${uptimeSec}`);
     await updateTeamJson(state);
     // T259: pidfile を最後に release（team.json 更新後、process.exit の直前）
     await releasePidFile(pidFilePath);
@@ -1133,7 +1145,15 @@ async function cmdStart(): Promise<void> {
   // 起動完了
   state.bootPhase = "ready";
   await updateTeamJson(state);
-  await log("boot_completed");
+  // T353: resume 反映ループ + startMaster 完了時点では state.openTasks は scanTasks 未実行で
+  //   未確定（必ず 0）。task-state は applyTaskEvent で更新済みなので再 load して確定値を取る
+  const { tasks: tasksAtBoot } = await loadTasks(PROJECT_ROOT);
+  const openTasksCount = tasksAtBoot.filter(t => !isTerminalStatus(t.status)).length;
+  const restoredConductors = resumeAssignments.length;
+  await log(
+    "boot_completed",
+    `version=${state.version} restored_conductors=${restoredConductors} open_tasks=${openTasksCount}`,
+  );
   scheduleRefresh();
 
   // 起動時に 1 回 update チェック（off 以外のモードのみ）

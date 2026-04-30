@@ -241,7 +241,7 @@ let spinnerTick = 0;
 
 // --- ジャーナルエントリ ---
 
-interface JournalEntry {
+export interface JournalEntry {
   time: string;  // HH:MM:SS
   icon: string;  // Nerd Font アイコン or フォールバック
   taskId: string;
@@ -249,6 +249,27 @@ interface JournalEntry {
   level: "info" | "warn" | "error";
   surface?: string;    // surface 名（dim 表示用）
   iconColor?: number;  // アイコンの色を直接保持
+  /** T353: dim 表示するか（daemon_stopped 用）。buildJournalRows が icon style にマージする */
+  dim?: boolean;
+}
+
+/**
+ * T353: daemon ライフサイクルイベント (boot_completed / daemon_stopped) は taskId を持たないため、
+ * sentinel taskId として `__daemon__` を使う。buildJournalRows は sentinel を filter で通過させ、
+ * `T###` 列は出さずに描画する。`isValidTaskId` が `__daemon__` を弾く挙動は変えない。
+ */
+export const DAEMON_SENTINEL_TASK_ID = "__daemon__";
+
+/**
+ * T353: 経過秒数を `Xs` / `Xm Ys` / `Xh Ym` 形式に整形する。
+ * 既存の `formatUptime` (startMs ベース、空白なし) と紛らわしいが、こちらは sec ベース + 空白あり。
+ */
+export function formatUptimeSec(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 // --- ヘルパー ---
@@ -335,7 +356,7 @@ function extractSurface(detail: string): string {
   return "";
 }
 
-function parseJournalEntries(lines: string[]): JournalEntry[] {
+export function parseJournalEntries(lines: string[]): JournalEntry[] {
   const result: JournalEntry[] = [];
   for (const line of lines) {
     const match = line.match(/^\[([^\]]+)\]\s+(\S+)\s*(.*)/);
@@ -375,6 +396,65 @@ function parseJournalEntries(lines: string[]): JournalEntry[] {
       const title = detail.match(/title=(.+?)(?:\s+\w+=|$)/)?.[1] ?? "";
       const summary = detail.match(/journal_summary=(.+)/)?.[1] ?? "";
       result.push({ time, icon: nerdIcon("\uf056", "[−]"), taskId, message: summary || title || "deleted", level: "warn", iconColor: YELLOW });
+    } else if (event === "boot_completed") {
+      // T353: daemon 起動マーカー。空 detail (拡張前の互換) なら "fresh start" にフォールバック
+      const version = detail.match(/version=(\S+)/)?.[1] ?? "";
+      const restored = parseInt(detail.match(/restored_conductors=(\d+)/)?.[1] ?? "0", 10);
+      const openTasks = parseInt(detail.match(/open_tasks=(\d+)/)?.[1] ?? "0", 10);
+      const summary = restored === 0
+        ? "— fresh start"
+        : `— resumed ${restored} conductor${restored === 1 ? "" : "s"} / ${openTasks} open task${openTasks === 1 ? "" : "s"}`;
+      const versionStr = version ? ` ${version}` : "";
+      result.push({
+        time,
+        icon: nerdIcon("", "▲"),
+        taskId: DAEMON_SENTINEL_TASK_ID,
+        message: `daemon started${versionStr} ${summary}`.trim(),
+        level: "info",
+        iconColor: CYAN,
+      });
+    } else if (event === "daemon_stopped") {
+      // T353: daemon 終了マーカー。dim 表示で目立たせない
+      const uptimeSec = parseInt(detail.match(/uptime_sec=(\d+)/)?.[1] ?? "0", 10);
+      result.push({
+        time,
+        icon: nerdIcon("", "▼"),
+        taskId: DAEMON_SENTINEL_TASK_ID,
+        message: `daemon stopped (uptime ${formatUptimeSec(uptimeSec)})`,
+        level: "info",
+        iconColor: CYAN,
+        dim: true,
+      });
+    } else if (event === "resume_worktree_missing_late") {
+      // T353: resume B 経路の worktree 不在検出
+      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
+      const surface = extractSurface(detail);
+      result.push({
+        time,
+        icon: nerdIcon("", "[✕]"),
+        taskId,
+        message: "resume failed — worktree_missing",
+        level: "error",
+        surface: surface || undefined,
+        iconColor: RED,
+      });
+    } else if (event === "conductor_resume_launch_failed") {
+      // T353: resume B 経路の launchConductor 失敗
+      const taskId = detail.match(/task_id=(\S+)/)?.[1] ?? "?";
+      if (!isValidTaskId(taskId)) continue;
+      const surface = extractSurface(detail);
+      // detail は "task_id=N C[surface] <error.message>" 形式。先頭 2 token を落とした残りを reason とする
+      const reason = detail.replace(/^task_id=\S+\s+\S+\s*/, "").trim() || "unknown";
+      result.push({
+        time,
+        icon: nerdIcon("", "[✕]"),
+        taskId,
+        message: `resume failed — launch_error: ${reason}`,
+        level: "error",
+        surface: surface || undefined,
+        iconColor: RED,
+      });
     }
   }
   return result;
@@ -978,19 +1058,27 @@ function buildTaskRow(
 
 // --- Journal/Log テキスト行構築（ui.logsConsole の代替） ---
 
-function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
+export function buildJournalRows(entries: JournalEntry[], repoUrl: string | null) {
   if (entries.length === 0) {
     return [ui.text("no journal entries", { dim: true })];
   }
-  return entries.filter((e) => isValidTaskId(e.taskId)).map((entry) => {
-    return ui.row({ gap: 1 }, [
-      ui.text(entry.time, { dim: true }),
-      ui.text(entry.icon, entry.iconColor ? { style: { fg: entry.iconColor } } : {}),
-      ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
-      entry.surface ? ui.text(`[${entry.surface.replace("surface:", "")}]`, { dim: true }) : null,
-      buildTitleWithLinks(entry.message, repoUrl),
-    ]);
-  });
+  // T353: daemon sentinel taskId は filter を通し T### 列はスキップ。dim flag は icon style にマージ
+  return entries
+    .filter((e) => isValidTaskId(e.taskId) || e.taskId === DAEMON_SENTINEL_TASK_ID)
+    .map((entry) => {
+      const isDaemon = entry.taskId === DAEMON_SENTINEL_TASK_ID;
+      const dimStyle = entry.dim ? { dim: true } : {};
+      const iconStyle = entry.iconColor
+        ? { style: { fg: entry.iconColor }, ...dimStyle }
+        : dimStyle;
+      return ui.row({ gap: 1 }, [
+        ui.text(entry.time, { dim: true }),
+        ui.text(entry.icon, iconStyle),
+        isDaemon ? null : ui.text(`T${entry.taskId.padStart(3, "0")}`, { bold: true }),
+        entry.surface ? ui.text(`[${entry.surface.replace("surface:", "")}]`, { dim: true }) : null,
+        buildTitleWithLinks(entry.message, repoUrl),
+      ]);
+    });
 }
 
 // --- Artifacts タブ ---

@@ -146,6 +146,11 @@ export interface DaemonState {
    * scanTasks の throttle ログに `pool_intended=on pool_active=off reason=db_init_failed` を付加する。
    */
   tokenDbInitFailed: boolean;
+  /**
+   * T353: daemon プロセスの起動時刻（ISO 8601）。daemon_stopped の uptime 計算に使う。
+   * createDaemon で空文字で初期化し、cmdStart が daemon_started emit より前に確定させる。
+   */
+  startedAt: string;
 }
 
 /**
@@ -414,6 +419,7 @@ export async function createDaemon(
     pool: null,
     poolPolicy: null,
     tokenDbInitFailed: false,
+    startedAt: "",
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
