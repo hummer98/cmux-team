@@ -33,6 +33,10 @@ The Master does not perform the following work (unless the user gives explicit i
 - **Directly editing files** outside of `.team/tasks/` (Write/Edit)
 - `git` **write operations** (`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick`, etc.)
   — read, fetch, and `pull --ff-only` are allowed; see "What to Do (Additional)"
+  — Exception: immediately after a task whose deliverable is `merged` is closed, Master may
+    run `git fetch origin <base>` / `git pull --ff-only origin <base>` / `git push origin <base>`
+    (see §"Deliverable sync protocol"). Destructive ops such as `push --force` / `reset --hard`
+    remain prohibited.
 - Directly starting or monitoring Conductor / Agent, polling, or loop execution
 
 To delete unstarted (draft/ready) tasks, use `cmux-team delete-task --task-id <id> [--journal "reason"]`.
@@ -59,6 +63,8 @@ The following remain **prohibited** even when an explicit phrase is given:
 - Directly starting or monitoring Conductor / Agent, polling, or loop execution
 - Destructive shared-state operations such as `git push` / `push --force` / `reset --hard`
   (even with an explicit instruction, re-confirm with the user before executing)
+  — Except for the §"Deliverable sync protocol" carve-out (only `git push origin <base>`
+    immediately after a `merged` deliverable closes; `push --force` remains prohibited)
 - **Casual use of `abort-task`** — interrupting and discarding work is a last resort
 
 ### Decision Criteria
@@ -173,6 +179,7 @@ Cases where this is appropriate (examples; analogous intents also qualify):
 - You want to read the resulting summary.md before **designing a follow-up task**
 - You want to re-evaluate the overall situation at a **convergence point** across tasks
 - You want to watch a series of dynamically-decided work that cannot be chained up front
+- **To capture completion of a `merged` deliverable so that Master can perform origin sync (fetch / pull / push)** (see §"Deliverable sync protocol")
 
 Launch examples:
 
@@ -190,6 +197,68 @@ stdout carries summary.md contents, stderr carries abort reasons or remaining ta
 **Do NOT use it for:** automatic chains that `depends-on` can handle, mid-dialog where
 the user is waiting for an immediate reply, drain waits for `--exclusive` tasks
 (Manager resolves those).
+
+## Deliverable sync protocol
+
+A concrete application of the general principles in §"When to use `await-task`".
+Origin sync for tasks completed with a `merged` deliverable is **Master's
+responsibility**. Conductors / Agents are confined to a worktree, so pushing to
+`origin/<base>` is out of their scope by design.
+
+### Choosing a deliverable_kind
+
+- Use `merged` when the work fits a local ff-only merge (same repo, same origin).
+  Adopt only if Master will take on origin sync.
+- Use `pr` when a GitHub PR is filed and review / merge are delegated externally.
+  Origin sync is then handled by the existing rule in §"What to Do (Additional)"
+  after `gh pr merge`.
+- Use `files` / `none` for deliveries that leave no branch behind. No sync needed.
+
+### Sync flow for merged tasks
+
+1. File and ready the task with `--deliverable-kind=merged` in mind.
+2. As soon as it is set ready, Master launches
+   `cmux-team await-task --task-id N` via `Bash(run_in_background=true)`.
+3. On task-notification, branch on the deliverable:
+   - `closed (merged)` → run the "sync steps" below
+   - `closed (pr)` → do nothing (PR completes the flow)
+   - `closed (files | none)` → do nothing
+   - `aborted` → rescue judgement (§"Rescue delegation")
+
+### Sync steps (when closed (merged))
+
+```bash
+git fetch origin <base>
+git pull --ff-only origin <base>
+git push origin <base>   # the only `git push` that is allowed
+```
+
+- `<base>` is the task's `merged_into` (the work base branch, usually mainBranch).
+- On failure (non-fast-forward / push reject / etc.), **delegate to a new rescue task**
+  (§"Rescue delegation").
+- Master never resolves destructively (`reset --hard` / `push --force` remain prohibited).
+
+### Serializing concurrent merged tasks (avoiding push contention)
+
+When several merged tasks close simultaneously:
+
+- Master runs syncs **sequentially** in the order task-notifications arrive.
+- The second sync does not start until the first `git pull --ff-only && git push` finishes.
+- Implementation-wise, "Master processes them one turn at a time" naturally serializes
+  the work (1 turn = 1 sync). Even if multiple background `await-task` calls run in
+  parallel, notifications are dispatched on Master's main thread in order, so push
+  contention does not arise.
+
+### Rescue delegation (sync failure / aborted)
+
+Do **not** resolve conflicts or force-push directly. File a follow-up task instead:
+
+- title: `"rescue: origin sync after T{id} merged"`
+- body: include the failing command's stderr / the prior HEAD / `merged_into` / `merge_sha`
+- File it as `priority: high`, `status: ready`, and let a Conductor (implementer) resolve it.
+
+For an aborted close, choose either (a) file an equivalent new task, or (b) ask the user
+to decide, depending on the cause.
 
 ## Proposing Exclusive Tasks
 

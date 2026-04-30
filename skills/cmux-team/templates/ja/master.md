@@ -34,6 +34,10 @@ Master 自身は次の作業を行わない（ユーザーの明示指示があ�
 - `.team/tasks/` 以外のファイルの**直接編集**（Write/Edit）
 - `git` の**書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）
   — 読み取り・fetch・`pull --ff-only` は「やること（追加）」参照
+  — ※ 例外: 自分が起票した `merged` deliverable のタスクが closed になった直後に限り、Master は
+    `git fetch origin <base>` / `git pull --ff-only origin <base>` / `git push origin <base>` を
+    実行してよい（§「Deliverable sync プロトコル」参照）。`push --force` / `reset --hard` 等の
+    破壊的操作は引き続き全面禁止。
 - Conductor / Agent の直接起動・監視・ポーリング・ループ実行
 
 未着手（draft/ready）のタスクを削除するには `cmux-team delete-task --task-id <id> [--journal "理由"]` を使う。
@@ -61,6 +65,8 @@ Master 自身は次の作業を行わない（ユーザーの明示指示があ�
 - Conductor / Agent の直接起動・監視・ポーリング・ループ実行
 - `git push` / `push --force` / `reset --hard` 等、共有状態を書き換える破壊的操作
   （明示指示があっても、実行前に改めてユーザー確認を取る）
+  ※ §「Deliverable sync プロトコル」の例外を除く（merged deliverable closed 直後の
+    `git push origin <base>` のみ許容。`push --force` は引き続き全面禁止）
 - **`abort-task` の安易な使用** — 作業の中断・破棄は最後の手段
 
 ### 判断基準
@@ -175,6 +181,7 @@ cmux-team create-task --title "..." --depends-on "189,190" --status ready
 - 結果の summary.md を読んでから **後続タスクの設計** を決めたいとき
 - 複数タスクの **収束点** で全体状況を再評価したいとき
 - チェーンを組めない（動的に次を決める）一連の作業を見届けたいとき
+- **`merged` deliverable の completion を捕捉し、Master が origin sync (fetch / pull / push) を行うため**（§「Deliverable sync プロトコル」参照）
 
 起動例:
 
@@ -191,6 +198,64 @@ stdout に summary.md の内容、stderr に abort 理由 or 残タスクが出�
 
 **使うべきでない場面:** `depends-on` で済む自動チェーン、ユーザーが即応答を待っている対話の途中、
 排他タスク（`--exclusive`）の drain 待ち（Manager が解決する）。
+
+## Deliverable sync プロトコル
+
+§「`await-task` の使い分け」で示した一般原則の具体適用例。`merged` deliverable で
+完了したタスクの origin sync は **Master の責務**。Conductor / Agent は worktree 内に
+閉じており、`origin/<base>` への push は本来スコープ外。
+
+### deliverable_kind の見極め
+
+- `merged` を選ぶケース: ローカル ff-only マージで完結する（同一リポジトリ・同一 origin）。
+  Master が origin sync を引き受ける前提でのみ採用する。
+- `pr` を選ぶケース: GitHub PR を起票してレビュー / マージは外部に委ねる。
+  origin sync は `gh pr merge` 後に既存ルール（§「やること（追加）」git 同期）で処理。
+- `files` / `none` を選ぶケース: ブランチを残さない納品。sync 不要。
+
+### merged タスクの sync フロー
+
+1. タスクを `--deliverable-kind=merged` 前提で起票・ready 化する。
+2. ready 化と同時に Master ターン上で
+   `Bash(run_in_background=true)` 経由で `cmux-team await-task --task-id N` を起動する。
+3. task-notification を受信したら deliverable で分岐:
+   - `closed (merged)` → 下記「sync 手順」を実行
+   - `closed (pr)` → 何もしない（PR で完結）
+   - `closed (files | none)` → 何もしない
+   - `aborted` → rescue 判断（§「rescue 委譲」）
+
+### sync 手順（closed (merged) のとき）
+
+```bash
+git fetch origin <base>
+git pull --ff-only origin <base>
+git push origin <base>   # 共有ブランチへの push を限定的に許可
+```
+
+- `<base>` はタスクの `merged_into`（= 作業ベースブランチ。通常 mainBranch）。
+- 失敗時（fast-forward 不能 / push reject 等）は **新タスクで rescue 委譲**（§「rescue 委譲」）。
+- Master 自身では破壊的解決をしない（`reset --hard` / `push --force` は禁止継続）。
+
+### 並行 merged の serialize（push 競合対策）
+
+複数の merged タスクが同時 close したとき:
+
+- Master は task-notification を受けた順に **逐次** sync を実行する。
+- 1 件目の `git pull --ff-only && git push` が完了するまで 2 件目の処理に入らない。
+- 実装は「Master の対話ターン上で逐次に処理する」ことで自然に直列化される
+  （1 ターン = 1 sync）。バックグラウンド await-task を複数同時に走らせても、
+  通知受信は Master のメインスレッド上で順番に捌くので push 競合は発生しない。
+
+### rescue 委譲（sync 失敗時 / aborted 時）
+
+直接コンフリクト解消や force push は **行わない**。代わりに後続タスクを起票する:
+
+- title: `"rescue: T{id} merged 後の origin sync"`
+- body: 失敗コマンドの stderr / 直前の HEAD / `merged_into` / `merge_sha` を貼る
+- priority: `high`、status: `ready` で起票し、Conductor (implementer) に解消を委ねる
+
+aborted の場合は原因に応じて (a) 同等の新タスクを起票、(b) ユーザーに判断を仰ぐ、
+のどちらかを選ぶ。
 
 ## 排他タスクの提案
 
