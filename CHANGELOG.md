@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [4.23.0] - 2026-05-01
+
+### Added
+
+- **`cmux-team metrics` サブコマンドを新設し、CodeDNA 評価のためのデータ収集基盤を整備（T379 / T381）**。`cmux-team metrics --task-id / --since / --format json|text|csv / --group-by task|day|week` で完了時間・abort 率・tool call 数（Read/Grep/Edit/Bash）・token 消費・time-to-first-Edit・tool call 失敗率・hook block 率（Bash deny）・tool call stddev を集計できる。さらに `cmux-team metrics snapshot` で日次スナップショットを `.team/metrics/snapshots/YYYY-MM-DD.json` に保存し、`compare --baseline <period> --comparison <period>` で Welch's t-test / Mann-Whitney U / 2-prop z-test による cohort 比較、`health --days <N>` で snapshot ギャップ検出を行える。launchd plist テンプレートも `skills/cmux-team/templates/launchd/` に同梱（JST 09:05 daily）
+- **`/cmux-team:watch` slash command を新設（T360）**。`.team/logs/events.jsonl` を Monitor で tail し、`task_completed` の自動 PR merge / conflict resolve / `git pull --ff-only` と escalation 系イベントのユーザー提示を行う opt-in コマンド。`--types` でイベントを絞り込み、persistent Monitor で stream tail する。pre-flight として daemon.pid / `cmux-team status` / events.jsonl / events サブコマンド存在を確認
+- **`cmux-team events` サブコマンドを実装（T359）**。`.team/logs/events.jsonl` を tail / filter / format 変換する CLI。`--follow` で rotate 検知付き tail -F 相当、`--types` で comma-separated exact match filter、`--since` で duration（5m / 1h / 2d）or ISO 8601、`--format json|text` で出力形式を切り替え。spec §8 forward-compat に従い不正 JSON / 未知 event / schema_version 範囲外は warn + skip
+- **dashboard の Journal に daemon lifecycle / resume イベントを追加（T353）**。`boot_completed`（▲）/ `daemon_stopped`（▼）/ `conductor_resume_launch_failed`（✕）/ `resume_worktree_missing_late`（✕）の 4 イベントを Journal に表示。`boot_completed` には version / restored_conductors / open_tasks、`daemon_stopped` には uptime_sec を含める。daemon 系イベントには T### 列を出さず、`daemon_reload` は通常時 3 行制限を維持するため非表示
+- **dashboard: Pool key モード時に Metrics 枯渇予測セクションを非表示**。`poolTokens !== null` のとき Rate Limit Projection（5h/7d）は proxy 全体集計に基づくため pool rotation の実態を反映しない。per-token util を出す Pool Tokens セクションが情報源になるので枯渇予測自体を skip する
+
+### Changed
+
+- **docs/spec/11-metrics.md（376 行）を新設し metrics taxonomy と CodeDNA 評価判定基準を SSOT 化（T380）**。6 軸 taxonomy / Data sources / 撤退判定（BH FDR / Bonferroni）/ CLI 例 / Caveats を文書化。glossary §11「Metrics 関連」に 6 用語（metrics SSOT / cohort comparison / baseline period / evaluation period / header rot / agent message GC）を追加。CLAUDE.md のリポジトリ構造表と進捗情報の取得方法表に metrics 行を追記
+
+### Fixed
+
+- **`loadPoolSummary` 失敗時に CLI へ warning を再表示（T356）**。T351 で cmdStatus の旧 in-line ロジックを `loadPoolSummary` に集約した際、旧 `console.log("(token pool read failed: ...)")` が消失し tokens.db 破損時も silent に null を返していたリグレッションを修正。`loadPoolSummary` に optional `onError` callback を追加し、build catch のみで発火、gate 失敗（`isTokenPoolEnabled`）は silent OFF を維持。daemon 経路（`refreshPoolSnapshot`）は buildPoolSummary 直呼びのため挙動不変
+- **dashboard Metrics pool token を CLI と一致させる（T401）**。`buildPoolTokenRows` が生 `snap.util_5h/7d` を直読みしていたため stale + reset 通過軸の 0 上書きが抜け、CLI（`cmux-team token list`）と Metrics ページで同一 snapshot の表示が乖離していた問題を修正。`computeEffUtil` 経由に揃え、Metrics は admit / throttle / CLI 表示と並ぶ 4 箇所目の consumer に整列。reset 通過行に `*` マーカー + フッタ凡例を追加（i18n key `metrics_pool_marker_legend`）
+
 ## [4.22.0] - 2026-04-30
 
 ### Added
