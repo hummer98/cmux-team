@@ -1633,7 +1633,7 @@ export async function startDashboard(
           : state.focusedArea === "journal"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("L"), ui.text("log"),
               ui.kbd("ESC"), ui.text("back"),
@@ -1641,7 +1641,7 @@ export async function startDashboard(
           : state.focusedArea === "log"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("ESC"), ui.text("back"),
@@ -1669,7 +1669,7 @@ export async function startDashboard(
           ? [
               ui.kbd("↑/↓"), ui.text("select"),
               ui.kbd("Enter/O"), ui.text("view"),
-              ui.kbd("R"), ui.text("sync"),
+              ui.kbd("Ctrl+R"), ui.text("sync"),
               ui.kbd("B"), ui.text("browser"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("ESC"), ui.text("back"),
@@ -1677,7 +1677,7 @@ export async function startDashboard(
           : state.focusedArea === "metrics"
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/G"), ui.text("top/bottom"),
+              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("L"), ui.text("log"),
@@ -1694,7 +1694,7 @@ export async function startDashboard(
               ui.kbd("M"), ui.text("metrics"),
               ui.kbd("r"), ui.text("reload"),
               ui.kbd("q"), ui.text("quit"),
-              ui.kbd("Q"), ui.text("full quit"),
+              ui.kbd("Ctrl+Q"), ui.text("full quit"),
             ],
       }),
     });
@@ -1830,7 +1830,7 @@ export async function startDashboard(
     A: () => switchTab("artifacts"),
     I: () => switchTab("issues"),
     M: () => switchTab("metrics"),
-    "shift+r": (ctx) => {
+    "ctrl+r": (ctx) => {
       if (ctx.state.activeTab !== "issues") return;
       syncIssuesFromGh().catch((e: any) => {
         log("issues_sync_error", e?.message ?? String(e)).catch(() => {});
@@ -1931,7 +1931,7 @@ export async function startDashboard(
       }
       return s;
     }),
-    "shift+g": () => app.update((s) => {
+    "ctrl+g": () => app.update((s) => {
       // G = 末尾（最古）へ、autoScroll OFF
       if (s.focusedArea === "journal") {
         const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
@@ -1966,7 +1966,7 @@ export async function startDashboard(
       cleanup();
       opts?.onQuit?.();
     },
-    "shift+q": (ctx) => {
+    "ctrl+q": (ctx) => {
       if (ctx.state.focusedArea !== "global") return;
       confirmingFullQuit = true;
       app.update((s) => ({ ...s, confirmingFullQuit: true }));

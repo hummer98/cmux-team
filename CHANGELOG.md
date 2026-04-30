@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **dashboard のキーバインド `Shift+R` / `Shift+G` / `Shift+Q` を `Ctrl+R` / `Ctrl+G` / `Ctrl+Q` に変更（T394）**。kitty keyboard protocol / CSI-u 非対応の標準ターミナル（macOS Terminal.app, 既定設定の iTerm2 など）では `shift+letter` が text event の codepoint としてしか届かず shift modifier が trie マッチしないためハンドラが発火しなかった回帰を、全端末で確実に制御バイト（0x12 / 0x07 / 0x11）として届く `ctrl+letter` ベースに切り替えて構造的に修正。ヘルプ表記も `g/G` → `g/Ctrl+G`, `R sync` → `Ctrl+R sync`, `Q full quit` → `Ctrl+Q full quit` に更新
+
 ## [4.20.0] - 2026-04-30
 
 ### Breaking
