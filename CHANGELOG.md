@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+## [4.21.0] - 2026-04-30
+
+### Added
+
+- **Agent の API エラーを TUI に可視化（T392）**。Agent 側 hook（`stopfailure-hook`）がレート制限・overloaded・ネットワーク断などで Agent が停止した場合、その停止理由を構造化イベントとして daemon に送り、dashboard 上で該当 Agent の状態として視認できるようにした。Conductor が「なぜ Agent が止まったか」を画面読みではなくイベントから把握できるようになる
+
 ### Changed
 
 - **dashboard のキーバインド `Shift+R` / `Shift+G` / `Shift+Q` を `Ctrl+R` / `Ctrl+G` / `Ctrl+Q` に変更（T394）**。kitty keyboard protocol / CSI-u 非対応の標準ターミナル（macOS Terminal.app, 既定設定の iTerm2 など）では `shift+letter` が text event の codepoint としてしか届かず shift modifier が trie マッチしないためハンドラが発火しなかった回帰を、全端末で確実に制御バイト（0x12 / 0x07 / 0x11）として届く `ctrl+letter` ベースに切り替えて構造的に修正。ヘルプ表記も `g/G` → `g/Ctrl+G`, `R sync` → `Ctrl+R sync`, `Q full quit` → `Ctrl+Q full quit` に更新
+
+### Fixed
+
+- **token-store: T391 schema migration の FK 違反を SQLite 12-step procedure 準拠で解消（T393）**。tokens テーブルの再作成（`organization_id` / `auth_hash` を NULL 許容化）時に `usage_snapshots` の外部キー制約に違反していた問題を修正。SQLite 公式の 12-step table redefinition procedure（PRAGMA foreign_keys=OFF / 一時テーブル経由の COPY / FK 再有効化）に従って migration を書き直し、既存ユーザーの起動時 migration が安全に完了するようにした。fixture も新 schema に合わせて更新
 
 ## [4.20.0] - 2026-04-30
 
