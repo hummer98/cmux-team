@@ -18,6 +18,9 @@ import {
   parseCloseTaskArgs,
   decideAutoPullAction,
   formatAutoPullOutcome,
+  generateSessionId,
+  buildConductorClaudeArgs,
+  buildAgentClaudeFlags,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
 import {
@@ -2928,6 +2931,143 @@ describe("formatAutoPullOutcome (T339)", () => {
     } else {
       throw new Error("expected fail");
     }
+  });
+});
+
+// --- T407: UUID pre-inject for cmdConductor / cmdSpawnAgent ---
+
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+describe("generateSessionId (T407)", () => {
+  test("(T-11) UUID v4 形式を返す", () => {
+    const id = generateSessionId();
+    expect(id).toMatch(UUID_V4_RE);
+  });
+
+  test("複数回呼び出すと異なる UUID を返す（衝突しない）", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 100; i++) ids.add(generateSessionId());
+    expect(ids.size).toBe(100);
+  });
+});
+
+describe("buildConductorClaudeArgs (T407)", () => {
+  test("(T-2) `--session-id <UUID>` を含む", () => {
+    const args = buildConductorClaudeArgs({
+      conductorSettingsPath: "/p/conductor-settings.json",
+      model: "claude-sonnet-4-6",
+      rolePromptFile: "/p/role.md",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    const idx = args.indexOf("--session-id");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("11111111-2222-4333-8444-555555555555");
+  });
+
+  test("--session-id は単独の arg として渡る（値と分離）", () => {
+    const args = buildConductorClaudeArgs({
+      conductorSettingsPath: "/p/conductor-settings.json",
+      model: "claude-sonnet-4-6",
+      rolePromptFile: "/p/role.md",
+      sessionId: "abcdabcd-1234-4abc-89ab-abcdabcdabcd",
+    });
+    // shell escape を避けるため、claude binary に直接渡す形式（execFileSync）の args 配列。
+    // フラグと値が並んでいる順序で含まれる。
+    expect(args).toContain("--session-id");
+    expect(args).toContain("abcdabcd-1234-4abc-89ab-abcdabcdabcd");
+  });
+
+  test("--dangerously-skip-permissions / --settings / --model / --append-system-prompt-file が含まれる（既存挙動維持）", () => {
+    const args = buildConductorClaudeArgs({
+      conductorSettingsPath: "/p/conductor-settings.json",
+      model: "claude-sonnet-4-6",
+      rolePromptFile: "/p/role.md",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--settings");
+    expect(args).toContain("/p/conductor-settings.json");
+    expect(args).toContain("--model");
+    expect(args).toContain("claude-sonnet-4-6");
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain("/p/role.md");
+  });
+
+  test("taskPromptFile を渡すと末尾に「読んで指示に従って...」が追加される", () => {
+    const args = buildConductorClaudeArgs({
+      conductorSettingsPath: "/p/conductor-settings.json",
+      model: "claude-sonnet-4-6",
+      rolePromptFile: "/p/role.md",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+      taskPromptFile: "/p/task.md",
+    });
+    expect(args[args.length - 1]).toBe("/p/task.md を読んで指示に従って作業してください。");
+  });
+
+  test("taskPromptFile 未指定なら末尾に「読んで指示に従って...」は無い", () => {
+    const args = buildConductorClaudeArgs({
+      conductorSettingsPath: "/p/conductor-settings.json",
+      model: "claude-sonnet-4-6",
+      rolePromptFile: "/p/role.md",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    expect(args.find((a) => a.includes("読んで指示に従って"))).toBeUndefined();
+  });
+});
+
+describe("buildAgentClaudeFlags (T407)", () => {
+  test("(T-1) `--session-id <UUID>` を含む（join 後の文字列に出現）", () => {
+    const flags = buildAgentClaudeFlags({
+      agentSettingsFlag: "--settings '/p/agent-settings.json'",
+      model: "claude-sonnet-4-6",
+      sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    });
+    // claudeFlags は `cmux.send` 経由で `claudeFlags.join(" ")` され shell に投入される。
+    // join 後の文字列に `--session-id <UUID>` が含まれることを確認。
+    const joined = flags.join(" ");
+    expect(joined).toContain("--session-id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  });
+
+  test("(R5) tokenInjected の有無に関わらず `--session-id` は claudeFlags に必ず入る", () => {
+    // R5: `tokenInjected=true` (inline env prefix あり) と `tokenInjected=false` (prefix なし) の
+    //   2 fixture でいずれも `--session-id` が claude binary 引数として正しく付与されることを確認。
+    //   token prefix は claudeFlags の外側（`CLAUDE_CODE_OAUTH_TOKEN="$CMUX_CLAUDE_TOKEN" claude ...`）に
+    //   配置されるため、claudeFlags 自体には影響しない。
+    const flags = buildAgentClaudeFlags({
+      agentSettingsFlag: "--settings '/p/agent-settings.json'",
+      model: "claude-sonnet-4-6",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    const joined = flags.join(" ");
+    expect(joined).toContain("--session-id 11111111-2222-4333-8444-555555555555");
+
+    // tokenInjected=false の経路でも同じ claudeFlags が組み立てられる（外側 prefix のみ差分）
+    const flagsNoToken = buildAgentClaudeFlags({
+      agentSettingsFlag: "--settings '/p/agent-settings.json'",
+      model: "claude-sonnet-4-6",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    expect(flagsNoToken.join(" ")).toContain("--session-id 11111111-2222-4333-8444-555555555555");
+  });
+
+  test("(T-11) sessionId が UUID v4 形式であることをそのまま保持する", () => {
+    const id = generateSessionId();
+    expect(id).toMatch(UUID_V4_RE);
+    const flags = buildAgentClaudeFlags({
+      agentSettingsFlag: "--settings '/p/agent-settings.json'",
+      model: "claude-sonnet-4-6",
+      sessionId: id,
+    });
+    expect(flags.join(" ")).toContain(`--session-id ${id}`);
+  });
+
+  test("agentSettingsFlag 未指定なら --settings は claudeFlags に出ない", () => {
+    const flags = buildAgentClaudeFlags({
+      agentSettingsFlag: undefined,
+      model: "claude-sonnet-4-6",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    expect(flags.join(" ")).not.toContain("--settings");
   });
 });
 

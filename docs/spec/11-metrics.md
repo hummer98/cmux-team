@@ -195,24 +195,52 @@
 
 ### 3.5 join key と `session_to_task` CTE
 
-hook_signals は `session_id` を持つが `task_id` を持たない。一方 api_usage は `task_id` を直接持つ。両者を統一して per-task 集計するため `task_sessions` テーブル（DDL: `trace-store.ts:121-134`）の `event='assigned'` 行で `session_id → task_id` を解決する。
+hook_signals は `session_id` を持つが `task_id` を持たない。一方 api_usage は `task_id` を直接持つ。両者を統一して per-task 集計するため `task_sessions` テーブル（DDL: `trace-store.ts:121-134`）の `event IN ('assigned','agent_spawned')` 行で `session_id → task_id` を解決する。
 
 `task_sessions` は同 `session_id` に対し複数行を持ちうる（resume / clear で append される）ため、`MIN(task_id) GROUP BY session_id` で 1:1 に集約してから JOIN する。これがないと 2 行 hit で tool 件数が二重カウントされる。
 
-`session_to_task` CTE 全文（`trace-store.ts:1179-1184` から逐語コピー）:
+T407: `event = 'assigned'` だけでは Conductor 由来の tool_use しか task_id 解決できなかったため、`event IN ('assigned','agent_spawned')` に拡張して **Agent 由来 tool_use も task_id へ紐づけられる**ようにした。同時に `session_id != ''` の防御を加え、過去の backfill されていない空 session_id 行（旧 cmdSpawnAgent が `session_id: ""` で書いた agent_spawned 行や空 session_id の hook_signals 行）が互いに誤マッチして empty 同士で JOIN ヒットする regression を防ぐ。
+
+`session_to_task` CTE 全文（`trace-store.ts` から逐語コピー）:
 
 ```sql
 WITH session_to_task AS (
   SELECT session_id, MIN(task_id) AS task_id
   FROM task_sessions
-  WHERE event = 'assigned' AND task_id IS NOT NULL
+  WHERE event IN ('assigned','agent_spawned')
+    AND task_id IS NOT NULL
+    AND session_id IS NOT NULL AND session_id != ''
   GROUP BY session_id
 )
 ```
 
-> **脚注**: 同一の `session_to_task` CTE は `countToolCallsByTask` / `firstEditPerTask` / `failureRateByTask` の **3 関数に複製**されている（`trace-store.ts:1179-1184` / `1220-1225` / `1258-1263`）。後続タスクで共通化候補だが、本 spec の範囲では事実として記録するに留める。
+JOIN 側でも `h.session_id != ''` の防御を入れる:
+
+```sql
+LEFT JOIN session_to_task s2t
+  ON h.session_id = s2t.session_id
+  AND h.session_id != ''
+```
+
+> **脚注**: 同一の `session_to_task` CTE は `countToolCallsByTask` / `firstEditPerTask` / `failureRateByTask` の **3 関数に複製**されている。後続タスクで共通化候補だが、本 spec の範囲では事実として記録するに留める。
 
 `task_id IS NULL`（unattached）の hook はこの CTE で除外される。task_assigned 前に発火した hook（session_started 未到達）は `task_sessions` に行が無いため LEFT JOIN 結果が NULL となり、`countToolCallsByTask` は `task_id=null` のまま残し、`firstEditPerTask` / `failureRateByTask` の per-task 集計からは除外される。詳細は §6 Caveats。
+
+#### 3.5.1 spawn 時 `--session-id` pre-inject (T407)
+
+`task_sessions` の `event='assigned'` / `event='agent_spawned'` 行に**空でない** `session_id` を確実に書き込むため、Manager 側で UUID v4 を pre-inject する経路を取る。
+
+| ロール | spawn 経路 | UUID 発行サイト | claude 起動 flag | daemon 通知 |
+|---|---|---|---|---|
+| Conductor | `cmux-team conductor` | `cmdConductor`（`main.ts`） | `--session-id <UUID>` | `CONDUCTOR_REGISTERED` POST に sessionId 同梱 |
+| Agent | `cmux-team spawn-agent` | `cmdSpawnAgent`（`main.ts`） | `--session-id <UUID>` | `AGENT_SPAWNED` POST に sessionId 同梱 |
+| Master | （**scope 外** — 本タスクで対応せず） | — | — | — |
+
+Daemon は `CONDUCTOR_REGISTERED` / `AGENT_SPAWNED` ハンドラで `state.sessionId` 未設定なら採用、既存値があれば mismatch を warn (`session_id_mismatch_at_register_late`) して hook 信頼方針で破棄する。後続の SessionStart hook 由来 `SESSION_STARTED(source=startup)` で異なる UUID が届いた場合は `session_id_mismatch_at_startup` warn を出した上で hook 側を採用する（`source=clear/compact/resume/undefined` は warn 無し上書きで legacy 互換）。
+
+`task_sessions` テーブルは **append-only 不変性**を保つ。/clear / /compact 後の追従は `task-state.json` の `sessionId` 更新のみで完結し、テーブル自体への UPDATE 経路は導入しない。spawn 時に書かれた `assigned` / `agent_spawned` 行に空でない UUID が入っていれば、Agent 由来 tool_use の task_id 解決には十分（同 task_id 配下に複数 session_id 行があっても `MIN(task_id) GROUP BY session_id` で集約される）。
+
+`--resume` 経路（`cmdResume`）には `--session-id` を**渡さない**。既存 session を復元する目的のため。
 
 ---
 

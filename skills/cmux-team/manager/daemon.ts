@@ -1644,12 +1644,37 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             `${formatSurface(conductor.surface, "C")} event=AGENT_SPAWNED ${formatConductorSnapshot(conductor)}`
           );
         }
+        // T407: 後着 AGENT_SPAWNED 救済路。同 surface の agent が既に存在する場合
+        //   (SESSION_STARTED 先着で agent 仮登録された等のレース) は push せず、
+        //   sessionId のみ採用 / mismatch なら warn を出す。通常経路 (cmdSpawnAgent
+        //   が AGENT_SPAWNED を Claude 起動より前に POST する) ではここに入らない。
+        const existingAgent = conductor.agents.find((a) => a.surface === message.surface);
+        if (existingAgent) {
+          if (message.sessionId) {
+            if (!existingAgent.sessionId) {
+              existingAgent.sessionId = message.sessionId;
+              notifyStateChanged("daemon.ts:handleMessage:agent-spawned-sessionid-late");
+            } else if (existingAgent.sessionId !== message.sessionId) {
+              await log(
+                "session_id_mismatch_at_register_late",
+                `${formatPair(conductor.surface, message.surface, "C", "A")} existing_session_id=${existingAgent.sessionId} preinject_session_id=${message.sessionId}`,
+              );
+            }
+          }
+          await log(
+            "agent_spawn_skipped",
+            `${formatPair(conductor.surface, message.surface, "C", "A")} reason=already_registered`,
+          );
+          break;
+        }
         conductor.agents.push({
           surface: message.surface,
           role: message.role,
           taskTitle: message.taskTitle,
           spawnedAt: message.timestamp,
           status: "starting",
+          // T407: pre-inject UUID を agent.sessionId に格納。SESSION_STARTED より先着するのが通常順序。
+          sessionId: message.sessionId,
           // T392: 新規 agent エントリは lastApiError を持たない
           lastApiError: undefined,
         });
@@ -1766,9 +1791,25 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             task_id: conductor.taskId ?? "",
           });
         }
-        // T203: SessionStart hook 経由で受信した sessionId を最新値に追従
+        // T203: SessionStart hook 経由で受信した sessionId を最新値に追従。
+        // T407: source=startup で既存 state.sessionId と不一致なら mismatch warn を出した上で
+        //   hook 信頼方針で上書きする。source=clear/compact/resume/undefined は warn 無し上書き
+        //   （legacy 互換 + T203 既存経路を維持）。state.sessionId 未設定なら warn 無しで採用
+        //   （POST 順序逆転の保険）。
         const prevSessionId = conductor.sessionId;
-        if (message.sessionId) conductor.sessionId = message.sessionId;
+        if (message.sessionId) {
+          if (
+            message.source === "startup" &&
+            prevSessionId &&
+            prevSessionId !== message.sessionId
+          ) {
+            await log(
+              "session_id_mismatch_at_startup",
+              `${formatSurface(message.surface, "C")} preinject_session_id=${prevSessionId} hook_session_id=${message.sessionId}`,
+            );
+          }
+          conductor.sessionId = message.sessionId;
+        }
         conductor.pid = message.pid;
         conductor.disconnectedAt = undefined;
         // T260: 最後に生存確認できた時刻を記録
@@ -1840,7 +1881,21 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         const agent = c.agents.find(a => a.surface === message.surface);
         if (agent) {
           // T203: Agent も同様に最新 sessionId を反映
-          if (message.sessionId) agent.sessionId = message.sessionId;
+          // T407: source=startup で既存 sessionId と不一致なら mismatch warn を出してから上書き。
+          if (message.sessionId) {
+            const prevAgentSessionId = agent.sessionId;
+            if (
+              message.source === "startup" &&
+              prevAgentSessionId &&
+              prevAgentSessionId !== message.sessionId
+            ) {
+              await log(
+                "session_id_mismatch_at_startup",
+                `${formatPair(c.surface, message.surface, "C", "A")} preinject_session_id=${prevAgentSessionId} hook_session_id=${message.sessionId}`,
+              );
+            }
+            agent.sessionId = message.sessionId;
+          }
           agent.pid = message.pid;
           // T236: TUI spinner 用の status 遷移（starting/idle → running）
           agent.status = "running";
@@ -1915,8 +1970,23 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       // T228: idempotent merge — 既存 state があれば skip（taskId/agents 等を破壊しないため）。
       //   cmdConductor / cmdResume 自身が POST する self-register 方式に変わったため、
       //   resume 経路では initializeConductorSlots が pre-set した state が既に存在する。
+      // T407: ただし pre-inject UUID を後着で受け取った場合は、既存 state.sessionId と比較し
+      //   未設定なら採用、既存値と異なるなら hook 信頼方針で破棄して warn ログを出す。
       if (state.conductors.has(message.surface)) {
         const existing = state.conductors.get(message.surface)!;
+        if (message.sessionId) {
+          if (!existing.sessionId) {
+            // 既存 state はあるが sessionId は未設定 → pre-inject UUID を採用
+            existing.sessionId = message.sessionId;
+            notifyStateChanged("daemon.ts:handleMessage:conductor-registered-sessionid-late");
+          } else if (existing.sessionId !== message.sessionId) {
+            // POST 順序逆転: hook 側で確定済の sessionId を pre-inject 値で巻き戻さない
+            await log(
+              "session_id_mismatch_at_register_late",
+              `${formatSurface(message.surface, "C")} existing_session_id=${existing.sessionId} preinject_session_id=${message.sessionId}`,
+            );
+          }
+        }
         await log(
           "conductor_register_skipped",
           `${formatSurface(message.surface, "C")} reason=already_registered existing_status=${existing.status} existing_pid=${existing.pid ?? "null"}`,
@@ -1937,6 +2007,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         status: "starting",
         startedAt: message.timestamp,
         agents: [],
+        // T407: pre-inject UUID を初期 sessionId として記録。SESSION_STARTED より先着するのが通常順序。
+        sessionId: message.sessionId,
       });
       notifyStateChanged("daemon.ts:handleMessage:conductor-registered");
       await log("conductor_registered", formatSurface(message.surface, "C"));

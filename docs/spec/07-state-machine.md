@@ -122,6 +122,39 @@ stateDiagram-v2
 
 違反は `fsm_invariant_violation` ログに出る (P1 は log only、強制修正しない)。
 
+### 1.6 sessionId pre-inject と整合性チェック (T407)
+
+Conductor / Agent の新規セッション起動時、Manager 側で UUID v4 を発行し `--session-id <UUID>` で claude を起動する。
+
+**経路**:
+
+```
+cmdConductor / cmdSpawnAgent
+    │ 1. crypto.randomUUID() で UUID 発行
+    │ 2. claude args に --session-id <UUID> 追加
+    │ 3. POST CONDUCTOR_REGISTERED / AGENT_SPAWNED に sessionId 同梱
+    ▼
+daemon (CONDUCTOR_REGISTERED / AGENT_SPAWNED ハンドラ)
+    │ if (message.sessionId && !state.sessionId)
+    │   → state.sessionId に格納（基準値）
+    │ else if (message.sessionId && state.sessionId !== message.sessionId)
+    │   → session_id_mismatch_at_register_late を warn、採用しない（hook 信頼）
+    ▼ (Claude 起動)
+SessionStart hook (source=startup) → SESSION_STARTED
+    │ state.sessionId 未設定 → warn 無し採用（POST 順序逆転の保険）
+    │ source=startup で一致 → warn 無し維持
+    │ source=startup で不一致 → session_id_mismatch_at_startup を warn + hook 側で上書き
+    │ source=clear/compact/resume → warn 無し上書き（既存 T203 経路）
+    │ source=undefined → warn 無し上書き（legacy 互換）
+```
+
+**`task_sessions` テーブルは append-only**。/clear / /compact 後の追従は `task-state.json` の `sessionId` 更新のみで完結し、テーブルへの UPDATE 経路は導入しない。spawn 時に書かれた `assigned` / `agent_spawned` 行に空でない UUID が入れば、Agent 由来 tool_use の task_id 解決には十分。
+
+**スコープ**:
+- Conductor (`cmdConductor`) / Agent (`cmdSpawnAgent`) のみ対応
+- Master (`cmdLaunchMaster`) は **scope 外**（`task_sessions` に Master 起動行が無いため、pre-inject の効用が集計に効かない）
+- `cmdResume` には `--session-id` を**渡さない**（`--resume` 経路は既存 session を復元するため）
+
 ## 2. Task FSM
 
 ### 2.1 状態一覧 (6 値)

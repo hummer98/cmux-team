@@ -1167,6 +1167,12 @@ export interface ToolCallByTaskRow {
  * `WITH session_to_task AS (... GROUP BY session_id)` で session_id → task_id を 1:1 に集約してから JOIN する。
  * これがないと 2 行 hit で tool 件数が二重カウントされる（design-review Recommendation 3）。
  *
+ * T407: `event = 'assigned'` だけでは Conductor 由来の tool_use しか task_id 解決できないため、
+ * `event IN ('assigned','agent_spawned')` に拡張して Agent 由来 tool_use も task_id へ紐づけられるようにする。
+ * さらに `session_id != ''` の防御を加え、過去の backfill されていない空 session_id 行
+ * （cmdSpawnAgent の旧経路で書かれた `session_id: ""` の agent_spawned 行 / 空 session_id の hook_signals 行）が
+ * 互いに誤マッチして「empty 同士で JOIN ヒット」する regression を防ぐ。
+ *
  * task_id 未解決（join 結果 NULL）の行は task_id = null として残し、
  * 集計 CLI 側で unattached として別カウントできるようにする。
  */
@@ -1179,12 +1185,16 @@ export function countToolCallsByTask(
     WITH session_to_task AS (
       SELECT session_id, MIN(task_id) AS task_id
       FROM task_sessions
-      WHERE event = 'assigned' AND task_id IS NOT NULL
+      WHERE event IN ('assigned','agent_spawned')
+        AND task_id IS NOT NULL
+        AND session_id IS NOT NULL AND session_id != ''
       GROUP BY session_id
     )
     SELECT s2t.task_id AS task_id, h.tool_name AS tool_name, COUNT(*) AS n
     FROM hook_signals h
-    LEFT JOIN session_to_task s2t USING (session_id)
+    LEFT JOIN session_to_task s2t
+      ON h.session_id = s2t.session_id
+      AND h.session_id != ''
     WHERE h.type = $type
       AND h.timestamp >= $sinceIso
       AND h.timestamp <= $untilIso
@@ -1211,6 +1221,8 @@ export interface FirstEditByTaskRow {
  * T379: タスク別に最初の Edit ツール呼び出し時刻を返す。
  * task_assigned 時刻との差分から「time-to-first-edit」を算出する目的。
  * task_id 未解決行は除外（time-to-first-edit を算出できないため）。
+ *
+ * T407: countToolCallsByTask と同じく `event IN ('assigned','agent_spawned')` + `session_id != ''` 防御を適用。
  */
 export function firstEditPerTask(
   db: Database,
@@ -1220,12 +1232,16 @@ export function firstEditPerTask(
     WITH session_to_task AS (
       SELECT session_id, MIN(task_id) AS task_id
       FROM task_sessions
-      WHERE event = 'assigned' AND task_id IS NOT NULL
+      WHERE event IN ('assigned','agent_spawned')
+        AND task_id IS NOT NULL
+        AND session_id IS NOT NULL AND session_id != ''
       GROUP BY session_id
     )
     SELECT s2t.task_id AS task_id, MIN(h.timestamp) AS first_edit_ts
     FROM hook_signals h
-    JOIN session_to_task s2t USING (session_id)
+    JOIN session_to_task s2t
+      ON h.session_id = s2t.session_id
+      AND h.session_id != ''
     WHERE h.type = 'PRE_TOOL_USE'
       AND h.tool_name = 'Edit'
       AND h.timestamp >= $sinceIso
@@ -1249,6 +1265,8 @@ export interface ToolFailureByTaskRow {
  * T379: タスク別に PostToolUse の総数と失敗数を返す。
  * 失敗判定は `tool_response.success = false` または `tool_response.error IS NOT NULL`。
  * 集計時の `JSON_EXTRACT` の path は payload_json の `payload.tool_response`（schema に従う）。
+ *
+ * T407: countToolCallsByTask と同じく `event IN ('assigned','agent_spawned')` + `session_id != ''` 防御を適用。
  */
 export function failureRateByTask(
   db: Database,
@@ -1258,7 +1276,9 @@ export function failureRateByTask(
     WITH session_to_task AS (
       SELECT session_id, MIN(task_id) AS task_id
       FROM task_sessions
-      WHERE event = 'assigned' AND task_id IS NOT NULL
+      WHERE event IN ('assigned','agent_spawned')
+        AND task_id IS NOT NULL
+        AND session_id IS NOT NULL AND session_id != ''
       GROUP BY session_id
     )
     SELECT
@@ -1272,7 +1292,9 @@ export function failureRateByTask(
         END
       ) AS failures
     FROM hook_signals h
-    LEFT JOIN session_to_task s2t USING (session_id)
+    LEFT JOIN session_to_task s2t
+      ON h.session_id = s2t.session_id
+      AND h.session_id != ''
     WHERE h.type = 'POST_TOOL_USE'
       AND h.timestamp >= $sinceIso
       AND h.timestamp <= $untilIso

@@ -1642,6 +1642,7 @@ async function postMessage(msg: Record<string, unknown>): Promise<void> {
 async function registerSelf(
   role: "master" | "conductor",
   surface: string,
+  sessionId?: string,
 ): Promise<void> {
   const messageType = role === "master" ? "MASTER_REGISTERED" : "CONDUCTOR_REGISTERED";
   const logEvent = role === "master" ? "master_self_register" : "conductor_self_register";
@@ -1659,14 +1660,19 @@ async function registerSelf(
     process.exit(1);
   }
   try {
+    // T407: Conductor 経路では cmdConductor 側で `crypto.randomUUID()` を発行し
+    //   `--session-id <UUID>` フラグと同 UUID を sessionId として POST に同梱する。
+    //   Master スコープでは渡されないため undefined のまま JSON.stringify で省略される。
+    const body: Record<string, unknown> = {
+      type: messageType,
+      surface,
+      timestamp: new Date().toISOString(),
+    };
+    if (sessionId) body.sessionId = sessionId;
     const res = await fetch(`http://127.0.0.1:${port}/api/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: messageType,
-        surface,
-        timestamp: new Date().toISOString(),
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       console.error(
@@ -2460,6 +2466,61 @@ async function resolveCallerSurfaceOrExit(): Promise<string> {
 }
 
 /**
+ * T407: Conductor / Agent の `--session-id` 用 UUID を発行する。
+ * `crypto.randomUUID()` の薄いラッパー。テストで spy / mock 可能にするため named export。
+ */
+export function generateSessionId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * T407: Agent の claude 起動 claudeFlags 文字列配列を組み立てる（cmux send で送る文字列の中身）。
+ * `--session-id <UUID>` を必ず含める。token-pool の inline env prefix
+ * (`CLAUDE_CODE_OAUTH_TOKEN="$CMUX_CLAUDE_TOKEN" claude ...`) は claudeFlags の外側で
+ * 結合されるため、本関数の責務外（R5 の test fixture でも claudeFlags のみを検証する）。
+ *
+ * UUID は v4 のため shell metacharacter は含まれず escape 不要。
+ */
+export function buildAgentClaudeFlags(opts: {
+  agentSettingsFlag?: string;
+  model: string;
+  sessionId: string;
+}): string[] {
+  const flags: string[] = ["--dangerously-skip-permissions"];
+  if (opts.agentSettingsFlag) {
+    flags.push(opts.agentSettingsFlag);
+  }
+  flags.push(`--model ${opts.model}`);
+  flags.push(`--session-id ${opts.sessionId}`);
+  return flags;
+}
+
+/**
+ * T407: Conductor の claude 起動 args を組み立てる。テスト容易性のため別関数として export。
+ * 引数順序: --dangerously-skip-permissions / --settings / --model / --append-system-prompt-file /
+ *   --session-id / [taskPrompt 文字列]
+ */
+export function buildConductorClaudeArgs(opts: {
+  conductorSettingsPath: string;
+  model: string;
+  rolePromptFile: string;
+  sessionId: string;
+  taskPromptFile?: string;
+}): string[] {
+  const args = [
+    "--dangerously-skip-permissions",
+    "--settings", opts.conductorSettingsPath,
+    "--model", opts.model,
+    "--append-system-prompt-file", opts.rolePromptFile,
+    "--session-id", opts.sessionId,
+  ];
+  if (opts.taskPromptFile) {
+    args.push(`${opts.taskPromptFile} を読んで指示に従って作業してください。`);
+  }
+  return args;
+}
+
+/**
  * cmux-team conductor
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  * CMUX_SURFACE 環境変数が未設定なら cmux identify から自動解決する。
@@ -2468,9 +2529,14 @@ async function cmdConductor(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
   const surface = await resolveCallerSurfaceOrExit();
 
+  // T407: pre-inject UUID。`--session-id` で claude に渡し、SessionStart hook の
+  //   session_id がこれと一致するのが通常順序。daemon に CONDUCTOR_REGISTERED 経由で同梱通知し、
+  //   `task_sessions` の assigned 行に空でない UUID が書かれる経路を確立する。
+  const sessionId = generateSessionId();
+
   // self-register: cmdConductor が自身を daemon に登録（T228）。
   // proxy-port 不在 / POST 失敗時は fail-fast。
-  await registerSelf("conductor", surface);
+  await registerSelf("conductor", surface, sessionId);
 
   // T213: main ブランチを env → config の順で解決。T253 で暗黙 "main" フォールバックを削除し
   //   両方空なら fail-stop する。
@@ -2510,8 +2576,9 @@ async function cmdConductor(): Promise<void> {
   const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "conductor", getArg("model"));
 
-  // T203: sessionId は Claude 自身に発行させる。
-  // SessionStart hook が新しい session_id を daemon に push するため CLI 側で固定しない。
+  // T407: sessionId は Manager 側で `crypto.randomUUID()` で pre-inject する。
+  //   `--session-id <UUID>` を claude に渡すため、SessionStart hook が同 UUID を返す。
+  //   `--resume` 経路（cmdResume）には `--session-id` を渡さない（既存 session を復元するため）。
 
   const taskPromptFile = getArg("task-prompt");
 
@@ -2519,20 +2586,14 @@ async function cmdConductor(): Promise<void> {
   // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
   const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
-  // claude コマンド引数を組み立て
-  const claudeArgs = [
-    "--dangerously-skip-permissions",
-    "--settings", conductorSettingsPath,
-    "--model", model,
-    "--append-system-prompt-file", rolePromptFile,
-  ];
-
-  // 初期プロンプトを決定
-  //   taskPromptFile 指定時のみチャット入力として push する。
-  //   未指定（通常の待機起動）は何も push せず、Claude は純粋に ❯ で待機する。
-  if (taskPromptFile) {
-    claudeArgs.push(`${taskPromptFile} を読んで指示に従って作業してください。`);
-  }
+  // claude コマンド引数を組み立て（T407: builder 関数経由で `--session-id` を確実に同梱）
+  const claudeArgs = buildConductorClaudeArgs({
+    conductorSettingsPath,
+    model,
+    rolePromptFile,
+    sessionId,
+    taskPromptFile,
+  });
 
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
@@ -2726,6 +2787,11 @@ async function cmdSpawnAgent(): Promise<void> {
     process.exit(1);
   }
 
+  // T407: pre-inject UUID。`--session-id` で claude に渡し、SessionStart hook の
+  //   session_id がこれと一致するのが通常順序。AGENT_SPAWNED と insertTaskSession にも
+  //   同 UUID を流し、`task_sessions` の agent_spawned 行に空でない UUID が書かれるようにする。
+  const sessionId = generateSessionId();
+
   // --- direnv allow fail-fast チェック ---
   // cmdStart と同じく、.envrc が未 allow なら Agent を spawn せず即 exit する。
   // 引数検証を全てパスした後・throttle ガードより前で実行する。
@@ -2831,6 +2897,7 @@ async function cmdSpawnAgent(): Promise<void> {
       surface: ocSurface,
       role,
       taskTitle,
+      sessionId,
       timestamp: new Date().toISOString(),
       callerPid: process.pid,
       callerSurface: process.env.CMUX_SURFACE,
@@ -2869,6 +2936,8 @@ async function cmdSpawnAgent(): Promise<void> {
     surface,
     role,
     taskTitle,
+    // T407: pre-inject UUID を同梱。daemon 側で agent.sessionId に格納される。
+    sessionId,
     timestamp: new Date().toISOString(),
     // T260: spawn-agent を実行した主体（通常は Conductor surface / pid）を記録し、
     //       daemon 側で `caller=...` として agent_spawned ログに載せる。
@@ -3006,12 +3075,12 @@ async function cmdSpawnAgent(): Promise<void> {
     await sleep(500);
   }
 
-  // Claude Code 起動
-  const claudeFlags = ["--dangerously-skip-permissions"];
-  if (agentSettingsFlag) {
-    claudeFlags.push(agentSettingsFlag);
-  }
-  claudeFlags.push(`--model ${model}`);
+  // Claude Code 起動（T407: builder 関数で `--session-id` を確実に同梱）
+  const claudeFlags = buildAgentClaudeFlags({
+    agentSettingsFlag,
+    model,
+    sessionId,
+  });
 
   // T247: prompt-file 内の {{PROJECT_INSTRUCTIONS}} を overlay で展開する。
   // 展開後は `.team/prompts/<basename>.expanded.md` に書き出し、その path を Claude に渡す。
@@ -3065,7 +3134,9 @@ async function cmdSpawnAgent(): Promise<void> {
         timestamp: new Date().toISOString(),
         task_id: cond.taskId,
         task_run_id: cond.taskRunId,
-        session_id: "",
+        // T407: pre-inject UUID。空文字列 hardcode を排除し、Agent 由来 tool_use の
+        //   task_id 解決経路（trace-store の CTE）にこの UUID で hit するようにする。
+        session_id: sessionId,
         role,
         surface,
         worktree_path: worktreePath,

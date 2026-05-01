@@ -6291,3 +6291,420 @@ describe("updateTeamJson: tokenHandle シリアライズ (T323)", () => {
   });
 });
 
+// --- T407: CONDUCTOR_REGISTERED / AGENT_SPAWNED の sessionId pre-inject 受信 ---
+
+describe("CONDUCTOR_REGISTERED で sessionId pre-inject 受信 (T407)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  test("(T-2) CONDUCTOR_REGISTERED の sessionId が conductor.sessionId に格納される（state.sessionId 未設定の場合）", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:407c1",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407c1");
+    expect(conductor).toBeDefined();
+    expect(conductor?.sessionId).toBe("11111111-2222-4333-8444-555555555555");
+  });
+
+  test("CONDUCTOR_REGISTERED で sessionId 無し（後方互換）でも従来通り state が作られる", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:407c2",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407c2");
+    expect(conductor).toBeDefined();
+    expect(conductor?.sessionId).toBeUndefined();
+  });
+
+  test("(T-12) 後着 CONDUCTOR_REGISTERED で hook 確定済 sessionId は維持される（mismatch warn のみ）", async () => {
+    // POST 順序逆転シナリオ: SESSION_STARTED が先着で state.sessionId=hook_uuid 確定
+    // → 後着 CONDUCTOR_REGISTERED の sessionId が異なっても hook 側を信頼する
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    // 既に SESSION_STARTED 等で state が確定（sessionId=hook_uuid）
+    state.conductors.set("surface:407c3", {
+      surface: "surface:407c3",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+      sessionId: "hook-uuid-already-set",
+      pid: 1234,
+    });
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:407c3",
+      sessionId: "preinject-uuid-different",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407c3");
+    // hook 側 sessionId が維持される（pre-inject 値で巻き戻されない）
+    expect(conductor?.sessionId).toBe("hook-uuid-already-set");
+
+    // mismatch warn ログが出ている
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("session_id_mismatch_at_register_late");
+  });
+
+  test("既存 state があり sessionId が一致するなら warn なしで idempotent skip（既存挙動維持）", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407c4", {
+      surface: "surface:407c4",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "idle",
+      sessionId: "same-uuid-1234",
+    });
+
+    await handleMessage(state, {
+      type: "CONDUCTOR_REGISTERED",
+      surface: "surface:407c4",
+      sessionId: "same-uuid-1234",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407c4");
+    expect(conductor?.sessionId).toBe("same-uuid-1234");
+
+    const logContent = await readManagerLog();
+    expect(logContent).not.toContain("session_id_mismatch_at_register_late");
+  });
+});
+
+// --- T407 Step 4: AGENT_SPAWNED の sessionId pre-inject 受信 ---
+
+describe("AGENT_SPAWNED で sessionId pre-inject 受信 (T407)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  test("(T-1 daemon 部分) AGENT_SPAWNED の sessionId が agent.sessionId に格納される", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cA", {
+      surface: "surface:407cA",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      taskId: "T407",
+      taskRunId: "task-407-1",
+    });
+
+    await handleMessage(state, {
+      type: "AGENT_SPAWNED",
+      conductorSurface: "surface:407cA",
+      surface: "surface:407aA",
+      role: "implementer",
+      sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407cA");
+    const agent = conductor?.agents.find((a) => a.surface === "surface:407aA");
+    expect(agent).toBeDefined();
+    expect(agent?.sessionId).toBe("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  });
+
+  test("AGENT_SPAWNED で sessionId 無しでも従来通り agent が登録される（後方互換）", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cB", {
+      surface: "surface:407cB",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+    });
+
+    await handleMessage(state, {
+      type: "AGENT_SPAWNED",
+      conductorSurface: "surface:407cB",
+      surface: "surface:407aB",
+      role: "implementer",
+      timestamp: new Date().toISOString(),
+    });
+
+    const conductor = state.conductors.get("surface:407cB");
+    const agent = conductor?.agents.find((a) => a.surface === "surface:407aB");
+    expect(agent).toBeDefined();
+    expect(agent?.sessionId).toBeUndefined();
+  });
+});
+
+// --- T407 Step 7: SESSION_STARTED 整合性チェック + warn ログ ---
+
+describe("SESSION_STARTED 整合性チェック (T407)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  test("(T-8) source=startup で sessionId 一致 → warn 無し", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    // pre-inject UUID で state.sessionId 確定済
+    state.conductors.set("surface:407cs1", {
+      surface: "surface:407cs1",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "starting",
+      sessionId: "uuid-same",
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs1",
+      pid: 11111,
+      sessionId: "uuid-same",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get("surface:407cs1");
+    expect(c?.sessionId).toBe("uuid-same");
+
+    const logContent = await readManagerLog();
+    expect(logContent).not.toContain("session_id_mismatch_at_startup");
+
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("(T-9) source=startup で sessionId 不一致 → warn 1 件 + hook 側で上書き", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cs2", {
+      surface: "surface:407cs2",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "starting",
+      sessionId: "uuid-preinject",
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs2",
+      pid: 22222,
+      sessionId: "uuid-from-hook",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get("surface:407cs2");
+    // hook 信頼方針: hook 側 UUID で上書き
+    expect(c?.sessionId).toBe("uuid-from-hook");
+
+    const logContent = await readManagerLog();
+    expect(logContent).toContain("session_id_mismatch_at_startup");
+
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("(R2) source=undefined（legacy hook）→ warn 無しで上書き", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cs3", {
+      surface: "surface:407cs3",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "starting",
+      sessionId: "uuid-preinject",
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs3",
+      pid: 33333,
+      sessionId: "uuid-legacy",
+      // source 未指定（legacy 互換）
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get("surface:407cs3");
+    expect(c?.sessionId).toBe("uuid-legacy");
+
+    const logContent = await readManagerLog();
+    // source=undefined では mismatch warn は出さない（legacy 互換）
+    expect(logContent).not.toContain("session_id_mismatch_at_startup");
+
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("保険: state.sessionId 未設定（POST 順序逆転）→ warn 無しで採用", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cs4", {
+      surface: "surface:407cs4",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "starting",
+      // sessionId は未設定（CONDUCTOR_REGISTERED が後着）
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs4",
+      pid: 44444,
+      sessionId: "uuid-from-hook-only",
+      source: "startup",
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get("surface:407cs4");
+    expect(c?.sessionId).toBe("uuid-from-hook-only");
+
+    const logContent = await readManagerLog();
+    expect(logContent).not.toContain("session_id_mismatch_at_startup");
+
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+
+  test("source=clear で sessionId 上書き（既存 T203 経路、warn なし）", async () => {
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const state = await createDaemon(testDir);
+
+    state.conductors.set("surface:407cs5", {
+      surface: "surface:407cs5",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      sessionId: "uuid-old",
+      pid: 55555,
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs5",
+      pid: 55556,
+      sessionId: "uuid-clear-new",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    const c = state.conductors.get("surface:407cs5");
+    expect(c?.sessionId).toBe("uuid-clear-new");
+
+    const logContent = await readManagerLog();
+    expect(logContent).not.toContain("session_id_mismatch_at_startup");
+
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+});
+
+// --- T407 Step 8: task_sessions テーブルは append-only 維持 ---
+
+describe("task_sessions append-only 維持 (T407 Step 8)", () => {
+  test("/clear シナリオで SESSION_STARTED(source=clear, sessionId=U2) → task_sessions UPDATE は発生しない", async () => {
+    const { saveTaskState, loadTaskState } = await import("./task");
+    const { createDaemon, handleMessage } = await import("./daemon");
+    const { initDB, insertTaskSession, getTaskSessions } = await import("./trace-store");
+
+    const state = await createDaemon(testDir);
+
+    // 事前: task-state.json に assigned + 旧 sessionId
+    const initialTs = await loadTaskState(testDir);
+    initialTs["T9999"] = {
+      status: "assigned",
+      sessionId: "uuid-old",
+      worktreePath: join(testDir, ".worktrees/task-9999"),
+    } as any;
+    await saveTaskState(testDir, initialTs);
+
+    // 事前: task_sessions に assigned 行 1 件
+    const db = initDB(testDir);
+    insertTaskSession(db, {
+      timestamp: new Date().toISOString(),
+      task_id: "T9999",
+      session_id: "uuid-old",
+      role: "conductor",
+      surface: "surface:407cs8",
+      event: "assigned",
+    });
+    db.close();
+
+    state.conductors.set("surface:407cs8", {
+      surface: "surface:407cs8",
+      startedAt: new Date().toISOString(),
+      agents: [],
+      status: "running",
+      sessionId: "uuid-old",
+      taskId: "T9999",
+      taskRunId: "task-9999-1",
+      pid: 55555,
+    });
+
+    await handleMessage(state, {
+      type: "SESSION_STARTED",
+      surface: "surface:407cs8",
+      pid: 55556,
+      sessionId: "uuid-new",
+      source: "clear",
+      timestamp: new Date().toISOString(),
+    });
+
+    // task-state.json の sessionId が更新されることを確認（既存 T203 経路）
+    const ts = await loadTaskState(testDir);
+    expect(ts["T9999"]?.sessionId).toBe("uuid-new");
+
+    // task_sessions テーブルは append-only 維持: 1 行のままで session_id は uuid-old のまま
+    const db2 = initDB(testDir);
+    const rows = getTaskSessions(db2, { taskId: "T9999" });
+    db2.close();
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.session_id).toBe("uuid-old");
+
+    const c = state.conductors.get("surface:407cs8");
+    if (c?.pidWatcherInterval) {
+      clearInterval(c.pidWatcherInterval);
+      c.pidWatcherInterval = undefined;
+    }
+  });
+});
+

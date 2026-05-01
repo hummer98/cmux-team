@@ -1,8 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import {
   AGENT_ROLES,
+  AgentSpawnedMessage,
   AgentTokenBoundMessage,
+  ConductorRegisteredMessage,
   ConductorState,
+  MasterRegisteredMessage,
   MasterStateSchema,
   NotificationMessage,
   OVERLAY_ROLES,
@@ -482,5 +485,91 @@ describe("QueueMessage T379 messages are included", () => {
       timestamp: "2026-04-29T10:00:02.000Z",
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+// --- T407: ConductorRegisteredMessage / AgentSpawnedMessage の sessionId 同梱 ---
+
+describe("ConductorRegisteredMessage sessionId (T407)", () => {
+  const base = {
+    type: "CONDUCTOR_REGISTERED" as const,
+    surface: "surface:200",
+    timestamp: "2026-05-01T10:00:00.000Z",
+  };
+
+  test("正常系: sessionId なしで parse 可能（後方互換）", () => {
+    const parsed = ConductorRegisteredMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: sessionId 付きで parse 可能（pre-inject UUID）", () => {
+    const parsed = ConductorRegisteredMessage.safeParse({
+      ...base,
+      sessionId: "11111111-2222-4333-8444-555555555555",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sessionId).toBe("11111111-2222-4333-8444-555555555555");
+    }
+  });
+
+  test("異常系: sessionId が string でない場合は reject", () => {
+    const parsed = ConductorRegisteredMessage.safeParse({
+      ...base,
+      sessionId: 123,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("AgentSpawnedMessage sessionId (T407)", () => {
+  const base = {
+    type: "AGENT_SPAWNED" as const,
+    conductorSurface: "surface:200",
+    surface: "surface:300",
+    timestamp: "2026-05-01T10:00:00.000Z",
+  };
+
+  test("正常系: sessionId なしで parse 可能（後方互換）", () => {
+    const parsed = AgentSpawnedMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("正常系: sessionId 付きで parse 可能（pre-inject UUID）", () => {
+    const parsed = AgentSpawnedMessage.safeParse({
+      ...base,
+      sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sessionId).toBe("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+    }
+  });
+
+  test("異常系: sessionId が string でない場合は reject", () => {
+    const parsed = AgentSpawnedMessage.safeParse({
+      ...base,
+      sessionId: false,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("MasterRegisteredMessage は sessionId を持たない（T407 scope 外）", () => {
+  test("MasterRegisteredMessage は sessionId が unknown property（passthrough されない）", () => {
+    // T407 改訂履歴 C1: Master は scope 外。sessionId フィールドを追加しない。
+    // zod の default は strict ではないが、型レベルで sessionId が含まれないことを保証する
+    // (型推論で sessionId が undefined と扱われる)。
+    const parsed = MasterRegisteredMessage.safeParse({
+      type: "MASTER_REGISTERED",
+      surface: "surface:100",
+      timestamp: "2026-05-01T10:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      // @ts-expect-error: sessionId は MasterRegisteredMessage の型に存在しない
+      const _sid = parsed.data.sessionId;
+      void _sid;
+    }
   });
 });

@@ -48,6 +48,10 @@ export const AgentSpawnedMessage = z.object({
   // Agent が spawn され続ける現象の事後追跡用）。optional で互換性維持。
   callerPid: z.number().optional(),
   callerSurface: z.string().optional(),
+  // T407: spawn-agent 側で事前発行した UUID v4 を同梱し、daemon 側で
+  // agent.sessionId に格納して `task_sessions` の agent_spawned 行に書く。
+  // hook 由来 SESSION_STARTED より先着するのが通常順序。
+  sessionId: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -81,6 +85,11 @@ export const SessionEndedMessage = z.object({
 export const ConductorRegisteredMessage = z.object({
   type: z.literal("CONDUCTOR_REGISTERED"),
   surface: z.string(),
+  // T407: cmdConductor 側で事前発行した UUID v4 を同梱し、daemon 側で
+  // conductor.sessionId に格納して `task_sessions` の assigned 行に書く。
+  // hook 由来 SESSION_STARTED より先着するのが通常順序。
+  // optional のままにして、Master / 旧バージョンのクライアントとの互換性を保つ。
+  sessionId: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 

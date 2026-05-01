@@ -14,12 +14,18 @@ import { Database } from "bun:sqlite";
 import {
   initDB,
   insertApiUsage,
+  insertHookSignal,
+  insertTaskSession,
   aggregateApiUsageByRole,
   aggregateApiUsageByTask,
+  countToolCallsByTask,
+  failureRateByTask,
+  firstEditPerTask,
   getLatestApiUsageRow,
   getBurnRateWindow,
 } from "./trace-store";
 import { createDummyProject, type DummyProject } from "./test-project";
+import type { QueueMessage } from "./schema";
 
 describe("trace-store: aggregateApiUsageByRole (T307)", () => {
   let project: DummyProject;
@@ -343,5 +349,326 @@ describe("trace-store: getBurnRateWindow (T307)", () => {
     });
     const r = getBurnRateWindow(db, 60);
     expect(r.totalTokens).toBe(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// T407: countToolCallsByTask / firstEditPerTask / failureRateByTask CTE 拡張
+// ────────────────────────────────────────────────────────────────────────
+
+const SINCE = "2026-04-30T00:00:00.000Z";
+const UNTIL = "2026-05-01T23:59:59.999Z";
+
+function insertPreToolUse(
+  db: Database,
+  args: { sessionId: string; toolName: string; timestamp: string; payload?: any },
+) {
+  const msg: QueueMessage = {
+    type: "PRE_TOOL_USE",
+    surface: "surface:300",
+    pid: 1234,
+    role: "agent",
+    sessionId: args.sessionId,
+    toolName: args.toolName,
+    payload: args.payload ?? {},
+    timestamp: args.timestamp,
+  };
+  insertHookSignal(db, msg);
+}
+
+function insertPostToolUse(
+  db: Database,
+  args: {
+    sessionId: string;
+    toolName: string;
+    timestamp: string;
+    success?: boolean;
+    error?: string;
+  },
+) {
+  const tool_response: Record<string, any> = {};
+  if (args.success !== undefined) tool_response.success = args.success;
+  if (args.error !== undefined) tool_response.error = args.error;
+  const msg: QueueMessage = {
+    type: "POST_TOOL_USE",
+    surface: "surface:300",
+    pid: 1234,
+    role: "agent",
+    sessionId: args.sessionId,
+    toolName: args.toolName,
+    payload: { tool_response },
+    timestamp: args.timestamp,
+  };
+  insertHookSignal(db, msg);
+}
+
+describe("trace-store: countToolCallsByTask agent_spawned 行 + 防御 (T407)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-count-tool-t407-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("(T-5) agent_spawned 行のみで task_id を解決する", () => {
+    // task_sessions に agent_spawned 行のみ（assigned 行なし）
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T123",
+      session_id: "U_a-aaaaaaaaaaaa",
+      role: "agent",
+      surface: "surface:301",
+      event: "agent_spawned",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_a-aaaaaaaaaaaa",
+      toolName: "Edit",
+      timestamp: "2026-04-30T10:01:00.000Z",
+    });
+
+    const rows = countToolCallsByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    const t123 = rows.find((r) => r.task_id === "T123");
+    expect(t123).toBeDefined();
+    expect(t123?.tool_name).toBe("Edit");
+    expect(t123?.n).toBe(1);
+  });
+
+  test("(R1) 重複検出: assigned + agent_spawned 併存で同 task_id に集約 (二重カウントしない)", () => {
+    // 同 task_id に conductor の assigned 行 + agent の agent_spawned 行
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "Tn",
+      session_id: "U_c-cccccccccccc",
+      role: "conductor",
+      event: "assigned",
+    });
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:30.000Z",
+      task_id: "Tn",
+      session_id: "U_a-aaaaaaaaaaaa",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    // hook_signals に conductor 由来 1 件 + agent 由来 1 件
+    insertPreToolUse(db, {
+      sessionId: "U_c-cccccccccccc",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:01:00.000Z",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_a-aaaaaaaaaaaa",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:02:00.000Z",
+    });
+
+    const rows = countToolCallsByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    // 同 (task_id=Tn, tool_name=Bash) で集約され n=2
+    const tn = rows.find((r) => r.task_id === "Tn" && r.tool_name === "Bash");
+    expect(tn?.n).toBe(2);
+    // 行数: Tn の Bash 1 行のみ
+    expect(rows.filter((r) => r.task_id === "Tn").length).toBe(1);
+  });
+
+  test("(R1) 異常状態: 同 session_id に複数 task_id → MIN(task_id) で 1 つに集約", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T200",
+      session_id: "U_a-aaaaaaaaaaaa",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:01:00.000Z",
+      task_id: "T100",
+      session_id: "U_a-aaaaaaaaaaaa",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_a-aaaaaaaaaaaa",
+      toolName: "Read",
+      timestamp: "2026-04-30T10:02:00.000Z",
+    });
+
+    const rows = countToolCallsByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    // MIN(T100, T200) = T100 で集約（決定論的）
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.task_id).toBe("T100");
+    expect(rows[0]?.n).toBe(1);
+  });
+
+  test("(C2) 空 session_id の行は集計から除外される", () => {
+    // 空 session_id の agent_spawned 行（過去 backfill されない不正行）
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T_empty",
+      session_id: "",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    // 正常な agent_spawned 行
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:01.000Z",
+      task_id: "T_ok",
+      session_id: "U_ok-okokokokok",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    // 空 session_id の hook_signal → 集計対象外
+    insertPreToolUse(db, {
+      sessionId: "",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:01:00.000Z",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_ok-okokokokok",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:01:01.000Z",
+    });
+
+    const rows = countToolCallsByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    // T_empty 由来の集計は出ない
+    expect(rows.find((r) => r.task_id === "T_empty")).toBeUndefined();
+    // T_ok のみ集計
+    const ok = rows.find((r) => r.task_id === "T_ok");
+    expect(ok?.n).toBe(1);
+    // 空 session_id の hook_signal は task_id=null として残るが、別 fixture: 空文字列 session_id 同士の誤マッチは起きない
+    // 本テストでは空 session_id の hook_signal が T_empty と誤マッチしないことが要点
+  });
+});
+
+describe("trace-store: firstEditPerTask agent_spawned 行 + 防御 (T407)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-first-edit-t407-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("(T-6) agent_spawned 行のみで firstEditPerTask が解決する", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T123",
+      session_id: "U_a-firstedit",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_a-firstedit",
+      toolName: "Edit",
+      timestamp: "2026-04-30T10:05:00.000Z",
+    });
+    insertPreToolUse(db, {
+      sessionId: "U_a-firstedit",
+      toolName: "Edit",
+      timestamp: "2026-04-30T10:06:00.000Z",
+    });
+
+    const rows = firstEditPerTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    const t123 = rows.find((r) => r.task_id === "T123");
+    expect(t123?.first_edit_ts).toBe("2026-04-30T10:05:00.000Z");
+  });
+
+  test("(C2) 空 session_id 行は除外される", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T_empty",
+      session_id: "",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    insertPreToolUse(db, {
+      sessionId: "",
+      toolName: "Edit",
+      timestamp: "2026-04-30T10:05:00.000Z",
+    });
+
+    const rows = firstEditPerTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    expect(rows.find((r) => r.task_id === "T_empty")).toBeUndefined();
+  });
+});
+
+describe("trace-store: failureRateByTask agent_spawned 行 + 防御 (T407)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-fail-rate-t407-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("(T-6) agent_spawned 行のみで failureRateByTask が解決する", () => {
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T123",
+      session_id: "U_a-failrate",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    // 成功 1, 失敗 1
+    insertPostToolUse(db, {
+      sessionId: "U_a-failrate",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:05:00.000Z",
+      success: true,
+    });
+    insertPostToolUse(db, {
+      sessionId: "U_a-failrate",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:06:00.000Z",
+      success: false,
+    });
+
+    const rows = failureRateByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    const t123 = rows.find((r) => r.task_id === "T123");
+    expect(t123?.total).toBe(2);
+    expect(t123?.failures).toBe(1);
+  });
+
+  test("(C2) 空 session_id 行は集計対象外（誤マッチしない）", () => {
+    // 空 session_id の task_sessions 行 (task_id=T_empty)
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:00.000Z",
+      task_id: "T_empty",
+      session_id: "",
+      role: "agent",
+      event: "agent_spawned",
+    });
+    // 空 session_id の POST_TOOL_USE → T_empty に誤マッチしてはいけない
+    insertPostToolUse(db, {
+      sessionId: "",
+      toolName: "Bash",
+      timestamp: "2026-04-30T10:05:00.000Z",
+      success: false,
+    });
+
+    const rows = failureRateByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
+    expect(rows.find((r) => r.task_id === "T_empty")).toBeUndefined();
   });
 });

@@ -230,6 +230,161 @@ describe("runMetricsCli (T379) - 出力 format", () => {
   });
 });
 
+// ────────────────────────────────────────────────────────────────────────
+// T407: R6 e2e fixture — agent_spawned 行 + hook_signals(PRE/POST) + api_usage で
+//   metrics CLI 出力の 4 軸（tool_calls / first_edit / failure_rate / token_usage）が
+//   全て task_id を解決して集計されることを確認する。
+// ────────────────────────────────────────────────────────────────────────
+
+describe("runMetricsCli (T407 R6) - Agent 由来 metrics e2e", () => {
+  test("agent_spawned 行のみで 4 軸が task_id 解決される", async () => {
+    // 事前: events.jsonl に T407 のライフサイクル
+    await writeEventsFixture(project.root, [
+      { schema_version: 2, ts: "2026-04-30T10:00:00.000Z", event: "task_assigned", task_id: "T407", conductor_surface: "surface:200", task_run_id: "r407" },
+      { schema_version: 2, ts: "2026-04-30T11:00:00.000Z", event: "task_completed", task_id: "T407", conductor_surface: "surface:200", worktree_path: "/tmp", journal_summary: "" },
+    ]);
+
+    const db = initDB(project.root);
+    // task_sessions: agent_spawned 行のみ（assigned 行なし、ただし conductor の session が無くても agent 単独で task_id 解決できる）
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:30.000Z",
+      task_id: "T407",
+      task_run_id: "r407",
+      session_id: "uuid-agent-r6",
+      role: "agent",
+      surface: "surface:301",
+      event: "agent_spawned",
+    });
+
+    // hook_signals: agent 由来の Edit (PRE) + Bash success (POST) + Bash failure (POST)
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      surface: "surface:301",
+      pid: 1,
+      role: "agent",
+      sessionId: "uuid-agent-r6",
+      toolName: "Edit",
+      payload: {},
+      timestamp: "2026-04-30T10:05:00.000Z",
+    } as unknown as QueueMessage);
+    insertHookSignal(db, {
+      type: "POST_TOOL_USE",
+      surface: "surface:301",
+      pid: 1,
+      role: "agent",
+      sessionId: "uuid-agent-r6",
+      toolName: "Bash",
+      payload: { tool_response: { success: true } },
+      timestamp: "2026-04-30T10:06:00.000Z",
+    } as unknown as QueueMessage);
+    insertHookSignal(db, {
+      type: "POST_TOOL_USE",
+      surface: "surface:301",
+      pid: 1,
+      role: "agent",
+      sessionId: "uuid-agent-r6",
+      toolName: "Bash",
+      payload: { tool_response: { success: false } },
+      timestamp: "2026-04-30T10:07:00.000Z",
+    } as unknown as QueueMessage);
+
+    // api_usage: 同じ task_id で
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T10:08:00.000Z",
+      task_id: "T407",
+      role: "agent",
+      input_tokens: 1234,
+      output_tokens: 567,
+    });
+
+    db.close();
+
+    const { stdout, stderr, outText } = captureStreams();
+    const ac = new AbortController();
+    const code = await runMetricsCli({
+      args: ["--format", "json", "--task-id", "T407"],
+      projectRoot: project.root,
+      stdout,
+      stderr,
+      abortSignal: ac.signal,
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(outText());
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBe(1);
+    const row = parsed[0];
+    // 1. tool counts (countToolCallsByTask)
+    expect(row.task_id).toBe("T407");
+    expect(row.tool_calls.Edit).toBe(1);
+    // 2. first edit (firstEditPerTask) — task_assigned 10:00:00 → first Edit 10:05:00 → 5min = 300_000ms
+    expect(row.time_to_first_edit_ms).toBe(300_000);
+    // 3. failure rate (failureRateByTask) — 1 failure / 2 total = 0.5
+    expect(row.tool_failure_rate).toBeCloseTo(0.5, 5);
+    // 4. token usage (api_usage 集計)
+    expect(row.tokens.input).toBe(1234);
+    expect(row.tokens.output).toBe(567);
+  });
+
+  test("空 session_id 行が混ざっても unattached regression を起こさない", async () => {
+    // (C2 regression) 過去の空 session_id 行が agent_spawned で残っていても
+    // 集計時に task_id へ誤マッチせず、新規 fixture が unattached にされない。
+    await writeEventsFixture(project.root, [
+      { schema_version: 2, ts: "2026-04-30T10:00:00.000Z", event: "task_assigned", task_id: "T999", conductor_surface: "surface:200", task_run_id: "r999" },
+      { schema_version: 2, ts: "2026-04-30T11:00:00.000Z", event: "task_completed", task_id: "T999", conductor_surface: "surface:200", worktree_path: "/tmp", journal_summary: "" },
+    ]);
+
+    const db = initDB(project.root);
+    // 空 session_id の旧 agent_spawned 行（過去データ模倣）
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T09:00:00.000Z",
+      task_id: "T999",
+      task_run_id: "r999",
+      session_id: "",
+      role: "agent",
+      surface: "surface:399",
+      event: "agent_spawned",
+    });
+    // 新規 agent_spawned 行（pre-inject UUID 付き）
+    insertTaskSession(db, {
+      timestamp: "2026-04-30T10:00:30.000Z",
+      task_id: "T999",
+      task_run_id: "r999",
+      session_id: "uuid-fresh",
+      role: "agent",
+      surface: "surface:301",
+      event: "agent_spawned",
+    });
+
+    // 新規 hook_signal (session_id="uuid-fresh") → task_id="T999" に解決される
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      surface: "surface:301",
+      pid: 1,
+      role: "agent",
+      sessionId: "uuid-fresh",
+      toolName: "Read",
+      payload: {},
+      timestamp: "2026-04-30T10:05:00.000Z",
+    } as unknown as QueueMessage);
+    db.close();
+
+    const { stdout, stderr, outText } = captureStreams();
+    const ac = new AbortController();
+    const code = await runMetricsCli({
+      args: ["--format", "json", "--task-id", "T999"],
+      projectRoot: project.root,
+      stdout,
+      stderr,
+      abortSignal: ac.signal,
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(outText());
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].task_id).toBe("T999");
+    expect(parsed[0].tool_calls.Read).toBe(1);
+  });
+});
+
 describe("csvEscape / formatCsvRow (T379)", () => {
   test("通常文字列はそのまま", () => {
     expect(csvEscape("abc")).toBe("abc");

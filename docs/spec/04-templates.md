@@ -55,7 +55,7 @@ Project: {{PROJECT_ROOT}}
 
 | hook | 役割 | Master | Conductor | Agent |
 |---|---|---|---|---|
-| `SessionStart` | `cmux-team send SESSION_STARTED` を呼び pid / sessionId を daemon へ通知 | ✅ | ✅ | ✅ |
+| `SessionStart` | `cmux-team send SESSION_STARTED` を呼び pid / sessionId を daemon へ通知（T407: Conductor / Agent では Manager 側で発行した pre-inject UUID と整合性チェック。`source=startup` の不一致は warn し hook 値で上書き） | ✅ | ✅ | ✅ |
 | `UserPromptSubmit` | Master 専用 — proxy `/master-state` に `status: busy` を POST | ✅ | — | — |
 | `PreToolUse` (Bash) | Conductor の `cmux-team send/send-key` 直接呼出を抑止 | — | ✅ | — |
 | `Notification` | Claude Code native の通知（permission / idle 等）を Manager に集約 | ✅ | ✅ | ✅ |
