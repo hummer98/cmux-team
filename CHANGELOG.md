@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.23.1] - 2026-05-01
+
+### Changed
+
+- **events stream + watch mode を CLAUDE.md / docs / README に反映（T361）**。docs/spec/glossary.md §10 に `watch mode` 用語を追加し、docs/spec/00-project-overview.md・CLAUDE.md §通信プロトコル・README.md / README.ja.md に events channel と `/cmux-team:watch` の存在を opt-in 前提で明記。Phase 1 段階のため Master template への自動 watch 組み込みは行わず、Phase 2 で別途検討と留保
+
+### Fixed
+
+- **`api_usage.task_id` 全件 NULL を修正（T403）**。`cmux-team metrics` の per-task tokens 集計が常に 0 になる原因を、agent 側ヘッダ固定注入（`ANTHROPIC_CUSTOM_HEADERS` に `x-cmux-role` / `x-cmux-surface` / `x-cmux-task-id` を改行区切りで注入）+ conductor 側 state 動的逆引き（`role==="conductor"` のとき `opts.getState().conductors[surface].taskId` を pure read で取得）のハイブリッド方式で解消。副次効果として agent の `api_usage.surface` NULL も解消。既存 13,885 行は再構築不可（新規行から正常化）
+- **dashboard Metrics の `util_5h=null` 時の表示を CLI と揃える（T402）**。T401 の follow-up。`snap.util_5h=null` の場合に CLI は "0%"、Metrics は空欄で乖離していた問題を解消し、両者で同じ視覚言語（`"--"` 表記）に統一。「値がない」と「reset 通過で 0」を視覚的に区別できるようにした
+
 ## [4.23.0] - 2026-05-01
 
 ### Added
