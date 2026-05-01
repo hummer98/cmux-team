@@ -16,6 +16,7 @@ import type { ConductorState } from "./schema";
 import type { AgentState } from "./schema";
 import { THROTTLE_5H_THRESHOLD } from "./schema";
 import { log } from "./logger";
+import { installDashboardConsoleRedirect } from "./dashboard-console-redirect";
 import { formatDeliverable } from "./task";
 import { onStateChanged } from "./eventBus";
 import { buildRateLimitDisplay, type RateLimitColor } from "./rate-limit-display";
@@ -1459,6 +1460,11 @@ export async function startDashboard(
 
   // OSC 8 ハイパーリンクを有効化（ターミナル自動検出に依存せず明示的に設定）
   process.env.REZI_TERMINAL_SUPPORTS_OSC8 = "1";
+
+  // T409: console.warn / error を manager.log にリダイレクト。
+  // 依存ライブラリが stderr に書き込んで TUI 描画バッファを貫通する残骸を防ぐ。
+  // すり替え解除は不要（dashboard プロセスは exit 時に消える）。
+  installDashboardConsoleRedirect();
 
   const app = createNodeApp<AppState>({
     initialState: {

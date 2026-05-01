@@ -63,7 +63,11 @@ export function formatPair(
   return p || c;
 }
 
-export async function log(event: string, detail: string = ""): Promise<void> {
+type LogLevel = "info" | "warn" | "error";
+
+// T409: log / warn / error の共通 append helper。
+// CMUX_TEAM_LOGGER_STRICT のチェックと PROJECT_ROOT 解決をここに集約する。
+async function appendLine(level: LogLevel, event: string, detail: string): Promise<void> {
   // T292: CMUX_TEAM_LOGGER_STRICT=1 では PROJECT_ROOT 未設定を fail-fast させる。
   // テスト実行中に helper で PROJECT_ROOT を必ず設定するための安全装置。
   // 通常の daemon 実行では env を set しないので process.cwd() フォールバックが使われる。
@@ -79,6 +83,20 @@ export async function log(event: string, detail: string = ""): Promise<void> {
   const logFile = join(logDir, "manager.log");
   await mkdir(logDir, { recursive: true });
   const timestamp = localISOString();
-  const line = `[${timestamp}] ${event} ${detail}`.trimEnd() + "\n";
+  // info の場合は prefix を挿入しない（既存ログの互換性維持）
+  const levelPrefix = level === "info" ? "" : `[${level}] `;
+  const line = `[${timestamp}] ${levelPrefix}${event} ${detail}`.trimEnd() + "\n";
   await appendFile(logFile, line);
+}
+
+export async function log(event: string, detail: string = ""): Promise<void> {
+  return appendLine("info", event, detail);
+}
+
+export async function warn(event: string, detail: string = ""): Promise<void> {
+  return appendLine("warn", event, detail);
+}
+
+export async function error(event: string, detail: string = ""): Promise<void> {
+  return appendLine("error", event, detail);
 }

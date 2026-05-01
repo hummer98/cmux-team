@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { log, formatSurface, formatPair } from "./logger";
+import { log, warn, error, formatSurface, formatPair } from "./logger";
 import { createDummyProject, type DummyProject } from "./test-project";
 
 const SENTINEL = `regression_sentinel_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -163,5 +163,40 @@ describe("logger - PROJECT_ROOT 遅延評価", () => {
 
     const after = await countSentinelInCwdLog();
     expect(after).toBe(before);
+  });
+});
+
+// T409: log / warn / error の level prefix と既存互換の検証
+describe("logger - warn / error level", () => {
+  test("warn() は [warn] prefix 付きで manager.log に append する", async () => {
+    process.env.PROJECT_ROOT = tmpdirA;
+    const event = `${SENTINEL}_warn1`;
+    await warn(event, "from=warn-test");
+
+    const content = await readFile(join(tmpdirA, ".team/logs/manager.log"), "utf-8");
+    expect(content).toContain(`[warn] ${event}`);
+    expect(content).toContain("from=warn-test");
+  });
+
+  test("error() は [error] prefix 付きで manager.log に append する", async () => {
+    process.env.PROJECT_ROOT = tmpdirA;
+    const event = `${SENTINEL}_error1`;
+    await error(event, "from=error-test");
+
+    const content = await readFile(join(tmpdirA, ".team/logs/manager.log"), "utf-8");
+    expect(content).toContain(`[error] ${event}`);
+    expect(content).toContain("from=error-test");
+  });
+
+  test("log() は従来通り prefix なしで append する（互換）", async () => {
+    process.env.PROJECT_ROOT = tmpdirA;
+    const event = `${SENTINEL}_info_compat`;
+    await log(event, "from=info-compat");
+
+    const content = await readFile(join(tmpdirA, ".team/logs/manager.log"), "utf-8");
+    // prefix なし行であること（[warn] / [error] が event と timestamp の間に居ない）
+    expect(content).toMatch(new RegExp(`\\] ${event} from=info-compat`));
+    expect(content).not.toMatch(new RegExp(`\\] \\[warn\\] ${event}`));
+    expect(content).not.toMatch(new RegExp(`\\] \\[error\\] ${event}`));
   });
 });
