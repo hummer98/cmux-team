@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.24.0] - 2026-05-02
+
+### Added
+
+- **`SESSION_STARTED` payload に `loaded_plugins` / `loaded_skills` を含める（T410）**。`cmux-team send SESSION_STARTED` が `claude --print '/plugin list' / '/skills list'` をタイムアウト 3 秒で実行し、結果を payload に注入する。dashboard / metrics 側で「あるセッションでどの plugin / skill が読み込まれていたか」を後追いできるようにした。docs/spec/11-metrics.md §3.5.2 に payload format / SQL idiom（unknown / empty / loaded の 4 状態判別）/ null fallback ポリシーを記載
+
+### Fixed
+
+- **全 spawn (Master / Conductor / Agent) で `session_id` を pre-inject（T407 / T408）**。Master / Conductor / Agent 起動時に `generateSessionId()` で UUID v4 を発行し、`claude --session-id <UUID>` として spawn 時から固定する仕組みに統一。これまで session_id は hook 側 `SESSION_STARTED` を待ってから紐付いていたため、起動直後の short-lived session では `task_sessions` に行が残らず metrics 集計から漏れていた。あわせて trace-store CTE / JOIN に `session_id != ''` ガードを追加し、空 session_id 行が誤マッチで集計を膨らませる regression を構造的に排除。Master 用には `buildMasterClaudeArgs` を新設し Conductor / Agent と対称な経路に揃えた
+- **dashboard モードで `console.warn` / `console.error` を `manager.log` にリダイレクト（T409）**。dashboard.tsx 起動時に `installDashboardConsoleRedirect()` を呼び、外部ライブラリ（ink / yoga 等）が emit する console.warn / console.error を logger 経由で `manager.log` に流す。dashboard の TUI レイアウトが warn 出力で崩れる問題を解消し、警告を後追いできる経路を確保
+
 ## [4.23.1] - 2026-05-01
 
 ### Changed
