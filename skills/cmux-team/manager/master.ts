@@ -23,7 +23,8 @@ function masterFilePath(projectRoot: string, surface: string): string {
 
 /**
  * Master 状態を `.team/masters/<normalized>.json` に永続化する（T229）。
- * MasterStateSchema に載らないランタイム専用フィールド（pidWatcherInterval）は除外する。
+ * MasterStateSchema に載らないランタイム専用フィールド（pidWatcherInterval / fallback）は除外する。
+ * T408: pre-inject UUID (sessionId) を永続化対象に含める（Conductor の T407 と対称）。
  */
 export async function persistMasterFile(
   projectRoot: string,
@@ -38,6 +39,7 @@ export async function persistMasterFile(
     startedAt: master.startedAt,
     disconnectedAt: master.disconnectedAt,
     prompt: master.prompt,
+    sessionId: master.sessionId,
   };
   // 書き込み前に schema で検証（破損データの早期検出）
   MasterStateSchema.parse(payload);

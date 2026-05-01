@@ -99,6 +99,11 @@ export const MasterRegisteredMessage = z.object({
   type: z.literal("MASTER_REGISTERED"),
   surface: z.string(),
   pid: z.number().optional(),
+  // T408: cmdLaunchMaster 側で事前発行した UUID v4 を同梱し、daemon 側で
+  // master.sessionId に格納する。hook 由来 SESSION_STARTED より先着するのが通常順序。
+  // optional のままにして、旧バージョンのクライアントとの互換性を保つ。
+  // task_sessions テーブルへの master 行追加は scope 外（Master は tool_use を発火しない）。
+  sessionId: z.string().optional(),
   timestamp: z.string().datetime(),
 });
 
@@ -329,6 +334,10 @@ export const MasterStateSchema = z.object({
   // T323: token pool 機能でこの Master が使用しているトークンの handle。
   // proxy.ts が auth_hash → tokens.db の handle を解決して書き戻す。
   tokenHandle: z.string().optional(),
+  // T408: cmdLaunchMaster 側で事前発行した UUID v4。MASTER_REGISTERED で daemon に
+  // 通知され、SESSION_STARTED hook 経由で更新もされる。team.json に永続化される。
+  // 旧バージョンの team.json (sessionId 無し) でも parse 可能となるよう optional。
+  sessionId: z.string().optional(),
   // T392: StopFailure hook 受信時の最新 API エラー情報。team.json に永続化される。
   lastApiError: z
     .object({

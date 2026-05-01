@@ -1660,9 +1660,10 @@ async function registerSelf(
     process.exit(1);
   }
   try {
-    // T407: Conductor 経路では cmdConductor 側で `crypto.randomUUID()` を発行し
-    //   `--session-id <UUID>` フラグと同 UUID を sessionId として POST に同梱する。
-    //   Master スコープでは渡されないため undefined のまま JSON.stringify で省略される。
+    // T407/T408: Conductor / Master とも cmdConductor / cmdLaunchMaster 側で
+    //   `crypto.randomUUID()` を発行し `--session-id <UUID>` フラグと同 UUID を
+    //   sessionId として POST に同梱する。未指定（旧クライアント / spawn-conductor 等）の
+    //   場合は下の `if (sessionId) body.sessionId = sessionId;` で省略される。
     const body: Record<string, unknown> = {
       type: messageType,
       surface,
@@ -2521,6 +2522,30 @@ export function buildConductorClaudeArgs(opts: {
 }
 
 /**
+ * T408: Master の claude 起動 args を組み立てる。
+ * `buildConductorClaudeArgs` の Master 版で、taskPromptFile / Conductor 固有の責務を持たない。
+ * 引数順序: --dangerously-skip-permissions / --settings / --model / --append-system-prompt-file /
+ *   --session-id
+ *
+ * cmdLaunchMaster で `generateSessionId()` 済みの UUID を渡す。task_sessions への
+ * Master 行追加は scope 外（Master は tool_use を発火しないため task_id 解決の動機が無い）。
+ */
+export function buildMasterClaudeArgs(opts: {
+  masterSettingsPath: string;
+  model: string;
+  rolePromptFile: string;
+  sessionId: string;
+}): string[] {
+  return [
+    "--dangerously-skip-permissions",
+    "--settings", opts.masterSettingsPath,
+    "--model", opts.model,
+    "--append-system-prompt-file", opts.rolePromptFile,
+    "--session-id", opts.sessionId,
+  ];
+}
+
+/**
  * cmux-team conductor
  * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  * CMUX_SURFACE 環境変数が未設定なら cmux identify から自動解決する。
@@ -2696,9 +2721,14 @@ async function cmdLaunchMaster(): Promise<void> {
   // Conductor (cmdConductor) と同じく defensive に明示設定する。
   const surface = await resolveCallerSurfaceOrExit();
 
+  // T408: pre-inject UUID。`--session-id` で claude に渡し、SessionStart hook の
+  //   session_id がこれと一致するのが通常順序。daemon に MASTER_REGISTERED 経由で同梱通知し、
+  //   `master.sessionId` に保持される（task_sessions への Master 行追加は scope 外）。
+  const sessionId = generateSessionId();
+
   // T230: daemon へ自己登録する。proxy-port 不在・POST 失敗は fail-fast（exit 1）。
   // generateMasterPrompt や claude exec より前に実行する（壊れた Master を残さないため）。
-  await registerSelf("master", surface);
+  await registerSelf("master", surface, sessionId);
 
   // プロンプト生成
   const { generateMasterPrompt } = await import("./template");
@@ -2724,15 +2754,18 @@ async function cmdLaunchMaster(): Promise<void> {
   const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "master", getArg("model"));
 
+  // T408: claude args は builder 関数経由で `--session-id` を確実に同梱する
+  const claudeArgs = buildMasterClaudeArgs({
+    masterSettingsPath,
+    model,
+    rolePromptFile: join(PROJECT_ROOT, ".team/prompts/master.md"),
+    sessionId,
+  });
+
   // claude を exec
   const { execFileSync } = require("child_process");
   try {
-    execFileSync("claude", [
-      "--dangerously-skip-permissions",
-      "--settings", masterSettingsPath,
-      "--model", model,
-      "--append-system-prompt-file", join(PROJECT_ROOT, ".team/prompts/master.md"),
-    ], {
+    execFileSync("claude", claudeArgs, {
       stdio: "inherit",
       env: process.env,
       cwd: PROJECT_ROOT,

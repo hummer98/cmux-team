@@ -1704,6 +1704,25 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         master.disconnectedAt = undefined;
         // T392: 通常状態に遷移したら API エラー情報をクリア
         master.lastApiError = undefined;
+        // T408: SessionStart hook 経由で受信した sessionId を最新値に追従。
+        // source=startup で既存 master.sessionId と不一致なら mismatch warn を出した上で
+        // hook 信頼方針で上書きする。source=clear/compact/resume/undefined は warn 無し上書き
+        // （legacy 互換 + T203 既存経路を維持）。state.sessionId 未設定なら warn 無しで採用
+        // （POST 順序逆転 / F1 fallback の保険）。Conductor の T407 対称ロジック。
+        const prevMasterSessionId = master.sessionId;
+        if (message.sessionId) {
+          if (
+            message.source === "startup" &&
+            prevMasterSessionId &&
+            prevMasterSessionId !== message.sessionId
+          ) {
+            await log(
+              "session_id_mismatch_at_startup_master",
+              `${formatSurface(message.surface, "U")} preinject_session_id=${prevMasterSessionId} hook_session_id=${message.sessionId}`,
+            );
+          }
+          master.sessionId = message.sessionId;
+        }
         notifyStateChanged("daemon.ts:handleMessage:session-started-master");
         spawnMasterPidWatcher(state, message.surface, message.pid);
         try {
@@ -2030,8 +2049,25 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
       //   ただし F1 対処として、message.pid が渡されていれば即時 watcher を起動する経路も許容する。
       //   T234: 既存 entry が F1 fallback の場合は「誤登録ではなく正しい推測の確定」なので
       //   entry は残し fallback フラグのみ落とす（SESSION_STARTED で既に得た pid/startedAt を保持）。
+      // T408: pre-inject UUID を後着で受け取った場合は、既存 state.sessionId と比較し
+      //   未設定なら採用、既存値と異なるなら hook 信頼方針で破棄して warn ログを出す
+      //   （Conductor の T407 対称ロジック）。
       const existing = state.masters.get(message.surface);
       if (existing) {
+        let sessionUpdated = false;
+        if (message.sessionId) {
+          if (!existing.sessionId) {
+            // 既存 state はあるが sessionId は未設定 → pre-inject UUID を採用
+            existing.sessionId = message.sessionId;
+            sessionUpdated = true;
+          } else if (existing.sessionId !== message.sessionId) {
+            // POST 順序逆転: hook 側で確定済の sessionId を pre-inject 値で巻き戻さない
+            await log(
+              "session_id_mismatch_at_register_late_master",
+              `${formatSurface(message.surface, "U")} existing_session_id=${existing.sessionId} preinject_session_id=${message.sessionId}`,
+            );
+          }
+        }
         if (existing.fallback) {
           existing.fallback = undefined;
           try {
@@ -2047,6 +2083,17 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
             `${formatSurface(message.surface, "U")} reason=master_registered_confirms_fallback`,
           );
           // 以降も skip 経路を通す（pid/startedAt を破壊しないため）
+        } else if (sessionUpdated) {
+          // T408: fallback クリーンアップ経路を通らない場合でも、sessionId 採用時は永続化する。
+          try {
+            await persistMasterFile(state.projectRoot, existing);
+          } catch (e: any) {
+            await log(
+              "error",
+              `persistMasterFile failed (master_registered_session_late): ${e?.message ?? e}`,
+            );
+          }
+          notifyStateChanged("daemon.ts:handleMessage:master-registered-sessionid-late");
         }
         await log(
           "master_register_skipped",
@@ -2059,6 +2106,8 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         status: "starting",
         startedAt: message.timestamp,
         pid: message.pid,
+        // T408: pre-inject UUID を初期 sessionId として記録。SESSION_STARTED より先着するのが通常順序。
+        sessionId: message.sessionId,
       };
       state.masters.set(message.surface, master);
       try {

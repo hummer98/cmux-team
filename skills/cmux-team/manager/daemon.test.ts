@@ -6708,3 +6708,337 @@ describe("task_sessions append-only 維持 (T407 Step 8)", () => {
   });
 });
 
+// --- T408: Master spawn の session_id pre-inject (T407 follow-up) ---
+
+describe("MASTER_REGISTERED で sessionId pre-inject 受信 (T408)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  function stopWatchers(state: DaemonState): void {
+    for (const m of state.masters.values()) {
+      if (m.pidWatcherInterval) {
+        clearInterval(m.pidWatcherInterval);
+        m.pidWatcherInterval = undefined;
+      }
+    }
+    state.running = false;
+  }
+
+  test("(T-2 対称) MASTER_REGISTERED の sessionId が master.sessionId に格納される", async () => {
+    const state = await createDaemon(testDir);
+    try {
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:408m1",
+        sessionId: "cccccccc-dddd-4eee-8fff-000000000101",
+        timestamp: new Date().toISOString(),
+      });
+
+      const master = state.masters.get("surface:408m1");
+      expect(master).toBeDefined();
+      expect(master?.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000101");
+
+      // 永続化されていることも確認（persistMasterFile が sessionId を含めて書き出す）
+      const persistPath = join(testDir, ".team/masters/surface_408m1.json");
+      expect(existsSync(persistPath)).toBe(true);
+      const persisted = JSON.parse(await readFile(persistPath, "utf-8"));
+      expect(persisted.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000101");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("MASTER_REGISTERED で sessionId 無しでも従来通り state が作られる（後方互換）", async () => {
+    const state = await createDaemon(testDir);
+    try {
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:408m2",
+        timestamp: new Date().toISOString(),
+      });
+
+      const master = state.masters.get("surface:408m2");
+      expect(master).toBeDefined();
+      expect(master?.sessionId).toBeUndefined();
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("既存 master あり + sessionId 一致 → warn 無しで idempotent skip（既存挙動維持）", async () => {
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408m3", {
+        surface: "surface:408m3",
+        status: "idle",
+        startedAt: "2026-04-30T09:00:00.000Z",
+        sessionId: "cccccccc-dddd-4eee-8fff-000000000103",
+      });
+
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:408m3",
+        sessionId: "cccccccc-dddd-4eee-8fff-000000000103",
+        timestamp: new Date().toISOString(),
+      });
+
+      const master = state.masters.get("surface:408m3");
+      expect(master?.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000103");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_register_late_master");
+      // idempotent skip ログは依然として出る（既存挙動）
+      expect(logContent).toContain("master_register_skipped");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("(T-12 対称) 後着 MASTER_REGISTERED で hook 確定済 sessionId は維持される（mismatch warn のみ）", async () => {
+    // POST 順序逆転シナリオ: SESSION_STARTED が先着で master.sessionId=hook_uuid 確定
+    // → 後着 MASTER_REGISTERED の sessionId が異なっても hook 側を信頼する
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408m4", {
+        surface: "surface:408m4",
+        status: "running",
+        startedAt: "2026-04-30T09:00:00.000Z",
+        sessionId: "hook-uuid-already-set-master",
+        pid: 9999,
+      });
+
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:408m4",
+        sessionId: "preinject-uuid-different-master",
+        timestamp: new Date().toISOString(),
+      });
+
+      const master = state.masters.get("surface:408m4");
+      // hook 側 sessionId が維持される（pre-inject 値で巻き戻されない）
+      expect(master?.sessionId).toBe("hook-uuid-already-set-master");
+
+      // mismatch warn ログが出ている
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("session_id_mismatch_at_register_late_master");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+
+  test("既存 master あり + 既存 sessionId 未設定 + 後着 sessionId → 採用（warn なし）", async () => {
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408m5", {
+        surface: "surface:408m5",
+        status: "idle",
+        startedAt: "2026-04-30T09:00:00.000Z",
+        // sessionId は未設定（旧バージョンで起動 → 後で MASTER_REGISTERED 再 POST されたケース）
+      });
+
+      await handleMessage(state, {
+        type: "MASTER_REGISTERED",
+        surface: "surface:408m5",
+        sessionId: "cccccccc-dddd-4eee-8fff-000000000105",
+        timestamp: new Date().toISOString(),
+      });
+
+      const master = state.masters.get("surface:408m5");
+      expect(master?.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000105");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_register_late_master");
+    } finally {
+      stopWatchers(state);
+    }
+  });
+});
+
+// --- T408: SESSION_STARTED Master 整合性チェック ---
+
+describe("SESSION_STARTED Master 整合性チェック (T408)", () => {
+  async function readManagerLog(): Promise<string> {
+    try {
+      return await readFile(join(testDir, ".team/logs/manager.log"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  function stopWatchers(state: DaemonState): void {
+    for (const m of state.masters.values()) {
+      if (m.pidWatcherInterval) {
+        clearInterval(m.pidWatcherInterval);
+        m.pidWatcherInterval = undefined;
+      }
+    }
+    state.running = false;
+  }
+
+  test("(T-8 対称) source=startup で sessionId 一致 → warn 無し / master.sessionId 維持", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408ms1", {
+        surface: "surface:408ms1",
+        status: "starting",
+        startedAt: new Date().toISOString(),
+        sessionId: "uuid-master-same",
+      });
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:408ms1",
+        pid: 11111,
+        sessionId: "uuid-master-same",
+        source: "startup",
+        timestamp: new Date().toISOString(),
+      });
+
+      const m = state.masters.get("surface:408ms1");
+      expect(m?.sessionId).toBe("uuid-master-same");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_startup_master");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("(T-9 対称) source=startup で sessionId 不一致 → warn 1 件 + hook 側で上書き", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408ms2", {
+        surface: "surface:408ms2",
+        status: "starting",
+        startedAt: new Date().toISOString(),
+        sessionId: "uuid-master-preinject",
+      });
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:408ms2",
+        pid: 22222,
+        sessionId: "uuid-master-from-hook",
+        source: "startup",
+        timestamp: new Date().toISOString(),
+      });
+
+      const m = state.masters.get("surface:408ms2");
+      // hook 信頼方針: hook 側 UUID で上書き
+      expect(m?.sessionId).toBe("uuid-master-from-hook");
+
+      const logContent = await readManagerLog();
+      expect(logContent).toContain("session_id_mismatch_at_startup_master");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("(R2 対称) source=undefined（legacy hook）→ warn 無しで上書き", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408ms3", {
+        surface: "surface:408ms3",
+        status: "starting",
+        startedAt: new Date().toISOString(),
+        sessionId: "uuid-master-preinject",
+      });
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:408ms3",
+        pid: 33333,
+        sessionId: "uuid-master-legacy",
+        // source 未指定（legacy 互換）
+        timestamp: new Date().toISOString(),
+      });
+
+      const m = state.masters.get("surface:408ms3");
+      expect(m?.sessionId).toBe("uuid-master-legacy");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_startup_master");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("source=clear で sessionId 上書き（warn なし）", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408ms4", {
+        surface: "surface:408ms4",
+        status: "running",
+        startedAt: new Date().toISOString(),
+        sessionId: "uuid-master-old",
+        pid: 44444,
+      });
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:408ms4",
+        pid: 44445,
+        sessionId: "uuid-master-clear-new",
+        source: "clear",
+        timestamp: new Date().toISOString(),
+      });
+
+      const m = state.masters.get("surface:408ms4");
+      expect(m?.sessionId).toBe("uuid-master-clear-new");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_startup_master");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+
+  test("保険: state.sessionId 未設定（POST 順序逆転 / F1 fallback）→ warn 無しで採用", async () => {
+    const { __setIsAliveImpl } = await import("./cmux");
+    __setIsAliveImpl(() => true);
+    const state = await createDaemon(testDir);
+    try {
+      state.masters.set("surface:408ms5", {
+        surface: "surface:408ms5",
+        status: "starting",
+        startedAt: new Date().toISOString(),
+        // sessionId は未設定（MASTER_REGISTERED が後着 / F1 fallback で SESSION_STARTED 先着）
+      });
+
+      await handleMessage(state, {
+        type: "SESSION_STARTED",
+        surface: "surface:408ms5",
+        pid: 55555,
+        sessionId: "uuid-master-from-hook-only",
+        source: "startup",
+        timestamp: new Date().toISOString(),
+      });
+
+      const m = state.masters.get("surface:408ms5");
+      expect(m?.sessionId).toBe("uuid-master-from-hook-only");
+
+      const logContent = await readManagerLog();
+      expect(logContent).not.toContain("session_id_mismatch_at_startup_master");
+    } finally {
+      stopWatchers(state);
+      __setIsAliveImpl(null);
+    }
+  });
+});

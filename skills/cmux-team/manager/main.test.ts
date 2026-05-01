@@ -21,6 +21,7 @@ import {
   generateSessionId,
   buildConductorClaudeArgs,
   buildAgentClaudeFlags,
+  buildMasterClaudeArgs,
 } from "./main";
 import type { TaskMeta, TaskState } from "./task";
 import {
@@ -3068,6 +3069,72 @@ describe("buildAgentClaudeFlags (T407)", () => {
       sessionId: "11111111-2222-4333-8444-555555555555",
     });
     expect(flags.join(" ")).not.toContain("--settings");
+  });
+});
+
+// --- T408: buildMasterClaudeArgs (Conductor 版と対称) ---
+
+describe("buildMasterClaudeArgs (T408)", () => {
+  test("(T-2 対称) `--session-id <UUID>` を含む", () => {
+    const args = buildMasterClaudeArgs({
+      masterSettingsPath: "/p/master-settings.json",
+      model: "claude-opus-4-7",
+      rolePromptFile: "/p/master.md",
+      sessionId: "cccccccc-dddd-4eee-8fff-000000000010",
+    });
+    const idx = args.indexOf("--session-id");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("cccccccc-dddd-4eee-8fff-000000000010");
+  });
+
+  test("--session-id は単独の arg として渡る（値と分離）", () => {
+    const args = buildMasterClaudeArgs({
+      masterSettingsPath: "/p/master-settings.json",
+      model: "claude-opus-4-7",
+      rolePromptFile: "/p/master.md",
+      sessionId: "abcdabcd-1234-4abc-89ab-abcdabcdabcd",
+    });
+    expect(args).toContain("--session-id");
+    expect(args).toContain("abcdabcd-1234-4abc-89ab-abcdabcdabcd");
+  });
+
+  test("--dangerously-skip-permissions / --settings / --model / --append-system-prompt-file が含まれる（既存挙動維持）", () => {
+    const args = buildMasterClaudeArgs({
+      masterSettingsPath: "/p/master-settings.json",
+      model: "claude-opus-4-7",
+      rolePromptFile: "/p/master.md",
+      sessionId: "cccccccc-dddd-4eee-8fff-000000000011",
+    });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--settings");
+    expect(args).toContain("/p/master-settings.json");
+    expect(args).toContain("--model");
+    expect(args).toContain("claude-opus-4-7");
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain("/p/master.md");
+  });
+
+  test("Master では taskPromptFile に相当する末尾引数は付与されない（Conductor 版との差分）", () => {
+    const args = buildMasterClaudeArgs({
+      masterSettingsPath: "/p/master-settings.json",
+      model: "claude-opus-4-7",
+      rolePromptFile: "/p/master.md",
+      sessionId: "cccccccc-dddd-4eee-8fff-000000000012",
+    });
+    expect(args.find((a) => a.includes("読んで指示に従って"))).toBeUndefined();
+  });
+
+  test("(T-11) generateSessionId の UUID をそのまま保持する", () => {
+    const id = generateSessionId();
+    expect(id).toMatch(UUID_V4_RE);
+    const args = buildMasterClaudeArgs({
+      masterSettingsPath: "/p/master-settings.json",
+      model: "claude-opus-4-7",
+      rolePromptFile: "/p/master.md",
+      sessionId: id,
+    });
+    const idx = args.indexOf("--session-id");
+    expect(args[idx + 1]).toBe(id);
   });
 });
 

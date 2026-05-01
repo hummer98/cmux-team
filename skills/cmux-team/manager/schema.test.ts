@@ -555,21 +555,76 @@ describe("AgentSpawnedMessage sessionId (T407)", () => {
   });
 });
 
-describe("MasterRegisteredMessage は sessionId を持たない（T407 scope 外）", () => {
-  test("MasterRegisteredMessage は sessionId が unknown property（passthrough されない）", () => {
-    // T407 改訂履歴 C1: Master は scope 外。sessionId フィールドを追加しない。
-    // zod の default は strict ではないが、型レベルで sessionId が含まれないことを保証する
-    // (型推論で sessionId が undefined と扱われる)。
+// --- T408: MasterRegisteredMessage の sessionId 同梱 ---
+
+describe("MasterRegisteredMessage sessionId (T408)", () => {
+  const base = {
+    type: "MASTER_REGISTERED" as const,
+    surface: "surface:100",
+    timestamp: "2026-05-01T10:00:00.000Z",
+  };
+
+  test("正常系: sessionId なしで parse 可能（後方互換 / 旧バージョン互換）", () => {
+    const parsed = MasterRegisteredMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sessionId).toBeUndefined();
+    }
+  });
+
+  test("正常系: sessionId 付きで parse 可能（pre-inject UUID）", () => {
     const parsed = MasterRegisteredMessage.safeParse({
-      type: "MASTER_REGISTERED",
-      surface: "surface:100",
-      timestamp: "2026-05-01T10:00:00.000Z",
+      ...base,
+      sessionId: "cccccccc-dddd-4eee-8fff-000000000001",
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      // @ts-expect-error: sessionId は MasterRegisteredMessage の型に存在しない
-      const _sid = parsed.data.sessionId;
-      void _sid;
+      expect(parsed.data.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000001");
     }
+  });
+
+  test("異常系: sessionId が string でない場合は reject", () => {
+    const parsed = MasterRegisteredMessage.safeParse({
+      ...base,
+      sessionId: 42,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("MasterStateSchema sessionId (T408)", () => {
+  test("正常系: sessionId なしでパース可能（後方互換）", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "idle",
+      startedAt: "2026-05-01T09:00:00.000Z",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sessionId).toBeUndefined();
+    }
+  });
+
+  test("正常系: sessionId ありでパース可能（pre-inject UUID 永続化）", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "running",
+      startedAt: "2026-05-01T09:00:00.000Z",
+      sessionId: "cccccccc-dddd-4eee-8fff-000000000002",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.sessionId).toBe("cccccccc-dddd-4eee-8fff-000000000002");
+    }
+  });
+
+  test("異常系: sessionId が string でない場合は reject", () => {
+    const parsed = MasterStateSchema.safeParse({
+      surface: "surface:100",
+      status: "idle",
+      startedAt: "2026-05-01T09:00:00.000Z",
+      sessionId: 0,
+    });
+    expect(parsed.success).toBe(false);
   });
 });
