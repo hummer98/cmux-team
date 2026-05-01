@@ -40,10 +40,18 @@ cmux-team のリリース作業を Conductor 自身が直接実行する。
 
 このタスクは **operational task（運用作業）** である。コード変更や設計判断を伴わないため以下を守る:
 
-- **サブエージェントは spawn しない**（Researcher / Planner / Implementer / Inspector いずれも起動しない）
+- **cmux-team の Researcher / Planner / Implementer / Inspector は spawn しない**（worktree 内での TDD / Plan / Inspection フェーズは不要）
 - Conductor 自身が Bash で順次コマンドを実行する
-- worktree 内での TDD / Plan / Inspection フェーズは不要
 - 失敗時は該当ステップだけやり直す（全体リトライ不要）
+
+### 例外: doc-sync 用 background subagent（許可）
+
+リリースコミットには直近の実装と同期した `docs/spec/` + `README` を含めるため、Step 0 で **Claude の `Agent` ツール（`subagent_type: general-purpose`, `run_in_background: true`）を 1 体だけ起動して dockeeper を実行する**。これは worktree や cmux タブを使わない built-in subagent であり、cmux-team の spawn-agent とは別経路。
+
+理由:
+- doc-sync は読み取り重作業（`git log` 解析 + 仕様書 10+ ファイル読み込み）。Conductor 本体に取り込むとコンテキストが膨らむ
+- Step 1-2（バージョン判定・CHANGELOG ドラフト）と並行実行することで wall-clock を短縮できる
+- subagent は `docs/spec/*.md` / `README.md` / `README.ja.md` のみを編集し、Conductor が編集する `CHANGELOG.md` / `package.json` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` とは disjoint なのでワーキングツリー競合は発生しない
 
 ## バージョン指定の読み取り方
 
@@ -56,6 +64,47 @@ cmux-team のリリース作業を Conductor 自身が直接実行する。
 - worktree 内にはリリース関連の差分を残さない
 
 ## 手順
+
+> **フェーズ構造**:
+> - **Phase A（並列）**: Step 0（doc-sync subagent）+ Step 1-2（version 判定 / CHANGELOG ドラフト）
+> - **Phase B（同期点）**: Step 3 で subagent 完了待ち → Step 4-6（CHANGELOG / version bump / 1 commit / push / tag）
+> - **Phase C（並列）**: Step 7（gh run watch をシェルバックグラウンド `&` で実行）+ Step 8-10（marketplace pull / cache cleanup / plugin reinstall を foreground）
+> - **Phase D**: Step 11（gh watch wait → npm install -g）+ Step 12（close-task）
+
+### 0. doc-sync を background subagent で起動（Phase A 並列開始）
+
+`Agent` ツールで dockeeper を `run_in_background: true` で起動する。Conductor は subagent 起動後すぐに Step 1-2 へ進み、subagent の完了通知は runtime から非同期で受け取る（ポーリング不要）。
+
+呼び出しパラメータ:
+
+| field | value |
+|---|---|
+| `description` | `release doc-sync` |
+| `subagent_type` | `general-purpose` |
+| `run_in_background` | `true` |
+| `prompt` | 下記の指示文（`$PROJECT_ROOT` は呼び出し側で実値に展開してから渡す） |
+
+prompt の中身（実値を埋めて 1 つの文字列として渡す）:
+
+```
+あなたは cmux-team リリース直前の docs 同期を担当する subagent です。
+cd <PROJECT_ROOT 実値> で main ブランチ側に入り、skills/dockeeper/SKILL.md の手順を
+--auto モード相当で実行してください。
+
+対象は docs/spec/*.md と README.md / README.ja.md と
+skills/cmux-team-guide/SKILL.md のみ。CHANGELOG.md / package.json /
+.claude-plugin/*.json には触れないこと（リリース本体の差分を上書きしない）。
+
+やること:
+1. git log -1 --format="%H %ai %s" -- docs/spec/ で base_hash を取得
+2. 以降の skills/ commands/ bin/ package.json .claude-plugin/ コミットを収集
+3. 各 docs/spec/*.md と README を読み、収集した変更と照合して必要な箇所のみ Edit
+4. ステージングはしない（git add は Conductor 側でまとめて行う）
+5. 完了したら、更新したファイル一覧と各ファイルの変更要約を返す
+
+変更不要な場合は「変更なし」と報告するだけでよい。
+既存の文体・構造を維持し、英日 README は対訳関係を保つこと。
+```
 
 ### 1. 現在のバージョンとコミット履歴を取得
 
@@ -82,7 +131,18 @@ fi
 
 コミット群で最も大きい変更レベルを採用。
 
-### 3. CHANGELOG.md を更新（main 側で）
+### 3. doc-sync subagent の完了確認（Phase B 同期点）
+
+Step 0 で起動した subagent の完了通知（runtime から非同期で届く）を受け取ってから Step 4 に進む。完了通知が Step 1-2 の処理中に既に届いていれば即座に Step 4 へ。まだ届いていなければ通知を待つ。
+
+完了確認:
+- subagent の最終メッセージから「更新したファイル一覧」または「変更なし」を読み取る
+- `git status -s -- docs/spec/ README.md README.ja.md skills/cmux-team-guide/` で実際の編集ファイルを照合
+- 想定外のファイル（`CHANGELOG.md` / `package.json` / `.claude-plugin/`）に触れていないことを `git status` で再確認。触れていたら `git checkout -- <file>` で破棄
+
+subagent がエラー終了した場合は warning として記録し、doc-sync なしでリリースを続行（リリースを doc-sync で止めない）。
+
+### 4. CHANGELOG.md を更新（main 側で）
 
 `cd "$PROJECT_ROOT"` 後、CHANGELOG.md の先頭に追記:
 
@@ -101,58 +161,66 @@ fi
 
 **分類:** `feat:` → Added / `fix:` → Fixed / それ以外 → Changed。ユーザーが読んで意味がわかる説明に書き直す（コミットメッセージそのままコピーしない）。
 
-### 4. バージョンを 3 ファイルで更新
+### 5. バージョンを 3 ファイルで更新
 
 - `package.json`
 - `.claude-plugin/plugin.json`
 - `.claude-plugin/marketplace.json`（`plugins[0].version`、存在しない場合スキップ）
 
-### 5. コミット・push・タグ
+### 6. コミット・push・タグ（doc-sync 差分も同梱）
 
 ```
 cd "$PROJECT_ROOT"
 git add CHANGELOG.md package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json
+# doc-sync subagent が編集したファイルがあれば同じコミットに含める
+git add docs/spec/ README.md README.ja.md skills/cmux-team-guide/ 2>/dev/null || true
 git commit -m "chore: release v${NEW_VERSION}"
 git tag "v${NEW_VERSION}"
 git push origin main
 git push origin "v${NEW_VERSION}"
 ```
 
-### 6. plugin marketplace キャッシュ更新
+### 7-10. Phase C（並列実行: gh run watch ＋ plugin キャッシュ更新）
 
-```
+push 完了後、`gh run watch`（npm publish workflow を待つ、約 2-3 分）と plugin キャッシュ更新（数十秒）は互いに独立しているので、シェルの `&` でバックグラウンド化して並列実行する。
+
+```bash
+cd "$PROJECT_ROOT"
+
+# 7. GitHub Actions 監視をバックグラウンドで開始
+sleep 5
+RUN_ID=$(gh run list --workflow=release.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+gh run watch ${RUN_ID} --exit-status > /tmp/gh-run-watch-${NEW_VERSION}.log 2>&1 &
+GH_WATCH_PID=$!
+
+# 8. plugin marketplace キャッシュ更新（foreground）
 MARKETPLACE_DIR="${HOME}/.claude/plugins/marketplaces/hummer98-cmux-team"
 if [ -d "$MARKETPLACE_DIR/.git" ]; then
   (cd "$MARKETPLACE_DIR" && git pull origin main)
 fi
-```
 
-### 7. 旧バージョンの plugin キャッシュを削除
-
-```
+# 9. 旧バージョンの plugin キャッシュを削除（foreground）
 CACHE_BASE="${HOME}/.claude/plugins/cache/hummer98-cmux-team/cmux-team"
 LATEST=$(ls -d "$CACHE_BASE"/*/ 2>/dev/null | sort -V | tail -1)
 for dir in "$CACHE_BASE"/*/; do
   [ "$dir" != "$LATEST" ] && rm -rf "$dir"
 done
-```
 
-### 8. plugin を再インストール
-
-```
+# 10. plugin を再インストール（foreground）
 claude plugin uninstall cmux-team@hummer98-cmux-team
 claude plugin install cmux-team@hummer98-cmux-team
+
+# Phase C 同期点: gh run watch の完了を待つ
+wait ${GH_WATCH_PID}
+GH_EXIT=$?
+if [ ${GH_EXIT} -ne 0 ]; then
+  echo "GitHub Actions release workflow failed (exit ${GH_EXIT})"
+  cat /tmp/gh-run-watch-${NEW_VERSION}.log
+  exit ${GH_EXIT}
+fi
 ```
 
-### 9. GitHub Actions 監視（バックグラウンド）
-
-```
-sleep 5
-RUN_ID=$(gh run list --workflow=release.yml --limit=1 --json databaseId --jq '.[0].databaseId')
-gh run watch ${RUN_ID} --exit-status
-```
-
-### 10. npm レジストリからローカルインストール
+### 11. npm レジストリからローカルインストール
 
 ```
 npm install -g @hummer98/cmux-team
@@ -160,7 +228,7 @@ npm install -g @hummer98/cmux-team
 
 `npm install -g .` は使わない（シンボリックリンクによる連鎖再起動を避けるため）。
 
-### 11. close-task で完了記録
+### 12. close-task で完了記録
 
 journal に以下を含めて `cmux-team close-task --task-id <id> --journal "..."` を実行:
 
@@ -169,6 +237,7 @@ journal に以下を含めて `cmux-team close-task --task-id <id> --journal "..
 - タグ: v${NEW_VERSION}
 - plugin: 更新済み
 - npm: @hummer98/cmux-team@${NEW_VERSION}
+- doc-sync: <更新ファイル数 or "変更なし">
 ```
 TASK_BODY
 )"
