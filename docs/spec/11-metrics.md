@@ -242,6 +242,118 @@ Daemon は `CONDUCTOR_REGISTERED` / `AGENT_SPAWNED` ハンドラで `state.sessi
 
 `--resume` 経路（`cmdResume`）には `--session-id` を**渡さない**。既存 session を復元する目的のため。
 
+#### 3.5.2 SESSION_STARTED 時 plugin / skill marker (T410)
+
+CodeDNA 評価判定基準（§4）の cohort 比較で「該当 session で plugin X が loaded だったか」を **trace DB のみから事後判定する**ための marker。介入前後で「介入導入を確定する起点」を session 単位で持たないと、cohort tag の切り出しが手動の date filter に頼ることになる（cohort tag 自動推定が困難）。本機能は SessionStart hook 発火時に `claude plugins list --json` を 1 回呼んで、その結果を SESSION_STARTED hook_signal の payload に同梱する。
+
+> **semantic 注意**: `loaded_skills` は **session が参照可能な skill 集合**を表す（loaded ≠ activated）。Claude Code の skill activation は description-based の動的判断で、外部から取得不可能。よって本 marker は「いつ activate される可能性があったか」までしか語らない。
+
+**取得経路**:
+
+```
+[Claude Code SessionStart hook 発火]
+  ↓ stdin: { session_id, source, ... }
+[bash -c 'cmux-team send SESSION_STARTED --from-stdin --surface ... --pid ...']
+  ↓
+[cmux-team binary (Bun) - cmdSend()]
+  ├─ collectSessionEnrichment() で claude plugins list --json を 1 回 invoke (timeout 3s)
+  ├─ 各 enabled plugin の installPath/skills/ + ~/.claude/skills + .claude/skills を walk
+  └─ buildMessageFromHookInput("SESSION_STARTED", ...) で SessionStartedMessage に同梱
+```
+
+hook bash command は変更しない（CLAUDE.md の「hook shell には分岐ロジックを持たせない」原則を厳守）。enrichment 取得は cmux-team binary 内部に閉じる。
+
+**format BNF**:
+
+```
+plugin_id ::= <name>@<source_id>          ; 例: cmux-team@hummer98-cmux-team
+skill_id  ::= <source>:<name>             ; <source> ∈ {plugin, user, project}
+```
+
+skill は 3 source（plugin / user / project）から prefix 付きで列挙する。同名 skill が異 source に存在しても prefix で区別され、両方含む（重複排除しない）。これは cohort 比較で source ごとの差を保つほうが分析価値が高いため。`cmux-team` plugin が enabled の場合、自身の plugin id (`cmux-team@hummer98-cmux-team`) が `loadedPlugins` に含まれる — これは正常動作。
+
+**payload 例**:
+
+```json
+{
+  "type": "SESSION_STARTED",
+  "surface": "surface:300",
+  "pid": 12345,
+  "sessionId": "uuid-1",
+  "source": "startup",
+  "loadedPlugins": [
+    "cmux-team@hummer98-cmux-team",
+    "code-review@claude-plugins-official"
+  ],
+  "loadedSkills": [
+    "plugin:cmux-team",
+    "plugin:cmux-agent-role",
+    "user:nano-banana",
+    "project:cmux-team-investigate"
+  ],
+  "timestamp": "2026-05-01T10:00:00.000Z"
+}
+```
+
+**取得失敗時の null fallback ポリシー**:
+
+- `claude` CLI が PATH に無い / exit code !=0 / stdout が invalid JSON / array でない → `{ loadedPlugins: null, loadedSkills: null }` を payload に同梱
+- timeout (3s) 超過 → 同上
+- 部分失敗（一部 plugin の skill walk のみ失敗）→ 該当 plugin の skill のみ skip、残りは収集
+- enrichment が null fallback になった場合は `manager.log` に `[warn] session_enrichment_null_fallback reason=<class>` で記録（運用 telemetry）
+
+**SQL idiom（unknown / empty / loaded の判別）**:
+
+```sql
+SELECT
+  session_id,
+  CASE
+    WHEN JSON_TYPE(payload_json, '$.loadedPlugins') = 'null' THEN 'unknown'
+    WHEN JSON_TYPE(payload_json, '$.loadedPlugins') IS NULL THEN 'unknown'  -- field 自体が absent (旧 client)
+    WHEN JSON_ARRAY_LENGTH(payload_json, '$.loadedPlugins') = 0 THEN 'empty'
+    ELSE 'loaded'
+  END AS plugin_state,
+  JSON_EXTRACT(payload_json, '$.loadedPlugins') AS plugins,
+  JSON_EXTRACT(payload_json, '$.loadedSkills')  AS skills
+FROM hook_signals
+WHERE type = 'SESSION_STARTED'
+  AND timestamp >= '2026-05-01';
+```
+
+cohort filter で「plugin X が enabled な session」を絞る場合の例（plugin_id format 用 LIKE）:
+
+```sql
+SELECT session_id
+FROM hook_signals
+WHERE type = 'SESSION_STARTED'
+  AND JSON_TYPE(payload_json, '$.loadedPlugins') = 'array'
+  AND EXISTS (
+    SELECT 1 FROM JSON_EACH(payload_json, '$.loadedPlugins')
+    WHERE value LIKE 'cmux-team@%'
+  );
+```
+
+skill_id format 用（source 抽出）:
+
+```sql
+-- plugin source の skill のみ
+SELECT session_id, JSON_EACH.value AS skill
+FROM hook_signals, JSON_EACH(payload_json, '$.loadedSkills')
+WHERE type = 'SESSION_STARTED'
+  AND JSON_EACH.value LIKE 'plugin:%';
+
+-- user / project の差を見る
+SELECT
+  SUM(CASE WHEN value LIKE 'user:%' THEN 1 ELSE 0 END) AS user_skills,
+  SUM(CASE WHEN value LIKE 'project:%' THEN 1 ELSE 0 END) AS project_skills
+FROM hook_signals, JSON_EACH(payload_json, '$.loadedSkills')
+WHERE type = 'SESSION_STARTED';
+```
+
+**consumer 側の missing 許容仕様**: cohort filter は `plugin_state = 'unknown'` の session を必ず除外すること。`empty` (loaded 0 件) と `unknown` (取得失敗) を取り違えると、cohort tag 自動推定で「plugin 無し cohort」に誤って unknown を含めて偽の baseline を作ってしまう。
+
+**実機 latency**: SessionStart hook 1 回あたりの enrichment 増分は概ね 100〜500ms（実機計測 380ms / 391ms / 416ms / p95=416ms、3s timeout の 14% 程度）。hook timeout 5s に余裕があり、本体 SESSION_STARTED 送信は妨げない。
+
 ---
 
 ## 4. CodeDNA 評価判定基準

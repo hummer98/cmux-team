@@ -71,6 +71,12 @@ export const SessionStartedMessage = z.object({
   pid: z.number(),
   sessionId: z.string().optional(),
   source: z.enum(["startup", "resume", "clear", "compact"]).optional(),
+  // T410: cohort 比較用 marker。
+  //   undefined = field absent (旧 client / 旧 schema)、null = unknown (enrichment 取得失敗)、
+  //   [] = empty (loaded 0 件)、["..."...] = loaded。
+  //   null と [] を SQL で区別するには JSON_TYPE / JSON_ARRAY_LENGTH を使う (spec §3.5.2)。
+  loadedPlugins: z.array(z.string()).nullable().optional(),
+  loadedSkills: z.array(z.string()).nullable().optional(),
   timestamp: z.string().datetime(),
 });
 

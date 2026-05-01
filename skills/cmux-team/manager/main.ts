@@ -32,7 +32,8 @@ import { promisify } from "util";
 import { t } from "./i18n";
 import { createDaemon, initInfra, startMaster, initializeLayout, tick, updateTeamJson, updateSidebarStatus, initFileWatcher, sleepUntilWakeup, checkUpdateAndNotify, handleMessage, normalizeSurfaceForPath, loadVersion, stopDaemon, ccBackend, refreshPoolSnapshot } from "./daemon";
 import { resolveMarkdownViewer, startDashboard, unmountDashboard } from "./dashboard";
-import { log, formatSurface } from "./logger";
+import { log, warn, formatSurface } from "./logger";
+import { collectSessionEnrichment } from "./session-enrichment";
 // T358: events.jsonl writer
 import { emitEvent } from "./events-writer";
 import { runEventsCli } from "./events-cli";
@@ -1217,6 +1218,31 @@ async function cmdSend(): Promise<void> {
     // （T189 SESSION_STOP forwarder は `send --from-stdin` 形式で呼ぶため）
     const typeArg = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
     if (typeArg) {
+      // T410: SESSION_STARTED の場合のみ enrichment を先行取得して opts に注入する。
+      //       他 type では呼ばないことで latency 増分を限定する。
+      //       collectSessionEnrichment 自体は内部で catch して { null, null } を返すため
+      //       throw しないが、念のため二重防御で try/catch する。
+      let loadedPlugins: string[] | null | undefined = undefined;
+      let loadedSkills: string[] | null | undefined = undefined;
+      if (typeArg === "SESSION_STARTED") {
+        try {
+          const enrichment = await collectSessionEnrichment();
+          loadedPlugins = enrichment.loadedPlugins;
+          loadedSkills = enrichment.loadedSkills;
+          // 内部 catch で null fallback になったケースも記録する（exception path とは排他）。
+          if (loadedPlugins === null && loadedSkills === null) {
+            await warn("session_enrichment_null_fallback", "reason=internal_fallback");
+          }
+        } catch (e: any) {
+          loadedPlugins = null;
+          loadedSkills = null;
+          // F8: null fallback 件数を運用 telemetry として記録する。
+          await warn(
+            "session_enrichment_null_fallback",
+            `reason=${e?.constructor?.name ?? "Error"} message=${e?.message ?? ""}`,
+          );
+        }
+      }
       // 新パス: hook JSON → 引数と合成して QueueMessage を作る
       try {
         message = buildMessageFromHookInput(typeArg, raw, {
@@ -1227,6 +1253,9 @@ async function cmdSend(): Promise<void> {
           surfaceUuid: getArg("surface-uuid"),
           workspaceUuid: getArg("workspace-uuid"),
           role: getArg("role"),
+          // T410: SESSION_STARTED 用 enrichment（他 type では ignore される）。
+          loadedPlugins,
+          loadedSkills,
         });
       } catch (e: any) {
         console.error(`Error: ${e.message}`);
@@ -1798,6 +1827,11 @@ export function buildMessageFromHookInput(
     surfaceUuid?: string;
     workspaceUuid?: string;
     role?: string;
+    // T410: SESSION_STARTED に同梱する cohort 比較用 marker。
+    //       cmdSend の SESSION_STARTED 分岐で collectSessionEnrichment() の結果を渡す。
+    //       null = 取得失敗 (unknown)、配列 = loaded、未指定 = field absent。
+    loadedPlugins?: string[] | null;
+    loadedSkills?: string[] | null;
   }
 ): QueueMessage {
   let parsed: unknown;
@@ -1820,6 +1854,8 @@ export function buildMessageFromHookInput(
       pid: opts.pid,
       sessionId,
       source: source as SessionStartedMessage["source"],
+      loadedPlugins: opts.loadedPlugins,
+      loadedSkills: opts.loadedSkills,
       timestamp: opts.now,
     };
     return SessionStartedMessageSchema.parse(message);

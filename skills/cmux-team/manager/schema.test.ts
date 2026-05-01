@@ -14,6 +14,7 @@ import {
   PreToolUseMessage,
   PostToolUseMessage,
   QueueMessage,
+  SessionStartedMessage,
   StopFailureMessage,
   normalizeOverlayRole,
 } from "./schema";
@@ -624,6 +625,88 @@ describe("MasterStateSchema sessionId (T408)", () => {
       status: "idle",
       startedAt: "2026-05-01T09:00:00.000Z",
       sessionId: 0,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+// T410: SessionStartedMessage に loadedPlugins / loadedSkills (nullable optional) が追加された。
+//       cohort 比較用 marker。null = unknown (取得失敗)、[] = empty (loaded 0 件)、配列 = loaded。
+describe("SessionStartedMessage loadedPlugins / loadedSkills (T410)", () => {
+  const base = {
+    type: "SESSION_STARTED" as const,
+    surface: "surface:100",
+    pid: 12345,
+    timestamp: "2026-05-01T10:00:00.000Z",
+  };
+
+  test("正常系: loadedPlugins / loadedSkills なしで parse 可能（後方互換 / 旧クライアント互換）", () => {
+    const parsed = SessionStartedMessage.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.loadedPlugins).toBeUndefined();
+      expect(parsed.data.loadedSkills).toBeUndefined();
+    }
+  });
+
+  test("正常系: loadedPlugins / loadedSkills が null で parse 可能（取得失敗の unknown 表現）", () => {
+    const parsed = SessionStartedMessage.safeParse({
+      ...base,
+      loadedPlugins: null,
+      loadedSkills: null,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.loadedPlugins).toBeNull();
+      expect(parsed.data.loadedSkills).toBeNull();
+    }
+  });
+
+  test("正常系: loadedPlugins / loadedSkills が string array で parse 可能", () => {
+    const parsed = SessionStartedMessage.safeParse({
+      ...base,
+      loadedPlugins: ["cmux-team@hummer98-cmux-team", "code-review@claude-plugins-official"],
+      loadedSkills: ["plugin:cmux-team", "user:nano-banana", "project:foo"],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.loadedPlugins).toEqual([
+        "cmux-team@hummer98-cmux-team",
+        "code-review@claude-plugins-official",
+      ]);
+      expect(parsed.data.loadedSkills).toEqual([
+        "plugin:cmux-team",
+        "user:nano-banana",
+        "project:foo",
+      ]);
+    }
+  });
+
+  test("正常系: loadedPlugins / loadedSkills が空配列 (loaded 0 件) で parse 可能", () => {
+    const parsed = SessionStartedMessage.safeParse({
+      ...base,
+      loadedPlugins: [],
+      loadedSkills: [],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.loadedPlugins).toEqual([]);
+      expect(parsed.data.loadedSkills).toEqual([]);
+    }
+  });
+
+  test("異常系: loadedPlugins の要素に number が含まれると reject", () => {
+    const parsed = SessionStartedMessage.safeParse({
+      ...base,
+      loadedPlugins: ["valid", 123],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test("異常系: loadedSkills の要素に number が含まれると reject", () => {
+    const parsed = SessionStartedMessage.safeParse({
+      ...base,
+      loadedSkills: [42],
     });
     expect(parsed.success).toBe(false);
   });

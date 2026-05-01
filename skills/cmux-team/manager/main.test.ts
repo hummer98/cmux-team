@@ -1493,6 +1493,55 @@ describe("buildMessageFromHookInput (T203)", () => {
     }
   });
 
+  // T410: SESSION_STARTED に loadedPlugins / loadedSkills を opts 経由で注入できる
+  test("T410: SESSION_STARTED — loadedPlugins / loadedSkills を opts で渡すと message に格納される", () => {
+    const raw = JSON.stringify({ session_id: "u", source: "startup" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, {
+      ...opts,
+      loadedPlugins: ["cmux-team@hummer98-cmux-team"],
+      loadedSkills: ["plugin:cmux-team", "user:nano-banana"],
+    });
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.loadedPlugins).toEqual(["cmux-team@hummer98-cmux-team"]);
+      expect(msg.loadedSkills).toEqual(["plugin:cmux-team", "user:nano-banana"]);
+    }
+  });
+
+  test("T410: SESSION_STARTED — loadedPlugins / loadedSkills が null (取得失敗) でも保持される", () => {
+    const raw = JSON.stringify({ session_id: "u", source: "startup" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, {
+      ...opts,
+      loadedPlugins: null,
+      loadedSkills: null,
+    });
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.loadedPlugins).toBeNull();
+      expect(msg.loadedSkills).toBeNull();
+    }
+  });
+
+  test("T410: SESSION_STARTED — opts に loadedPlugins / loadedSkills 無しの場合は undefined（旧パス互換）", () => {
+    const raw = JSON.stringify({ session_id: "u", source: "startup" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, opts);
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.loadedPlugins).toBeUndefined();
+      expect(msg.loadedSkills).toBeUndefined();
+    }
+  });
+
+  test("T410: SESSION_STARTED — loadedPlugins が空配列 (loaded 0 件) でも保持される", () => {
+    const raw = JSON.stringify({ session_id: "u", source: "startup" });
+    const msg = buildMessageFromHookInput("SESSION_STARTED", raw, {
+      ...opts,
+      loadedPlugins: [],
+      loadedSkills: [],
+    });
+    if (msg.type === "SESSION_STARTED") {
+      expect(msg.loadedPlugins).toEqual([]);
+      expect(msg.loadedSkills).toEqual([]);
+    }
+  });
+
   test("異常: 無効 JSON で throw", () => {
     expect(() =>
       buildMessageFromHookInput("SESSION_STARTED", "{not json", opts),
