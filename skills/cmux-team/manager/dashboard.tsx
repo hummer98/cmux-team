@@ -48,8 +48,6 @@ import { syncIncremental, RateLimitExhaustedError } from "./gh-cache-sync";
 import { writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import {
-  aggregateApiUsageByRole,
-  aggregateApiUsageByTask,
   getLatestApiUsageRow,
   getProjection5h,
   getProjection7d,
@@ -60,6 +58,7 @@ import {
   type MetricsData,
   type PoolTokenRow,
 } from "./dashboard-metrics";
+import { openDashboardUrlInBrowser } from "./browser-open";
 // T351: pool capacity / per-surface handle 表示
 import { buildPoolHeaderDisplay } from "./pool-header-display";
 import type { PoolSummary } from "./pool-summary";
@@ -589,6 +588,8 @@ export interface AppState {
   metricsError: string | null;
   metricsLastLoadedMs: number;
   metricsScrollOffset: number;
+  /** T415: O キー押下時の no-op / open 失敗通知。次の loadMetricsData で自動クリア */
+  metricsStatusMessage: string | null;
 }
 
 // --- スピナー定義 ---
@@ -1498,6 +1499,7 @@ export async function startDashboard(
       metricsError: null,
       metricsLastLoadedMs: 0,
       metricsScrollOffset: 0,
+      metricsStatusMessage: null,
     },
     config: { executionMode: "inline" },
   });
@@ -1687,7 +1689,11 @@ export async function startDashboard(
             ? buildIssueRows(state)
             : state.activeTab === "metrics"
             ? (() => {
-                const rows = buildMetricsRows(state.metricsData, state.metricsError);
+                const rows = buildMetricsRows(
+                  state.metricsData,
+                  state.metricsError,
+                  state.metricsStatusMessage,
+                );
                 const total = rows.length;
                 const visible = getMetricsVisibleLines();
                 const startIdx = Math.min(
@@ -1773,6 +1779,7 @@ export async function startDashboard(
           ? [
               ui.kbd("↑/↓"), ui.text("scroll"),
               ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
+              ui.kbd("O"), ui.text(t("metrics_open_browser_hint")),
               ui.kbd("J"), ui.text("journal"),
               ui.kbd("A"), ui.text("artifacts"),
               ui.kbd("L"), ui.text("log"),
@@ -1896,7 +1903,11 @@ export async function startDashboard(
         case "metrics": {
           // T354 S11: maxOffset で clamp（buildMetricsRows は dashboard.tsx 側で保持する
           // metricsData/metricsError から都度組み立てて長さを推定する）。
-          const rows = buildMetricsRows(s.metricsData, s.metricsError);
+          const rows = buildMetricsRows(
+            s.metricsData,
+            s.metricsError,
+            s.metricsStatusMessage,
+          );
           const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
           return {
             ...s,
@@ -1942,10 +1953,29 @@ export async function startDashboard(
       }
     },
     O: (ctx) => {
-      if (ctx.state.activeTab !== "issues") return;
-      openSelectedIssueInViewer(ctx.state).catch((e: any) => {
-        log("viewer_error", e?.message ?? String(e)).catch(() => {});
-      });
+      // T415: Issues タブと Metrics タブで共有される大文字 O キー。activeTab で分岐。
+      if (ctx.state.activeTab === "issues") {
+        openSelectedIssueInViewer(ctx.state).catch((e: any) => {
+          log("viewer_error", e?.message ?? String(e)).catch(() => {});
+        });
+        return;
+      }
+      if (ctx.state.activeTab === "metrics") {
+        const url = ctx.state.metricsData?.dashboardServerUrl ?? null;
+        const r = openDashboardUrlInBrowser(url);
+        if (!r.ok) {
+          const msg =
+            r.reason === "no_url"
+              ? t("metrics_url_not_running")
+              : `open failed: ${r.reason ?? ""}`;
+          log(
+            "metrics_open_browser_failed",
+            `reason=${r.reason ?? ""} url=${url ?? ""}`,
+          ).catch(() => {});
+          app.update((s) => ({ ...s, metricsStatusMessage: msg }));
+        }
+        return;
+      }
     },
     // Artifacts タブ専用キー
     Enter: (ctx) => {
@@ -2037,7 +2067,11 @@ export async function startDashboard(
         return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
       }
       if (s.focusedArea === "metrics") {
-        const rows = buildMetricsRows(s.metricsData, s.metricsError);
+        const rows = buildMetricsRows(
+          s.metricsData,
+          s.metricsError,
+          s.metricsStatusMessage,
+        );
         const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
         return { ...s, metricsScrollOffset: maxOffset };
       }
@@ -2142,8 +2176,8 @@ export async function startDashboard(
   // multi-statement 使用が安全）。plan.md Decision D9 の旧根拠「別プロセス想定」は
   // 事実と食い違っていたため Rec #1 に従い reuse 方式に倒した。
   // T354: METRICS_POLL_INTERVAL_MS は config 化された（resolveMetricsRefreshIntervalMs）。
-  const METRICS_TASK_TOP_N = 5;
-  const METRICS_WINDOW_MS = 60 * 60 * 1000; // 直近 1h
+  // T415: aggregateApiUsageByRole/Task は Web ダッシュボードに移管されたため
+  // METRICS_TASK_TOP_N / METRICS_WINDOW_MS は本ファイルで不要になった。
 
   /**
    * T354 S10: token pool 有効時の selectable token 一覧を PoolTokenRow[] に組み立てる。
@@ -2201,13 +2235,14 @@ export async function startDashboard(
           projection5h: null,
           projection7d: null,
           poolTokens: null,
-          roleRows: [],
-          taskRows: [],
+          dashboardServerUrl: daemon.dashboardServerUrl ?? null,
           latestRowRole: null,
           latestRowSurface: null,
           latestRowTimestampMs: null,
         },
         metricsError: null,
+        // T415: 次の tick で statusMessage は自動クリア（D6 / R6）
+        metricsStatusMessage: null,
         metricsLastLoadedMs: Date.now(),
       }));
       return;
@@ -2215,15 +2250,7 @@ export async function startDashboard(
 
     try {
       const now = Date.now();
-      const sinceIso = new Date(now - METRICS_WINDOW_MS).toISOString();
-      const untilIso = new Date(now).toISOString();
 
-      const roleRows = aggregateApiUsageByRole(db, { sinceIso, untilIso });
-      const taskRows = aggregateApiUsageByTask(db, {
-        sinceIso,
-        untilIso,
-        limit: METRICS_TASK_TOP_N,
-      });
       const latest = getLatestApiUsageRow(db);
       const projection5h = getProjection5h(db, now);
       const projection7d = getProjection7d(db, now);
@@ -2239,8 +2266,7 @@ export async function startDashboard(
         projection5h,
         projection7d,
         poolTokens,
-        roleRows,
-        taskRows,
+        dashboardServerUrl: daemon.dashboardServerUrl ?? null,
         latestRowRole: latest?.role ?? null,
         latestRowSurface: latest?.surface ?? null,
         latestRowTimestampMs:
@@ -2251,6 +2277,8 @@ export async function startDashboard(
         ...s,
         metricsData: metrics,
         metricsError: null,
+        // T415: 次の tick で statusMessage は自動クリア（D6 / R6）
+        metricsStatusMessage: null,
         metricsLastLoadedMs: now,
       }));
     } catch (e: any) {

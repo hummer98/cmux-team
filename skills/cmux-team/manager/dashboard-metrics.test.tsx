@@ -40,8 +40,7 @@ function makeData(overrides: Partial<MetricsData> = {}): MetricsData {
     projection5h: makeProjection(),
     projection7d: makeProjection({ utilization: 0.2, longTermProjectedSec: 600 }),
     poolTokens: null,
-    roleRows: [],
-    taskRows: [],
+    dashboardServerUrl: null,
     latestRowRole: "agent",
     latestRowSurface: "surface:300",
     latestRowTimestampMs: FIXED_NOW - 5_000,
@@ -479,52 +478,133 @@ describe("buildMetricsRows: Pool Tokens reset alignment (T377)", () => {
   });
 });
 
-describe("buildMetricsRows: role / task aggregations (T354 S9 桁揃え)", () => {
-  test("ロール行が表示され、数値列が padStart(12) で揃う", () => {
+// T415: role / task aggregations セクションは Web ダッシュボードに移管されたため削除。
+// MetricsData.roleRows / taskRows も型から消えており、buildMetricsRows は集計を出さない。
+
+describe("buildMetricsRows: T415 (Web 移管後)", () => {
+  test("'By role' / 'By task' セクションが含まれない", () => {
+    const rows = buildMetricsRows(makeData(), null);
+    const s = stringifyRows(rows);
+    expect(s).not.toContain("By role");
+    expect(s).not.toContain("By task");
+    expect(s).not.toContain("ロール別");
+    expect(s).not.toContain("タスク別");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T415: Web ダッシュボード URL 行
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildMetricsRows: Web URL row (T415)", () => {
+  test("dashboardServerUrl 設定あり → 'Open dashboard' と URL が含まれる", () => {
+    const data = makeData({ dashboardServerUrl: "http://127.0.0.1:54321" });
+    const rows = buildMetricsRows(data, null);
+    const s = stringifyRows(rows);
+    expect(s.includes("Open dashboard") || s.includes("Web ダッシュボード")).toBe(
+      true,
+    );
+    expect(s).toContain("http://127.0.0.1:54321");
+  });
+
+  test("dashboardServerUrl=null → 'not running' / '未起動' 表示", () => {
+    const data = makeData({ dashboardServerUrl: null });
+    const rows = buildMetricsRows(data, null);
+    const s = stringifyRows(rows);
+    expect(
+      s.toLowerCase().includes("not running") || s.includes("未起動"),
+    ).toBe(true);
+  });
+
+  test("URL 行は Pool Tokens セクションより前に出る", () => {
+    const tokens: PoolTokenRow[] = [
+      {
+        handle: "@personal",
+        util5h: 0.42,
+        reset5hIso: new Date(FIXED_NOW + 60_000).toISOString(),
+        util7d: 0.1,
+        reset7dIso: new Date(FIXED_NOW + 86_400_000).toISOString(),
+        hasSnapshot: true,
+        reset5hPassed: false,
+        reset7dPassed: false,
+      },
+    ];
     const data = makeData({
-      roleRows: [
-        {
-          role: "master",
-          requests: 5,
-          input: 2000,
-          output: 800,
-          cache: 0,
-          cache_read: 0,
-        },
-        {
-          role: "agent",
-          requests: 10,
-          input: 5000,
-          output: 2000,
-          cache: 1000,
-          cache_read: 500,
-        },
-      ],
-      taskRows: [
-        { task_id: "T001", requests: 3, input: 1000, output: 500, cache: 200 },
-      ],
+      poolTokens: tokens,
+      dashboardServerUrl: "http://127.0.0.1:54321",
     });
     const rows = buildMetricsRows(data, null);
     const s = stringifyRows(rows);
-    expect(s).toContain("master");
-    expect(s).toContain("agent");
-    expect(s).toContain("T001");
-    // 数値が padStart(12) で 12 桁右寄せになっている
-    // "5" は 11 スペース + "5"
-    expect(s).toContain("           5");
-    // "5,000" は 7 スペース + "5,000"
-    expect(s).toContain("       5,000");
+    const idxUrl = Math.max(
+      s.indexOf("Open dashboard"),
+      s.indexOf("Web ダッシュボード"),
+    );
+    const idxPool = s.indexOf("Pool Tokens");
+    expect(idxUrl).toBeGreaterThanOrEqual(0);
+    expect(idxPool).toBeGreaterThanOrEqual(0);
+    expect(idxUrl).toBeLessThan(idxPool);
   });
 
-  test("空 roleRows / 空 taskRows → empty メッセージ", () => {
-    const rows = buildMetricsRows(makeData({ roleRows: [], taskRows: [] }), null);
-    const s = stringifyRows(rows).toLowerCase();
-    expect(
-      s.includes("no ") ||
-        s.includes("(none)") ||
-        s.includes("—") ||
-        s.includes("なし"),
-    ).toBe(true);
+  test("URL 行は Rate Limit Projection セクションより前に出る", () => {
+    const data = makeData({
+      poolTokens: null,
+      dashboardServerUrl: "http://127.0.0.1:54321",
+    });
+    const rows = buildMetricsRows(data, null);
+    const s = stringifyRows(rows);
+    const idxUrl = s.indexOf("Open dashboard");
+    const idxProj = s.indexOf("Rate Limit Projection");
+    // 日本語 locale でも片方が必ず取れる
+    if (idxProj >= 0) {
+      expect(idxUrl).toBeGreaterThanOrEqual(0);
+      expect(idxUrl).toBeLessThan(idxProj);
+    } else {
+      const idxJa = s.indexOf("枯渇予測");
+      const idxUrlJa = s.indexOf("Web ダッシュボード");
+      expect(idxJa).toBeGreaterThanOrEqual(0);
+      expect(idxUrlJa).toBeGreaterThanOrEqual(0);
+      expect(idxUrlJa).toBeLessThan(idxJa);
+    }
+  });
+
+  test("URL 行は proxy 未稼働 (latestRowTimestampMs=null) でも常に表示", () => {
+    const data = makeData({
+      latestRowTimestampMs: null,
+      dashboardServerUrl: "http://127.0.0.1:9999",
+    });
+    const rows = buildMetricsRows(data, null);
+    const s = stringifyRows(rows);
+    expect(s).toContain("http://127.0.0.1:9999");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T415: status message 表示（O キー押下時の no-op / open 失敗通知）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildMetricsRows: status message (T415)", () => {
+  test("statusMessage 単独でも末尾に表示される", () => {
+    const rows = buildMetricsRows(makeData(), null, "open failed: foo");
+    const s = stringifyRows(rows);
+    expect(s).toContain("open failed: foo");
+  });
+
+  test("error と statusMessage の双方が指定されたら error を優先", () => {
+    const rows = buildMetricsRows(
+      makeData(),
+      "database locked",
+      "open failed: foo",
+    );
+    const s = stringifyRows(rows);
+    expect(s).toContain("database locked");
+    // statusMessage は出さない（error 優先）
+    expect(s).not.toContain("open failed: foo");
+  });
+
+  test("data=null + statusMessage のみでも末尾に表示", () => {
+    const rows = buildMetricsRows(null, null, "open failed: foo");
+    const s = stringifyRows(rows);
+    expect(s).toContain("open failed: foo");
   });
 });
 

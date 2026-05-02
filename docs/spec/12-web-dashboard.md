@@ -319,12 +319,41 @@ CI では SPA の自動描画テストはしない。本 spec のチェックリ
 
 ---
 
-## 9. TUI 連携（後続 T-2）
+## 9. TUI 連携（T415 で確定）
 
-本タスクでは未実装。後続タスクで以下を導入予定:
+### 9.1 Metrics タブの縮小後表示要素
 
-- Master の TUI / Metrics タブに「Open dashboard」コマンドを追加し、ブラウザ起動の摩擦を減らす
-- README に URL 取得方法 1 行追記（現状は CLAUDE.md の「進捗情報の取得方法」のみ）
+T415 で Metrics タブの集計表示を Web ダッシュボードに移管した。TUI 側は「今危険か」を即座に見るための最小ヘッドラインに縮小し、以下の要素のみを描画する（順序は固定）:
+
+1. **Latest activity caption**: `from: <role>/<surface> (Ns ago)` / `proxy idle? last seen Ns ago` / `no data` のいずれか（既存挙動）
+2. **Web URL 行**: `Open dashboard: <url>` または `Web dashboard: not running` を常に 1 行表示
+3. **Rate Limit Projection (5h / 7d)**: pool 無効時のみ。pool 有効時は per-token util に責務を譲るため非表示
+4. **Pool Tokens (selectable)**: pool 有効時のみ。`@handle` ごとに 5h / 7d util bar を描画
+5. **error / status message** 1 行（`metricsError` 優先、なければ `metricsStatusMessage`）
+
+旧 `By role` / `By task` セクション、および対応する `MetricsData.roleRows` / `taskRows` フィールドは削除した。集計値は引き続き `dashboard-server.ts` が独自に `aggregateApiUsageByRole` / `aggregateApiUsageByTask` を呼んで Web ダッシュボードに供給する（SSOT 維持）。
+
+### 9.2 `O` キー: ブラウザ起動
+
+Metrics タブ focus 中に `O` を押すと `team.json.dashboardServer.url` をブラウザで開く。
+
+- `darwin` → `open <url>`
+- `linux` 他 → `xdg-open <url>` (cross-platform フォールバック)
+- URL 未取得（`dashboardServerUrl=null`）のときは no-op + status 行に `metrics_url_not_running` を表示
+- spawn 失敗時は status 行に `open failed: <reason>` を表示し、`metrics_open_browser_failed` を `manager.log` に記録
+- status message は次の `loadMetricsData` で自動クリア（D6）
+
+実装は `skills/cmux-team/manager/browser-open.ts` の `openDashboardUrlInBrowser(url, opts?)` で、`spawn` / `platform` を DI 引数で差し替え可能（`browser-open.test.ts` で検証）。Issues タブの `B` キーも本来 cross-platform に揃えたいが、本タスクではスコープ外（既存の `Bun.spawn(["open", url])` 直書きは維持）。
+
+### 9.3 URL 取得経路
+
+Master / 周辺ツールから URL を参照する経路は 3 つ:
+
+1. **TUI**: Metrics タブを開いて `O` キー（最も低摩擦）
+2. **shell**: `cat .team/team.json | jq -r .dashboardServer.url`
+3. **CLI**: `cmux-team status` の出力（`team.json` から読み出して表示）
+
+ephemeral port のため URL は daemon 再起動で変わる。固定 port が欲しい場合は別タスクで `dashboard.port` config を導入する余地あり。
 
 ---
 
@@ -339,7 +368,11 @@ CI では SPA の自動描画テストはしない。本 spec のチェックリ
   - `skills/cmux-team/manager/trace-store.ts` — 新規 SQL: `countToolCallsByPeriod` / `failureRateByTool` / `aggregateApiUsageByBucket`
   - `skills/cmux-team/manager/main.ts` — startDashboardServer の lifecycle 統合
   - `skills/cmux-team/manager/daemon.ts` — `DaemonState.dashboardServerUrl` + `team.json.dashboardServer` 書き出し
+  - `skills/cmux-team/manager/dashboard-metrics.ts` — TUI Metrics タブの行ビルド（T415 で role/task セクション削除、URL 行追加）
+  - `skills/cmux-team/manager/browser-open.ts` — T415 ブラウザ起動 helper（cross-platform）
 - テスト:
   - `dashboard-server.test.ts` — health / endpoint shape / 400 / 404 / 503 timeout / HTML inline 置換
   - `agent-strategy.test.ts` — classifyStrategy 7 ケース / SQL 集計 / drill-down
   - `trace-store-metrics.test.ts` — 新規 SQL 4 ケース（空 / 件数降順 / since-until 境界 / hour vs day bucket key）
+  - `dashboard-metrics.test.tsx` — TUI Metrics 行ビルド（T415 で URL 行 / status message / role/task 削除を追加）
+  - `browser-open.test.ts` — T415 cross-platform spawn helper（DI ベース、6 ケース）

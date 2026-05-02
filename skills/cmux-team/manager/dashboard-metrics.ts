@@ -14,11 +14,7 @@
  * 書き換え、Pool Tokens セクションを新設した。F1 の caption role 正規化も本モジュールで行う。
  */
 import { ui, rgb } from "@rezi-ui/core";
-import type {
-  AggregatedRoleRow,
-  AggregatedTaskRow,
-  ProjectionResult,
-} from "./trace-store";
+import type { ProjectionResult } from "./trace-store";
 import { normalizeRole } from "./trace-store";
 import { buildUtilizationBar, type RateLimitPart } from "./rate-limit-display";
 import { t } from "./i18n";
@@ -54,10 +50,8 @@ export interface MetricsData {
   projection7d: ProjectionResult | null;
   /** token pool が enabled の場合 selectable token の rate limit 一覧。null = pool 無効 */
   poolTokens: PoolTokenRow[] | null;
-  /** ロール別集計（直近 1h、SQL 側で master / conductor / agent / unknown に正規化済み） */
-  roleRows: AggregatedRoleRow[];
-  /** タスク別集計（直近 1h、input+output 降順で limit 件） */
-  taskRows: AggregatedTaskRow[];
+  /** T415: Web ダッシュボード URL。daemon 未起動 / 起動失敗時は null */
+  dashboardServerUrl: string | null;
   /** 最新 api_usage 行の role（caption 表示用、生値） */
   latestRowRole: string | null;
   /** 最新 api_usage 行の surface */
@@ -67,8 +61,6 @@ export interface MetricsData {
   latestRowTimestampMs: number | null;
 }
 
-/** タスク別ランキングの表示件数（D4 の責務分離と合わせて UI 定数） */
-const TASK_TOP_LIMIT = 5;
 /** Rec #6: proxy idle 判定の閾値（秒） */
 const PROXY_IDLE_THRESHOLD_SEC = 60;
 
@@ -338,22 +330,44 @@ function padGrayParts(
 }
 
 /**
+ * T415: Web ダッシュボード URL 行を組み立てる pure 関数。
+ *
+ * - URL あり → "Open dashboard: <url>" 1 行
+ * - URL なし → "Web dashboard: not running" 1 行
+ *
+ * 表示位置は caption の直後・Pool Tokens / Rate Limit Projection の前で固定する。
+ * proxy idle / pool 有効/無効に関係なく常に 1 行出す（D4）。
+ */
+function buildWebUrlRow(url: string | null): any {
+  if (url) {
+    return ui.row({ gap: 1 }, [
+      ui.text(`${t("metrics_url_label")}:`, { dim: true }),
+      ui.text(url),
+    ]);
+  }
+  return ui.text(t("metrics_url_not_running"), { style: { fg: GRAY } });
+}
+
+/**
  * Metrics タブの行配列を構築する純粋関数。
  *
  * @param data - 1 tick 分のスナップショット。null なら loading 表示
  * @param error - 直近の loadMetricsData エラー（stale-while-error 用）。末尾に表示
+ * @param statusMessage - T415: O キー押下時の no-op / open 失敗通知。`error === null` のときのみ末尾に表示する
  */
 export function buildMetricsRows(
   data: MetricsData | null,
   error: string | null,
+  statusMessage: string | null = null,
 ): any[] {
   const rows: any[] = [];
 
   if (data === null) {
     rows.push(ui.text(t("metrics_loading"), { dim: true }));
-    if (error) {
+    const tail = error ?? statusMessage;
+    if (tail) {
       rows.push(ui.text(""));
-      rows.push(ui.text(error, { style: { fg: RED } }));
+      rows.push(ui.text(tail, { style: { fg: error ? RED : GRAY } }));
     }
     return rows;
   }
@@ -389,6 +403,9 @@ export function buildMetricsRows(
     );
   }
 
+  // ── T415: Web ダッシュボード URL 行（caption の直後、常に表示） ─────────
+  rows.push(buildWebUrlRow(data.dashboardServerUrl));
+
   // ── 上段: Rate Limit Projection (5h / 7d) ────────────────────────────
   // Pool key モード有効時は proxy 全体の集計に基づく枯渇予測が
   // pool rotation の実態を反映しないため非表示にする。Pool Tokens
@@ -407,73 +424,12 @@ export function buildMetricsRows(
   // ── Pool Tokens（pool 有効時のみ）──────────────────────────────────────
   rows.push(...buildPoolTokensSection(data.poolTokens, data.nowMs));
 
-  // ── 中段: ロール別集計 ─────────────────────────────────────────────────
-  rows.push(ui.text(""));
-  rows.push(
-    ui.text(`── ${t("metrics_section_role")} ──`, { dim: true }),
-  );
-  if (data.roleRows.length === 0) {
-    rows.push(ui.text(t("metrics_empty_role"), { dim: true }));
-  } else {
-    rows.push(
-      ui.row({ gap: 2 }, [
-        ui.text(t("metrics_header_role").padEnd(10), { dim: true }),
-        ui.text(t("metrics_header_requests").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_input").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_output").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_cache").padStart(12), { dim: true }),
-      ]),
-    );
-    for (const r of data.roleRows) {
-      rows.push(
-        ui.row({ gap: 2 }, [
-          ui.text(r.role.padEnd(10)),
-          ui.text(r.requests.toLocaleString("en-US").padStart(12), { dim: true }),
-          ui.text(r.input.toLocaleString("en-US").padStart(12)),
-          ui.text(r.output.toLocaleString("en-US").padStart(12)),
-          ui.text(r.cache.toLocaleString("en-US").padStart(12), { dim: true }),
-        ]),
-      );
-    }
-  }
-
-  // ── 下段: タスク別集計 ───────────────────────────────────────────────────
-  rows.push(ui.text(""));
-  rows.push(
-    ui.text(
-      `── ${t("metrics_section_task", { limit: String(TASK_TOP_LIMIT) })} ──`,
-      { dim: true },
-    ),
-  );
-  if (data.taskRows.length === 0) {
-    rows.push(ui.text(t("metrics_empty_task"), { dim: true }));
-  } else {
-    rows.push(
-      ui.row({ gap: 2 }, [
-        ui.text(t("metrics_header_task").padEnd(10), { dim: true }),
-        ui.text(t("metrics_header_requests").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_input").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_output").padStart(12), { dim: true }),
-        ui.text(t("metrics_header_cache").padStart(12), { dim: true }),
-      ]),
-    );
-    for (const r of data.taskRows) {
-      rows.push(
-        ui.row({ gap: 2 }, [
-          ui.text(r.task_id.padEnd(10)),
-          ui.text(r.requests.toLocaleString("en-US").padStart(12), { dim: true }),
-          ui.text(r.input.toLocaleString("en-US").padStart(12)),
-          ui.text(r.output.toLocaleString("en-US").padStart(12)),
-          ui.text(r.cache.toLocaleString("en-US").padStart(12), { dim: true }),
-        ]),
-      );
-    }
-  }
-
-  // ── エラー表示（stale-while-error） ────────────────────────────────────
-  if (error) {
+  // ── エラー / status message 表示（stale-while-error） ─────────────────
+  // T415: error と statusMessage は同時には出さない（error 優先 / D6）。
+  const tail = error ?? statusMessage;
+  if (tail) {
     rows.push(ui.text(""));
-    rows.push(ui.text(error, { style: { fg: RED } }));
+    rows.push(ui.text(tail, { style: { fg: error ? RED : GRAY } }));
   }
 
   return rows;
