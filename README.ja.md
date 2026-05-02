@@ -82,7 +82,7 @@ daemon は `update-notifier` で新バージョンを**検出**し、TUI バナ�
 |-----|---|----------|------|
 | `mainBranch` | string | `origin/HEAD` から自動検出 | 主開発ブランチ。worktree のデフォルト起点・マージ先として使用。上書き: 環境変数 `CMUX_TEAM_MAIN_BRANCH`、CLI `--main-branch`、タスク単位の `--base-branch`。 |
 | `layout` | `"wide"` \| `"16x9"` | `"16x9"` | 起動時のペインレイアウト。上書き: CLI `--layout`。 |
-| `sleepPrevention` | boolean | `true` | `cmux-team start` 時に `caffeinate` で macOS スリープを抑止するか。上書き: CLI `--no-sleep-prevention`。 |
+| `sleepPrevention` | `"off"` \| `"idle"` \| `"aggressive"` \| boolean | `"aggressive"` | macOS スリープ抑止モード。`aggressive` = `caffeinate -dis`（display + idle + system sleep を全抑止、T256 以降のデフォルト）、`idle` = `caffeinate -i`（user idle のみ抑止、display sleep は許可）、`off` = caffeinate を起動しない。boolean も後方互換で受理（`true` → `aggressive`、`false` → `off`）。上書き: CLI `--sleep-prevention <mode>` または `--no-sleep-prevention`。 |
 | `autoUpdate` | `"off"` \| `"notify"` | `"off"` | バージョン検出モード（上記参照）。上書き: 環境変数 `CMUX_TEAM_AUTO_UPDATE`。 |
 | `models.master` / `models.conductor` / `models.agent` | string | Claude デフォルト | ロール別モデル指定（例: `"claude-sonnet-4-6"`）。 |
 | `envrcHookPromptSkipped` | boolean | `false` | direnv hook プロンプトをスキップした際の内部フラグ。通常手動編集しません。 |
@@ -93,7 +93,7 @@ daemon は `update-notifier` で新バージョンを**検出**し、TUI バナ�
 {
   "mainBranch": "develop",
   "layout": "16x9",
-  "sleepPrevention": false,
+  "sleepPrevention": "idle",
   "autoUpdate": "notify",
   "models": { "conductor": "claude-sonnet-4-6" }
 }

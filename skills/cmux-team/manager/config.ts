@@ -9,8 +9,8 @@
 import { join } from "path";
 import { readFile } from "fs/promises";
 import { homedir } from "os";
-import type { LayoutMode, AutoUpdateMode } from "./schema";
-import { normalizeAutoUpdate } from "./schema";
+import type { LayoutMode, AutoUpdateMode, SleepPreventionMode } from "./schema";
+import { normalizeAutoUpdate, normalizeSleepPrevention } from "./schema";
 
 export interface TeamConfig {
   models?: {
@@ -42,8 +42,17 @@ export interface TeamConfig {
      */
     agentModel?: string;
   };
-  /** false にすると caffeinate によるスリープ抑止を無効化する（デフォルト: true） */
-  sleepPrevention?: boolean;
+  /**
+   * caffeinate によるスリープ抑止モード（デフォルト: "aggressive"）。T419 で mode 化。
+   *
+   * - `"off"`        : caffeinate を起動しない（旧 sleepPrevention=false 相当）
+   * - `"idle"`       : `caffeinate -i` のみ起動（user idle 抑止、display sleep は許可）
+   * - `"aggressive"` : `caffeinate -dis`（display + idle + system sleep を全抑止、T256 以降のデフォルト）
+   *
+   * 後方互換: boolean は受理する（true → "aggressive"、false → "off"）。詳細は
+   * `normalizeSleepPrevention` / `resolveSleepPrevention` を参照。
+   */
+  sleepPrevention?: SleepPreventionMode | boolean;
   /**
    * auto-update のモード（デフォルト: "off"）。env CMUX_TEAM_AUTO_UPDATE が優先。
    * - "off": 更新チェックしない
@@ -317,6 +326,26 @@ export function resolveLayout(
     throw new Error(`Unknown layout: ${raw} (expected "wide" or "16x9")`);
   }
   return raw;
+}
+
+/**
+ * caffeinate sleep prevention モードを解決する（T419）。
+ *
+ * 優先順位: CLI `--no-sleep-prevention` > CLI `--sleep-prevention <mode>` > config.json > "aggressive"
+ *
+ * - `--no-sleep-prevention` は最優先で `"off"` に倒す（旧フラグの「絶対 disable」セマンティクスを維持）
+ * - `--sleep-prevention <mode>` は config を上書きする（mode は normalizeSleepPrevention で正規化）
+ * - 不正値は normalizeSleepPrevention が throw する。呼出し側で process.exit(1) する想定
+ */
+export function resolveSleepPrevention(
+  config: Pick<TeamConfig, "sleepPrevention">,
+  cli: { noSleepPrevention: boolean; sleepPrevention?: string },
+): SleepPreventionMode {
+  if (cli.noSleepPrevention) return "off";
+  if (cli.sleepPrevention !== undefined) {
+    return normalizeSleepPrevention(cli.sleepPrevention);
+  }
+  return normalizeSleepPrevention(config.sleepPrevention);
 }
 
 /**

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **reload 時に caffeinate プロセスが二重起動するバグを修正（T419）**。`r` キー / `daemon_reload` で daemon を再起動する際、`onReload` が `updateCaffeinate(false)` を呼ばないまま `execFileSync` で新 daemon を立ち上げていたため、旧 daemon が握っていた `caffeinate -dis` プロセスが孤児化したまま新 daemon の caffeinate と並走していた。`shutdown` と同形の順序（`stopDaemon → fileWatcher → opencode → caffeinate → releasePidFile`）にそろえることで解消
+
+### Added
+
+- **`sleepPrevention` を mode 化（T419）**: `"off"` / `"idle"` / `"aggressive"` の 3 値を受理する。`aggressive` (= `caffeinate -dis`、T256 以降のデフォルト) の他に `idle` (= `caffeinate -i`、display sleep を許可しつつ user idle のみ抑止) を選べるようにした。新フラグ `--sleep-prevention <mode>` を追加し、既存 `--no-sleep-prevention` は `"off"` と等価のまま維持。`.team/config.json` の boolean 値（`true`/`false`）も後方互換で受理する（`true` → `aggressive`、`false` → `off`）。`daemon_started` ログの `sleep_prevention=` 値が boolean からモード文字列に変わるため、`manager.log` を grep している外部ツールがあれば破壊的変更扱い
+
 ## [4.24.0] - 2026-05-02
 
 ### Added

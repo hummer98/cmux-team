@@ -84,14 +84,18 @@ const en = {
 cmux-team start -- launch daemon + spawn Master + show dashboard
 
 Usage:
-  cmux-team start [--layout=<wide|16x9>] [--no-sleep-prevention]
+  cmux-team start [--layout=<wide|16x9>] [--sleep-prevention=<off|idle|aggressive>] [--no-sleep-prevention]
 
 Options:
   --layout <wide|16x9>     layout mode (default: 16x9, or config.json layout)
                            - 16x9: top full-width + bottom split, 2 Conductors (default)
                            - wide: 2x2 layout, 3 Conductors
-  --no-sleep-prevention    disable macOS sleep prevention (caffeinate -dis)
-                           also configurable via .team/config.json "sleepPrevention": false
+  --sleep-prevention <m>   macOS sleep prevention mode (default: aggressive)
+                           - aggressive: caffeinate -dis (block display + idle + system sleep, default since T256)
+                           - idle:       caffeinate -i  (block user-idle sleep only; allows display sleep)
+                           - off:        no caffeinate
+                           also configurable via .team/config.json "sleepPrevention"
+  --no-sleep-prevention    disable macOS sleep prevention (equivalent to --sleep-prevention off)
 
 Notes:
   - Must be run inside a cmux session (CMUX_SOCKET_PATH is required)
@@ -100,9 +104,11 @@ Notes:
   - CMUX_TEAM_MAX_CONDUCTORS env var overrides layout-derived max
     (16x9 still creates only 2 panes; extra conductors are clamped)
   - Dashboard is displayed with keyboard shortcuts for interaction
-  - Sleep prevention: on macOS, caffeinate -dis is used while any agent is active
-    (prevents display sleep, idle system sleep, and AC-powered system sleep).
-    Priority: --no-sleep-prevention > .team/config.json "sleepPrevention" > true
+  - Sleep prevention: on macOS, caffeinate is used while any agent is active.
+    aggressive=caffeinate -dis (block display + idle + system sleep),
+    idle=caffeinate -i (user-idle only), off=disabled. Boolean values in
+    .team/config.json are accepted for backward compatibility (true → aggressive, false → off).
+    Priority: --no-sleep-prevention > --sleep-prevention <mode> > .team/config.json "sleepPrevention" > "aggressive"
 `,
 
   help_send: `
@@ -1082,14 +1088,18 @@ const ja: typeof en = {
 cmux-team start -- daemon 起動 + Master spawn + ダッシュボード表示
 
 Usage:
-  cmux-team start [--layout=<wide|16x9>] [--no-sleep-prevention]
+  cmux-team start [--layout=<wide|16x9>] [--sleep-prevention=<off|idle|aggressive>] [--no-sleep-prevention]
 
 Options:
   --layout <wide|16x9>     レイアウトモード (デフォルト: 16x9、または config.json の layout)
                            - 16x9: 上段フル幅 + 下段 2 分割、Conductor x2（デフォルト）
                            - wide: 2x2 レイアウト、Conductor x3
-  --no-sleep-prevention    macOS スリープ抑止を無効化（caffeinate -dis を使わない）
-                           .team/config.json の "sleepPrevention": false でも設定可能
+  --sleep-prevention <m>   macOS スリープ抑止モード（デフォルト: aggressive）
+                           - aggressive: caffeinate -dis（display+idle+system 全抑止、T256 以降のデフォルト）
+                           - idle:       caffeinate -i  （user idle のみ抑止、display sleep は許可）
+                           - off:        caffeinate を起動しない
+                           .team/config.json の "sleepPrevention" でも設定可能
+  --no-sleep-prevention    macOS スリープ抑止を無効化（--sleep-prevention off と等価）
 
 Notes:
   - cmux 環境内で実行する必要があります（CMUX_SOCKET_PATH が必要）
@@ -1098,9 +1108,11 @@ Notes:
   - CMUX_TEAM_MAX_CONDUCTORS 環境変数は layout 派生値を上書きします
     （16x9 は 2 pane のみ作成、超過分は clamp されます）
   - ダッシュボードが表示され、キーボードショートカットで操作できます
-  - スリープ抑止: macOS では稼働中エージェントがある間 caffeinate -dis を実行します
-    （ディスプレイスリープ・アイドルスリープ・AC 電源時のシステムスリープを抑止）
-    優先順位: --no-sleep-prevention > .team/config.json の "sleepPrevention" > true
+  - スリープ抑止: macOS では稼働中エージェントがある間 caffeinate を実行します。
+    aggressive=caffeinate -dis（display + idle + system sleep を抑止）、
+    idle=caffeinate -i（user idle のみ抑止）、off=無効。
+    .team/config.json の boolean 値も後方互換で受理します（true → aggressive、false → off）。
+    優先順位: --no-sleep-prevention > --sleep-prevention <mode> > .team/config.json の "sleepPrevention" > "aggressive"
 `,
 
   help_send: `

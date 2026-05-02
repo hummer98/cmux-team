@@ -76,12 +76,13 @@ import { runPreflight, printPreflightIssues } from "./preflight";
 import { acquireOrExit, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
-import type { QueueMessage, LayoutMode, AutoUpdateMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, PreToolUseMessage, PostToolUseMessage, PreToolUseDeniedMessage, Deliverable } from "./schema";
+import type { QueueMessage, LayoutMode, AutoUpdateMode, SleepPreventionMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, PreToolUseMessage, PostToolUseMessage, PreToolUseDeniedMessage, Deliverable } from "./schema";
 import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, QueueMessage as QueueMessageSchema, SessionStartedMessage as SessionStartedMessageSchema, SessionEndedMessage as SessionEndedMessageSchema, NotificationMessage as NotificationMessageSchema, StopFailureMessage as StopFailureMessageSchema, PreToolUseMessage as PreToolUseMessageSchema, PostToolUseMessage as PostToolUseMessageSchema, PreToolUseDeniedMessage as PreToolUseDeniedMessageSchema, Deliverable as DeliverableSchema } from "./schema";
 import type { TeamConfig } from "./config";
 import {
   loadConfig,
   resolveLayout,
+  resolveSleepPrevention,
   resolveAutoUpdateMode,
   resolveFetchBeforeWorktree,
   isTokenPoolEnabled,
@@ -554,10 +555,18 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
-  // スリープ抑止設定（CLI --no-sleep-prevention > config.json sleepPrevention > true）
-  const sleepPrevention = args.includes("--no-sleep-prevention")
-    ? false
-    : (startConfig.sleepPrevention ?? true);
+  // スリープ抑止設定（T419 で mode 化）
+  // 優先順位: --no-sleep-prevention > --sleep-prevention <mode> > config.json > "aggressive"
+  let sleepPrevention: SleepPreventionMode;
+  try {
+    sleepPrevention = resolveSleepPrevention(startConfig, {
+      noSleepPrevention: args.includes("--no-sleep-prevention"),
+      sleepPrevention: getArg("sleep-prevention"),
+    });
+  } catch (e: any) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 
   // auto-update 設定（env CMUX_TEAM_AUTO_UPDATE > config.autoUpdate > "off"）
   let autoUpdate: { mode: AutoUpdateMode; source: "env" | "config" | "default" };
@@ -813,15 +822,20 @@ async function cmdStart(): Promise<void> {
     await log("dashboard_server_start_failed", e?.message ?? String(e));
   }
 
-  // macOS スリープ抑止（caffeinate 管理）
+  // macOS スリープ抑止（caffeinate 管理）— T419 で mode 化
   // Master/Conductor/Agent のいずれかが稼働中ならスリープを抑止し、全 idle 時は解放する。
   // 複数の cmux-team インスタンスが同時起動している場合も、各インスタンスが独立して
   // caffeinate assertion を管理するため、どれか1つがアクティブなら Mac はスリープしない。
+  // sleepPrevention モード:
+  //   "off"        : caffeinate を起動しない
+  //   "idle"       : caffeinate -i  （user idle 抑止のみ。display sleep は許可）
+  //   "aggressive" : caffeinate -dis（display + idle + system sleep を全抑止、T256 以降のデフォルト）
   let caffeinateProc: { kill(): void } | null = null;
   const updateCaffeinate = (active: boolean) => {
-    if (!sleepPrevention || process.platform !== "darwin") return;
+    if (sleepPrevention === "off" || process.platform !== "darwin") return;
     if (active && !caffeinateProc) {
-      caffeinateProc = Bun.spawn(["caffeinate", "-dis"], {
+      const flag = sleepPrevention === "idle" ? "-i" : "-dis";
+      caffeinateProc = Bun.spawn(["caffeinate", flag], {
         stdin: "ignore", stdout: "ignore", stderr: "ignore",
       });
     } else if (!active && caffeinateProc) {
@@ -881,6 +895,10 @@ async function cmdStart(): Promise<void> {
       if (state.openCodeServerProcess) {
         stopOpenCodeServer(state.openCodeServerProcess);
       }
+      // T419: 古い caffeinate を確実に kill する（shutdown と同形にそろえる）。
+      // execFileSync で新 daemon を立ち上げる前に旧 assertion を解放しないと、
+      // 新 daemon が systemActive で再 spawn する際に caffeinate プロセスが二重化する。
+      updateCaffeinate(false);
       // T259: 子 daemon が acquire できるよう親は execFileSync より前に pidfile を release する。
       // 親自身は execFileSync でブロッキングするためシグナルを受け取れず、pidfile を握り
       // 続けると子が自分自身を "alive cmux-team" と誤検知して fail-stop する。

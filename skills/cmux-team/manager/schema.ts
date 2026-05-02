@@ -606,3 +606,41 @@ export function normalizeAutoUpdate(val: unknown): AutoUpdateMode {
       `(v4.5.0 no longer accepts boolean; use "off" or "notify" instead)`,
   );
 }
+
+// --- Sleep prevention mode (T419) ---
+
+/**
+ * caffeinate によるスリープ抑止モード（T419）。
+ *
+ * - "off":        caffeinate を起動しない（旧 sleepPrevention=false 相当）
+ * - "idle":       `caffeinate -i` のみ起動（user idle のみ抑止、display sleep は許可）
+ * - "aggressive": `caffeinate -dis` 起動（display + idle + system sleep の全抑止、T256 以降のデフォルト）
+ */
+export const SleepPreventionMode = z.enum(["off", "idle", "aggressive"]);
+export type SleepPreventionMode = z.infer<typeof SleepPreventionMode>;
+
+/**
+ * config / CLI の生値を SleepPreventionMode に正規化する（T419）。
+ *
+ * - undefined / null → "aggressive"（デフォルト = T256 以降の挙動を維持）
+ * - boolean true     → "aggressive"（後方互換: 旧 sleepPrevention=true）
+ * - boolean false    → "off"（後方互換: 旧 sleepPrevention=false / --no-sleep-prevention）
+ * - string           → trim + lowercase 後 "off" / "idle" / "aggressive" のみ受理。それ以外は throw
+ * - その他の型       → throw（fail-fast、normalizeAutoUpdate と同じ流儀）
+ */
+export function normalizeSleepPrevention(val: unknown): SleepPreventionMode {
+  if (val === undefined || val === null) return "aggressive";
+  if (typeof val === "boolean") return val ? "aggressive" : "off";
+  if (typeof val === "string") {
+    const v = val.trim().toLowerCase();
+    if (v === "off" || v === "idle" || v === "aggressive") return v;
+    throw new Error(
+      `unknown sleepPrevention value: ${JSON.stringify(val)} ` +
+        `(expected "off" | "idle" | "aggressive" | boolean)`,
+    );
+  }
+  throw new Error(
+    `unknown sleepPrevention value type: ${typeof val} ` +
+      `(expected string or boolean)`,
+  );
+}

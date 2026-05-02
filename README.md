@@ -82,7 +82,7 @@ Created per-project by `cmux-team start`. All keys are optional — the file can
 |-----|------|---------|---------|
 | `mainBranch` | string | auto-detected from `origin/HEAD` | Primary development branch used as the default worktree base & merge target. Overrides: env `CMUX_TEAM_MAIN_BRANCH`, CLI `--main-branch`, per-task `--base-branch`. |
 | `layout` | `"wide"` \| `"16x9"` | `"16x9"` | Pane layout preset at startup. Override: CLI `--layout`. |
-| `sleepPrevention` | boolean | `true` | Whether `cmux-team start` runs `caffeinate` to prevent macOS sleep. Override: CLI `--no-sleep-prevention`. |
+| `sleepPrevention` | `"off"` \| `"idle"` \| `"aggressive"` \| boolean | `"aggressive"` | macOS sleep prevention mode. `aggressive` = `caffeinate -dis` (block display + idle + system sleep, default since T256), `idle` = `caffeinate -i` (block user-idle only; allows display sleep), `off` = no caffeinate. Boolean is accepted for backward compatibility (`true` → `aggressive`, `false` → `off`). Override: CLI `--sleep-prevention <mode>` or `--no-sleep-prevention`. |
 | `autoUpdate` | `"off"` \| `"notify"` | `"off"` | Version detection mode (see above). Override: env `CMUX_TEAM_AUTO_UPDATE`. |
 | `models.master` / `models.conductor` / `models.agent` | string | Claude defaults | Per-role model selection (e.g. `"claude-sonnet-4-6"`). |
 | `envrcHookPromptSkipped` | boolean | `false` | Internal flag set when the user declines the direnv hook prompt — normally not edited by hand. |
@@ -93,7 +93,7 @@ Example:
 {
   "mainBranch": "develop",
   "layout": "16x9",
-  "sleepPrevention": false,
+  "sleepPrevention": "idle",
   "autoUpdate": "notify",
   "models": { "conductor": "claude-sonnet-4-6" }
 }
