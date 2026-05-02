@@ -112,6 +112,44 @@ export const OverlayRole = z.enum([
 
 ---
 
+## `{{PROJECT_COMMON_INSTRUCTIONS}}` プレースホルダ（T413）
+
+全 sub-agent prompt 共通の overlay を提供する第 2 軸の placeholder。`{{PROJECT_INSTRUCTIONS}}` (per-role overlay) と直交する。テンプレート上の物理位置は `{{COMMON_HEADER}}` 直後・`{{PROJECT_INSTRUCTIONS}}` の前。
+
+**展開ソース**: `.team/agent-instructions/_common.md`（prefix `_` で role overlay と視覚的に区別）。
+
+**展開タイミング**: `generateMasterPrompt` / `generateConductorRolePrompt` / `cmdSpawnAgent` の全経路で展開される（上位 wrap helper `expandPromptOverlays` 経由）。
+
+**展開仕様**: `skills/cmux-team/manager/template.ts` の `expandProjectCommonInstructions(projectRoot, content)` が担当:
+- `{{PROJECT_COMMON_INSTRUCTIONS}}` を含まない → そのまま返す (mode=noop)
+- `_common.md` 不在 / 空 → 空文字置換 (mode=empty)
+- `_common.md` 有り → `\n## <project_common_instructions_heading>\n\n<body>\n` ブロックに展開 (mode=applied)
+- 置換は `lineRe = /\n\{\{PROJECT_COMMON_INSTRUCTIONS\}\}\n/` の **最初の 1 件のみ**（既存 `expandProjectInstructions` と対称・heredoc literal 保護のための安全側仕様）
+- `unknown-role` mode は存在しない（common には role 概念が無い）
+
+**展開順序（重要）**: `expandPromptOverlays` 内では **`role → common` の順**に展開する。テンプレート上の placeholder 物理位置は `{{PROJECT_COMMON_INSTRUCTIONS}}` が前・`{{PROJECT_INSTRUCTIONS}}` が後だが、内部処理順を逆にすることで common body 内に literal `{{PROJECT_INSTRUCTIONS}}` が含まれていても誤置換されない（`expandProjectInstructions` 実行時点では common body は未挿入のため、template 内の `{{PROJECT_INSTRUCTIONS}}` placeholder のみが対象になる）。出力上は common が role より上に表示される（physical position で担保）。
+
+**i18n**: 見出しは `project_common_instructions_heading` キー（ja: 「プロジェクト共通の追加指示」/ en: "Project Common Instructions"）。`formatProjectCommonInstructionsBlock(body, locale)` が整形する。
+
+**共存時の log フォーマット**: `mode=common:<m>/role:<m>` 形式（例: `expand_mode=common:applied/role:empty`）。`master_prompt_generated` / `conductor_role_prompt_generated` / `spawn_agent_expand` の各ログで適用される。
+
+**ロール enum**: `OverlayRole` に `"common"` を追加（11 ロール）。
+
+```typescript
+export const OverlayRole = z.enum([
+  ...AgentRole.options,
+  "master", "conductor", "common",
+] as const);
+```
+
+**path 命名**: `.team/agent-instructions/_common.md`（prefix `_` で role overlay と視覚的に区別）。`agentInstructionsPath(projectRoot, "common")` だけ `_common.md` にマップする 1 行 branch を持つ。
+
+**spawn-agent への影響**: `cmux-team spawn-agent --role common` は exit 1 で reject される（`requireSpawnableAgentRole` が "reserved for system prompt overlay" エラーを出す）。`master` / `conductor` と同じ扱い。
+
+**list-agent-instructions 出力順**: `OVERLAY_ROLES` 配列順（Agent 8 → master → conductor → common）。視覚的に「全体共通」を末尾に置く。
+
+---
+
 ## Master Template
 
 Master 固有のテンプレート。ユーザー対話・タスク作成・進捗報告のプロトコルを定義。
@@ -124,7 +162,7 @@ Master 固有のテンプレート。ユーザー対話・タスク作成・進�
 - **やらないこと（デフォルト）**: 実装・テスト・リファクタリング・ファイル直接編集（`.team/tasks/` 以外）・git の**書き込み系操作**（`commit` / `branch <new>` / `merge` / `rebase` / `cherry-pick` 等）。ユーザーの明示指示があれば Master 自身が実行してよい
 - **明示指示があっても禁止**: `.team/tasks/` 配下の直接編集（CLI 経由必須）・assigned タスクの編集・Conductor/Agent の直接起動・ポーリング・破壊的 git 操作（push, force-push, reset --hard 等）
 
-**テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`, `{{PROJECT_INSTRUCTIONS}}`（T342: Master 用テンプレート冒頭に配置）
+**テンプレート変数:** `{{ROLE_ID}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_ROOT}}`, `{{PROJECT_COMMON_INSTRUCTIONS}}`（T413: 全 sub-agent 共通 overlay）, `{{PROJECT_INSTRUCTIONS}}`（T342: Master 用テンプレート冒頭に配置）
 
 ---
 
@@ -172,7 +210,7 @@ conductor.md と同等の構造だが、`{{WORKTREE_PATH}}` 等のパス情報�
 
 **Step 8 semantic resolution（T284）:** rebase conflict 発生時、Conductor は即 abort せず semantic 自解決を試みる。衝突元 commit から task ID（`(TXXX)`）を抽出して両側の仕様を読み、conflict marker のあるファイルのみを Edit / Write で統合する（Conductor が直接編集できる唯一の例外）。検証（scope_violation / `bun test` / `bunx tsc --noEmit`）がすべて pass すれば `runs/<taskRunId>/conflict-resolution.md` を書き出して Step 9 へ。いずれか失敗した場合は `failure_mode`（`spec_divergence` / `test_failed` / `tsc_failed` / `missing_context` / `scope_violation` / `iteration_limit`）を含む【判断必要】レポートを返し、`rebase-merge` / `rebase-apply` ディレクトリ有無で分岐した rollback（進行中 → `git rebase --abort`、完了済 → `git reset --hard "$PRE_REBASE"`）を行う。worktree / branch は温存する。
 
-**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`, `{{PROJECT_INSTRUCTIONS}}`（T342: 冒頭の 1 件のみ daemon 起動時に展開、heredoc サンプル内のものは Agent 用 literal として保護される）。パス情報はタスク割り当て時に付与。
+**テンプレート変数:** `{{PROJECT_ROOT}}`, `{{CONDUCTOR_ID}}`, `{{MAIN_BRANCH}}`, `{{PROJECT_COMMON_INSTRUCTIONS}}`（T413: 全 sub-agent 共通 overlay、冒頭の 1 件のみ daemon 起動時に展開）, `{{PROJECT_INSTRUCTIONS}}`（T342: 冒頭の 1 件のみ daemon 起動時に展開、heredoc サンプル内のものは Agent 用 literal として保護される）。パス情報はタスク割り当て時に付与。
 
 ### conflict-resolution.md フォーマット（runs/<taskRunId>/ 配下、T284）
 
@@ -516,6 +554,8 @@ Write to {{OUTPUT_FILE}}:
 | 変数 | 使用テンプレート | 説明 |
 |------|----------------|------|
 | `{{COMMON_HEADER}}` | 全ロール | common-header.md の展開結果 |
+| `{{PROJECT_COMMON_INSTRUCTIONS}}` | 全 overlay 対応ロール（researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager / master / conductor-role の ja/en 計 20 ファイル） | T413: `.team/agent-instructions/_common.md` を全 sub-agent prompt 共通の overlay として展開（無ければ空文字。`{{COMMON_HEADER}}` 直後・`{{PROJECT_INSTRUCTIONS}}` の前に配置） |
+| `{{PROJECT_INSTRUCTIONS}}` | 全 overlay 対応ロール | T247 / T342: `.team/agent-instructions/<role>.md` を per-role overlay として展開 |
 | `{{OUTPUT_FILE}}` | OUTPUT_FILE を使用するロール（planner を除く：researcher, architect, design-reviewer, implementer, inspector, dockeeper, task-manager） | 出力ファイルパス |
 | `{{WORKTREE_PATH}}` | conductor, conductor-task | git worktree パス |
 | `{{CONDUCTOR_ID}}` | conductor* | Conductor 識別子 |

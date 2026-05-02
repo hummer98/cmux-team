@@ -510,18 +510,21 @@ export function normalizeAgentRole(raw: string): AgentRole | undefined {
 
 /**
  * `.team/agent-instructions/<role>.md` overlay の対象ロール列挙。
- * `AgentRole` 8 件に加えて `master` / `conductor` を含む 10 件のタプル。
+ * `AgentRole` 8 件に加えて `master` / `conductor` / `common` を含む 11 件のタプル（T413）。
  *
  * - spawn-agent の `--role` 引数は引き続き `AgentRole` のみ受け付ける
- *   （`requireSpawnableAgentRole`）。master / conductor は agent として spawn できない
+ *   （`requireSpawnableAgentRole`）。master / conductor / common は agent として spawn できない
  * - get/set/delete/list-agent-instructions と
  *   generateMasterPrompt / generateConductorRolePrompt の overlay 経路は
  *   `OverlayRole` を受け付ける
+ * - T413: `common` は `_common.md` を介して全 sub-agent prompt 共通の overlay を提供する。
+ *   `agentInstructionsPath` は `role === "common"` のとき `_common.md` を返す。
  */
 export const OverlayRole = z.enum([
   ...AgentRole.options,
   "master",
   "conductor",
+  "common",
 ] as const);
 export type OverlayRole = z.infer<typeof OverlayRole>;
 export const OVERLAY_ROLES: readonly OverlayRole[] = OverlayRole.options;

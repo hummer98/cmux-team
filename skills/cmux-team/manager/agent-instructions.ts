@@ -37,9 +37,13 @@ export const AGENT_INSTRUCTIONS_MAX_BYTES = 100 * 1024;
 
 /**
  * overlay ファイルのフルパス。存在確認はしない。
+ *
+ * T413: `role === "common"` のときだけ `_common.md` にマップする
+ * （prefix `_` で per-role overlay と視覚的に区別）。それ以外は `<role>.md`。
  */
 export function agentInstructionsPath(projectRoot: string, role: OverlayRole): string {
-  return join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, `${role}.md`);
+  const filename = role === "common" ? "_common.md" : `${role}.md`;
+  return join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, filename);
 }
 
 /**
@@ -125,5 +129,23 @@ export async function listProjectInstructions(
 export function formatProjectInstructionsBlock(body: string | null, locale: Locale): string {
   if (body === null || body === "") return "";
   const heading = `## ${tFor(locale, "project_instructions_heading")}`;
+  return `\n${heading}\n\n${body.trimEnd()}\n`;
+}
+
+/**
+ * `{{PROJECT_COMMON_INSTRUCTIONS}}` 置換用のブロック整形（T413）。
+ *
+ * `formatProjectInstructionsBlock` のコピー実装。i18n キーだけ
+ * `project_common_instructions_heading` に差し替える。
+ *
+ * - body が null / 空 → 空文字を返す（mode=empty 相当）
+ * - body があれば、locale 別の見出しを付けたブロック `\n<heading>\n\n<body>\n` を返す
+ */
+export function formatProjectCommonInstructionsBlock(
+  body: string | null,
+  locale: Locale,
+): string {
+  if (body === null || body === "") return "";
+  const heading = `## ${tFor(locale, "project_common_instructions_heading")}`;
   return `\n${heading}\n\n${body.trimEnd()}\n`;
 }

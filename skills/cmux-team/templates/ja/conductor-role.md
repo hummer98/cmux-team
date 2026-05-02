@@ -6,16 +6,18 @@
 
 自分の役割はタスクの分解・Agent の起動と監視・結果の統合のみ。「自分でやった方が早い」と思っても Agent を spawn すること。
 
+{{PROJECT_COMMON_INSTRUCTIONS}}
+
 {{PROJECT_INSTRUCTIONS}}
 
 > **プレースホルダ表記について**
 >
-> このロール定義で `{{PROJECT_ROOT}}` / `{{MAIN_BRANCH}}` / 冒頭の `{{PROJECT_INSTRUCTIONS}}` は実値に置換される（`template.ts:generateConductorRolePrompt` による）。
-> `{{PROJECT_INSTRUCTIONS}}` は `.team/agent-instructions/conductor.md` の内容で置換され、ファイルが無い・空の場合はプレースホルダが削除される。
+> このロール定義で `{{PROJECT_ROOT}}` / `{{MAIN_BRANCH}}` / 冒頭の `{{PROJECT_COMMON_INSTRUCTIONS}}` / 冒頭の `{{PROJECT_INSTRUCTIONS}}` は実値に置換される（`template.ts:generateConductorRolePrompt` による）。
+> `{{PROJECT_COMMON_INSTRUCTIONS}}` は `.team/agent-instructions/_common.md` の内容で（T413）、`{{PROJECT_INSTRUCTIONS}}` は `.team/agent-instructions/conductor.md` の内容で置換され、ファイルが無い・空の場合はプレースホルダが削除される。
 > 一方 `<OUTPUT_DIR>` / `<WORKTREE_PATH>` / `<CONDUCTOR_ID>` / `<TASK_STATUS_FILE>` 等の angle-bracket 表記は
 > 「タスク割り当て時に conductor-task.md で渡された値を Conductor 自身が埋める」ことを意味する。
 > bash で実行する際は environment variable か実値に置換してから実行する。
-> **curly brace `{{...}}` で書いてよいのは `{{PROJECT_ROOT}}` / `{{MAIN_BRANCH}}` / 冒頭の `{{PROJECT_INSTRUCTIONS}}` のみ**（いずれも `template.ts:generateConductorRolePrompt` によって実値に置換される。なお下記 heredoc サンプル内の `{{PROJECT_INSTRUCTIONS}}` は literal として保持される — それは Agent 用の overlay placeholder であり、後ほど `cmux-team spawn-agent` が展開する。それ以外の変数を curly brace で書くと runtime prompt にそのまま残り bash が失敗する）。
+> **curly brace `{{...}}` で書いてよいのは `{{PROJECT_ROOT}}` / `{{MAIN_BRANCH}}` / 冒頭の `{{PROJECT_COMMON_INSTRUCTIONS}}` / 冒頭の `{{PROJECT_INSTRUCTIONS}}` のみ**（いずれも `template.ts:generateConductorRolePrompt` によって実値に置換される。なお下記 heredoc サンプル内の `{{PROJECT_INSTRUCTIONS}}` は literal として保持される — それは Agent 用の overlay placeholder であり、後ほど `cmux-team spawn-agent` が展開する。それ以外の変数を curly brace で書くと runtime prompt にそのまま残り bash が失敗する）。
 
 ## フェーズ実行
 

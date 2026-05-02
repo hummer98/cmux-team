@@ -12,6 +12,7 @@ import { normalizeOverlayRole } from "./schema";
 import {
   readProjectInstructions,
   formatProjectInstructionsBlock,
+  formatProjectCommonInstructionsBlock,
 } from "./agent-instructions";
 
 /** base ディレクトリからロケール付きテンプレートディレクトリを解決する */
@@ -58,12 +59,20 @@ export async function generateMasterPrompt(
     throw new Error(t("template_dir_not_found"));
   }
 
-  // T342: master テンプレ冒頭の `{{PROJECT_INSTRUCTIONS}}` を overlay 展開する。
+  // T342 / T413: master テンプレ冒頭の `{{PROJECT_INSTRUCTIONS}}` と
+  // `{{PROJECT_COMMON_INSTRUCTIONS}}` を overlay 展開する。
   // best-effort write — ランタイムプロンプトは再生成可能（cmux-team start）。
   const raw = await readFile(join(templateDir, "master.md"), "utf-8");
-  const { expanded, mode } = await expandProjectInstructions(projectRoot, "master", raw);
+  const { expanded, commonMode, roleMode } = await expandPromptOverlays(
+    projectRoot,
+    "master",
+    raw,
+  );
   await writeFile(dst, expanded);
-  await log("master_prompt_generated", `path=${dst} expand_mode=${mode}`);
+  await log(
+    "master_prompt_generated",
+    `path=${dst} expand_mode=common:${commonMode}/role:${roleMode}`,
+  );
 }
 
 export async function generateConductorRolePrompt(
@@ -92,14 +101,20 @@ export async function generateConductorRolePrompt(
     .replace(/\{\{PROJECT_ROOT\}\}/g, projectRoot)
     .replace(/\{\{MAIN_BRANCH\}\}/g, mainBranch);
 
-  // T342: 冒頭の単独行 `{{PROJECT_INSTRUCTIONS}}` を overlay 展開する。
-  // expandProjectInstructions 内の lineRe は最初のマッチ 1 件のみ置換するため、
-  // heredoc サンプル内の literal placeholder は保護される。
-  const { expanded, mode } = await expandProjectInstructions(projectRoot, "conductor", content);
+  // T342 / T413: 冒頭の単独行 `{{PROJECT_INSTRUCTIONS}}` と `{{PROJECT_COMMON_INSTRUCTIONS}}`
+  // を overlay 展開する。expandProjectInstructions 内の lineRe は最初のマッチ 1 件のみ
+  // 置換するため、heredoc サンプル内の literal placeholder は保護される。
+  // expandPromptOverlays は role → common の順で適用し、common body 内の literal
+  // `{{PROJECT_INSTRUCTIONS}}` が誤置換されないようにする（plan §3 判断 3）。
+  const { expanded, commonMode, roleMode } = await expandPromptOverlays(
+    projectRoot,
+    "conductor",
+    content,
+  );
   await writeFile(promptFile, expanded);
   await log(
     "conductor_role_prompt_generated",
-    `path=${promptFile} expand_mode=${mode}`,
+    `path=${promptFile} expand_mode=common:${commonMode}/role:${roleMode}`,
   );
   return promptFile;
 }
@@ -158,6 +173,81 @@ export async function expandProjectInstructions(
   }
 
   return { expanded, mode };
+}
+
+/**
+ * `{{PROJECT_COMMON_INSTRUCTIONS}}` プレースホルダを `_common.md` overlay で展開する（T413）。
+ *
+ * `expandProjectInstructions` の対称実装。違いは:
+ * - placeholder 名: `{{PROJECT_COMMON_INSTRUCTIONS}}`
+ * - 読み込み元: `.team/agent-instructions/_common.md`（`OverlayRole === "common"`）
+ * - role 概念が無いため `unknown-role` mode は存在しない
+ *
+ * 返り値の mode:
+ * - `noop`: 入力 content にプレースホルダが無い（content を変更せず返す）
+ * - `empty`: overlay ファイルが無い / 空 → プレースホルダを `""` で置換
+ * - `applied`: overlay を block に整形して置換
+ */
+export async function expandProjectCommonInstructions(
+  projectRoot: string,
+  content: string,
+): Promise<{
+  expanded: string;
+  mode: "noop" | "empty" | "applied";
+}> {
+  if (!content.includes("{{PROJECT_COMMON_INSTRUCTIONS}}")) {
+    return { expanded: content, mode: "noop" };
+  }
+
+  const body = await readProjectInstructions(projectRoot, "common");
+  let block = "";
+  let mode: "empty" | "applied";
+  if (body === null || body === "") {
+    mode = "empty";
+  } else {
+    block = formatProjectCommonInstructionsBlock(body, locale);
+    mode = "applied";
+  }
+
+  const lineRe = /\n\{\{PROJECT_COMMON_INSTRUCTIONS\}\}\n/;
+  let expanded: string;
+  if (lineRe.test(content)) {
+    expanded = content.replace(lineRe, block === "" ? "" : block);
+  } else {
+    expanded = content.replaceAll("{{PROJECT_COMMON_INSTRUCTIONS}}", block);
+  }
+
+  return { expanded, mode };
+}
+
+/**
+ * 上位 wrap helper（T413）。`{{PROJECT_INSTRUCTIONS}}` と `{{PROJECT_COMMON_INSTRUCTIONS}}`
+ * を 1 度に展開する。
+ *
+ * 展開順序は **role → common の順**。理由（plan §3 判断 3）:
+ * - `expandProjectInstructions` の `lineRe` は document 全体での最初の 1 件にマッチする。
+ *   common→role 順で展開すると、common body 内に literal `{{PROJECT_INSTRUCTIONS}}` が
+ *   含まれる場合に lineRe の最初のマッチが common body 内 literal に当たり、本来の role
+ *   placeholder ではなく common body 内 literal が誤置換される可能性がある。
+ * - role → common 順なら `expandProjectInstructions` 実行時点では common body は未挿入なので、
+ *   template 内の `{{PROJECT_INSTRUCTIONS}}` placeholder のみが対象になり、common body 内
+ *   literal は自然に保護される。
+ *
+ * テンプレート上の placeholder 物理位置は `{{PROJECT_COMMON_INSTRUCTIONS}}` が
+ * `{{PROJECT_INSTRUCTIONS}}` より前なので、出力上は common が role より前に表示される。
+ */
+export async function expandPromptOverlays(
+  projectRoot: string,
+  role: string,
+  content: string,
+): Promise<{
+  expanded: string;
+  commonMode: "noop" | "empty" | "applied";
+  roleMode: "noop" | "unknown-role" | "empty" | "applied";
+}> {
+  const r = await expandProjectInstructions(projectRoot, role, content);
+  const c = await expandProjectCommonInstructions(projectRoot, r.expanded);
+  return { expanded: c.expanded, commonMode: c.mode, roleMode: r.mode };
 }
 
 export async function generateConductorTaskPrompt(

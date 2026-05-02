@@ -2687,11 +2687,22 @@ describe("agent-instructions CLI overlay roles (T342)", () => {
     expect(raw).toBe("CONDUCTOR_X\n");
   }, 15000);
 
-  test("list-agent-instructions includes master / conductor lines", async () => {
+  test("(X) set-agent-instructions --role common writes to _common.md (T413)", async () => {
+    const setRes = await runCli([
+      "set-agent-instructions", "--role", "common", "--body", "test",
+    ]);
+    expect(setRes.code).toBe(0);
+    const file = join(testDir, ".team/agent-instructions/_common.md");
+    const raw = await readFile(file, "utf-8");
+    expect(raw).toBe("test\n");
+  }, 15000);
+
+  test("list-agent-instructions includes master / conductor / common lines (T413)", async () => {
     const r = await runCli(["list-agent-instructions"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/^master /m);
     expect(r.stdout).toMatch(/^conductor /m);
+    expect(r.stdout).toMatch(/^common /m);
   }, 15000);
 });
 
@@ -2737,6 +2748,18 @@ describe("cmdSpawnAgent role validation (T342)", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("reserved");
     expect(r.stderr).toContain("conductor");
+  }, 15000);
+
+  test("(Y) --role common は exit 1 + stderr に reserved (T413)", async () => {
+    const r = await runSpawn([
+      "spawn-agent",
+      "--conductor-surface", "surface:1",
+      "--role", "common",
+      "--prompt", "x",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("reserved");
+    expect(r.stderr).toContain("common");
   }, 15000);
 
   test("--role unknown-foo は exit 1 + stderr に unknown role", async () => {

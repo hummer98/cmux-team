@@ -179,24 +179,31 @@ describe("ConductorState tokenHandle", () => {
   });
 });
 
-// --- T342: OverlayRole ---
+// --- T342 / T413: OverlayRole ---
 
-describe("OverlayRole / OVERLAY_ROLES (T342)", () => {
-  test("OVERLAY_ROLES contains all AGENT_ROLES + master + conductor", () => {
+describe("OverlayRole / OVERLAY_ROLES (T342 / T413)", () => {
+  test("OVERLAY_ROLES contains all AGENT_ROLES + master + conductor + common", () => {
     for (const r of AGENT_ROLES) {
       expect(OVERLAY_ROLES).toContain(r);
     }
     expect(OVERLAY_ROLES).toContain("master");
     expect(OVERLAY_ROLES).toContain("conductor");
+    expect(OVERLAY_ROLES).toContain("common");
   });
 
-  test("OVERLAY_ROLES.length === AGENT_ROLES.length + 2", () => {
-    expect(OVERLAY_ROLES.length).toBe(AGENT_ROLES.length + 2);
+  test("OVERLAY_ROLES.length === AGENT_ROLES.length + 3 (T413)", () => {
+    expect(OVERLAY_ROLES.length).toBe(AGENT_ROLES.length + 3);
   });
 
-  test("OverlayRole.options preserves AgentRole order then appends master, conductor", () => {
-    expect(OverlayRole.options[OverlayRole.options.length - 2]).toBe("master");
-    expect(OverlayRole.options[OverlayRole.options.length - 1]).toBe("conductor");
+  test("OverlayRole.options preserves AgentRole order then appends master, conductor, common", () => {
+    expect(OverlayRole.options[OverlayRole.options.length - 3]).toBe("master");
+    expect(OverlayRole.options[OverlayRole.options.length - 2]).toBe("conductor");
+    expect(OverlayRole.options[OverlayRole.options.length - 1]).toBe("common");
+  });
+
+  test("OverlayRole.options[10] === \"common\" (T413: 末尾 common)", () => {
+    expect(OverlayRole.options.length).toBe(11);
+    expect(OverlayRole.options[10]).toBe("common");
   });
 });
 
@@ -316,13 +323,17 @@ describe("ConductorState (T392) lastApiError", () => {
   });
 });
 
-describe("normalizeOverlayRole (T342)", () => {
+describe("normalizeOverlayRole (T342 / T413)", () => {
   test("master → master", () => {
     expect(normalizeOverlayRole("master")).toBe("master");
   });
 
   test("conductor → conductor", () => {
     expect(normalizeOverlayRole("conductor")).toBe("conductor");
+  });
+
+  test("common → common (T413)", () => {
+    expect(normalizeOverlayRole("common")).toBe("common");
   });
 
   test("AgentRole alias inheritance: impl → implementer", () => {

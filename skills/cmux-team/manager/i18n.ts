@@ -28,6 +28,8 @@ const en = {
   // ── T247: project-local agent instructions overlay ─────────────────────────
   /** `{{PROJECT_INSTRUCTIONS}}` 展開時に overlay 本文の先頭に付ける見出し文字列 */
   project_instructions_heading: "Project-Specific Instructions",
+  /** `{{PROJECT_COMMON_INSTRUCTIONS}}` 展開時に overlay 本文の先頭に付ける見出し（T413） */
+  project_common_instructions_heading: "Project Common Instructions",
 
   // ── エラー・ステータスメッセージ ──────────────────────────────────────────────
   not_in_cmux:
@@ -1027,6 +1029,7 @@ Rate-limit exhaustion exits 4.`,
 const ja: typeof en = {
   // ── T247: project-local agent instructions overlay ─────────────────────────
   project_instructions_heading: "プロジェクト固有の追加指示",
+  project_common_instructions_heading: "プロジェクト共通の追加指示",
 
   // ── エラー・ステータスメッセージ ──────────────────────────────────────────────
   not_in_cmux: "❌ cmux 環境外です。cmux 内で実行してください。",

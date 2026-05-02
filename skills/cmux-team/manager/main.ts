@@ -105,7 +105,7 @@ import {
   listProjectInstructions,
   AGENT_INSTRUCTIONS_MAX_BYTES,
 } from "./agent-instructions";
-import { expandProjectInstructions } from "./template";
+import { expandPromptOverlays } from "./template";
 import { resolveOriginRepo } from "./gh-cache-repo";
 import { resolveGithubToken, tokenHash } from "./gh-cache-auth";
 import {
@@ -2965,7 +2965,7 @@ async function cmdSpawnAgent(): Promise<void> {
     if (promptFile) {
       try {
         const rawPrompt = await readFile(promptFile, "utf-8");
-        const { expanded } = await expandProjectInstructions(PROJECT_ROOT, role, rawPrompt);
+        const { expanded } = await expandPromptOverlays(PROJECT_ROOT, role, rawPrompt);
         ocPromptText = expanded;
       } catch (e: any) {
         await log("spawn_agent_expand_failed", `role=${role} prompt_file=${promptFile} error=${e?.message ?? e}`);
@@ -3171,15 +3171,20 @@ async function cmdSpawnAgent(): Promise<void> {
     sessionId,
   });
 
-  // T247: prompt-file 内の {{PROJECT_INSTRUCTIONS}} を overlay で展開する。
+  // T247 / T413: prompt-file 内の {{PROJECT_INSTRUCTIONS}} と {{PROJECT_COMMON_INSTRUCTIONS}}
+  // を overlay で展開する。
   // 展開後は `.team/prompts/<basename>.expanded.md` に書き出し、その path を Claude に渡す。
   // 失敗時は元の promptFile にフォールバック。
   let effectivePromptFile = promptFile;
   if (promptFile) {
     try {
       const original = await readFile(promptFile, "utf-8");
-      const { expanded, mode } = await expandProjectInstructions(PROJECT_ROOT, role, original);
-      if (mode !== "noop" && expanded !== original) {
+      const { expanded, commonMode, roleMode } = await expandPromptOverlays(
+        PROJECT_ROOT,
+        role,
+        original,
+      );
+      if ((commonMode !== "noop" || roleMode !== "noop") && expanded !== original) {
         const base = basename(promptFile, ".md");
         const expandedPath = join(PROJECT_ROOT, ".team/prompts", `${base}.expanded.md`);
         await mkdir(dirname(expandedPath), { recursive: true });
@@ -3188,7 +3193,7 @@ async function cmdSpawnAgent(): Promise<void> {
       }
       await log(
         "spawn_agent_expand",
-        `role=${role} mode=${mode} prompt_file=${promptFile}${effectivePromptFile !== promptFile ? ` expanded=${effectivePromptFile}` : ""}`,
+        `role=${role} mode=common:${commonMode}/role:${roleMode} prompt_file=${promptFile}${effectivePromptFile !== promptFile ? ` expanded=${effectivePromptFile}` : ""}`,
       );
     } catch (e: any) {
       await log("spawn_agent_expand_failed", `role=${role} prompt_file=${promptFile} error=${e?.message ?? e}`);
@@ -5424,10 +5429,10 @@ function requireOverlayRole(): OverlayRole {
 }
 
 /**
- * spawn-agent 用の --role バリデーション (T342)。
+ * spawn-agent 用の --role バリデーション (T342 / T413)。
  * - canonical AgentRole / alias → そのまま
- * - master / conductor → "reserved" エラーで exit 1
- *   （overlay 専用ロール: `cmux-team set-agent-instructions --role master/conductor` で設定）
+ * - master / conductor / common → "reserved" エラーで exit 1
+ *   （overlay 専用ロール: `cmux-team set-agent-instructions --role master/conductor/common` で設定）
  * - その他 unknown → "unknown role" エラーで exit 1
  */
 function requireSpawnableAgentRole(): AgentRole {
@@ -5436,7 +5441,7 @@ function requireSpawnableAgentRole(): AgentRole {
   if (role) return role;
 
   const overlay = normalizeOverlayRole(raw);
-  if (overlay === "master" || overlay === "conductor") {
+  if (overlay === "master" || overlay === "conductor" || overlay === "common") {
     console.error(
       `Error: role '${overlay}' is reserved for system prompt overlay and cannot be spawned as agent. ` +
         `Use --role <agent-role> (one of: ${AGENT_ROLES.join(", ")})`,

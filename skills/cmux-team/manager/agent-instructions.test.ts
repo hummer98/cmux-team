@@ -12,8 +12,15 @@ import {
   deleteProjectInstructions,
   listProjectInstructions,
   formatProjectInstructionsBlock,
+  formatProjectCommonInstructionsBlock,
 } from "./agent-instructions";
-import { AGENT_ROLES, OVERLAY_ROLES, normalizeAgentRole } from "./schema";
+import {
+  AGENT_ROLES,
+  OVERLAY_ROLES,
+  OverlayRole,
+  normalizeAgentRole,
+  normalizeOverlayRole,
+} from "./schema";
 import { expandProjectInstructions } from "./template";
 import { createDummyProject, type DummyProject } from "./test-project";
 
@@ -228,11 +235,13 @@ describe("master/conductor overlay (T342)", () => {
     expect(existsSync(agentInstructionsPath(projectRoot, "master"))).toBe(false);
   });
 
-  test("(18) listProjectInstructions includes master and conductor at the end", async () => {
+  test("(18) listProjectInstructions includes master, conductor, common at the end (T413)", async () => {
     const items = await listProjectInstructions(projectRoot);
     const roles = items.map((it) => it.role);
-    expect(roles[roles.length - 2]).toBe("master");
-    expect(roles[roles.length - 1]).toBe("conductor");
+    // T413: 末尾は agent 8 → master → conductor → common の順
+    expect(roles[roles.length - 3]).toBe("master");
+    expect(roles[roles.length - 2]).toBe("conductor");
+    expect(roles[roles.length - 1]).toBe("common");
   });
 
   test("agentInstructionsPath builds correct relative path for master", () => {
@@ -281,5 +290,85 @@ describe("master/conductor overlay (T342)", () => {
     expect(mode).toBe("empty");
     expect(expanded).not.toContain("{{PROJECT_INSTRUCTIONS}}");
     expect(/\n\n\n+/.test(expanded)).toBe(false);
+  });
+});
+
+// --- T413: common overlay (agent-instructions 層) ---
+
+describe("common overlay (T413)", () => {
+  test("(A) OverlayRole has \"common\" + OVERLAY_ROLES.length === 11 + last is common", () => {
+    expect(OverlayRole.options).toContain("common" as OverlayRole);
+    expect(OVERLAY_ROLES.length).toBe(11);
+    expect(OVERLAY_ROLES[OVERLAY_ROLES.length - 1]).toBe("common" as OverlayRole);
+  });
+
+  test("normalizeOverlayRole(\"common\") returns \"common\"", () => {
+    expect(normalizeOverlayRole("common")).toBe("common" as OverlayRole);
+  });
+
+  test("(B) agentInstructionsPath(\"common\") maps to _common.md", () => {
+    const p = agentInstructionsPath(projectRoot, "common");
+    expect(p).toBe(join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, "_common.md"));
+  });
+
+  test("(C) agentInstructionsPath(\"implementer\") still maps to implementer.md", () => {
+    const p = agentInstructionsPath(projectRoot, "implementer");
+    expect(p).toBe(join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, "implementer.md"));
+  });
+
+  test("(D) write/read round-trip for common overlay → _common.md", async () => {
+    const body = "COMMON_BODY\nline2\n";
+    await writeProjectInstructions(projectRoot, "common", body);
+    const got = await readProjectInstructions(projectRoot, "common");
+    expect(got).toBe(body);
+    // 物理的に _common.md に書かれていることを確認
+    const raw = await readFile(
+      join(projectRoot, AGENT_INSTRUCTIONS_DIR_REL, "_common.md"),
+      "utf-8",
+    );
+    expect(raw).toBe(body);
+  });
+
+  test("(E) deleteProjectInstructions(\"common\") true/false", async () => {
+    expect(await deleteProjectInstructions(projectRoot, "common")).toBe(false);
+    await writeProjectInstructions(projectRoot, "common", "to be deleted\n");
+    expect(await deleteProjectInstructions(projectRoot, "common")).toBe(true);
+    expect(existsSync(agentInstructionsPath(projectRoot, "common"))).toBe(false);
+  });
+
+  test("(F) listProjectInstructions includes common at the end", async () => {
+    await writeProjectInstructions(projectRoot, "common", "BODY");
+    const items = await listProjectInstructions(projectRoot);
+    expect(items.length).toBe(11);
+    const common = items.find((x) => x.role === "common");
+    expect(common).toBeDefined();
+    expect(common!.exists).toBe(true);
+    expect(common!.size).toBeGreaterThan(0);
+    expect(items[items.length - 1]!.role).toBe("common" as OverlayRole);
+  });
+
+  test("(G) formatProjectCommonInstructionsBlock(null, \"ja\") → empty", () => {
+    expect(formatProjectCommonInstructionsBlock(null, "ja")).toBe("");
+  });
+
+  test("formatProjectCommonInstructionsBlock(\"\", \"en\") → empty", () => {
+    expect(formatProjectCommonInstructionsBlock("", "en")).toBe("");
+  });
+
+  test("(H) formatProjectCommonInstructionsBlock body (ja) contains ja heading", () => {
+    const out = formatProjectCommonInstructionsBlock("hi", "ja");
+    expect(out).toContain("## プロジェクト共通の追加指示");
+    expect(out).toContain("hi");
+  });
+
+  test("(I) formatProjectCommonInstructionsBlock body (en) contains en heading", () => {
+    const out = formatProjectCommonInstructionsBlock("hi", "en");
+    expect(out).toContain("## Project Common Instructions");
+    expect(out).toContain("hi");
+  });
+
+  test("formatProjectCommonInstructionsBlock format `\\n<heading>\\n\\n<body>\\n`", () => {
+    const out = formatProjectCommonInstructionsBlock("hello", "en");
+    expect(out).toBe("\n## Project Common Instructions\n\nhello\n");
   });
 });

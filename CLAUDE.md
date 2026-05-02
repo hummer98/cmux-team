@@ -156,6 +156,7 @@ TypeScript daemon（`skills/cmux-team/manager/main.ts`）として Bun で実行
 - **完了検出**: done マーカーファイル（`.team/output/conductor-N/done`）+ PID ベース生存確認（`spawnPidWatcher`）
 - **アイドル化**: open tasks ゼロで待機、`[TASK_CREATED]` 通知で起床
 - **多重起動防止**: `.team/daemon.pid` を `writeFile({ flag: "wx" })` で atomic に取得
+- **Sub-agent 共通 overlay (T413)**: `.team/agent-instructions/_common.md` に置くと、Master / Conductor / Agent 全 sub-agent prompt の `{{PROJECT_COMMON_INSTRUCTIONS}}` 位置に展開される（per-role overlay は引き続き `<role>.md`）
 
 ### タスクの作成・更新は CLI 経由（直接ファイル操作禁止）
 
