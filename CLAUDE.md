@@ -13,6 +13,18 @@ Master（ユーザー対話）→ Manager（イベント駆動監視）→ Condu
 2. **進捗が見える** — cmux のペイン分割でエージェントの作業がリアルタイムに可視化される
 3. **安全に失敗できる** — git worktree 隔離により main は常に無傷
 4. **プラグインとして誰でもインストールできる** — Claude Code Plugin として配布
+5. **観察可能性が改善サイクルを回す** — エージェント挙動を **pane（real-time）+ trace DB / metrics snapshot（retrospective）** の二層で観察可能にし、得られた洞察を prompt / hook / skill / agent 設計の改善に還元する。本プロジェクトは orchestration layer であると同時に **AI 観察箱（AI observatory）** である（README 参照）
+
+### 観察箱 (AI Observatory) としての性格
+
+cmux-team は「AI を働かせる基盤」であると同時に「**AI のふるまいを観察して洞察を得るためのプラットフォーム**」である。観察は二層構造を取る:
+
+| 層 | 媒体 | 主な利用 |
+|---|---|---|
+| **real-time 観察** | cmux ペイン（人間の目） | Conductor / Agent ペインの斜め読みで「途中の挙動」をその場で検出（README "AI 観察箱" / "AI observatory" 参照） |
+| **retrospective 観察** | trace DB (`hook_signals` / `api_usage` / `task_sessions`) + events.jsonl + metrics snapshot | `cmux-team metrics` / cohort 比較 / 統計検定による事後・統計的評価（`docs/spec/11-metrics.md` 参照） |
+
+**機能追加の判断軸**: 新機能を入れる際は「observatory に資するか」（観察可能性を高めるか、観察結果から得た洞察に基づくか）を判断軸の 1 つとする。逆に観察を阻害する変更（state を内部に隠す、hook を bypass する、trace を不完全にする、pane の表示を奪う）は原則として避ける。
 
 ### 設計原則
 

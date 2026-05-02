@@ -57,7 +57,18 @@ cmux 内で Claude Code を使用する開発者。開発ワークフローを�
 2. **決定論的なものはコードで、判断が必要なものは AI で** — イベント検出は確実に、意思決定は柔軟に
 3. **各層は自分の仕事だけをする** — Master は作業しない、Agent は報告しない、Conductor はユーザーに聞かない
 4. **逸脱を防ぐより、逸脱しても安全な構造にする** — git worktree 隔離 + 事後レビュー
-5. **シンプルさを優先** — 動くものを最小構成で
+5. **構造的正しさを優先** — 状態遷移・責務分担・データフローが明示的に正しいこと。state machine・専用ライブラリを積極的に導入し、繰り返し発生するクラスのバグを構造で絶つ
+
+## 観察箱 (AI Observatory) としての性格
+
+cmux-team は orchestration layer であると同時に **AI 観察箱**である（README "AI observatory" / "AI 観察箱" 参照）。**「AI のふるまいを観察して洞察を得るためのプラットフォーム」**であることが本プロジェクトを通底するコンセプトで、エージェントの挙動を観察可能にし、その洞察を改善サイクルに還元する。観察は二層構造を取る:
+
+| 層 | 媒体 | 主な利用 |
+|---|---|---|
+| **real-time 観察** | cmux ペイン（人間の目） | Conductor / Agent ペインの斜め読みで「途中の挙動」をその場で検出（README 参照） |
+| **retrospective 観察** | trace DB (`hook_signals` / `api_usage` / `task_sessions`) + events.jsonl + metrics snapshot | `cmux-team metrics` / cohort 比較 / 統計検定による事後・統計的評価（[`11-metrics.md`](11-metrics.md) 参照） |
+
+**機能追加判断の規範**: 新機能を入れる際は「observatory に資するか」（観察可能性を高めるか、観察結果から得た洞察に基づくか）を判断軸の 1 つとする。逆に観察を阻害する変更（state を内部に隠す、hook を bypass する、trace を不完全にする、pane の表示を奪う）は原則として避ける。
 
 ## レイアウト
 
