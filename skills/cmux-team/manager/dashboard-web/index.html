@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>cmux-team dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>/*__INLINE_UPLOT_CSS__*/</style>
+<style>/*__INLINE_CSS__*/</style>
+</head>
+<body>
+<aside id="sidebar">
+  <h1>cmux-team</h1>
+  <nav>
+    <a href="#overview" data-page="overview">Overview</a>
+    <a href="#tool-use" data-page="tool-use">Tool Use</a>
+    <a href="#agent-strategy" data-page="agent-strategy">Agent Strategy</a>
+    <a href="#tokens" data-page="tokens">Tokens</a>
+    <a href="#tasks" data-page="tasks">Tasks</a>
+  </nav>
+  <div id="health" class="health"></div>
+</aside>
+<main>
+  <header id="topbar">
+    <div class="period">
+      <span class="label">Range:</span>
+      <button data-preset="1h">1h</button>
+      <button data-preset="24h">24h</button>
+      <button data-preset="7d">7d</button>
+      <button data-preset="30d">30d</button>
+      <span class="custom">
+        <input type="datetime-local" id="from-input" step="1">
+        <span>—</span>
+        <input type="datetime-local" id="to-input" step="1">
+        <button id="apply-custom">Apply</button>
+      </span>
+    </div>
+    <label class="refresh">
+      <input type="checkbox" id="refresh-toggle" checked>
+      auto refresh 30s
+    </label>
+  </header>
+  <section id="page" aria-live="polite"></section>
+</main>
+<script>/*__INLINE_UPLOT__*/</script>
+<script>/*__INLINE_APP__*/</script>
+</body>
+</html>

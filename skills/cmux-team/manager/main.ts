@@ -46,6 +46,7 @@ import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
 import { startDashboardServer } from "./dashboard-server";
+import { getDashboardHtml } from "./dashboard-web-bundle";
 import { launchConductor, resetConductor } from "./conductor";
 import { ClaudeCodeBackend } from "./claude-code-backend";
 import { OpenCodeBackend } from "./opencode-backend";
@@ -803,6 +804,7 @@ async function cmdStart(): Promise<void> {
       projectRoot: PROJECT_ROOT,
       version,
       getState: () => state,
+      htmlBundle: getDashboardHtml,
     });
     state.dashboardServerUrl = dashboardHandle.url;
     await log("dashboard_server_started", `url=${dashboardHandle.url}`);

@@ -271,6 +271,60 @@ describe("dashboard-server: timeout race (Promise.race + DI sleep)", () => {
   });
 });
 
+describe("dashboard-server: Step 4 GET / HTML 配信", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-html-",
+      subdirs: ["logs", "traces"],
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("htmlBundle 提供時 GET / は 200 + Content-Type: text/html + title", async () => {
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+      htmlBundle: () =>
+        "<!doctype html><html><head><title>cmux-team dashboard</title></head><body>OK</body></html>",
+    });
+    const res = await fetch(`${handle.url}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type") ?? "").toContain("text/html");
+    const csp = res.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    const body = await res.text();
+    expect(body).toContain("<title>cmux-team dashboard</title>");
+  });
+
+  test("htmlBundle 未提供時 GET / は 404", async () => {
+    handle = await startDashboardServer({ projectRoot: project.root });
+    const res = await fetch(`${handle.url}/`);
+    expect(res.status).toBe(404);
+  });
+
+  test("getDashboardHtml は inline placeholder を全置換する (実ファイル読み込み)", async () => {
+    const { getDashboardHtml, _resetDashboardHtmlCache } = await import("./dashboard-web-bundle");
+    _resetDashboardHtmlCache();
+    const html = getDashboardHtml();
+    expect(html).toContain("<title>cmux-team dashboard</title>");
+    expect(html).not.toContain("/*__INLINE_CSS__*/");
+    expect(html).not.toContain("/*__INLINE_UPLOT__*/");
+    expect(html).not.toContain("/*__INLINE_APP__*/");
+    expect(html).not.toContain("/*__INLINE_UPLOT_CSS__*/");
+    // uPlot vendor が埋め込まれている (IIFE 開始)
+    expect(html).toContain("var uPlot=function()");
+    // SPA app.js が埋め込まれている
+    expect(html).toContain("renderOverview");
+  });
+});
+
 describe("dashboard-server: parsePeriodQuery", () => {
   const fixedNow = Date.parse("2026-05-02T12:00:00.000Z");
   const now = () => fixedNow;

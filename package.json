@@ -18,6 +18,7 @@
     "skills/cmux-team/manager/**/*.ts",
     "skills/cmux-team/manager/**/*.tsx",
     "!skills/cmux-team/manager/**/*.test.ts",
+    "skills/cmux-team/manager/dashboard-web/**",
     "skills/cmux-team/manager/package.json",
     "skills/cmux-team/manager/bun.lock",
     "skills/cmux-agent-role/",
