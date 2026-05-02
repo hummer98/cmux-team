@@ -1185,7 +1185,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
 
     // 事前条件: task-state.json に assigned + 旧 sessionId
     const initialTs = await loadTaskState(testDir);
-    initialTs["T999"] = {
+    initialTs["999"] = {
       status: "assigned",
       sessionId: "uuid-old",
       worktreePath: join(testDir, ".worktrees/task-999"),
@@ -1197,7 +1197,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
       startedAt: new Date().toISOString(),
       agents: [],
       status: "running",
-      taskId: "T999",
+      taskId: "999",
       sessionId: "uuid-old",
     };
     state.conductors.set(conductor.surface, conductor);
@@ -1213,7 +1213,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
 
     expect(conductor.sessionId).toBe("uuid-new");
     const updatedTs = await loadTaskState(testDir);
-    expect((updatedTs["T999"] as any).sessionId).toBe("uuid-new");
+    expect((updatedTs["999"] as any).sessionId).toBe("uuid-new");
 
     if (conductor.pidWatcherInterval) {
       clearInterval(conductor.pidWatcherInterval);
@@ -1226,7 +1226,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
     const state = await createDaemon(testDir);
 
     const initialTs = await loadTaskState(testDir);
-    initialTs["T888"] = {
+    initialTs["888"] = {
       status: "assigned",
       sessionId: "uuid-same",
       worktreePath: join(testDir, ".worktrees/task-888"),
@@ -1243,7 +1243,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
       startedAt: new Date().toISOString(),
       agents: [],
       status: "running",
-      taskId: "T888",
+      taskId: "888",
       sessionId: "uuid-same",
     };
     state.conductors.set(conductor.surface, conductor);
@@ -1264,7 +1264,7 @@ describe("SESSION_STARTED で sessionId 更新 (T203)", () => {
     expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
 
     const ts = await loadTaskState(testDir);
-    expect((ts["T888"] as any).sessionId).toBe("uuid-same");
+    expect((ts["888"] as any).sessionId).toBe("uuid-same");
 
     if (conductor.pidWatcherInterval) {
       clearInterval(conductor.pidWatcherInterval);
@@ -4466,7 +4466,7 @@ describe("handleMessage: user_clear_decision_snapshot (T261)", () => {
       status: "running",
       pid: 22222,
       taskRunId: "task-261-b",
-      taskId: "261b",
+      taskId: "262",
       clearSentAt,
       promptSentAt: "2026-04-19T10:10:00.500Z",
       promptBytes: 42,
@@ -4476,7 +4476,7 @@ describe("handleMessage: user_clear_decision_snapshot (T261)", () => {
     // task-state を assigned にしておく（user_clear → aborted 書き換えを発火させる）
     const { saveTaskState, loadTaskState } = await import("./task");
     const before = await loadTaskState(testDir);
-    before["261b"] = { status: "assigned", assignedAt: startedAt, taskRunId: "task-261-b" };
+    before["262"] = { status: "assigned", assignedAt: startedAt, taskRunId: "task-261-b" };
     await saveTaskState(testDir, before);
 
     await handleMessage(state, {
@@ -4489,11 +4489,11 @@ describe("handleMessage: user_clear_decision_snapshot (T261)", () => {
     expect(logContent).toMatch(
       /user_clear_decision_snapshot C\[261b\] case=user_clear prev_status=running clear_sent_at=2026-04-19T10:10:00.200Z .*prompt_bytes=42 decision_reason=running_with_taskid/
     );
-    expect(logContent).toMatch(/task_aborted task_id=261b reason=user_clear/);
+    expect(logContent).toMatch(/task_aborted task_id=262 reason=user_clear/);
 
     // 順序: snapshot が先、task_aborted が後
     const snapshotIdx = logContent.indexOf("user_clear_decision_snapshot C[261b]");
-    const abortedIdx = logContent.indexOf("task_aborted task_id=261b");
+    const abortedIdx = logContent.indexOf("task_aborted task_id=262");
     expect(snapshotIdx).toBeGreaterThanOrEqual(0);
     expect(abortedIdx).toBeGreaterThan(snapshotIdx);
   });
@@ -6670,7 +6670,7 @@ describe("task_sessions append-only 維持 (T407 Step 8)", () => {
 
     // 事前: task-state.json に assigned + 旧 sessionId
     const initialTs = await loadTaskState(testDir);
-    initialTs["T9999"] = {
+    initialTs["9999"] = {
       status: "assigned",
       sessionId: "uuid-old",
       worktreePath: join(testDir, ".worktrees/task-9999"),
@@ -6681,7 +6681,7 @@ describe("task_sessions append-only 維持 (T407 Step 8)", () => {
     const db = initDB(testDir);
     insertTaskSession(db, {
       timestamp: new Date().toISOString(),
-      task_id: "T9999",
+      task_id: "9999",
       session_id: "uuid-old",
       role: "conductor",
       surface: "surface:407cs8",
@@ -6695,7 +6695,7 @@ describe("task_sessions append-only 維持 (T407 Step 8)", () => {
       agents: [],
       status: "running",
       sessionId: "uuid-old",
-      taskId: "T9999",
+      taskId: "9999",
       taskRunId: "task-9999-1",
       pid: 55555,
     });
@@ -6711,11 +6711,11 @@ describe("task_sessions append-only 維持 (T407 Step 8)", () => {
 
     // task-state.json の sessionId が更新されることを確認（既存 T203 経路）
     const ts = await loadTaskState(testDir);
-    expect(ts["T9999"]?.sessionId).toBe("uuid-new");
+    expect(ts["9999"]?.sessionId).toBe("uuid-new");
 
     // task_sessions テーブルは append-only 維持: 1 行のままで session_id は uuid-old のまま
     const db2 = initDB(testDir);
-    const rows = getTaskSessions(db2, { taskId: "T9999" });
+    const rows = getTaskSessions(db2, { taskId: "9999" });
     db2.close();
     expect(rows.length).toBe(1);
     expect(rows[0]?.session_id).toBe("uuid-old");

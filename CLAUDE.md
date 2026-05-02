@@ -132,7 +132,7 @@ cmux-team/
 - **cmux tree**: `tree(workspace)` / `validateSurface(surface, workspace)` を使う（workspace 省略禁止）
 - **ログ**: 外部コマンド失敗時は `stderr` / `stdout` を必ず detail に含める。空の `catch {}` 禁止
 - **EventBus**: `notifyStateChanged` / `onStateChanged` のみ使用可。`bus.emit` / `bus.on` の直接呼び出し禁止。`logger.ts` からの `eventBus.ts` import 禁止（循環依存）
-- **task-state**: `applyTaskEvent` / `updateTaskSessionId` 経由のみ。`daemon.ts` / `main.ts` で `taskState[...] =` / `saveTaskState(` を直接書いてはいけない
+- **task-state**: `applyTaskEvent` / `updateTaskSessionId` 経由のみ。`daemon.ts` / `main.ts` で `taskState[...] =` / `saveTaskState(` を直接書いてはいけない。taskId は `/^\d{1,4}$/` に強制（write 時 throw、load 時 drop）
 - **hook**: hook shell には分岐ロジックを持たせない。全イベントを daemon に転送する
 
 ## プロンプト編集ルール（厳守）

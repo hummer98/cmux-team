@@ -302,6 +302,16 @@ Task の shadow observer は `state-machine/task-state-store.ts:applyTaskEvent` 
 | `apply-task-actions:cascade_children` (子) | `PARENT_ABORTED` | cascade 対象の各 childId に対して呼ぶ (R5) |
 | `task-state-store:updateTaskSessionId` | — | status 遷移を伴わないため shadow は呼ばない (reducer scope 外) |
 
+### 4.2 taskId shape invariant (T418)
+
+`task-state.json` のキー (taskId) は `/^\d{1,4}$/`（1〜4 桁の数字列）に正規化されている。
+defense-in-depth として:
+
+- **write 時**: `applyTaskEvent` / `updateTaskSessionId` の入口（`withTaskStateLock` の **外側**）で `assertTaskIdShape` が走り、不正 ID は **`Error` を throw** して mutex に入る前に拒否される。
+- **load 時**: `task.ts:loadTaskState` がキー regex に合致しない entry を **drop** して `task_state_invalid_key_dropped` を log 出力する。次回の `saveTaskState` で disk から恒久削除される（既存 zombie の自然消滅）。
+
+旧 `daemon.ts::handleTodo` (削除済) が `Math.floor(Date.now()/1000)` を ID として書き込んだ epoch 形式 zombie key（10 桁）の再発を物理的にブロックする目的。`9999` を超える運用に拡張する場合は両側の regex を同時更新すること（`task-state-store.ts:TASK_ID_RE` と `task.ts:TASK_ID_RE_LOAD`）。
+
 ## 5. dispatch ガード (run_after_all / exclusive)
 
 `scanTasks` のタスク dispatch ループに先立ち、3 段階のガードが評価される。

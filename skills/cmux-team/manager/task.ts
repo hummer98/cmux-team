@@ -8,6 +8,15 @@ import { log } from "./logger";
 import { Deliverable } from "./schema";
 import type { Deliverable as DeliverableT } from "./schema";
 
+/**
+ * task-state.json のキー (taskId) として許容する形式。
+ *
+ * `state-machine/task-state-store.ts` の `TASK_ID_RE` と同一仕様。
+ * 循環依存 (task ↔ task-state-store) 回避のため、ここには再掲する。
+ * パターンを変更する際は両者を同時に更新すること。
+ */
+const TASK_ID_RE_LOAD = /^\d{1,4}$/;
+
 export interface TaskMeta {
   id: string;
   title: string;
@@ -318,13 +327,25 @@ export function parseTaskMeta(content: string, fileName: string, filePath: strin
  * 挟む。壊れた deliverable は warn ログ + 当該 entry の `deliverable` を
  * undefined に倒して継続（fail-fast しない）。旧 closed 行（deliverable
  * フィールドなし）は undefined のまま正常に読める。
+ *
+ * T418: キー (taskId) が `TASK_ID_RE_LOAD` (`/^\d{1,4}$/`) に合致しない entry は
+ * drop し `task_state_invalid_key_dropped` event を log する。旧 daemon が残した
+ * epoch 形式 zombie key を次回 save で恒久削除するための defense-in-depth 層。
  */
 export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> {
   const filePath = join(projectRoot, ".team/task-state.json");
   if (!existsSync(filePath)) return {};
   try {
     const parsed = JSON.parse(await readFile(filePath, "utf-8")) as TaskStateMap;
+    const cleaned: TaskStateMap = {};
     for (const [taskId, entry] of Object.entries(parsed)) {
+      if (!TASK_ID_RE_LOAD.test(taskId)) {
+        await log(
+          "task_state_invalid_key_dropped",
+          `task_id=${JSON.stringify(taskId)} status=${(entry as { status?: string } | undefined)?.status ?? "<missing>"}`,
+        );
+        continue;
+      }
       if (entry && typeof entry === "object" && "deliverable" in entry && entry.deliverable !== undefined) {
         const result = Deliverable.safeParse(entry.deliverable);
         if (!result.success) {
@@ -337,8 +358,9 @@ export async function loadTaskState(projectRoot: string): Promise<TaskStateMap> 
           entry.deliverable = result.data;
         }
       }
+      cleaned[taskId] = entry;
     }
-    return parsed;
+    return cleaned;
   } catch (e: any) {
     await log("error", `loadTaskState parse failed: ${e.message}`);
     return {};

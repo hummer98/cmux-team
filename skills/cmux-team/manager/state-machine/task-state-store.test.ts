@@ -256,7 +256,7 @@ describe("task-state-store — applyTaskEvent (T303)", () => {
 
   test("T358 M2: CREATE + initialStatus=ready は events.jsonl に task_created + task_ready の 2 件を emit する", async () => {
     await applyTaskEvent(project.root, {
-      taskId: "010R",
+      taskId: "010",
       event: { type: "CREATE" },
       ctx: { initialStatus: "ready" },
       eventStream: { taskTitle: "ready-task" },
@@ -270,13 +270,13 @@ describe("task-state-store — applyTaskEvent (T303)", () => {
     const eventNames = lines.map((l) => l.event);
     expect(eventNames).toEqual(["task_created", "task_ready"]);
     expect(lines[0]?.title).toBe("ready-task");
-    expect(lines[0]?.task_id).toBe("010R");
-    expect(lines[1]?.task_id).toBe("010R");
+    expect(lines[0]?.task_id).toBe("010");
+    expect(lines[1]?.task_id).toBe("010");
   });
 
   test("T358: CREATE + initialStatus=draft は events.jsonl に task_created のみ emit する", async () => {
     await applyTaskEvent(project.root, {
-      taskId: "011D",
+      taskId: "011",
       event: { type: "CREATE" },
       ctx: { initialStatus: "draft" },
       eventStream: { taskTitle: "draft-task" },
@@ -537,5 +537,96 @@ describe("task-state-store — updateTaskSessionId (T303 R3)", () => {
     });
     const r = await updateTaskSessionId(project.root, "001", "new", "tr-1");
     expect(r.written).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T418: taskId shape invariant
+// ---------------------------------------------------------------------------
+
+describe("task-state-store — assertTaskIdShape (T418)", () => {
+  let project: DummyProject;
+
+  beforeEach(async () => {
+    project = await createDummyProject({ prefix: "task-state-store-shape-" });
+    __resetShadowState();
+    __resetBusForTest();
+    __resetTaskStateLockForTest();
+  });
+
+  afterEach(async () => {
+    await project.dispose();
+  });
+
+  // ---- applyTaskEvent: invalid taskId ---------------------------------
+  test.each([
+    ["epoch (10 桁)", "1774711250"],
+    ["non-digit", "abc"],
+    ["empty", ""],
+    ["negative", "-1"],
+    ["mixed", "12a"],
+    ["5 桁", "10000"],
+  ])("applyTaskEvent throws on invalid taskId: %s", async (_label, badId) => {
+    await expect(
+      applyTaskEvent(project.root, {
+        taskId: badId,
+        event: { type: "CREATE" },
+        ctx: { initialStatus: "ready" },
+      }),
+    ).rejects.toThrow(/applyTaskEvent.*invalid taskId shape/);
+  });
+
+  // ---- updateTaskSessionId: invalid taskId ----------------------------
+  test.each([
+    ["epoch (10 桁)", "1774711250"],
+    ["non-digit", "abc"],
+    ["empty", ""],
+    ["negative", "-1"],
+    ["mixed", "12a"],
+    ["5 桁", "10000"],
+  ])("updateTaskSessionId throws on invalid taskId: %s", async (_label, badId) => {
+    await expect(
+      updateTaskSessionId(project.root, badId, "sess-x", undefined),
+    ).rejects.toThrow(/updateTaskSessionId.*invalid taskId shape/);
+  });
+
+  // ---- valid shape は通る --------------------------------------------
+  test.each([["1 桁", "1"], ["3 桁ゼロ埋め", "001"], ["3 桁", "123"], ["4 桁", "9999"]])(
+    "applyTaskEvent accepts valid taskId: %s",
+    async (_label, goodId) => {
+      // CREATE は新規 entry 作成のため throw しない（後続の reducer が走る）
+      const r = await applyTaskEvent(project.root, {
+        taskId: goodId,
+        event: { type: "CREATE" },
+        ctx: { initialStatus: "ready" },
+      });
+      expect(r.committed).toBe(true);
+      expect(r.next).toBe("ready");
+    },
+  );
+
+  test("updateTaskSessionId accepts valid taskId (no entry → silent skip, no throw)", async () => {
+    const r = await updateTaskSessionId(project.root, "001", "sess-x", undefined);
+    expect(r.written).toBe(false);
+    expect(r.reason).toBe("no_entry");
+  });
+
+  // ---- mutex に入る前に validation で fail する ----------------------
+  test("applyTaskEvent: validation fires outside withTaskStateLock (synchronous throw)", async () => {
+    // mutex を取らずに throw されることの間接的な検証:
+    // 不正 ID の rejects と同時に並行で valid な call が成功する
+    const bad = applyTaskEvent(project.root, {
+      taskId: "1774711250",
+      event: { type: "CREATE" },
+      ctx: { initialStatus: "ready" },
+    });
+    const good = applyTaskEvent(project.root, {
+      taskId: "001",
+      event: { type: "CREATE" },
+      ctx: { initialStatus: "ready" },
+    });
+    await expect(bad).rejects.toThrow(/invalid taskId shape/);
+    const goodResult = await good;
+    expect(goodResult.committed).toBe(true);
   });
 });

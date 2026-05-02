@@ -1077,6 +1077,100 @@ describe("Deliverable (T295)", () => {
   });
 });
 
+describe("loadTaskState invalid key drop (T418)", () => {
+  let project: DummyProject;
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    project = await createDummyProject({ prefix: "cmux-task-id-shape-test-", subdirs: ["logs"] });
+    tmpRoot = project.root;
+  });
+  afterEach(async () => {
+    await project.dispose();
+  });
+
+  test("epoch 形式 zombie key (10 桁) は drop され、残りの valid entry は保持される", async () => {
+    const mixed = {
+      "001": { status: "ready" },
+      "1774711250": { status: "closed" },
+      "1774711251": { status: "closed", journal: "old" },
+      "002": { status: "assigned" },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(mixed));
+
+    const loaded = await loadTaskState(tmpRoot);
+    expect(Object.keys(loaded).sort()).toEqual(["001", "002"]);
+    expect(loaded["001"]?.status).toBe("ready");
+    expect(loaded["002"]?.status).toBe("assigned");
+  });
+
+  test("invalid key drop 時に task_state_invalid_key_dropped が manager.log に出る", async () => {
+    const broken = {
+      "1774711250": { status: "closed" },
+      "001": { status: "ready" },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(broken));
+
+    await loadTaskState(tmpRoot);
+
+    const logPath = join(tmpRoot, ".team/logs/manager.log");
+    const logContent = await readFile(logPath, "utf-8");
+    expect(logContent).toContain("task_state_invalid_key_dropped");
+    expect(logContent).toContain('task_id="1774711250"');
+    expect(logContent).toContain("status=closed");
+  });
+
+  test.each([
+    ["empty", ""],
+    ["non-digit", "abc"],
+    ["mixed", "12a"],
+    ["negative", "-1"],
+    ["5 桁", "10000"],
+  ])("invalid taskId shape %s は drop される", async (_label, badId) => {
+    const data: Record<string, { status: string }> = {
+      "001": { status: "ready" },
+    };
+    data[badId] = { status: "closed" };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(data));
+
+    const loaded = await loadTaskState(tmpRoot);
+    expect(loaded[badId]).toBeUndefined();
+    expect(loaded["001"]?.status).toBe("ready");
+  });
+
+  test.each([["1 桁", "1"], ["3 桁ゼロ埋め", "001"], ["4 桁", "9999"]])(
+    "valid taskId shape %s は保持される",
+    async (_label, goodId) => {
+      const data: Record<string, { status: string }> = {};
+      data[goodId] = { status: "ready" };
+      await mkdir(join(tmpRoot, ".team"), { recursive: true });
+      await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(data));
+
+      const loaded = await loadTaskState(tmpRoot);
+      expect(loaded[goodId]?.status).toBe("ready");
+    },
+  );
+
+  test("zombie key drop 後 saveTaskState で恒久削除される", async () => {
+    const broken = {
+      "001": { status: "ready" },
+      "1774711250": { status: "closed" },
+    };
+    await mkdir(join(tmpRoot, ".team"), { recursive: true });
+    await writeFile(join(tmpRoot, ".team/task-state.json"), JSON.stringify(broken));
+
+    const loaded = await loadTaskState(tmpRoot);
+    await saveTaskState(tmpRoot, loaded);
+
+    const reloaded = await loadTaskState(tmpRoot);
+    expect(Object.keys(reloaded).sort()).toEqual(["001"]);
+    expect(reloaded["1774711250"]).toBeUndefined();
+  });
+});
+
 describe("isTerminalStatus (T300)", () => {
   test("closed は terminal", () => {
     expect(isTerminalStatus("closed")).toBe(true);

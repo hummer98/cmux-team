@@ -24,6 +24,30 @@ import type { EventStreamContext } from "./apply-task-actions";
 import type { TaskCtx, TaskFsmEvent, TaskStatus } from "./events";
 
 // -----------------------------------------------------------------------------
+// taskId shape invariant (T418)
+// -----------------------------------------------------------------------------
+
+/**
+ * task-state.json のキー (taskId) として許容する形式。
+ *
+ * 現行 CLI は `String(maxId + 1).padStart(3, "0")` で 3 桁ゼロ埋め採番だが、
+ * 将来 9999 タスクまでの拡張余地として 1〜4 桁の数字列を許容する。
+ *
+ * 旧 `daemon.ts::handleTodo` (削除済) が `Math.floor(Date.now()/1000)` を
+ * ID として書き込んだ epoch 形式 zombie key (10 桁) を物理的にブロックする。
+ * 詳細は `.team/tasks/418-task-state-json-epoch/runs/.../research.md` を参照。
+ */
+export const TASK_ID_RE = /^\d{1,4}$/;
+
+export function assertTaskIdShape(taskId: string, caller: string): void {
+  if (!TASK_ID_RE.test(taskId)) {
+    throw new Error(
+      `[${caller}] invalid taskId shape: ${JSON.stringify(taskId)} (expected /^\\d{1,4}$/)`,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // In-process mutex
 // -----------------------------------------------------------------------------
 
@@ -120,6 +144,7 @@ export async function applyTaskEvent(
   projectRoot: string,
   input: ApplyTaskEventInput,
 ): Promise<ApplyTaskEventResult> {
+  assertTaskIdShape(input.taskId, "applyTaskEvent");
   return withTaskStateLock(async () => {
     const taskState = await loadTaskState(projectRoot);
     const cur = taskState[input.taskId];
@@ -306,6 +331,7 @@ export async function updateTaskSessionId(
   sessionId: string,
   taskRunId: string | undefined,
 ): Promise<UpdateTaskSessionIdResult> {
+  assertTaskIdShape(taskId, "updateTaskSessionId");
   return withTaskStateLock(async () => {
     const taskState = await loadTaskState(projectRoot);
     const cur = taskState[taskId];
