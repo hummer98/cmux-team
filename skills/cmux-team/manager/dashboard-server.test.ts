@@ -197,6 +197,42 @@ describe("dashboard-server: Step 2 endpoint shape", () => {
   });
 });
 
+describe("dashboard-server: Step 3 agent-strategy", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-strat-",
+      subdirs: ["logs", "traces"],
+    });
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("/api/agent-strategy 200 + perTask / distribution / spawnTimeline", async () => {
+    const res = await fetch(`${handle.url}/api/agent-strategy`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.perTask)).toBe(true);
+    expect(typeof body.distribution).toBe("object");
+    expect(Array.isArray(body.spawnTimeline)).toBe(true);
+  });
+
+  test("/api/agent-strategy/UNKNOWN_TASK → 404", async () => {
+    const res = await fetch(`${handle.url}/api/agent-strategy/UNKNOWN_TASK_XYZ`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as any;
+    expect(body.error).toBe("not_found");
+  });
+});
+
 describe("dashboard-server: timeout race (Promise.race + DI sleep)", () => {
   let project: DummyProject;
   let handle: DashboardServerHandle;
