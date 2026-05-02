@@ -41,6 +41,7 @@ import { runMetricsCli } from "./metrics-cli";
 import { runMetricsSnapshotCli } from "./metrics-snapshot";
 import { runMetricsCompareCli } from "./metrics-compare";
 import { runMetricsHealthCli } from "./metrics-health";
+import { runMetricsQueryCli } from "./metrics-query";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
@@ -5308,6 +5309,18 @@ async function cmdMetrics(): Promise<void> {
   if (sub === "health") {
     process.exit(await runWithAbort((signal) =>
       runMetricsHealthCli({
+        args: args.slice(1),
+        projectRoot: PROJECT_ROOT,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        abortSignal: signal,
+      }),
+    ));
+  }
+  if (sub === "query") {
+    // T412: DuckDB ad-hoc query CLI
+    process.exit(await runWithAbort((signal) =>
+      runMetricsQueryCli({
         args: args.slice(1),
         projectRoot: PROJECT_ROOT,
         stdout: process.stdout,

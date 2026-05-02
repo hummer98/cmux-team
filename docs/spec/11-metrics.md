@@ -484,6 +484,41 @@ task_id=379 outcome=completed assigned_ts=2026-04-30T03:30:50.123Z closed_ts=202
 
 snapshot 自動収集と cohort 比較のサブコマンド `cmux-team metrics snapshot|compare|health` は §7〜§13 を参照。
 
+### 5.5 ad-hoc DuckDB クエリ（T412）
+
+`cmux-team metrics query` は `traces.db` (SQLite ATTACH READ_ONLY) + `events.jsonl` (`read_json` view) + `snapshots/*.json` (`read_json` view + UNNEST(per_task)) を 1 接続で横断する DuckDB ad-hoc CLI。固定 schema で表現できない cohort 切り直し / 複数 source JOIN / 探索的解析向け。
+
+**事前 attach 済み view / table** (起動時 init SQL で登録):
+
+| 名前 | 種別 | 由来 |
+|---|---|---|
+| `t.api_usage` / `t.hook_signals` / `t.task_sessions` / `t.rate_limit_snapshots` | SQLite table | `.team/traces/traces.db` (ATTACH AS t TYPE sqlite READ_ONLY) |
+| `events` | DuckDB view | `read_json('.team/logs/events.jsonl', format='newline_delimited', union_by_name=true, ignore_errors=true)` |
+| `snapshots` | DuckDB view | `read_json('.team/metrics/snapshots/*.json', union_by_name=true, ignore_errors=true)` (1 行/file) |
+| `snapshots_per_task` | DuckDB view | `UNNEST(snapshots.per_task)` を `snapshot_date` / `window` と pre-join |
+
+**最小例**:
+
+```bash
+# api_usage の総行数
+cmux-team metrics query --sql 'SELECT COUNT(*) AS n FROM t.api_usage'
+
+# events.jsonl の最近 10 task lifecycle イベント
+cmux-team metrics query --sql "SELECT ts, event, task_id FROM events WHERE ts >= '2026-05-01' ORDER BY ts DESC LIMIT 10"
+
+# snapshot を跨いだ per-task token トレンド
+cmux-team metrics query --sql "
+  SELECT snapshot_date, task_id, tokens.input AS in_tok
+  FROM snapshots_per_task
+  WHERE snapshot_date BETWEEN '2026-05-04' AND '2026-05-31'
+  ORDER BY in_tok DESC LIMIT 20
+"
+```
+
+**出力 format**: `--format json|csv|tsv|table`（既定 `table`、DuckDB CLI の `-json` / `-csv` / `-csv -separator $'\t'` / `-box` に直結）。
+
+**前提**: DuckDB CLI 0.10+ が `$PATH` に必要（`-box` flag のため）。`DUCKDB_BIN` env で path 上書き可。recipe 集は `skills/cmux-team-analyze/SKILL.md` を参照。
+
 ---
 
 ## 6. Caveats
@@ -776,6 +811,11 @@ rm .team/metrics/snapshots/.tmp-*
 
 ### 関連コード
 
-- 実装本体: `skills/cmux-team/manager/metrics-{aggregate,cli,stats,snapshot,compare,health,thresholds,path}.ts`
+- 実装本体: `skills/cmux-team/manager/metrics-{aggregate,cli,stats,snapshot,compare,health,thresholds,path,query}.ts`
 - launchd template: `skills/cmux-team/templates/launchd/com.cmux-team.metrics-snapshot.plist.template`
 - T379 既存 metrics CLI: `cmux-team metrics --group-by task|day|week`（snapshot/compare/health とは独立）
+- T412 DuckDB ad-hoc CLI: `cmux-team metrics query --sql '...'`（`metrics-query.ts`、外部 `duckdb` binary を spawn）
+
+### 関連 skill
+
+- `skills/cmux-team-analyze/SKILL.md` — DuckDB recipe ライブラリ（cohort 比較・介入評価・複数 task 横断トレンド）。`cmux-team metrics query` の主な利用者。

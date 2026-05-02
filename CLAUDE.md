@@ -209,6 +209,8 @@ cmux-team update-task --task-id 112 --status ready
 | open task 数 | `cat .team/task-state.json` |
 | metric サマリ（task lifecycle / tool call / token） | `cmux-team metrics --since 7d` または `cmux-team metrics --group-by day --format csv` |
 
+> メトリクス解析・cohort 比較・trace DB の ad-hoc 探索 (DuckDB SQL) は `cmux-team-analyze` skill を参照（CLI: `cmux-team metrics query`）。
+
 ### events stream（opt-in watch mode 用）
 
 Manager daemon は外向け event channel として `.team/logs/events.jsonl` に

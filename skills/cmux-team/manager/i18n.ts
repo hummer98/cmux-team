@@ -595,6 +595,7 @@ Subcommands:
   snapshot                 write a daily snapshot JSON for cohort comparison.
   compare                  compare baseline vs comparison cohorts (diff + statistical tests).
   health                   check that snapshot files are present for the recent N days.
+  query                    run an ad-hoc DuckDB SQL query across traces.db / events.jsonl / snapshots.
 
 Usage:
   cmux-team metrics [options]
@@ -701,6 +702,44 @@ Output:
 Exit codes:
   0  no gaps
   1  one or more days missing / argument error
+`,
+
+  help_metrics_query: `
+cmux-team metrics query -- run an ad-hoc DuckDB SQL across traces.db / events.jsonl / snapshots
+
+Usage:
+  cmux-team metrics query --sql '<SQL>' [--format json|csv|tsv|table] [--explain]
+  echo '<SQL>' | cmux-team metrics query [--format ...] [--explain]
+
+Options:
+  --sql <SQL>                  SQL to execute. Wins over stdin when both are provided.
+  --format json|csv|tsv|table  output format (default: table).
+                               Maps to DuckDB CLI flags: -json / -csv / -csv -separator $'\\t' / -box.
+  --explain                    prefix the user SQL with EXPLAIN (read query plan).
+
+Pre-attached sources (read-only):
+  t.api_usage              SQLite ATTACH from .team/traces/traces.db
+  t.hook_signals           same
+  t.task_sessions          same
+  t.rate_limit_snapshots   same
+  events                   read_json() view over .team/logs/events.jsonl (newline_delimited)
+  snapshots                read_json() view over .team/metrics/snapshots/*.json (one row per file)
+  snapshots_per_task       UNNEST(snapshots.per_task), pre-joined with snapshot_date / window
+
+Environment:
+  DUCKDB_BIN               path to the duckdb binary (overrides $PATH).
+                           DuckDB 0.10+ recommended (for the -box format flag).
+
+Notes:
+  - Sources that are missing on disk are skipped silently with a stderr warning.
+    e.g. running on a fresh project without traces.db still allows 'SELECT 1'.
+  - The connection is in-memory; ATTACH is READ_ONLY. Your queries cannot mutate facts.
+  - For recipe libraries, see the cmux-team-analyze skill (skills/cmux-team-analyze/SKILL.md).
+
+Exit codes:
+  0  query exited normally
+  1  argument error / 'duckdb' binary not found / stdin empty
+  *  any other code is relayed from the duckdb child process
 `,
 
   help_conductor: `
@@ -1559,6 +1598,7 @@ Subcommands:
   snapshot                 cohort 比較用に日次 snapshot JSON を書き出す。
   compare                  baseline と comparison cohort を比較（diff + 統計検定）。
   health                   直近 N 日の snapshot ファイルが揃っているか確認する。
+  query                    traces.db / events.jsonl / snapshots を横断する DuckDB ad-hoc SQL を実行する。
 
 Usage:
   cmux-team metrics [options]
@@ -1664,6 +1704,44 @@ Options:
 Exit codes:
   0  欠損なし
   1  欠損あり / 引数エラー
+`,
+
+  help_metrics_query: `
+cmux-team metrics query -- traces.db / events.jsonl / snapshots を横断する DuckDB ad-hoc SQL
+
+Usage:
+  cmux-team metrics query --sql '<SQL>' [--format json|csv|tsv|table] [--explain]
+  echo '<SQL>' | cmux-team metrics query [--format ...] [--explain]
+
+Options:
+  --sql <SQL>                  実行する SQL。stdin と同時指定された場合は --sql を優先する。
+  --format json|csv|tsv|table  出力 format（既定: table）。
+                               DuckDB CLI flag に直結: -json / -csv / -csv -separator $'\\t' / -box。
+  --explain                    user SQL を EXPLAIN で prefix（query plan を見る）。
+
+事前 attach 済みの source（read-only）:
+  t.api_usage              .team/traces/traces.db を SQLite ATTACH
+  t.hook_signals           同上
+  t.task_sessions          同上
+  t.rate_limit_snapshots   同上
+  events                   .team/logs/events.jsonl の read_json() view（newline_delimited）
+  snapshots                .team/metrics/snapshots/*.json の read_json() view（1 ファイル = 1 行）
+  snapshots_per_task       UNNEST(snapshots.per_task) を snapshot_date / window と pre-join
+
+環境変数:
+  DUCKDB_BIN               duckdb binary のパス（$PATH より優先）。
+                           DuckDB 0.10+ 推奨（-box flag のため）。
+
+注意:
+  - 不在 source は stderr に warn を出して silent に skip。
+    例: traces.db が無い fresh project でも 'SELECT 1' は通る。
+  - 接続は in-memory、ATTACH は READ_ONLY。fact を mutate することはできない。
+  - recipe ライブラリは cmux-team-analyze skill を参照（skills/cmux-team-analyze/SKILL.md）。
+
+Exit codes:
+  0  正常終了
+  1  引数エラー / 'duckdb' binary 不在 / stdin が空
+  *  その他は duckdb 子プロセスの exit code をそのまま relay する
 `,
 
   help_conductor: `
