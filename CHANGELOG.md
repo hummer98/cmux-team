@@ -1,14 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [4.25.0] - 2026-05-03
+
+### Added
+
+- **`.team/` 配下の自動 GC を実装（T416）**。daemon 起動時 + 24h periodic で派生物を自動掃除する。bodies / prompts / queue/processed / output / conductors / e2e-results を保持期間（デフォルト 7-14 日）で sweep、`api-trace.jsonl` / `manager.log` を 10MB×N 世代でローテート、`traces.db` の `hook_signals` / `api_usage` を 30 日超で DELETE（boot trigger 時のみ VACUUM）。実行中タスクの output / conductors / 直近 prompts は保護。`gc.dryRun=true` / `gc.retention.<key>` で設定可能
+- **`task-state.json` の taskId に shape invariant `/^\d{1,4}$/` を追加（T418）**。旧 daemon の epoch 秒 zombie key 再発防止のための 2 段 defense-in-depth。`applyTaskEvent` / `updateTaskSessionId` 入口で違反を sync throw（write 時の物理ブロック）、`loadTaskState` で不正キーを drop して `task_state_invalid_key_dropped` を warn 出力（既存 zombie の自然消滅 + observability）
+- **`sleepPrevention` を mode 化（T419）**: `"off"` / `"idle"` / `"aggressive"` の 3 値を受理する。`aggressive` (= `caffeinate -dis`、T256 以降のデフォルト) の他に `idle` (= `caffeinate -i`、display sleep を許可しつつ user idle のみ抑止) を選べるようにした。新フラグ `--sleep-prevention <mode>` を追加し、既存 `--no-sleep-prevention` は `"off"` と等価のまま維持。`.team/config.json` の boolean 値（`true`/`false`）も後方互換で受理する（`true` → `aggressive`、`false` → `off`）。`daemon_started` ログの `sleep_prevention=` 値が boolean からモード文字列に変わるため、`manager.log` を grep している外部ツールがあれば破壊的変更扱い
+
+### Changed
+
+- **legacy conductor marker file を廃止（T417）**。`.team/conductors/conductor.surface:NNN` 空ファイル機構（v3.15.0 で導入、v3.19.0 で読み出し廃止）を git から削除し、`cleanupLegacyConductorMarkers` で `initInfra` 時に冪等 unlink するように変更。現役の `surface_NNN/agent-done/` 形式に一本化
+- **README / cmux-team-guide を最新 CLI に同期**。README.md / README.ja.md の Diagnostics 表に `cmux-team metrics` / `cmux-team metrics snapshot|compare|health|query` / `cmux-team events` を追加。`skills/cmux-team-guide/SKILL.md` に Settings / Issues / Metrics タブの説明と `I` / `M` / `O` / `B` / `Ctrl+R` 等のショートカット、token pool 7d forecast / Web dashboard URL のヘッダー説明を追加
 
 ### Fixed
 
 - **reload 時に caffeinate プロセスが二重起動するバグを修正（T419）**。`r` キー / `daemon_reload` で daemon を再起動する際、`onReload` が `updateCaffeinate(false)` を呼ばないまま `execFileSync` で新 daemon を立ち上げていたため、旧 daemon が握っていた `caffeinate -dis` プロセスが孤児化したまま新 daemon の caffeinate と並走していた。`shutdown` と同形の順序（`stopDaemon → fileWatcher → opencode → caffeinate → releasePidFile`）にそろえることで解消
-
-### Added
-
-- **`sleepPrevention` を mode 化（T419）**: `"off"` / `"idle"` / `"aggressive"` の 3 値を受理する。`aggressive` (= `caffeinate -dis`、T256 以降のデフォルト) の他に `idle` (= `caffeinate -i`、display sleep を許可しつつ user idle のみ抑止) を選べるようにした。新フラグ `--sleep-prevention <mode>` を追加し、既存 `--no-sleep-prevention` は `"off"` と等価のまま維持。`.team/config.json` の boolean 値（`true`/`false`）も後方互換で受理する（`true` → `aggressive`、`false` → `off`）。`daemon_started` ログの `sleep_prevention=` 値が boolean からモード文字列に変わるため、`manager.log` を grep している外部ツールがあれば破壊的変更扱い
 
 ## [4.24.0] - 2026-05-02
 

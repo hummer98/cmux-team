@@ -185,6 +185,9 @@ Claude: → cmux-team create-task --title "..." --status ready
 | `cmux-team trace-task <task-id>` | タスクのセッション履歴を表示 |
 | `cmux-team trace-hooks` | hook シグナル履歴を表示 |
 | `cmux-team artifacts [add\|show\|open\|search]` | アーティファクト管理 |
+| `cmux-team metrics [--since <range>] [--group-by day]` | タスク lifecycle / tool call / token の集計サマリ（詳細は `docs/spec/11-metrics.md`） |
+| `cmux-team metrics snapshot\|compare\|health\|query` | daily snapshot / cohort 比較 / health check / DuckDB ad-hoc query |
+| `cmux-team events [--follow] [--types <names>] [--format json\|tsv]` | events stream（`.team/logs/events.jsonl`）を tail / filter |
 
 #### スラッシュコマンド（Claude 内で実行）
 

@@ -117,6 +117,8 @@ cmux-team delete-task --task-id 42 --journal "理由"
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `cmux-team trace-hooks` | hook シグナル履歴検索（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 |
 | `cmux-team artifacts` | アーティファクト管理（サブコマンド: `add`, `show`, `open`, `search`。オプション: `--validate`） |
+| `cmux-team metrics` | タスク lifecycle / tool call / token の集計サマリ（`--since <range>`, `--group-by day`, `--format csv`）。サブコマンド: `snapshot` / `compare` / `health` / `query`（DuckDB ad-hoc）。詳細は `docs/spec/11-metrics.md` |
+| `cmux-team events` | events stream（`.team/logs/events.jsonl`）を tail / filter（`--follow`, `--types <names>`, `--format json\|tsv`）。詳細は `docs/spec/10-events-stream.md` |
 | `cmux-team resume` | assigned タスクの Conductor セッションを再開 |
 
 各コマンドの詳細は `cmux-team <command> --help` で確認可能。
@@ -137,26 +139,35 @@ cmux-team delete-task --task-id 42 --journal "理由"
 `cmux-team start` で自動起動するフルスクリーン TUI。
 
 **表示内容:**
-- **ヘッダー:** ステータス、PID、稼働時間、プロキシポート、レート制限使用率
+- **ヘッダー:** ステータス、PID、稼働時間、プロキシポート、レート制限使用率、token pool 7d forecast、Web dashboard URL
 - **Conductor 一覧:** 各 Conductor の状態（idle/running）、割り当てタスク、エージェント数
 - **タスクリスト:** open タスク（上位）+ closed タスク（下位）
 - **Journal/Log タブ:** タスク完了履歴、daemon ログ
 - **Artifacts タブ:** 知見の一覧
+- **Settings タブ:** config と全 10 ロールの overlay プレビュー
+- **Issues タブ:** GitHub issues 一覧（`Ctrl+R` で gh sync）
+- **Metrics タブ:** 集計サマリと Web dashboard URL（`O` でブラウザ起動。詳細は `docs/spec/12-web-dashboard.md`）
 
 **キーボードショートカット:**
 
 | キー | 動作 |
 |------|------|
 | `T` | Tasks パネルにフォーカス |
-| `J` | Journal タブにフォーカス |
-| `L` | Log タブにフォーカス |
-| `A` | Artifacts タブにフォーカス |
+| `J` | Journal タブに切り替え |
+| `A` | Artifacts タブに切り替え |
+| `L` | Log タブに切り替え |
+| `I` | Issues タブに切り替え |
+| `M` | Metrics タブに切り替え |
 | `↑/↓` | スクロール / カーソル移動 |
+| `g` / `Ctrl+G` | リスト先頭 / 末尾へジャンプ |
 | `Enter` | 選択アイテムを Markdown ビューアで開く |
+| `O` | Issues タブ: GitHub viewer で開く / Metrics タブ: Web dashboard をブラウザで開く（T415） |
+| `B` | Issues タブで GitHub をブラウザで開く |
+| `Ctrl+R` | Issues タブで gh から再同期 |
 | `r` | リロード |
 | `q` | TUI 終了（daemon は続行） |
 | `Q` | Full quit（全 surface を閉じてシャットダウン） |
-| `1/2/3` | タブ切り替え（Journal/Artifacts/Log） |
+| `1/2/3/4/5/6` | タブ切り替え（Journal/Artifacts/Log/Settings/Issues/Metrics） |
 | `Tab` | タブを順に切り替え |
 
 **進捗確認の真のソース:**

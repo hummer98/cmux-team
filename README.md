@@ -197,6 +197,9 @@ See `cmux-team --help` for the full list. Common commands:
 | `cmux-team trace-task <task-id>` | Show session history for a task |
 | `cmux-team trace-hooks` | Show hook signal history |
 | `cmux-team artifacts [add\|show\|open\|search]` | Manage knowledge artifacts |
+| `cmux-team metrics [--since <range>] [--group-by day]` | Show task lifecycle / tool call / token aggregates (see `docs/spec/11-metrics.md`) |
+| `cmux-team metrics snapshot\|compare\|health\|query` | Daily snapshot, cohort comparison, health check, and DuckDB ad-hoc query |
+| `cmux-team events [--follow] [--types <names>] [--format json\|tsv]` | Tail / filter the events stream (`.team/logs/events.jsonl`) |
 
 #### Slash Commands (run within Claude)
 
