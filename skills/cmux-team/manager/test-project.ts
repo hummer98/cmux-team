@@ -44,6 +44,16 @@ export interface DummyProjectOptions {
   seedTeamJson?: boolean;
   /** default true: `.team/` 自体を事前 mkdir する。false の場合は root だけが空の tmp dir */
   createTeamDir?: boolean;
+  /**
+   * default false (T416): `.team/config.json` を seed する。
+   * - `true` → `{"gc":{"runOnStart":false,"periodic":false}}` を書き込み GC 無効化
+   * - object → 与えた object を JSON 化して書き込む。GC を無効にしたい場合は呼び出し側で
+   *   `gc.runOnStart=false / gc.periodic=false` を含めること
+   *
+   * `cmdStart` を in-process で起動するテストの副作用回避用。既存テストは `false` の
+   * ままで挙動が変わらない。
+   */
+  seedConfigJson?: boolean | Record<string, unknown>;
 }
 
 export interface DummyProject {
@@ -77,6 +87,13 @@ export async function createDummyProject(
         join(teamDir, "team.json"),
         '{"phase":"init","masters":[],"conductors":[]}',
       );
+    }
+    if (opts.seedConfigJson) {
+      const cfg =
+        opts.seedConfigJson === true
+          ? { gc: { runOnStart: false, periodic: false } }
+          : opts.seedConfigJson;
+      await writeFile(join(teamDir, "config.json"), JSON.stringify(cfg, null, 2));
     }
   }
 

@@ -94,6 +94,145 @@ export interface TeamConfig {
     include?: string[];
     exclude?: string[];
   };
+  /**
+   * `.team/` 自動 GC の保持ポリシー（T416）。
+   * 全フィールド optional — 未指定値は team-gc.ts の DEFAULTS で埋める。
+   */
+  gc?: GcConfig;
+}
+
+/**
+ * `.team/` 自動 GC の保持ポリシー（T416）。詳細は docs/spec/05-install-and-infrastructure.md。
+ */
+export interface GcConfig {
+  /** 起動時 GC を実行するか。default: true */
+  runOnStart?: boolean;
+  /** periodic GC を実行するか。default: true */
+  periodic?: boolean;
+  /** periodic GC の周期（ms）。default: 86_400_000 = 24h。clamp: [3_600_000, 604_800_000] */
+  intervalMs?: number;
+  /** 削除を行わず log のみ出すか。default: false */
+  dryRun?: boolean;
+  retention?: {
+    /** .team/logs/traces/bodies/<file> の保持日数。default: 14 */
+    bodiesDays?: number;
+    /** .team/prompts/<file> の保持日数。default: 14 */
+    promptsDays?: number;
+    /** .team/queue/processed/<file> の保持日数。default: 7 */
+    queueProcessedDays?: number;
+    /** .team/output/<taskRunId>/ の保持日数。default: 14 */
+    outputDays?: number;
+    /** .team/conductors/<surface>/ の保持日数。default: 14 */
+    conductorsDays?: number;
+    /** .team/e2e-results/<run-id>/ の保持日数。default: 7 */
+    e2eResultsDays?: number;
+    /** hook_signals / api_usage の保持日数。default: 30 */
+    dbDays?: number;
+  };
+  rotation?: {
+    /** ローテート発火サイズ（bytes）。default: 10_485_760 (10MB) */
+    sizeBytes?: number;
+    /** 保持世代数。default: 5（.1 〜 .5） */
+    keep?: number;
+  };
+}
+
+/**
+ * resolveGcConfig: GcConfig の不正値を default に倒した完全形を返す（T416）。
+ *
+ * - 各 boolean / number は型違反で default に倒す（resolveMetricsRefreshIntervalMs と同流儀）
+ * - intervalMs は [1h, 168h] に clamp
+ * - retention.*Days は >= 0 のみ受理（0 は active 保護 race 警告用に運用）
+ * - rotation.sizeBytes は >= 1MB のみ受理、rotation.keep は [1, 50]
+ *
+ * 不正値はすべて default に倒すだけで throw しない（fail-fast せず log は呼び出し側）。
+ */
+export function resolveGcConfig(
+  config: Pick<TeamConfig, "gc">,
+): Required<GcConfig> & {
+  retention: Required<NonNullable<GcConfig["retention"]>>;
+  rotation: Required<NonNullable<GcConfig["rotation"]>>;
+} {
+  const DEFAULTS = {
+    runOnStart: true,
+    periodic: true,
+    intervalMs: 86_400_000,
+    dryRun: false,
+    retention: {
+      bodiesDays: 14,
+      promptsDays: 14,
+      queueProcessedDays: 7,
+      outputDays: 14,
+      conductorsDays: 14,
+      e2eResultsDays: 7,
+      dbDays: 30,
+    },
+    rotation: {
+      sizeBytes: 10_485_760,
+      keep: 5,
+    },
+  } as const;
+
+  const INTERVAL_MIN = 3_600_000; // 1h
+  const INTERVAL_MAX = 604_800_000; // 7day
+  const ROTATION_SIZE_MIN = 1_048_576; // 1MB
+  const ROTATION_KEEP_MIN = 1;
+  const ROTATION_KEEP_MAX = 50;
+
+  const gc = config.gc ?? {};
+
+  const pickBool = (raw: unknown, def: boolean): boolean =>
+    typeof raw === "boolean" ? raw : def;
+
+  const pickInterval = (raw: unknown): number => {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULTS.intervalMs;
+    if (raw < INTERVAL_MIN || raw > INTERVAL_MAX) return DEFAULTS.intervalMs;
+    return raw;
+  };
+
+  const pickDays = (raw: unknown, def: number): number => {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return def;
+    if (raw < 0) return def;
+    return raw;
+  };
+
+  const pickSize = (raw: unknown): number => {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULTS.rotation.sizeBytes;
+    if (raw < ROTATION_SIZE_MIN) return DEFAULTS.rotation.sizeBytes;
+    return raw;
+  };
+
+  const pickKeep = (raw: unknown): number => {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULTS.rotation.keep;
+    if (raw < ROTATION_KEEP_MIN || raw > ROTATION_KEEP_MAX) return DEFAULTS.rotation.keep;
+    return Math.floor(raw);
+  };
+
+  const retention = gc.retention ?? {};
+  const rotation = gc.rotation ?? {};
+
+  return {
+    runOnStart: pickBool(gc.runOnStart, DEFAULTS.runOnStart),
+    periodic: pickBool(gc.periodic, DEFAULTS.periodic),
+    intervalMs: pickInterval(gc.intervalMs),
+    dryRun: pickBool(gc.dryRun, DEFAULTS.dryRun),
+    retention: {
+      bodiesDays: pickDays(retention.bodiesDays, DEFAULTS.retention.bodiesDays),
+      promptsDays: pickDays(retention.promptsDays, DEFAULTS.retention.promptsDays),
+      queueProcessedDays: pickDays(
+        retention.queueProcessedDays,
+        DEFAULTS.retention.queueProcessedDays,
+      ),
+      outputDays: pickDays(retention.outputDays, DEFAULTS.retention.outputDays),
+      conductorsDays: pickDays(retention.conductorsDays, DEFAULTS.retention.conductorsDays),
+      e2eResultsDays: pickDays(retention.e2eResultsDays, DEFAULTS.retention.e2eResultsDays),
+      dbDays: pickDays(retention.dbDays, DEFAULTS.retention.dbDays),
+    },
+    rotation: {
+      sizeBytes: pickSize(rotation.sizeBytes),
+      keep: pickKeep(rotation.keep),
+    },
+  };
 }
 
 /**

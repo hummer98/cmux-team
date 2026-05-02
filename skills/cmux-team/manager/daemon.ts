@@ -159,6 +159,17 @@ export interface DaemonState {
    * `team.json.dashboardServer.url` として外部に公開する。null = 起動失敗 or 未起動。
    */
   dashboardServerUrl?: string | null;
+  /**
+   * T416: 自動 GC の周期 timer ハンドル。cmdStart が `setInterval` で仕掛け、
+   * stopDaemon が `clearInterval` で解放する。periodic GC が無効な場合は undefined。
+   */
+  gcInterval?: ReturnType<typeof setInterval>;
+  /**
+   * T416: 自動 GC の同一プロセス内多重実行ガード。runTeamGC が冒頭で true にし、
+   * finally で false に戻す。boot trigger と periodic trigger が衝突した場合に
+   * 後発を `team_gc_skipped reason=in_flight` で弾く。
+   */
+  gcInFlight?: boolean;
 }
 
 /**
@@ -429,6 +440,8 @@ export async function createDaemon(
     tokenDbInitFailed: false,
     startedAt: "",
     dashboardServerUrl: null,
+    gcInterval: undefined,
+    gcInFlight: false,
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
@@ -491,6 +504,12 @@ export function stopDaemon(state: DaemonState): void {
       clearInterval(master.pidWatcherInterval);
       master.pidWatcherInterval = undefined;
     }
+  }
+
+  // T416: 自動 GC の periodic timer を停止する
+  if (state.gcInterval) {
+    clearInterval(state.gcInterval);
+    state.gcInterval = undefined;
   }
 }
 

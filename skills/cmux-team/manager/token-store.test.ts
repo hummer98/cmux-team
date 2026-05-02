@@ -40,6 +40,7 @@ import {
   assertCanRetrieveFromKeychain,
   computeEffUtil,
   STALE_THRESHOLD_MS,
+  walCheckpointTokensDB,
   KeychainUnsupportedError,
   KeychainNotFoundError,
   REFERENCE_FLOW,
@@ -2878,5 +2879,79 @@ describe("computeEffUtil (T390)", () => {
     expect(r.effUtil5h).toBe(0);
     expect(r.effUtil7d).toBe(0);
     expect(r.hasSnapshot).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// walCheckpointTokensDB (T416)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("walCheckpointTokensDB (T416)", () => {
+  let walTestDir: string;
+  let walDbPath: string;
+
+  beforeEach(() => {
+    walTestDir = mkdtempSync(join(tmpdir(), "wal-checkpoint-test-"));
+    walDbPath = join(walTestDir, "tokens.db");
+  });
+
+  afterEach(() => {
+    rmSync(walTestDir, { recursive: true, force: true });
+  });
+
+  test("正常系: ok=true で完了する", () => {
+    // 事前に DB を初期化して書き込みを発生させる
+    const db = initTokenDB({ dbPath: walDbPath, dirPath: walTestDir });
+    insertToken(db, {
+      handle: "wal-test",
+      organization_id: "org-wal",
+      auth_hash: "hash-wal",
+      plan: "max-x5",
+      plan_ratio: null,
+      credential_source: "manual",
+      tags: ["any"],
+      selectable: true,
+    });
+    db.close();
+
+    const result = walCheckpointTokensDB({ dbPath: walDbPath, dirPath: walTestDir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.framesCheckpointed).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test("WAL ファイルが TRUNCATE 後に縮む", () => {
+    const db = initTokenDB({ dbPath: walDbPath, dirPath: walTestDir });
+    // 多数の書き込みを発生させて WAL を膨らませる
+    for (let i = 0; i < 20; i++) {
+      insertToken(db, {
+        handle: `wal-bulk-${i}`,
+        organization_id: `org-${i}`,
+        auth_hash: `hash-${i}`,
+        plan: "max-x5",
+        plan_ratio: null,
+        credential_source: "manual",
+        tags: ["any"],
+        selectable: true,
+      });
+    }
+    db.close();
+
+    const walPath = `${walDbPath}-wal`;
+    let beforeSize = 0;
+    if (existsSync(walPath)) {
+      beforeSize = require("fs").statSync(walPath).size;
+    }
+
+    const result = walCheckpointTokensDB({ dbPath: walDbPath, dirPath: walTestDir });
+    expect(result.ok).toBe(true);
+
+    let afterSize = 0;
+    if (existsSync(walPath)) {
+      afterSize = require("fs").statSync(walPath).size;
+    }
+    // TRUNCATE 後は WAL がクリアされるため、書き込み発生時より小さくなる（または 0）
+    expect(afterSize).toBeLessThanOrEqual(beforeSize);
   });
 });

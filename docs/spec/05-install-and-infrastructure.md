@@ -434,3 +434,77 @@ daemon は `update-notifier` v7 で新バージョンを検出するのみで、
 **この機能は `claude` を直接起動するユーザー向けの optional な親切機能であり、`cmux-team start` 経由の spawn 経路には不要である。** `cmux-team` は Conductor / Agent / Master spawn 時に `CMUX_CLAUDE_HOOKS_DISABLED=1` を explicit な `export` として直接注入するため、`.envrc` / `direnv` に依存しない。
 
 `claude` コマンドを自分で直接起動する場合（cmux-team 外での利用）は、プロジェクトルートに `.envrc` が存在し、かつ `CMUX_CLAUDE_HOOKS_DISABLED=1` が未設定の場合に限り、初回 `cmux-team start` 時にユーザーへ追記を提案する。承諾すると `.envrc` 末尾にエントリーを追記し、`direnv allow` の実行と再起動を促す。断る場合は `config.json` の `envrcHookPromptSkipped: true` で以降スキップする。worktree 内の `.envrc` 自動生成（`source_up`）は T212 で廃止済み。
+
+### 自動 GC（T416）
+
+`cmux-team start` は起動直後（boot trigger）と 24 時間周期（periodic trigger）に `.team/` 配下の派生物・trace DB の古い行を自動削除する。`runTeamGC()` (`skills/cmux-team/manager/team-gc.ts`) が単一プロセス内 mutex (`state.gcInFlight`) で直列化し、daemon 多重起動は既存 `pidfile.ts` の lock で構造的に防止される。
+
+#### 保持期間（`.team/config.json` の `gc.retention.*` で上書き可能）
+
+| 項目 | 設定キー | default |
+|---|---|---|
+| `.team/logs/traces/bodies/<file>` | `bodiesDays` | 14 日 |
+| `.team/prompts/<file>` | `promptsDays` | 14 日（active taskRunId 紐付き名 + mtime 24h 以内は二重保護） |
+| `.team/queue/processed/<file>` | `queueProcessedDays` | 7 日 |
+| `.team/output/<taskRunId>/` | `outputDays` | 14 日（active taskRunId は保護） |
+| `.team/conductors/<surface>/` | `conductorsDays` | 14 日（`normalizeSurfaceForPath` 適用後の active surface 名で保護） |
+| `.team/e2e-results/<run-id>/` | `e2eResultsDays` | 7 日（active 保護なし） |
+| `hook_signals` / `api_usage` 行 | `dbDays` | 30 日（`timestamp < cutoff` で DELETE） |
+
+#### ローテート（`gc.rotation.*`）
+
+- `.team/logs/traces/api-trace.jsonl` / `.team/logs/manager.log`
+- 発火閾値 `sizeBytes` default 10 MB、世代 `keep` default 5（`.1` 〜 `.5`、それ以降は unlink）
+- `appendFile` の短命 fd 仮定（proxy.ts:905 / proxy.ts:1184）に依存し、rename 後の write は新 inode に向かう
+
+#### 領域回収（boot trigger 限定）
+
+- `traces.db` の `VACUUM` を boot trigger でのみ実行する（writer 不在で SQLITE_BUSY を構造的に回避）。periodic では行わないため 24h 毎の長時間ブロックは発生しない
+- `~/.cmux-team/tokens.db` は boot trigger で `PRAGMA wal_checkpoint(TRUNCATE)` を 1 回実行する
+
+#### 設定例（`.team/config.json`）
+
+```json
+{
+  "gc": {
+    "runOnStart": true,
+    "periodic": true,
+    "intervalMs": 86400000,
+    "dryRun": false,
+    "retention": {
+      "bodiesDays": 14,
+      "promptsDays": 14,
+      "queueProcessedDays": 7,
+      "outputDays": 14,
+      "conductorsDays": 14,
+      "e2eResultsDays": 7,
+      "dbDays": 30
+    },
+    "rotation": {
+      "sizeBytes": 10485760,
+      "keep": 5
+    }
+  }
+}
+```
+
+- `runOnStart` / `periodic` を `false` にすると当該 trigger をスキップ（テスト・運用調整用）
+- `intervalMs` の clamp は `[3_600_000 (1h), 604_800_000 (1week)]`、範囲外は default に倒す
+- `dryRun: true` は削除を行わず `team_gc_deleted` イベントだけ出す（事前確認用）
+- `retention.*Days = 0` は active 保護 race の安全網を破る構成のため起動時に `team_gc_warn reason=retention_zero_active_protection_unsafe` を 1 行 emit する
+
+#### log event
+
+| event 名 | 出るタイミング | detail |
+|---|---|---|
+| `team_gc_started` | runTeamGC 入口 | `trigger=<boot\|periodic\|manual> dry_run=<bool>` |
+| `team_gc_skipped` | gcInFlight true で弾いた | `reason=in_flight trigger=<...>` |
+| `team_gc_deleted` | category 単位で集計（dryRun でも emit） | `category=<...> count=<N> bytes=<B> dry_run=<bool>` |
+| `team_gc_rotated` | log rotation 発火 | `file=<...> from_bytes=<...> rotated_to=<.1,.2,...>` |
+| `team_gc_db` | DB GC 結果 | `hook_signals_deleted=<N> api_usage_deleted=<N> retention_days=<D>` |
+| `team_gc_db_vacuum` | traces.db VACUUM 完了（boot trigger のみ） | `duration_ms=<N> freed_bytes=<B>` |
+| `team_gc_wal_checkpoint` | tokens.db checkpoint（boot trigger のみ） | `frames_checkpointed=<N> ok=<bool>` |
+| `team_gc_completed` | 出口 | `trigger=<...> duration_ms=<N> total_deletions=<N> total_bytes=<B>` |
+| `team_gc_failed` | 例外 | `trigger=<...> error=<message>` |
+
+> 個別ファイルパスは log に出さない（数千件で `manager.log` が膨張するため）。詳細を追いたいときは `gc.dryRun=true` で再実行する。`hook_signals` / `api_usage` 自体が GC 対象なので GC 実行ログは trace DB ではなく `manager.log` のみが情報源となる。

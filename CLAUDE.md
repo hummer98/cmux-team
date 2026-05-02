@@ -259,7 +259,6 @@ state 遷移・cascade・CONDUCTOR_DONE 分岐・rebase conflict 自解決の詳
 - **Trust 確認**: 新しいディレクトリでの起動時に「Trust this folder?」が出る。タイミングによっては手動介入が必要
 - **パーミッション確認**: 最初の確認で「Yes, and allow Claude to edit its own settings for this session」を選択すること
 - **API レート制限**: 複数エージェント同時実行で API 過負荷になりやすい。Claude Max 推奨
-- **DB GC**: `hook_signals` / `api_usage` テーブルの自動 GC は未実装。膨張した場合は手動削除: `sqlite3 .team/traces/traces.db "DELETE FROM <table> WHERE timestamp < '2026-01-01'"`
 - **`bun test` 全体実行は禁忌**: O(N²) 級劣化で 13 分以上ハング。`cd skills/cmux-team/manager && for f in *.test.ts state-machine/*.test.ts dashboard-*.test.tsx; do bun test --timeout 30000 "$f"; done` を使う。詳細は `.team/artifacts/A021-research.md` および `.github/workflows/test.yml`。根本対策後に撤去予定
 - **トレース検索**: `cmux-team trace-task <id>`
 

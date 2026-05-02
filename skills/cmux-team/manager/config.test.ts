@@ -14,6 +14,7 @@ import {
   resolveGlobalTokenPool,
   resolveTokenPoolEnabled,
   resolveMetricsRefreshIntervalMs,
+  resolveGcConfig,
   loadGlobalConfig,
   type TeamConfig,
   type GlobalConfig,
@@ -398,5 +399,112 @@ describe("resolveMetricsRefreshIntervalMs (T354)", () => {
   test("型違反（string）→ default", () => {
     // @ts-expect-error: 意図的に型違反
     expect(resolveMetricsRefreshIntervalMs({ metricsRefreshIntervalMs: "5000" })).toBe(10_000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveGcConfig (T416)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("resolveGcConfig (T416)", () => {
+  test("gc 未指定 → 全 default", () => {
+    const r = resolveGcConfig({});
+    expect(r.runOnStart).toBe(true);
+    expect(r.periodic).toBe(true);
+    expect(r.intervalMs).toBe(86_400_000);
+    expect(r.dryRun).toBe(false);
+    expect(r.retention.bodiesDays).toBe(14);
+    expect(r.retention.promptsDays).toBe(14);
+    expect(r.retention.queueProcessedDays).toBe(7);
+    expect(r.retention.outputDays).toBe(14);
+    expect(r.retention.conductorsDays).toBe(14);
+    expect(r.retention.e2eResultsDays).toBe(7);
+    expect(r.retention.dbDays).toBe(30);
+    expect(r.rotation.sizeBytes).toBe(10_485_760);
+    expect(r.rotation.keep).toBe(5);
+  });
+
+  test("e2eResultsDays 未指定 default は 7", () => {
+    const r = resolveGcConfig({ gc: { retention: {} } });
+    expect(r.retention.e2eResultsDays).toBe(7);
+  });
+
+  test("intervalMs 範囲内（2h）はそのまま返る", () => {
+    const r = resolveGcConfig({ gc: { intervalMs: 7_200_000 } });
+    expect(r.intervalMs).toBe(7_200_000);
+  });
+
+  test("intervalMs 範囲外（30 分）→ default", () => {
+    const r = resolveGcConfig({ gc: { intervalMs: 1_800_000 } });
+    expect(r.intervalMs).toBe(86_400_000);
+  });
+
+  test("intervalMs 範囲外（10 day）→ default", () => {
+    const r = resolveGcConfig({ gc: { intervalMs: 864_000_000 } });
+    expect(r.intervalMs).toBe(86_400_000);
+  });
+
+  test("intervalMs 不正値（-1）→ default", () => {
+    const r = resolveGcConfig({ gc: { intervalMs: -1 } });
+    expect(r.intervalMs).toBe(86_400_000);
+  });
+
+  test("intervalMs NaN / Infinity → default", () => {
+    expect(resolveGcConfig({ gc: { intervalMs: NaN } }).intervalMs).toBe(86_400_000);
+    expect(resolveGcConfig({ gc: { intervalMs: Infinity } }).intervalMs).toBe(86_400_000);
+  });
+
+  test("型違反 boolean（string）→ default", () => {
+    // @ts-expect-error: 意図的に型違反
+    const r = resolveGcConfig({ gc: { runOnStart: "true", periodic: 1 } });
+    expect(r.runOnStart).toBe(true);
+    expect(r.periodic).toBe(true);
+  });
+
+  test("retention.*Days = 0 は受理する（active 保護 race 警告は呼び出し側）", () => {
+    const r = resolveGcConfig({
+      gc: { retention: { bodiesDays: 0, promptsDays: 0 } },
+    });
+    expect(r.retention.bodiesDays).toBe(0);
+    expect(r.retention.promptsDays).toBe(0);
+  });
+
+  test("retention.*Days < 0 → default", () => {
+    const r = resolveGcConfig({ gc: { retention: { bodiesDays: -1 } } });
+    expect(r.retention.bodiesDays).toBe(14);
+  });
+
+  test("retention.*Days NaN / Infinity → default", () => {
+    const r = resolveGcConfig({
+      gc: { retention: { dbDays: NaN, e2eResultsDays: Infinity } },
+    });
+    expect(r.retention.dbDays).toBe(30);
+    expect(r.retention.e2eResultsDays).toBe(7);
+  });
+
+  test("rotation.sizeBytes 1MB 未満 → default", () => {
+    const r = resolveGcConfig({ gc: { rotation: { sizeBytes: 1024 } } });
+    expect(r.rotation.sizeBytes).toBe(10_485_760);
+  });
+
+  test("rotation.sizeBytes 範囲内（5MB）はそのまま", () => {
+    const r = resolveGcConfig({ gc: { rotation: { sizeBytes: 5 * 1024 * 1024 } } });
+    expect(r.rotation.sizeBytes).toBe(5 * 1024 * 1024);
+  });
+
+  test("rotation.keep 範囲外（0 / 51）→ default", () => {
+    expect(resolveGcConfig({ gc: { rotation: { keep: 0 } } }).rotation.keep).toBe(5);
+    expect(resolveGcConfig({ gc: { rotation: { keep: 51 } } }).rotation.keep).toBe(5);
+  });
+
+  test("rotation.keep 範囲内（3）はそのまま", () => {
+    expect(resolveGcConfig({ gc: { rotation: { keep: 3 } } }).rotation.keep).toBe(3);
+  });
+
+  test("retention の一部だけ指定すると残りは default で埋まる", () => {
+    const r = resolveGcConfig({ gc: { retention: { dbDays: 7 } } });
+    expect(r.retention.dbDays).toBe(7);
+    expect(r.retention.bodiesDays).toBe(14);
+    expect(r.retention.e2eResultsDays).toBe(7);
   });
 });

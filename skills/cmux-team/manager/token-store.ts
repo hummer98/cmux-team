@@ -279,6 +279,42 @@ export function initTokenDB(opts?: InitTokenDBOptions): Database {
 }
 
 /**
+ * tokens.db の WAL ファイルを TRUNCATE モードで checkpoint する（T416）。
+ *
+ * daemon 起動時に 1 度だけ呼ぶ前提。`-wal` ファイルが肥大化したまま放置される問題を
+ * 解消する。失敗しても daemon を落とさない（best-effort）。
+ *
+ * 内部で `initTokenDB(opts)` で DB を open し（既存の WAL 設定 / migration をそのまま流す）、
+ * `PRAGMA wal_checkpoint(TRUNCATE)` を実行して即 close する。
+ */
+export function walCheckpointTokensDB(
+  opts?: InitTokenDBOptions,
+):
+  | { ok: true; framesCheckpointed: number }
+  | { ok: false; error: string } {
+  let db: Database | null = null;
+  try {
+    db = initTokenDB(opts);
+    // PRAGMA wal_checkpoint(TRUNCATE) は (busy, log_pages, checkpointed) の 1 行を返す。
+    // bun:sqlite は配列で返してくれるため、framesCheckpointed として 3 番目の値を読む。
+    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      | { busy?: number; log?: number; checkpointed?: number }
+      | undefined;
+    const framesCheckpointed =
+      row && typeof row.checkpointed === "number" ? row.checkpointed : 0;
+    return { ok: true, framesCheckpointed };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // close 失敗は best-effort。すでに close されていても問題ない
+    }
+  }
+}
+
+/**
  * T391 migration が必要かどうかを判定する。
  *
  * `migrateTokensSchemaT391` 冒頭の冪等条件と同じ式（`organization_id` / `auth_hash` の

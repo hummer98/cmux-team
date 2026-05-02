@@ -85,9 +85,11 @@ import {
   resolveSleepPrevention,
   resolveAutoUpdateMode,
   resolveFetchBeforeWorktree,
+  resolveGcConfig,
   isTokenPoolEnabled,
   buildSelectTokenPolicy,
 } from "./config";
+import { runTeamGC } from "./team-gc";
 import { persistRateLimit, loadRateLimit, isStale5h, isStale7d } from "./rate-limit-persistence";
 import { buildRateLimitStatusLines } from "./rate-limit-status";
 import { buildTasksSectionLines } from "./tasks-status";
@@ -745,6 +747,33 @@ async function cmdStart(): Promise<void> {
   } catch (e: any) {
     console.error(`Error: ${e.message}`);
     process.exit(1);
+  }
+
+  // T416: 起動時 GC + periodic GC を仕掛ける。
+  // - boot trigger は proxy 起動より前に走らせる（VACUUM の writer 競合を構造的に避ける）
+  // - 非同期 fire-and-forget で proxy 起動を block しない
+  // - dryRun 等の細かい制御は `.team/config.json` の `gc.*` で行う
+  try {
+    const startConfig = await loadConfig(PROJECT_ROOT);
+    const gcConfig = resolveGcConfig(startConfig);
+    await log(
+      "team_gc_config",
+      `run_on_start=${gcConfig.runOnStart} periodic=${gcConfig.periodic} interval_ms=${gcConfig.intervalMs} dry_run=${gcConfig.dryRun}`,
+    );
+    if (gcConfig.runOnStart) {
+      runTeamGC(state, { trigger: "boot" }).catch((e) =>
+        log("team_gc_failed", `trigger=boot ${e?.message ?? e}`),
+      );
+    }
+    if (gcConfig.periodic) {
+      state.gcInterval = setInterval(() => {
+        runTeamGC(state, { trigger: "periodic" }).catch((e) =>
+          log("team_gc_failed", `trigger=periodic ${e?.message ?? e}`),
+        );
+      }, gcConfig.intervalMs);
+    }
+  } catch (e: any) {
+    await log("team_gc_failed", `trigger=boot reason=schedule error=${e?.message ?? e}`);
   }
 
   // 前回のポートを記録（proxy 起動前にファイルから読む — alive チェック不要）
