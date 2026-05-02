@@ -30,6 +30,7 @@ import {
 } from "./trace-store";
 import {
   aggregateMetricsByTask,
+  readTaskLifecycle,
   type Outcome,
 } from "./metrics-aggregate";
 import {
@@ -706,7 +707,6 @@ async function safeReadLifecycle(
   since: Date,
 ): Promise<Map<string, { task_id: string; assigned_ts: string; closed_ts: string | null; duration_ms: number | null; outcome: Outcome }>> {
   // events.jsonl が存在しないときは空 Map を返す（fail-soft）
-  const { readTaskLifecycle } = await import("./metrics-aggregate");
   try {
     return await readTaskLifecycle(eventsFile, since);
   } catch (e: any) {
@@ -889,12 +889,3 @@ export async function startDashboardServer(
     },
   };
 }
-
-/** plan §10 の Promise.race race ヘルパーを後続 Step で使うため公開する */
-export const _internal = {
-  TIMEOUT_SENTINEL,
-  withTimeout,
-  CSP_HEADER,
-  jsonResponse,
-  errorResponse,
-};
