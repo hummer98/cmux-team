@@ -5978,6 +5978,26 @@ describe("initInfra: .team/.gitignore (T315)", () => {
     // 本行も追記されている
     expect(rawLines).toContain("daemon.pid");
   });
+
+  test("T417: initInfra 実行で .team/conductors/conductor.surface:* が削除される", async () => {
+    const conductors = join(testDir, ".team/conductors");
+    await mkdir(conductors, { recursive: true });
+    await writeFile(join(conductors, "conductor.surface:1"), "");
+    await writeFile(join(conductors, "conductor.surface:2"), "");
+
+    const state = await createDaemon(testDir);
+    const { initInfra } = await import("./daemon");
+    await initInfra(state);
+
+    expect(existsSync(join(conductors, "conductor.surface:1"))).toBe(false);
+    expect(existsSync(join(conductors, "conductor.surface:2"))).toBe(false);
+
+    const logContent = await readFile(
+      join(testDir, ".team/logs/manager.log"),
+      "utf-8",
+    );
+    expect(logContent).toMatch(/legacy_conductor_markers_cleaned.*count=2/);
+  });
 });
 
 // --- T323: AGENT_TOKEN_BOUND ハンドラと updateTeamJson の tokenHandle 出力 ---

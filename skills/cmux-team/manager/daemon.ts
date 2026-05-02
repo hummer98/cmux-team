@@ -42,6 +42,8 @@ import { initTokenDB, releaseLeaseByHolder } from "./token-store";
 // T351: dashboard / CLI で共有する pool snapshot 純関数
 import { buildPoolSummary, type PoolSummary } from "./pool-summary";
 import { isThrottled5h, countPoolTokens } from "./pool-throttle";
+// T417: 旧 Conductor 発見マーカーファイル (.team/conductors/conductor.surface:NNN) 残骸の掃除
+import { cleanupLegacyConductorMarkers } from "./cleanup";
 
 export interface TaskSummary {
   id: string;
@@ -749,6 +751,21 @@ export async function initInfra(state: DaemonState): Promise<void> {
     } catch (e: any) {
       await log("error", `gitignore migration failed: ${e.message}`);
     }
+  }
+
+  // T417: 旧 Conductor 発見マーカーファイル (`.team/conductors/conductor.surface:NNN` 空ファイル)
+  // を起動時に掃除する one-shot cleanup。`.gitignore` で `conductors/` は ignore 済みなので
+  // 再混入リスクは無く、現役の `surface_NNN/agent-done/` 構造には触れない（cleanup.ts 参照）。
+  try {
+    const removedLegacy = await cleanupLegacyConductorMarkers(root);
+    if (removedLegacy.length > 0) {
+      await log(
+        "legacy_conductor_markers_cleaned",
+        `count=${removedLegacy.length} files=${removedLegacy.join(",")}`,
+      );
+    }
+  } catch (e: any) {
+    await log("error", `legacy_conductor_markers_cleanup failed: ${e.message}`);
   }
 
   // config.json（デフォルト生成）
