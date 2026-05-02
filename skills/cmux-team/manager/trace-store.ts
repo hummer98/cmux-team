@@ -1352,6 +1352,126 @@ export function getLatestApiUsageRow(db: Database): ApiUsageRecord | null {
   return row ?? null;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// T414: Web ダッシュボード用 集計 SQL
+// ────────────────────────────────────────────────────────────────────────
+
+/** T414: per-tool 件数集計（task_id を集約せず tool_name で SUM） */
+export interface ToolCallByPeriodRow {
+  tool_name: string;
+  n: number;
+}
+
+/**
+ * T414: 期間内に発火した tool 呼び出しを tool_name 単位で件数集計する。
+ * task_id 解決は不要（per-tool 集計のため）。
+ */
+export function countToolCallsByPeriod(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string; type?: "PRE_TOOL_USE" | "POST_TOOL_USE" },
+): ToolCallByPeriodRow[] {
+  const type = opts.type ?? "PRE_TOOL_USE";
+  const stmt = db.prepare(`
+    SELECT tool_name, COUNT(*) AS n
+    FROM hook_signals
+    WHERE type = $type
+      AND timestamp >= $sinceIso
+      AND timestamp <= $untilIso
+      AND tool_name IS NOT NULL
+    GROUP BY tool_name
+    ORDER BY n DESC, tool_name ASC
+  `);
+  return stmt.all({
+    $type: type,
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as ToolCallByPeriodRow[];
+}
+
+/** T414: per-tool 失敗率集計（failureRateByTask の tool_name 版） */
+export interface ToolFailureByToolRow {
+  tool_name: string;
+  total: number;
+  failures: number;
+}
+
+/**
+ * T414: 期間内の PostToolUse を tool_name 別に成功/失敗集計する。
+ * 失敗判定ロジックは failureRateByTask と同じ（tool_response.success=0 / tool_response.error 非 NULL）。
+ */
+export function failureRateByTool(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string },
+): ToolFailureByToolRow[] {
+  const stmt = db.prepare(`
+    SELECT
+      tool_name,
+      COUNT(*) AS total,
+      SUM(
+        CASE
+          WHEN JSON_EXTRACT(payload_json, '$.payload.tool_response.success') = 0 THEN 1
+          WHEN JSON_EXTRACT(payload_json, '$.payload.tool_response.error') IS NOT NULL THEN 1
+          ELSE 0
+        END
+      ) AS failures
+    FROM hook_signals
+    WHERE type = 'POST_TOOL_USE'
+      AND timestamp >= $sinceIso
+      AND timestamp <= $untilIso
+      AND tool_name IS NOT NULL
+    GROUP BY tool_name
+    ORDER BY total DESC, tool_name ASC
+  `);
+  return stmt.all({
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as ToolFailureByToolRow[];
+}
+
+/** T414: time-bucket 単位の token 集計（Overview / Tokens timeline 用） */
+export interface ApiUsageByBucketRow {
+  bucket: string;
+  input: number;
+  output: number;
+  cache_creation: number;
+  cache_read: number;
+  requests: number;
+}
+
+/**
+ * T414: api_usage を hour / day bucket で集計する。
+ * timestamp は ISO 8601 UTC を期待し、`substr(timestamp, 1, $bucketLen)` で bucket key を生成。
+ *  - day  : YYYY-MM-DD       (bucketLen=10)
+ *  - hour : YYYY-MM-DDTHH    (bucketLen=13)
+ *
+ * task_id IS NULL も含めて全行を SUM する（grand-total として返す）。
+ */
+export function aggregateApiUsageByBucket(
+  db: Database,
+  opts: { sinceIso: string; untilIso: string; groupBy: "hour" | "day" },
+): ApiUsageByBucketRow[] {
+  const bucketLen = opts.groupBy === "hour" ? 13 : 10;
+  const stmt = db.prepare(`
+    SELECT
+      substr(timestamp, 1, $bucketLen) AS bucket,
+      COUNT(*) AS requests,
+      COALESCE(SUM(input_tokens), 0) AS input,
+      COALESCE(SUM(output_tokens), 0) AS output,
+      COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation,
+      COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read
+    FROM api_usage
+    WHERE timestamp >= $sinceIso
+      AND timestamp <= $untilIso
+    GROUP BY bucket
+    ORDER BY bucket ASC
+  `);
+  return stmt.all({
+    $bucketLen: bucketLen,
+    $sinceIso: opts.sinceIso,
+    $untilIso: opts.untilIso,
+  }) as ApiUsageByBucketRow[];
+}
+
 /**
  * 直近 `windowSec` 秒内の input_tokens + output_tokens 合計と tok/s を返す。
  *

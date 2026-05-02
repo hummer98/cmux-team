@@ -19,7 +19,10 @@ import {
   aggregateApiUsageByRole,
   aggregateApiUsageByTask,
   countToolCallsByTask,
+  countToolCallsByPeriod,
   failureRateByTask,
+  failureRateByTool,
+  aggregateApiUsageByBucket,
   firstEditPerTask,
   getLatestApiUsageRow,
   getBurnRateWindow,
@@ -670,5 +673,271 @@ describe("trace-store: failureRateByTask agent_spawned 行 + 防御 (T407)", () 
 
     const rows = failureRateByTask(db, { sinceIso: SINCE, untilIso: UNTIL });
     expect(rows.find((r) => r.task_id === "T_empty")).toBeUndefined();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// T414: Web ダッシュボード用 SQL のテスト
+// ────────────────────────────────────────────────────────────────────────
+
+describe("trace-store: countToolCallsByPeriod (T414)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-tool-period-t414-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("空テーブル → 空配列", () => {
+    const rows = countToolCallsByPeriod(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+    });
+    expect(rows).toEqual([]);
+  });
+
+  test("tool_name 単位で件数集計、件数降順で返す", () => {
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T10:00:00.000Z",
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T10:01:00.000Z",
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T10:02:00.000Z",
+      sessionId: "s1",
+      toolName: "Edit",
+    } as QueueMessage);
+    const rows = countToolCallsByPeriod(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+    });
+    expect(rows[0]).toEqual({ tool_name: "Bash", n: 2 });
+    expect(rows[1]).toEqual({ tool_name: "Edit", n: 1 });
+  });
+
+  test("since/until 境界 (>= / <=) を含む", () => {
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T10:00:00.000Z", // == sinceIso
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T11:00:00.000Z", // == untilIso
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T11:00:00.001Z", // outside
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    const rows = countToolCallsByPeriod(db, {
+      sinceIso: "2026-04-30T10:00:00.000Z",
+      untilIso: "2026-04-30T11:00:00.000Z",
+    });
+    expect(rows[0]?.n).toBe(2);
+  });
+
+  test("type=POST_TOOL_USE で抽出対象を切り替えられる", () => {
+    insertHookSignal(db, {
+      type: "PRE_TOOL_USE",
+      timestamp: "2026-04-30T10:00:00.000Z",
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    insertHookSignal(db, {
+      type: "POST_TOOL_USE",
+      timestamp: "2026-04-30T10:00:01.000Z",
+      sessionId: "s1",
+      toolName: "Bash",
+    } as QueueMessage);
+    const rows = countToolCallsByPeriod(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+      type: "POST_TOOL_USE",
+    });
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.n).toBe(1);
+  });
+});
+
+describe("trace-store: failureRateByTool (T414)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-fail-tool-t414-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("空テーブル → 空配列", () => {
+    const rows = failureRateByTool(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+    });
+    expect(rows).toEqual([]);
+  });
+
+  test("tool_name 別に total / failures を集計する", () => {
+    function postToolHook(toolName: string, ts: string, success: boolean): QueueMessage {
+      return {
+        type: "POST_TOOL_USE",
+        timestamp: ts,
+        sessionId: "s1",
+        toolName,
+        // payload_json に payload.tool_response.success を持たせる
+        payload: { tool_response: { success } },
+      } as unknown as QueueMessage;
+    }
+    insertHookSignal(db, postToolHook("Bash", "2026-04-30T10:00:00.000Z", true));
+    insertHookSignal(db, postToolHook("Bash", "2026-04-30T10:01:00.000Z", false));
+    insertHookSignal(db, postToolHook("Bash", "2026-04-30T10:02:00.000Z", false));
+    insertHookSignal(db, postToolHook("Edit", "2026-04-30T10:03:00.000Z", true));
+    const rows = failureRateByTool(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+    });
+    const bash = rows.find((r) => r.tool_name === "Bash")!;
+    expect(bash.total).toBe(3);
+    expect(bash.failures).toBe(2);
+    const edit = rows.find((r) => r.tool_name === "Edit")!;
+    expect(edit.total).toBe(1);
+    expect(edit.failures).toBe(0);
+  });
+});
+
+describe("trace-store: aggregateApiUsageByBucket (T414)", () => {
+  let project: DummyProject;
+  let db: Database;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-bucket-t414-",
+      subdirs: ["logs"],
+    });
+    db = initDB(project.root);
+  });
+
+  afterEach(async () => {
+    try { db.close(); } catch {}
+    await project.dispose();
+  });
+
+  test("空テーブル → 空配列", () => {
+    const rows = aggregateApiUsageByBucket(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+      groupBy: "hour",
+    });
+    expect(rows).toEqual([]);
+  });
+
+  test("hour bucket の key は YYYY-MM-DDTHH 形式 (length=13)", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T10:15:00.000Z",
+      role: "agent",
+      input_tokens: 10,
+      output_tokens: 5,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T10:45:00.000Z",
+      role: "agent",
+      input_tokens: 20,
+      output_tokens: 10,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T11:15:00.000Z",
+      role: "agent",
+      input_tokens: 30,
+      output_tokens: 15,
+    });
+    const rows = aggregateApiUsageByBucket(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T00:00:00.000Z",
+      groupBy: "hour",
+    });
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.bucket).toBe("2026-04-30T10");
+    expect(rows[0]?.bucket.length).toBe(13);
+    expect(rows[0]?.input).toBe(30);
+    expect(rows[0]?.output).toBe(15);
+    expect(rows[0]?.requests).toBe(2);
+    expect(rows[1]?.bucket).toBe("2026-04-30T11");
+  });
+
+  test("day bucket の key は YYYY-MM-DD 形式 (length=10)", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T01:00:00.000Z",
+      input_tokens: 10,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T23:00:00.000Z",
+      input_tokens: 20,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-05-01T01:00:00.000Z",
+      input_tokens: 100,
+    });
+    const rows = aggregateApiUsageByBucket(db, {
+      sinceIso: "2026-04-30T00:00:00.000Z",
+      untilIso: "2026-05-01T23:59:59.999Z",
+      groupBy: "day",
+    });
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.bucket).toBe("2026-04-30");
+    expect(rows[0]?.bucket.length).toBe(10);
+    expect(rows[0]?.input).toBe(30);
+    expect(rows[1]?.bucket).toBe("2026-05-01");
+    expect(rows[1]?.input).toBe(100);
+  });
+
+  test("since/until 境界 (>= / <=) を含む", () => {
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T10:00:00.000Z", // == since
+      input_tokens: 1,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T11:00:00.000Z", // == until
+      input_tokens: 2,
+    });
+    insertApiUsage(db, {
+      timestamp: "2026-04-30T11:00:00.001Z", // outside
+      input_tokens: 99,
+    });
+    const rows = aggregateApiUsageByBucket(db, {
+      sinceIso: "2026-04-30T10:00:00.000Z",
+      untilIso: "2026-04-30T11:00:00.000Z",
+      groupBy: "hour",
+    });
+    const total = rows.reduce((s, r) => s + r.input, 0);
+    expect(total).toBe(3);
   });
 });

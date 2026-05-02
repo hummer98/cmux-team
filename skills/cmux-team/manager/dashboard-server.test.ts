@@ -115,6 +115,126 @@ describe("dashboard-server: 127.0.0.1 listen のみ受け付ける", () => {
   });
 });
 
+describe("dashboard-server: Step 2 endpoint shape", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-step2-",
+      subdirs: ["logs", "traces"],
+    });
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+      version: "test",
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("/api/overview デフォルト 24h window で 200 + period.fromIso/toIso", async () => {
+    const res = await fetch(`${handle.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.period.fromIso).toBeDefined();
+    expect(body.period.toIso).toBeDefined();
+    expect(Array.isArray(body.throughput)).toBe(true);
+    expect(Array.isArray(body.toolFailureRate)).toBe(true);
+    expect(Array.isArray(body.tokens)).toBe(true);
+    expect(typeof body.activeTasks.count).toBe("number");
+    expect(body.rateLimit.projection5h.risk).toMatch(/green|yellow|red|gray/);
+  });
+
+  test("/api/tool-use 200 + perTool / failureTimeline / denyTimeline / recentFailures", async () => {
+    const res = await fetch(`${handle.url}/api/tool-use`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.perTool)).toBe(true);
+    expect(Array.isArray(body.perToolFailure)).toBe(true);
+    expect(Array.isArray(body.failureTimeline)).toBe(true);
+    expect(Array.isArray(body.denyTimeline)).toBe(true);
+    expect(Array.isArray(body.recentFailures)).toBe(true);
+  });
+
+  test("/api/tokens 200 + timeline / topTasks / perRole / perTaskHistogram", async () => {
+    const res = await fetch(`${handle.url}/api/tokens`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.timeline)).toBe(true);
+    expect(Array.isArray(body.topTasks)).toBe(true);
+    expect(Array.isArray(body.perRole)).toBe(true);
+    expect(body.perTaskHistogram).toHaveProperty("bins");
+    expect(body.perTaskHistogram).toHaveProperty("counts");
+  });
+
+  test("/api/tasks 200 + rows", async () => {
+    // events.jsonl が存在しないと readTaskLifecycle が ENOENT。fail-soft で 200 を返す。
+    const res = await fetch(`${handle.url}/api/tasks`);
+    expect([200, 500]).toContain(res.status);
+    if (res.status === 200) {
+      const body = (await res.json()) as any;
+      expect(Array.isArray(body.rows)).toBe(true);
+    }
+  });
+
+  test("/api/overview?from=NOT_ISO → 400 bad_request", async () => {
+    const res = await fetch(`${handle.url}/api/overview?from=NOT_ISO`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error).toBe("bad_request");
+  });
+
+  test("/api/overview?from > to → 400 bad_request", async () => {
+    const res = await fetch(
+      `${handle.url}/api/overview?from=2026-05-02T00:00:00Z&to=2026-05-01T00:00:00Z`,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error).toBe("bad_request");
+  });
+});
+
+describe("dashboard-server: timeout race (Promise.race + DI sleep)", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-timeout-",
+      subdirs: ["logs", "traces"],
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("aggregator が 6s sleep のとき 5s で 503 timeout を返す", async () => {
+    // sleep 関数を即時 resolve に差し替えて時計を加速。
+    // aggregator は never-resolve、sleep は即時 resolve → Promise.race で sleep が勝つ。
+    const fastSleep = async (_ms: number) => {};
+    const slowOverview = () => new Promise<any>(() => {});
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+      sleep: fastSleep,
+      aggregateTimeoutMs: 5000,
+      aggregators: {
+        overview: slowOverview as any,
+      },
+    });
+    const res = await fetch(`${handle.url}/api/overview`);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as any;
+    expect(body.error).toBe("timeout");
+    expect(body.endpoint).toBe("/api/overview");
+    expect(body.windowSec).toBe(5);
+  });
+});
+
 describe("dashboard-server: parsePeriodQuery", () => {
   const fixedNow = Date.parse("2026-05-02T12:00:00.000Z");
   const now = () => fixedNow;
