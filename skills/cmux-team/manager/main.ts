@@ -45,6 +45,7 @@ import { runMetricsQueryCli } from "./metrics-query";
 import { formatExecError } from "./exec-error";
 import * as cmux from "./cmux";
 import { start as startProxy } from "./proxy";
+import { startDashboardServer } from "./dashboard-server";
 import { launchConductor, resetConductor } from "./conductor";
 import { ClaudeCodeBackend } from "./claude-code-backend";
 import { OpenCodeBackend } from "./opencode-backend";
@@ -792,6 +793,22 @@ async function cmdStart(): Promise<void> {
     }
   } catch (e: any) {
     await log("error", `version read failed: ${e.message}`);
+  }
+
+  // T414: 内部 Web ダッシュボード server を起動する。proxy 再利用パスでも本プロセスで
+  // 自前 initDB(PROJECT_ROOT) を呼ぶ B 案（plan §2.1）。失敗しても daemon 全体は継続
+  // （fail-soft）。shutdown では明示停止しない（process.exit に委ねる、plan §5.1）。
+  try {
+    const dashboardHandle = await startDashboardServer({
+      projectRoot: PROJECT_ROOT,
+      version,
+      getState: () => state,
+    });
+    state.dashboardServerUrl = dashboardHandle.url;
+    await log("dashboard_server_started", `url=${dashboardHandle.url}`);
+  } catch (e: any) {
+    state.dashboardServerUrl = null;
+    await log("dashboard_server_start_failed", e?.message ?? String(e));
   }
 
   // macOS スリープ抑止（caffeinate 管理）

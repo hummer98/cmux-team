@@ -151,6 +151,12 @@ export interface DaemonState {
    * createDaemon で空文字で初期化し、cmdStart が daemon_started emit より前に確定させる。
    */
   startedAt: string;
+  /**
+   * T414: 内部 Web ダッシュボード server の URL（`http://127.0.0.1:<ephemeral>`）。
+   * dashboard-server.ts が起動成功時に main.ts でセットし、updateTeamJson が
+   * `team.json.dashboardServer.url` として外部に公開する。null = 起動失敗 or 未起動。
+   */
+  dashboardServerUrl?: string | null;
 }
 
 /**
@@ -420,6 +426,7 @@ export async function createDaemon(
     poolPolicy: null,
     tokenDbInitFailed: false,
     startedAt: "",
+    dashboardServerUrl: null,
   };
   // Issue #30 M3-b Phase 2: opencode 等の非 Claude Code backend のイベントを購読する
   subscribeRuntimeEvents(state);
@@ -4159,6 +4166,13 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
     };
     teamJson.phase = "running";
     teamJson.layout = state.layout;
+    // T414: 内部 Web ダッシュボードの URL を外部に公開する。dashboard 起動失敗時は
+    // フィールド自体を削除する（古い値が残らないように）。
+    if (state.dashboardServerUrl) {
+      teamJson.dashboardServer = { url: state.dashboardServerUrl, schemaVersion: 1 };
+    } else {
+      delete teamJson.dashboardServer;
+    }
     teamJson.conductors = [...state.conductors.values()].map((c) => ({
       surface: c.surface,
       taskRunId: c.taskRunId,
