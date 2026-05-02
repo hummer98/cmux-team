@@ -66,7 +66,7 @@ cmux-team は orchestration layer であると同時に **AI 観察箱**であ�
 | 層 | 媒体 | 主な利用 |
 |---|---|---|
 | **real-time 観察** | cmux ペイン（人間の目） | Conductor / Agent ペインの斜め読みで「途中の挙動」をその場で検出（README 参照） |
-| **retrospective 観察** | trace DB (`hook_signals` / `api_usage` / `task_sessions`) + events.jsonl + metrics snapshot | `cmux-team metrics` / cohort 比較 / 統計検定による事後・統計的評価（[`11-metrics.md`](11-metrics.md) 参照） |
+| **retrospective 観察** | trace DB (`hook_signals` / `api_usage` / `task_sessions`) + events.jsonl + metrics snapshot | `cmux-team metrics` / cohort 比較 / 統計検定による事後・統計的評価（[`11-metrics.md`](11-metrics.md) 参照）。time-series グラフ・分布・drill-down は内部 **Web ダッシュボード**（`127.0.0.1:<ephemeral>`、[`12-web-dashboard.md`](12-web-dashboard.md) 参照） |
 
 **機能追加判断の規範**: 新機能を入れる際は「observatory に資するか」（観察可能性を高めるか、観察結果から得た洞察に基づくか）を判断軸の 1 つとする。逆に観察を阻害する変更（state を内部に隠す、hook を bypass する、trace を不完全にする、pane の表示を奪う）は原則として避ける。
 
@@ -155,4 +155,5 @@ npm install -g @hummer98/cmux-team
 | 06 | 06-implementation-tasks.md | 実装タスク定義 |
 | 07 | 07-state-machine.md | Conductor / Task FSM 仕様（T279、shadow observability 配線） |
 | 10 | 10-events-stream.md | 外向け event channel `.team/logs/events.jsonl` の schema 仕様（schema v2、16 event 種、T357） |
+| 12 | 12-web-dashboard.md | 内部 Web ダッシュボード（Manager daemon 同居 HTTP server + 5 ページ SPA、T414） |
 | -- | glossary.md | 用語集（一次定義のインデックス、二次資料） |

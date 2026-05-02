@@ -208,6 +208,7 @@ cmux-team update-task --task-id 112 --status ready
 | 稼働中 Master / Conductor | `jq .masters .team/team.json` / `jq .conductors .team/team.json` |
 | open task 数 | `cat .team/task-state.json` |
 | metric サマリ（task lifecycle / tool call / token） | `cmux-team metrics --since 7d` または `cmux-team metrics --group-by day --format csv` |
+| Web ダッシュボード（time-series グラフ・分布・drill-down） | `cat .team/team.json \| jq -r .dashboardServer.url` で URL 取得（ephemeral port、daemon 再起動で変わる）。詳細は `docs/spec/12-web-dashboard.md` |
 
 > メトリクス解析・cohort 比較・trace DB の ad-hoc 探索 (DuckDB SQL) は `cmux-team-analyze` skill を参照（CLI: `cmux-team metrics query`）。
 

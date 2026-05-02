@@ -370,6 +370,8 @@ e2e-results/
 
 `output/`, `prompts/`, `queue/` はタスク中心フォルダ集約への移行で実体としては未使用だが、過去バージョンとの互換のため引き続き ignore に列挙されている。`team.json` は daemon が自動更新する派生物のため追跡しない（以前は追跡対象だったが v3.41 以降で無視に変更）。`task-state.json` は resume に必要なため追跡する。
 
+**`team.json` の主要フィールド** (T414): `manager` / `masters[]` / `conductors[]` / `phase` / `layout` に加え、daemon が internal Web ダッシュボード起動時に `dashboardServer: { url: "http://127.0.0.1:<ephemeral>", schemaVersion: 1 }` を atomic write する（外部から read-only で参照する公開チャネル）。詳細は [`12-web-dashboard.md`](12-web-dashboard.md) §2.3。
+
 `rate-limit.json` は T227 で追加された RateLimitInfo スナップショット（下記参照）。`initInfra` は既存 `.team/.gitignore` に `rate-limit.json` 行が無ければ自動で追記し（`team_gitignore_migrated` をログ）、二重追記は行わない（冪等）。
 
 追跡するもの:

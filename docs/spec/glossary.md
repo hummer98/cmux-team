@@ -182,5 +182,7 @@ glossary には要約と一次リンクのみを置く方針を取る。
 | daily snapshot | 1 日分（UTC 00:00..00:00 の half-open window）の per_task + period + metadata を JSON ファイル化した fact。`.team/metrics/snapshots/YYYY-MM-DD.json`、schema_version=1、increment-only / 過去 snapshot は再生成しない。 | [`11-metrics.md#7-snapshot-スキーマ--命名`](11-metrics.md#7-snapshot-スキーマ--命名) | cohort comparison / `metrics-snapshot.ts` |
 | header rot | エージェント `{{COMMON_HEADER}}` 等のテンプレートヘッダーが古くなり、現行の運用と乖離した状態。副作用系 metric として観測対象。 | [`11-metrics.md#25-副作用系`](11-metrics.md#25-副作用系) | agent message GC / `{{COMMON_HEADER}}` |
 | agent message GC | サブエージェント実行時に蓄積するメッセージ履歴の累積 token 量、および定期的な剪定処理。副作用系 metric として観測対象。 | [`11-metrics.md#25-副作用系`](11-metrics.md#25-副作用系) | header rot / token consumption |
+| Web ダッシュボード | Manager daemon に同居する内部 HTTP server（`127.0.0.1:<ephemeral>`）が配信する 5 ページ SPA。retrospective 観察 UI として time-series グラフ・分布・drill-down を担当する。`team.json.dashboardServer.url` が公開チャネル。 | [`12-web-dashboard.md`](12-web-dashboard.md) | metrics SSOT / observatory |
+| Agent 戦略分類（暫定 6 値） | task ごとの agent 役割分布から `solo / research-only / plan-impl / parallel-impl / full-cycle / other` を自動分類する規則。`agent-strategy.ts` の純粋関数 `classifyStrategy`。 | [`12-web-dashboard.md#7-agent-戦略分類規則暫定`](12-web-dashboard.md#7-agent-戦略分類規則暫定) | Web ダッシュボード |
 
-**関連 spec**: [`11-metrics.md`](11-metrics.md)
+**関連 spec**: [`11-metrics.md`](11-metrics.md) / [`12-web-dashboard.md`](12-web-dashboard.md)
