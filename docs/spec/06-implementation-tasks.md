@@ -14,13 +14,13 @@
 - `.gitignore`, `LICENSE` (MIT), `README.md`, `README.ja.md`
 - `.claude-plugin/plugin.json`
 - `package.json`（npm パッケージ）
-- `bin/cmux-team.js`（CLI ラッパー）
+- `bin/cmux-team.js`（CLI ラッパー、当時。T422 で bash wrapper `bin/cmux-team` に置き換え済み）
 - `bin/postinstall.js`（npm postinstall スクリプト）
 
 ### Task 1.2: npm パッケージング — 完了（install.sh を置き換え）
 - `@hummer98/cmux-team` として npm 公開
 - postinstall で bun install + claude plugin add を自動実行
-- bin/cmux-team.js で bun を透過呼び出し
+- bin/cmux-team.js で bun を透過呼び出し（T422 で bash wrapper `bin/cmux-team` に変更し node 親プロセスを排除）
 
 ### Task 1.3: cmux-agent-role SKILL.md — 完了
 - 出力プロトコル、タスク作成（CLI 経由）、作業境界、ロール別ガイドライン

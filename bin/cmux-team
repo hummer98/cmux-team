@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# cmux-team CLI ラッパー
+# bun で skills/cmux-team/manager/main.ts を exec 起動する（node 親を介さない）
+
+set -euo pipefail
+
+# bun 存在確認
+if ! command -v bun >/dev/null 2>&1; then
+  echo "エラー: bun がインストールされていません。" >&2
+  echo "インストール: https://bun.sh/docs/installation" >&2
+  exit 1
+fi
+
+# このスクリプト本体の絶対ディレクトリを解決（npm 経由のシンボリックリンクに対応）
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$( readlink "$SOURCE" )"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+PROJECT_ROOT="$( cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd )"
+
+MAIN_TS="$PROJECT_ROOT/skills/cmux-team/manager/main.ts"
+
+# bun に exec で置き換える（bash 自体を bun プロセスに replace、親 PID を増やさない）
+exec bun run "$MAIN_TS" "$@"

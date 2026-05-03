@@ -49,7 +49,7 @@ Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=
 {
   "name": "@hummer98/cmux-team",
   "version": "3.45.0",
-  "bin": { "cmux-team": "bin/cmux-team.js" },
+  "bin": { "cmux-team": "bin/cmux-team" },
   "scripts": {
     "postinstall": "node bin/postinstall.js",
     "prepublishOnly": "cd skills/cmux-team/manager && bun test"
@@ -58,12 +58,13 @@ Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=
 }
 ```
 
-### bin/cmux-team.js
+### bin/cmux-team
 
-CLI ラッパー。Bun で `skills/cmux-team/manager/main.ts` を実行する。
+CLI ラッパー（bash）。`bun run skills/cmux-team/manager/main.ts` を `exec` で起動する。
 
 - `bun` の存在を確認（未インストール時はエラー）
-- 全コマンド共通で引数を透過して `bun run main.ts` に渡す
+- 全サブコマンド共通で `exec bun run main.ts "$@"`（bash 自身を bun に置換し、node 親プロセスを介さない）
+- `manager/main.ts` を絶対パスで解決（symlink 経由のグローバルインストールに対応。macOS の `readlink -f` 非対応のため while ループで手動辿り）
 
 ### bin/postinstall.js
 

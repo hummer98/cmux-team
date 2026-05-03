@@ -4,10 +4,10 @@
   "description": "Multi-agent development orchestration with Claude Code + cmux. Spawn, monitor, and integrate parallel sub-agents visually in terminal panes.",
   "type": "module",
   "bin": {
-    "cmux-team": "bin/cmux-team.js"
+    "cmux-team": "bin/cmux-team"
   },
   "scripts": {
-    "dev": "node bin/cmux-team.js start",
+    "dev": "bash bin/cmux-team start",
     "postinstall": "node bin/postinstall.js",
     "test:clean": "bash scripts/verify-test-no-pollution.sh"
   },
