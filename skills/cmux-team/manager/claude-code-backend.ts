@@ -18,6 +18,7 @@ import type {
   PermissionRef,
   SpawnOptions,
   PermissionReply,
+  ResetOptions,
 } from "./runtime-backend";
 import type { QueueMessage } from "./schema";
 
@@ -34,11 +35,12 @@ export interface ClaudeCodeSpawnOptions extends SpawnOptions {
   /** cmux surface ID（Claude Code 固有 — opencode では不要） */
   surface: string;
   /**
-   * conductor / master ロール起動コマンド（例: "cmux-team conductor"）。
+   * conductor / master ロール起動コマンド（例: "cmux-team spawn-conductor"）。
    * 末尾 `\n` がなければ自動付加する。
    */
   launchCmd: string;
 }
+
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -127,23 +129,81 @@ export class ClaudeCodeBackend implements RuntimeBackend {
   }
 
   /**
-   * セッションをリセットする（/clear 送信 + 新プロンプト投入）。
-   * Claude Code では session を destroy できないため、/clear でコンテキストをクリアし
-   * 新しいプロンプトを送信することでリセットとみなす。
+   * セッションをリセットする（T421: kill+spawn 方式）。
+   *
+   * 旧 `/clear` 経路を廃し、以下の 3 アクションで再起動を行う:
+   *   1. (pid 有り時のみ) `killClaudeProcess(pid)` で旧 claude を SIGTERM/SIGKILL
+   *   2. (env 指定時のみ) `export ...\n` を pane の shell に送信
+   *   3. `launchCmd\n` を pane の shell に送信（spawn-conductor が起動）
+   *
+   * D7 採用後は launchCmd に `--task-prompt <path>` を含めて claude 起動時に
+   * CLI 引数でプロンプトを atomic 注入する。TUI 起動完了を待たない設計のため、
+   * 旧 5 秒固定 sleep + プロンプト後送信は不要。
+   *
    * 返り値は同一 sessionRef（surface は変わらない）。
    */
-  async reset(sessionRef: SessionRef, prompt: string): Promise<SessionRef> {
+  async reset(sessionRef: SessionRef, opts: ResetOptions): Promise<SessionRef> {
     if (this.disposed) throw new Error("ClaudeCodeBackend: already disposed");
     const surface = fromSessionRef(sessionRef);
-    // /clear → enter で確定、500ms 待って TUI のクリアを待ってから新プロンプトを投入する。
-    // M3 PR-2 で SESSION_CLEAR → session_reset イベントの発火と組み合わせる。
-    await cmux.send(surface, "/clear");
-    await cmux.sendKey(surface, "return");
-    await new Promise((r) => setTimeout(r, 500));
-    const body = prompt.endsWith("\n") ? prompt.slice(0, -1) : prompt;
-    await cmux.send(surface, body);
-    await cmux.sendKey(surface, "return");
-    return sessionRef; // surface は変わらない
+
+    // 1. 旧セッション kill（pid 有り時のみ）
+    if (opts.pid !== undefined) {
+      await this.killClaudeProcess(sessionRef, opts.pid);
+    }
+    // shell プロンプト復帰待ち（kill 後に shell が prompt を再描画するまでの猶予）
+    await new Promise((r) => setTimeout(r, 300));
+
+    // 2. env を export
+    if (opts.env && Object.keys(opts.env).length > 0) {
+      const envStr = Object.entries(opts.env)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ");
+      await cmux.send(surface, `export ${envStr}\n`);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // 3. launchCmd 投入（spawn-conductor → claude 起動 → CLI 引数で prompt 取り込み）
+    const cmd = opts.launchCmd.endsWith("\n") ? opts.launchCmd : `${opts.launchCmd}\n`;
+    await cmux.send(surface, cmd);
+
+    // 4. SESSION_STARTED 待ちは不要（CLI 引数経由でプロンプトは atomic に届く）
+    return sessionRef;
+  }
+
+  /**
+   * pane を保持したまま claude プロセスのみを kill する（T421）。
+   * SIGTERM 送信 → 200ms wait → 生存確認 → SIGKILL → 100ms wait。
+   *
+   * 既存 `kill(sessionRef)` は cmux.closeSurface で pane ごと閉じる。本メソッドは
+   * pane（shell）を残したまま claude プロセスだけを kill するため、kill+spawn 経路で
+   * 同 surface に再 spawn できる。
+   *
+   * pid が undefined / 既に死亡 / EPERM の場合は no-op。
+   */
+  async killClaudeProcess(sessionRef: SessionRef, pid: number): Promise<void> {
+    if (this.disposed) return;
+    const surface = fromSessionRef(sessionRef);
+    this.stopPidWatcher(surface);
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // 既に死亡 / EPERM 等 — no-op
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    // 生存確認: process.kill(pid, 0) が throw すれば既に死亡
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    // まだ生きている → SIGKILL で確実に倒す
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // 直前で死亡した可能性 — silently 続行
+    }
+    await new Promise((r) => setTimeout(r, 100));
   }
 
   /**

@@ -232,7 +232,7 @@ LEFT JOIN session_to_task s2t
 
 | ロール | spawn 経路 | UUID 発行サイト | claude 起動 flag | daemon 通知 |
 |---|---|---|---|---|
-| Conductor | `cmux-team conductor` | `cmdConductor`（`main.ts`） | `--session-id <UUID>` | `CONDUCTOR_REGISTERED` POST に sessionId 同梱 |
+| Conductor | `cmux-team spawn-conductor` | `cmdSpawnConductor`（`main.ts`） | `--session-id <UUID>` | `CONDUCTOR_REGISTERED` POST に sessionId 同梱 |
 | Agent | `cmux-team spawn-agent` | `cmdSpawnAgent`（`main.ts`） | `--session-id <UUID>` | `AGENT_SPAWNED` POST に sessionId 同梱 |
 | Master | （**scope 外** — 本タスクで対応せず） | — | — | — |
 
@@ -240,7 +240,7 @@ Daemon は `CONDUCTOR_REGISTERED` / `AGENT_SPAWNED` ハンドラで `state.sessi
 
 `task_sessions` テーブルは **append-only 不変性**を保つ。/clear / /compact 後の追従は `task-state.json` の `sessionId` 更新のみで完結し、テーブル自体への UPDATE 経路は導入しない。spawn 時に書かれた `assigned` / `agent_spawned` 行に空でない UUID が入っていれば、Agent 由来 tool_use の task_id 解決には十分（同 task_id 配下に複数 session_id 行があっても `MIN(task_id) GROUP BY session_id` で集約される）。
 
-`--resume` 経路（`cmdResume`）には `--session-id` を**渡さない**。既存 session を復元する目的のため。
+`--resume` 経路（`cmdSpawnConductor --resume <session-id>`、T421 で `cmdResume` を統合）には `--session-id` を**渡さない**。既存 session を復元する目的のため。
 
 #### 3.5.2 SESSION_STARTED 時 plugin / skill marker (T410)
 

@@ -68,7 +68,7 @@ description: >
 | `cmux-team send TASK_CREATED` | タスク作成通知（`--task-id`, `--task-file` 必須） |
 | `cmux-team send <TYPE>` | 内部メッセージ通知（`TASK_CREATED / TASK_UPDATED / CONDUCTOR_DONE / CONDUCTOR_REGISTERED / AGENT_SPAWNED / SESSION_STARTED / SESSION_ENDED / SESSION_ACTIVE / SESSION_IDLE / SESSION_ASK / SESSION_STOP / SESSION_CLEAR / SHUTDOWN`。ほとんどは Claude セッションの SessionStart/Stop/SessionEnd hook が送信する） |
 | `cmux-team send-agent` | Agent/Conductor surface へメッセージ送信（`--surface` 必須、`<message>` positional、`--no-return` 任意）。Conductor → 他 surface 操作はこの CLI 経由に限定され、`cmux send` の直接呼び出しは hook でブロックされる |
-| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
+| `cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>]` | 現 surface で Conductor 用 Claude Code を起動・登録。起動時に CONDUCTOR_REGISTERED 自己 POST。`--resume <session-id>` で既存セッションを `claude --resume` モードで復元。`--task-prompt <path>` で起動時にプロンプトファイルパスを CLI 引数として atomic 注入（T421/D7）。任意の surface から実行でき、`cmux-team start` が作成する固定 pane に依存しない |
 | `cmux-team spawn-agent` | Agent spawn（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`）。`/rate-limit` API でスロットル中はブロックされ exit code 75 を返す |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface` 必須、`--conductor-surface` 任意） |
@@ -81,12 +81,10 @@ description: >
 | `cmux-team await-task` | タスク完了を fs.watch で待機（`--task-id` 必須、カンマ区切りで複数指定可、`--timeout` 任意。非ブロッキング用途） |
 | `cmux-team await-agent` | Agent 完了/ask/crash を done マーカーの fs.watch で待機（`--surface` 必須、`--timeout` 任意）。Conductor テンプレートから使用され、STATUS= 行を stdout に出力し状態に応じた exit code で終了する（T181） |
 | `cmux-team trace-task` | 特定タスクのセッション履歴を表示（タスク ID positional 引数必須） |
-| `cmux-team conductor` | Conductor 用 Claude Code を起動する。起動時に自身を daemon に self-register（`CONDUCTOR_REGISTERED` POST）する（T228）。daemon 不在 / proxy-port 破損時は fail-fast（exit 1）。任意の surface から実行でき、`cmux-team start` が作成する固定 pane に依存しない |
 | `cmux-team spawn-master` | Master 用 Claude Code を起動する。起動時に自身を daemon に self-register（`MASTER_REGISTERED` POST）する（T230）。daemon 不在 / proxy-port 破損時は fail-fast（exit 1）。任意の pane から実行でき、`cmux-team start` で立ち上がる 1 つ目以外にも Master を追加可能（複数 Master 並行運用） |
 | `cmux-team artifacts` | アーティファクト一覧・検索 |
 | `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
 | `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
-| `cmux-team resume` | assigned タスクの Conductor セッション再開（`<task-id>` positional 引数必須）。起動時 resume 経路では Manager が shell 側で直接 `claude --resume` を実行する（Conductor ペインに `cmux-team resume` 文字列を送らないこと）。`cmdConductor` と同様に起動時に自身を daemon に self-register（T228）。既存 state があれば daemon 側で skip されるため、`initializeConductorSlots` が pre-set した taskId/taskRunId/worktreePath は保持される |
 | `cmux-team get-agent-instructions` | overlay ロールの project-local overlay を表示（`--role` 必須。`.team/agent-instructions/<role>.md` に相当。overlay 不在時は何も出力せず exit 0。T342: master / conductor も受け付ける） |
 | `cmux-team set-agent-instructions` | overlay ロールの overlay を書き込み（`--role` 必須。`--body <text>` / `--from-file <path>` / `--from-stdin` のいずれか必須。100 KB 超で exit 1。未知 role で exit 1。T342: master / conductor も受け付ける） |
 | `cmux-team delete-agent-instructions` | overlay ロールの overlay を削除（`--role` 必須。存在しなくても exit 0 — 冪等。T342: master / conductor も受け付ける） |

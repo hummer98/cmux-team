@@ -113,13 +113,12 @@ cmux-team delete-task --task-id 42 --journal "理由"
 | `cmux-team spawn-agent` | Agent 起動（`--conductor-surface`, `--role`, `--prompt` or `--prompt-file`） |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team kill-agent` | Agent 終了（`--surface`） |
-| `cmux-team conductor` | Conductor 用 Claude Code を起動（内部用。`--model` でモデル指定可能） |
 | `cmux-team trace` | API トレース検索（`--task`, `--search`, `--show`, `--conductor`, `--role`, `--limit`） |
 | `cmux-team trace-hooks` | hook シグナル履歴検索（`--type`, `--surface`, `--task-run`, `--limit`（デフォルト 50）, `--json`）。T217 |
 | `cmux-team artifacts` | アーティファクト管理（サブコマンド: `add`, `show`, `open`, `search`。オプション: `--validate`） |
 | `cmux-team metrics` | タスク lifecycle / tool call / token の集計サマリ（`--since <range>`, `--group-by day`, `--format csv`）。サブコマンド: `snapshot` / `compare` / `health` / `query`（DuckDB ad-hoc）。詳細は `docs/spec/11-metrics.md` |
 | `cmux-team events` | events stream（`.team/logs/events.jsonl`）を tail / filter（`--follow`, `--types <names>`, `--format json\|tsv`）。詳細は `docs/spec/10-events-stream.md` |
-| `cmux-team resume` | assigned タスクの Conductor セッションを再開 |
+| `cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]` | Conductor 用 Claude Code を起動・登録（内部用）。`--resume` で既存セッション復元、`--task-prompt` で起動時にプロンプトを CLI 引数として atomic 注入（T421/D7） |
 
 各コマンドの詳細は `cmux-team <command> --help` で確認可能。
 

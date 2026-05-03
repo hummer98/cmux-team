@@ -196,12 +196,27 @@ Token Pool (T323):
 `,
 
   help_spawn_conductor: `
-cmux-team spawn-conductor -- launch and register a Conductor on the current surface
+cmux-team spawn-conductor -- launch Claude Code for Conductor on the current surface (self-register)
 
 Usage:
-  cmux-team spawn-conductor
+  cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]
 
-The Conductor is started on the current surface ($CMUX_SURFACE or caller surface).
+Environment:
+  CMUX_SURFACE  Conductor surface ID (optional; falls back to cmux identify caller.surface_ref)
+
+Options:
+  --resume <session-id>     resume an existing session via 'claude --resume' (no new session-id)
+  --task-prompt <path>      atomic prompt injection — passed as a positional CLI arg to claude (T421/D7)
+  --model <model>           model to use (default: config.models.conductor or "{model}")
+
+Notes:
+  - Normally invoked by Manager when assigning a task (kill + spawn flow), but can be invoked
+    manually from a cmux pane for debugging (CMUX_SURFACE will be auto-detected).
+  - Self-registers via CONDUCTOR_REGISTERED POST so the Manager can match this surface to a
+    pre-reserved entry (T421).
+  - Dynamically resolves logging proxy port and exec's Claude Code.
+  - Launched with --dangerously-skip-permissions.
+  - T421: this command replaces the deprecated 'cmux-team conductor' / 'cmux-team resume'.
 `,
 
   help_spawn_agent: `
@@ -750,25 +765,6 @@ Exit codes:
   *  any other code is relayed from the duckdb child process
 `,
 
-  help_conductor: `
-cmux-team conductor -- launch Claude Code for Conductor (internal use)
-
-Usage:
-  cmux-team conductor [--model <model>]
-
-Environment:
-  CMUX_SURFACE  Conductor surface ID (optional; falls back to cmux identify caller.surface_ref)
-
-Options:
-  --model <model>   model to use (default: config.models.conductor or "{model}")
-
-Notes:
-  - Normally called by daemon at startup, but can be invoked manually
-    from a cmux pane for debugging (CMUX_SURFACE will be auto-detected)
-  - Dynamically resolves logging proxy port and exec's Claude Code
-  - Launched with --dangerously-skip-permissions
-`,
-
   help_spawn_master: `
 cmux-team spawn-master -- launch Claude Code for Master (self-register)
 
@@ -912,7 +908,7 @@ Usage:
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
   cmux-team status                             show status
-  cmux-team spawn-conductor
+  cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
                                               (agent roles only — master/conductor reserved for system prompt overlay)
   cmux-team agents                             list running agents
@@ -932,7 +928,6 @@ Usage:
                                               tail / filter the events stream (.team/logs/events.jsonl)
   cmux-team metrics [--task-id ...] [--since ...] [--format json|text|csv] [--group-by task|day|week]
                                               aggregate task / tool / token metrics from events.jsonl + hook_signals + api_usage
-  cmux-team conductor                          launch Conductor (auto-resolves proxy)
   cmux-team spawn-master                       launch Master (auto-resolves proxy)
   cmux-team artifacts                              list artifacts
   cmux-team artifacts add <file>                   move a file into .team/artifacts/
@@ -1199,12 +1194,26 @@ Token Pool (T323):
 `,
 
   help_spawn_conductor: `
-cmux-team spawn-conductor -- 現在の surface で Conductor を起動・登録
+cmux-team spawn-conductor -- 現在の surface で Conductor 用 Claude Code を起動・登録
 
 Usage:
-  cmux-team spawn-conductor
+  cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]
 
-現在の surface（$CMUX_SURFACE または呼び出し元 surface）で Conductor を起動します。
+Environment:
+  CMUX_SURFACE  Conductor の surface ID（任意。未指定時は cmux identify の caller.surface_ref から自動解決）
+
+Options:
+  --resume <session-id>     既存セッションを 'claude --resume' で復元（新規 session-id は発行しない）
+  --task-prompt <path>      起動時にプロンプトファイルパスを CLI 引数として atomic 注入（T421/D7）
+  --model <model>           使用するモデル（デフォルト: config.models.conductor or "{model}"）
+
+Notes:
+  - 通常は Manager がタスク assign 時（kill+spawn 経路）に呼び出しますが、
+    cmux ペイン内から手動で実行することもできます（CMUX_SURFACE は自動検出）。
+  - CONDUCTOR_REGISTERED POST で自己登録し、Manager が pre-reserved entry とマッチさせます（T421）。
+  - ロギングプロキシのポートを動的に解決して Claude Code を exec します。
+  - --dangerously-skip-permissions で起動されます。
+  - T421: 旧 'cmux-team conductor' / 'cmux-team resume' を本コマンドに統合しました（後方互換なし）。
 `,
 
   help_spawn_agent: `
@@ -1753,25 +1762,6 @@ Exit codes:
   *  その他は duckdb 子プロセスの exit code をそのまま relay する
 `,
 
-  help_conductor: `
-cmux-team conductor -- Conductor 用 Claude Code を起動（内部用）
-
-Usage:
-  cmux-team conductor [--model <model>]
-
-Environment:
-  CMUX_SURFACE  Conductor の surface ID（任意。未指定時は cmux identify の caller.surface_ref から自動解決）
-
-Options:
-  --model <model>   使用するモデル（デフォルト: config.models.conductor or "{model}"）
-
-Notes:
-  - 通常は daemon が起動時に自動的に呼び出す内部コマンドですが、
-    cmux ペイン内から手動で実行することもできます（CMUX_SURFACE は自動検出されます）
-  - ロギングプロキシのポートを動的に解決して Claude Code を exec します
-  - --dangerously-skip-permissions で起動されます
-`,
-
   help_spawn_master: `
 cmux-team spawn-master -- Master 用 Claude Code を起動（self-register）
 
@@ -1916,7 +1906,7 @@ Usage:
   cmux-team send TASK_CREATED --task-id <id> --task-file <path>
   cmux-team send SHUTDOWN
   cmux-team status                             ステータス表示
-  cmux-team spawn-conductor
+  cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]
   cmux-team spawn-agent --conductor-surface <surface> --role <role> --prompt <prompt>
                                               （Agent ロールのみ — master/conductor は overlay 専用）
   cmux-team agents                             稼働中エージェント一覧
@@ -1936,7 +1926,6 @@ Usage:
                                               events ストリームを tail / filter（.team/logs/events.jsonl）
   cmux-team metrics [--task-id ...] [--since ...] [--format json|text|csv] [--group-by task|day|week]
                                               events.jsonl + hook_signals + api_usage を per-task / 期間で集計
-  cmux-team conductor                          Conductor 起動（proxy 自動解決）
   cmux-team spawn-master                      Master 起動（proxy 自動解決）
   cmux-team artifacts                              アーティファクト一覧
   cmux-team artifacts add <file>                   ファイルを .team/artifacts/ に移動

@@ -156,9 +156,9 @@ daemon は起動時に呼び出し元の workspace を `state.workspace` に記�
 
 Conductor が worktree を初期化する際には `.claude/settings.local.json` をワークツリー側にコピーし（`skills/cmux-team/manager/conductor.ts` の worktree 作成フロー）、サブエージェントが同じローカル設定で動作するようにする。`CMUX_CLAUDE_HOOKS_DISABLED=1` は Conductor / Agent / Master の spawn 時に explicit な `export` として注入されるため、worktree 側での `.envrc` 生成や `direnv` 実行は行わない。
 
-#### assigned タスクの resume
+#### assigned タスクの resume（T421 以降）
 
-daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned` のタスクを検出し、以下の条件を満たす場合は Manager が該当 Conductor ペインの shell 側で直接 `cmux-team resume <task-id>` を実行する（Conductor ペインに "cmux-team resume" 文字列を `cmux send` で打ち込む方式は禁止。既に Claude が起動していると chat 入力として扱われてしまうため）:
+T421 以降、Conductor は「pane に常駐し `/clear` で再利用」する旧方式から「タスク開始時に kill+spawn される」新方式に変更された。daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned` のタスクを検出し、以下の条件を満たす場合は Manager が該当 Conductor ペインの shell 側で直接 `cmux-team spawn-conductor --resume <session-id>` を実行する（Conductor ペインに該当文字列を `cmux send` で打ち込む方式は禁止。既に Claude が起動していると chat 入力として扱われてしまうため）:
 
 1. `sessionId` が記録されている
 2. `worktreePath` が存在する
@@ -166,7 +166,7 @@ daemon 起動時（boot 完了後）に `task-state.json` で `status: assigned`
 
 条件を満たさない場合は `ready` に戻して通常の再割り当てにフォールバックする。既に同じタスクを実行中の Conductor がいる場合はスキップ（多重実行防止）。
 
-`resume` コマンドは `claude --resume <sessionId>` でセッションを再開する。設定は `cmdConductor` と同等（`--dangerously-skip-permissions`, `--settings`, `--model`）。作業ディレクトリは `worktreePath` を使用。
+`spawn-conductor --resume <session-id>` は `claude --resume <sessionId>` でセッションを再開する。設定は通常起動と同等（`--dangerously-skip-permissions`, `--settings`, `--model`）。作業ディレクトリは `worktreePath` を使用。
 
 #### サイドバーステータスのリアルタイム更新
 
@@ -222,9 +222,9 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - Zod バリデーション（不正メッセージはスキップ）
 - `task_completed` の二重記録は CONDUCTOR_DONE ハンドラのステータスガードで防止
 
-`CONDUCTOR_REGISTERED` は **Conductor 実行プロセス自身**（`cmdConductor` / `cmdResume`）が起動時に POST する self-register 方式（T228）。`launchConductor`（Manager 起動経路）からは POST しない。daemon ハンドラは idempotent merge で、既存 state があれば `conductor_register_skipped` ログを出して skip する（resume 時の taskId/taskRunId/worktreePath を破壊しないため）。`state.conductors.size >= state.maxConductors` を超過した新規登録では `conductor_register_over_cap` warning ログを出すが登録自体は成功する（soft cap）。
+`CONDUCTOR_REGISTERED` は **Conductor 実行プロセス自身**（`cmdSpawnConductor`）が起動時に POST する self-register 方式（T228）。`launchConductor`（Manager 起動経路）からは POST しない。daemon ハンドラは idempotent merge で、既存 state があれば `conductor_register_skipped` ログを出して skip する（resume 時の taskId/taskRunId/worktreePath を破壊しないため）。`state.conductors.size >= state.maxConductors` を超過した新規登録では `conductor_register_over_cap` warning ログを出すが登録自体は成功する（soft cap）。
 
-`SESSION_CLEAR` は Conductor が `/clear` を実行したときに送信される。Conductor が `running` 状態のときに `SESSION_CLEAR` を受信すると、ユーザーの手動 `/clear` とみなしてタスクを `aborted` に遷移させ、Conductor を idle にリセットする（`forceCloseDisconnectedConductor` と同パターン）。`idle` 状態の場合は何もしない（TUI チラつき防止）。
+`SESSION_CLEAR` は Conductor が `/clear` を実行したときに送信される。Conductor が `running` 状態のときに `SESSION_CLEAR` を受信すると、ユーザーの手動 `/clear` とみなしてタスクを `aborted` に遷移させ、Conductor を `reserved` にリセットする（claude プロセスを kill して token を解放し、pane は保持して次の assign を待つ — T421/D5）。`idle` / `reserved` 状態の場合は何もしない（TUI チラつき防止）。
 
 `SESSION_ASK` は Stop hook が AskUserQuestion による停止を検出したときに送信される（T181）。Conductor が `running` 状態で受信すると status を `asking` に遷移させ、ユーザー入力待ちであることを TUI に反映する。Agent 側で発火した場合は Conductor の `await-agent` が STATUS=ASK を受け取り再開判断を行う。
 

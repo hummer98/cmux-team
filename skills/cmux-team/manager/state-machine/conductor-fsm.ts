@@ -49,6 +49,8 @@ export function conductorReduce(
       // 既存 state で register が来た場合は idempotent skip 扱いで no-op にする。
       // shadow 呼び出し元は「idempotent skip も no-op」として記録する。
       if (state === "starting") return noop(state);
+      // T421: reserved も既存 entry なので idempotent skip 扱いで no-op。
+      if (state === "reserved") return noop(state);
       // 新規 state が register される場合の期待値も starting (但し現実には事前に state が
       // 登録されている経路はないため、reducer としては state 変化なし)
       return noop(state);
@@ -59,12 +61,15 @@ export function conductorReduce(
         // Master の SESSION_STARTED は Conductor FSM の対象外。
         return noop(state);
       }
-      if (state === "starting" || state === "disconnected") {
+      // T421: reserved は starting と同等扱い（pane だけ作成 → claude 起動）。
+      if (state === "starting" || state === "disconnected" || state === "reserved") {
         return withActions("idle", [
           { type: "spawn_pid_watcher" },
           {
             type: "log",
-            event: state === "starting" ? "conductor_ready" : "conductor_recovered",
+            event: state === "starting" ? "conductor_ready"
+              : state === "disconnected" ? "conductor_recovered"
+              : "conductor_reserved_started",
           },
         ]);
       }

@@ -11,6 +11,7 @@ import { join } from "path";
 import { assignTask, AssignTaskError, createConductorPanes, resetConductor } from "./conductor";
 import type { ConductorState } from "./schema";
 import * as cmux from "./cmux";
+import * as template from "./template";
 import { createDummyProject, type DummyProject } from "./test-project";
 
 let project: DummyProject;
@@ -136,7 +137,7 @@ describe("mainBranch required 化 (T253)", () => {
 
 // --- T232: assignTask 成功パスで status が "assigning" になること ---
 
-describe("assignTask 状態遷移 (T232)", () => {
+describe("assignTask 状態遷移 (T232 / T421 kill+spawn)", () => {
   let sendSpy: ReturnType<typeof spyOn>;
   let sendKeySpy: ReturnType<typeof spyOn>;
 
@@ -172,14 +173,149 @@ describe("assignTask 状態遷移 (T232)", () => {
     expect(updated.taskRunId).toMatch(/^task-232-/);
     expect(updated.worktreePath).toContain(".worktrees");
 
-    // cmux.send が /clear と新プロンプト送信の 2 回呼ばれたこと
-    // NOTE (T343): ClaudeCodeBackend.reset() は cmux.send(raw) → cmux.sendKey(return) に分離。
-    // /clear は \n 末尾を付けず raw text のみ送り、enter は send-key return が担う。
-    expect(sendSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(sendSpy.mock.calls[0]?.[1]).toBe("/clear");
-    // /clear の直後に return が send-key で送られていることを確認
-    expect(sendKeySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(sendKeySpy.mock.calls[0]?.[1]).toBe("return");
+    // T421: cmux.send の呼び出し列は [export env, launchCmd] の 2 回。
+    //       prompt 後送信なし（D7: --task-prompt CLI 引数で claude が startup 時に取り込む）。
+    //       /clear も sendKey も呼ばれない。
+    expect(sendSpy.mock.calls.length).toBe(2);
+    // 1 回目: env export 行
+    expect(sendSpy.mock.calls[0]?.[1]).toMatch(/^export /);
+    expect(sendSpy.mock.calls[0]?.[1]).toContain(`CMUX_SURFACE=${conductor.surface}`);
+    // 2 回目: launchCmd（spawn-conductor --task-prompt <quoted-path>）
+    expect(sendSpy.mock.calls[1]?.[1]).toMatch(/^cmux-team spawn-conductor --task-prompt '/);
+    expect(sendSpy.mock.calls[1]?.[1]).toMatch(/'\n$/);
+    // sendKey return は呼ばれない（kill+spawn 経路は shell コマンド送信のみ）
+    expect(sendKeySpy.mock.calls.length).toBe(0);
+
+    // T421/F5/R2: kill 前に sessionId / pid が undefined にクリアされていること
+    //             reserved 状態 (oldPid===undefined) なので process.kill は呼ばれていない
+    expect(updated.sessionId).toBeUndefined();
+    expect(updated.pid).toBeUndefined();
+
+    // T421/F6: kill+spawn の途中の SESSION_ENDED を suppress するために killInProgressUntil が立つ
+    expect(typeof updated.killInProgressUntil).toBe("number");
+    expect(updated.killInProgressUntil!).toBeGreaterThan(Date.now());
+  }, 30000);
+});
+
+// --- T421: kill+spawn 経路の D7 サニタイズ ---
+
+describe("assignTask kill+spawn 経路 (T421)", () => {
+  let sendSpy: ReturnType<typeof spyOn>;
+  let sendKeySpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    sendKeySpy = spyOn(cmux, "sendKey").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+    sendKeySpy.mockRestore();
+  });
+
+  // generateConductorTaskPrompt が絶対パスを返すため、通常経路の D7 サニタイズは
+  // 既存の T232 テストで間接的に通過確認済み。本 describe では shellQuote の防御的
+  // 単一引用符 wrap を確認する。
+  test("shellQuote が launchCmd 内のパスを single-quote で包んでいる", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await writeTaskFile("421", "kill-spawn-test");
+    const conductor = fakeConductor();
+    await assignTask(conductor, "421", testDir, "main");
+
+    // launchCmd の path 部分が single-quote で包まれている
+    const launchCmdSent = sendSpy.mock.calls[1]?.[1] as string;
+    expect(launchCmdSent).toMatch(/--task-prompt '\/[^']+'\n$/);
+  }, 30000);
+
+  // T421/D7 個別 throw 検証 (T424 M3): generateConductorTaskPrompt を spy で差し替え、
+  // 細工された promptFile を assignTask に流し込む。conductor.ts:559-576 の 3 つの
+  // throw 条件をそれぞれ独立に固定する。
+  test("D7: promptFile が相対パス（先頭が / でない）の場合 throw する", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await writeTaskFile("421", "d7-relative");
+    const generateSpy = spyOn(template, "generateConductorTaskPrompt").mockImplementation(
+      async () => "relative/path/prompt.md",
+    );
+    try {
+      const conductor = fakeConductor();
+      await expect(assignTask(conductor, "421", testDir, "main")).rejects.toThrow(
+        /promptFile must be absolute path/,
+      );
+    } finally {
+      generateSpy.mockRestore();
+    }
+  }, 30000);
+
+  test("D7: promptFile に空白または改行が含まれる場合 throw する", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    await writeTaskFile("421", "d7-whitespace");
+    const generateSpy = spyOn(template, "generateConductorTaskPrompt").mockImplementation(
+      async () => "/tmp/has space/prompt.md",
+    );
+    try {
+      const conductor = fakeConductor();
+      await expect(assignTask(conductor, "421", testDir, "main")).rejects.toThrow(
+        /promptFile must not contain whitespace\/newline/,
+      );
+    } finally {
+      generateSpy.mockRestore();
+    }
+
+    // 改行混入も同じ throw 条件で reject される
+    await writeTaskFile("422", "d7-newline");
+    const generateSpy2 = spyOn(template, "generateConductorTaskPrompt").mockImplementation(
+      async () => "/tmp/has\nnewline/prompt.md",
+    );
+    try {
+      const conductor = fakeConductor();
+      await expect(assignTask(conductor, "422", testDir, "main")).rejects.toThrow(
+        /promptFile must not contain whitespace\/newline/,
+      );
+    } finally {
+      generateSpy2.mockRestore();
+    }
+  }, 30000);
+
+  test("D7: promptFile に shell metacharacter が含まれる場合 throw する", async () => {
+    const { execFile: execFileCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFile = promisify(execFileCb);
+    await execFile("git", ["init", "-q", "-b", "main"], { cwd: testDir });
+    await execFile("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init"], { cwd: testDir });
+
+    // conductor.ts:571 の正規表現 [;|&$`()<>'"] を 1 文字ずつ確認する
+    const metacharacters = [";", "|", "&", "$", "`", "(", ")", "<", ">", "'", '"'];
+    for (let i = 0; i < metacharacters.length; i++) {
+      const ch = metacharacters[i]!;
+      const taskId = String(500 + i);
+      await writeTaskFile(taskId, `d7-meta-${i}`);
+      const generateSpy = spyOn(template, "generateConductorTaskPrompt").mockImplementation(
+        async () => `/tmp/path${ch}injected/prompt.md`,
+      );
+      try {
+        const conductor = fakeConductor();
+        await expect(assignTask(conductor, taskId, testDir, "main")).rejects.toThrow(
+          /promptFile must not contain shell metacharacters/,
+        );
+      } finally {
+        generateSpy.mockRestore();
+      }
+    }
   }, 30000);
 });
 
@@ -667,7 +803,11 @@ describe("assignTask snapshot フィールド記録 (T261)", () => {
     );
   }
 
-  test("assignTask 成功 → clear_sent + assigning_window_open + assign_prompt_sent が順序通りログされる", async () => {
+  // T421: kill+spawn 経路では `/clear` を送信しないため `clear_sent` ログ /
+  //       `clearSentAt` snapshot は埋まらない。assigning_window_open も同様。
+  //       これらの T261 race ガード関連テストは T422（race 緩和コード撤去）と
+  //       一緒に削除予定。それまで test.skip で残す。
+  test.skip("assignTask 成功 → clear_sent + assigning_window_open + assign_prompt_sent が順序通りログされる", async () => {
     await gitInitWithMain();
     await writeTaskFile("261", "snap-order");
 
@@ -695,7 +835,8 @@ describe("assignTask snapshot フィールド記録 (T261)", () => {
     expect(lines[promptSentIdx]).toMatch(/prompt_file=/);
   }, 30000);
 
-  test("assignTask 成功 → conductor.clearSentAt / promptSentAt / promptBytes が set される", async () => {
+  // T421: clearSentAt は kill+spawn 経路では undefined のまま（T422 で撤去予定）。
+  test.skip("assignTask 成功 → conductor.clearSentAt / promptSentAt / promptBytes が set される", async () => {
     await gitInitWithMain();
     await writeTaskFile("262", "snap-fields");
 
@@ -716,7 +857,10 @@ describe("assignTask snapshot フィールド記録 (T261)", () => {
   // T265: assigningSetAt は assignTask が status="assigning" にセットした時刻を記録する。
   // formatUserClearDecision の assigning_set_at が参照する値で、startedAt（プロセス起動時刻）
   // とは別物。
-  test("assignTask 成功 → conductor.assigningSetAt が set され clearSentAt より前", async () => {
+  // T421: clearSentAt との順序性検証は新経路で破綻（clearSentAt が undefined）。
+  //       assigningSetAt の set 自体は新経路でも維持されているが、本テストは
+  //       T261 race ガードと一括 skip にする（T422 でテスト整理）。
+  test.skip("assignTask 成功 → conductor.assigningSetAt が set され clearSentAt より前", async () => {
     await gitInitWithMain();
     await writeTaskFile("265", "assigning-set-at");
 

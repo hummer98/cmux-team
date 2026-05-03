@@ -1030,8 +1030,8 @@ async function cmdStart(): Promise<void> {
 
   // --- assigned タスクの resumePlan を boot 前に構築 ---
   //   launchConductor に `{ resumeTaskId }` を渡して起動時点で
-  //   `cmux-team resume <id>` をシェルに投入する（旧実装は Claude 起動後に
-  //   チャット入力として消費されるバグがあった）。
+  //   `cmux-team spawn-conductor --resume <session-id>` をシェルに投入する
+  //   （旧実装は Claude 起動後にチャット入力として消費されるバグがあった）。
   const taskState = await loadTaskState(PROJECT_ROOT);
   // T303: task-state mutation は applyTaskEvent 経由のみ (変更追跡フラグは撤去)
   const rawResumePlan: Array<{
@@ -1756,9 +1756,9 @@ async function registerSelf(
     process.exit(1);
   }
   try {
-    // T407/T408: Conductor / Master とも cmdConductor / cmdLaunchMaster 側で
+    // T407/T408: Conductor / Master とも cmdSpawnConductor / cmdLaunchMaster 側で
     //   `crypto.randomUUID()` を発行し `--session-id <UUID>` フラグと同 UUID を
-    //   sessionId として POST に同梱する。未指定（旧クライアント / spawn-conductor 等）の
+    //   sessionId として POST に同梱する。未指定（旧クライアント / --resume 等）の
     //   場合は下の `if (sessionId) body.sessionId = sessionId;` で省略される。
     const body: Record<string, unknown> = {
       type: messageType,
@@ -1788,7 +1788,7 @@ async function registerSelf(
 
 /**
  * conductor-settings.json を生成する共通ヘルパー。
- * cmdConductor と cmdResume の両方から使用される。
+ * cmdSpawnConductor の通常起動 / --resume 経路の両方から使用される。
  * @returns 生成したファイルの絶対パス
  */
 /**
@@ -2649,21 +2649,30 @@ export function buildMasterClaudeArgs(opts: {
 }
 
 /**
- * cmux-team conductor
- * Conductor 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
+ * cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>] [--model <model>]
+ * Conductor 用 Claude Code を起動・登録するラッパー。proxy ポートを動的に解決して claude を exec する。
  * CMUX_SURFACE 環境変数が未設定なら cmux identify から自動解決する。
+ *
+ * T421: 旧 `cmux-team conductor` / `cmux-team resume` を統合した新 CLI。
+ *   - `--resume <session-id>`: 既存セッションを `claude --resume` モードで復元（cmdResume 統合）
+ *   - `--task-prompt <path>`: 起動時にプロンプトファイルパスを CLI 引数として atomic 注入（D7）
+ *   - 旧コマンドは完全廃止（後方互換なし）
  */
-async function cmdConductor(): Promise<void> {
-  if (hasHelpFlag()) showHelp(t("help_conductor", { model: DEFAULT_MODEL }));
+async function cmdSpawnConductor(): Promise<void> {
+  if (hasHelpFlag()) showHelp(t("help_spawn_conductor", { model: DEFAULT_MODEL }));
   const surface = await resolveCallerSurfaceOrExit();
+
+  const resumeSessionId = getArg("resume");
 
   // T407: pre-inject UUID。`--session-id` で claude に渡し、SessionStart hook の
   //   session_id がこれと一致するのが通常順序。daemon に CONDUCTOR_REGISTERED 経由で同梱通知し、
   //   `task_sessions` の assigned 行に空でない UUID が書かれる経路を確立する。
-  const sessionId = generateSessionId();
+  //   `--resume` 経路では既存 session を復元するため `--session-id` は渡さない。
+  const sessionId = resumeSessionId ? undefined : generateSessionId();
 
-  // self-register: cmdConductor が自身を daemon に登録（T228）。
-  // proxy-port 不在 / POST 失敗時は fail-fast。
+  // self-register: 自身を daemon に登録（T228）。
+  // proxy-port 不在 / POST 失敗時は fail-fast。daemon 側ハンドラは既存 state があれば skip するため、
+  // resume 時に initializeConductorSlots が pre-set した taskId/taskRunId/worktreePath は破壊されない。
   await registerSelf("conductor", surface, sessionId);
 
   // T213: main ブランチを env → config の順で解決。T253 で暗黙 "main" フォールバックを削除し
@@ -2679,13 +2688,9 @@ async function cmdConductor(): Promise<void> {
         "Run `cmux-team start` first to detect and persist the main branch, " +
         "or set CMUX_TEAM_MAIN_BRANCH=<your-branch> explicitly.",
     );
-    await log("conductor_main_branch_missing", "reason=env_and_config_missing");
+    await log("spawn_conductor_main_branch_missing", "reason=env_and_config_missing");
     process.exit(1);
   }
-
-  // ロールプロンプトファイル生成
-  const { generateConductorRolePrompt } = await import("./template");
-  const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT, mainBranch);
 
   // 環境変数を設定
   process.env.PROJECT_ROOT = PROJECT_ROOT;
@@ -2704,24 +2709,32 @@ async function cmdConductor(): Promise<void> {
   const config = await loadConfig(PROJECT_ROOT);
   const model = getModelForRole(config, "conductor", getArg("model"));
 
-  // T407: sessionId は Manager 側で `crypto.randomUUID()` で pre-inject する。
-  //   `--session-id <UUID>` を claude に渡すため、SessionStart hook が同 UUID を返す。
-  //   `--resume` 経路（cmdResume）には `--session-id` を渡さない（既存 session を復元するため）。
-
-  const taskPromptFile = getArg("task-prompt");
-
   // conductor-settings.json を生成（Conductor 固有の hook + cmux hooks を注入）
   // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
   const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
 
-  // claude コマンド引数を組み立て（T407: builder 関数経由で `--session-id` を確実に同梱）
-  const claudeArgs = buildConductorClaudeArgs({
-    conductorSettingsPath,
-    model,
-    rolePromptFile,
-    sessionId,
-    taskPromptFile,
-  });
+  let claudeArgs: string[];
+  if (resumeSessionId) {
+    // resume 経路: 既存セッションを `--resume` で復元（rolePromptFile / sessionId は渡さない）
+    claudeArgs = [
+      "--resume", resumeSessionId,
+      "--dangerously-skip-permissions",
+      "--settings", conductorSettingsPath,
+      "--model", model,
+    ];
+  } else {
+    // 通常起動: ロールプロンプトファイル生成 + builder 関数経由で claudeArgs を組み立て
+    const { generateConductorRolePrompt } = await import("./template");
+    const rolePromptFile = await generateConductorRolePrompt(PROJECT_ROOT, mainBranch);
+    const taskPromptFile = getArg("task-prompt");
+    claudeArgs = buildConductorClaudeArgs({
+      conductorSettingsPath,
+      model,
+      rolePromptFile,
+      sessionId: sessionId!,
+      taskPromptFile,
+    });
+  }
 
   // claude を exec（プロセスを置換）
   const { execFileSync } = require("child_process");
@@ -2738,82 +2751,6 @@ async function cmdConductor(): Promise<void> {
 }
 
 /**
- * cmux-team resume <task-id>
- * assigned タスクの Conductor セッションを claude --resume で再開する。
- */
-async function cmdResume(): Promise<void> {
-  if (hasHelpFlag()) showHelp("Usage: cmux-team resume <task-id>");
-  const surface = await resolveCallerSurfaceOrExit();
-
-  // self-register: cmdResume が自身を daemon に登録（T228）。
-  // daemon 側ハンドラは既存 state があれば skip するため、resume 時に
-  // initializeConductorSlots が pre-set した taskId/taskRunId/worktreePath は破壊されない。
-  await registerSelf("conductor", surface);
-
-  const taskId = args[1];
-  if (!taskId) {
-    console.error("Usage: cmux-team resume <task-id>");
-    process.exit(1);
-  }
-
-  // task-state.json から resume 情報を取得
-  const taskState = await loadTaskState(PROJECT_ROOT);
-  const ts = taskState[taskId];
-  if (!ts) {
-    console.error(`Task ${taskId} not found in task-state.json`);
-    process.exit(1);
-  }
-  if (ts.status !== "assigned") {
-    console.error(`Task ${taskId} is not assigned (status: ${ts.status})`);
-    process.exit(1);
-  }
-  if (!ts.sessionId) {
-    console.error(`Task ${taskId} has no sessionId — cannot resume`);
-    process.exit(1);
-  }
-  if (!ts.worktreePath || !existsSync(ts.worktreePath)) {
-    console.error(`Task ${taskId} worktree not found: ${ts.worktreePath}`);
-    process.exit(1);
-  }
-
-  // 環境変数を設定（cmdConductor と同等）
-  process.env.PROJECT_ROOT = PROJECT_ROOT;
-  // T210: 同上（cmdConductor 参照）— fallback 経路のための defensive export。
-  process.env.CMUX_SURFACE = surface;
-  process.env.CMUX_NO_RENAME_TAB = "1";
-  process.env.CMUX_CLAUDE_HOOKS_DISABLED = "1";
-  const proxyPort = await resolveProxyPort();
-  if (proxyPort) {
-    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
-  }
-
-  // モデル解決
-  const config = await loadConfig(PROJECT_ROOT);
-  const model = getModelForRole(config, "conductor", getArg("model"));
-
-  // conductor-settings.json 生成（cmdConductor と同一の hook 構成）
-  // T323: per-surface settings（surface ごとに ANTHROPIC_CUSTOM_HEADERS が異なる）
-  const conductorSettingsPath = generateConductorSettings(PROJECT_ROOT, surface);
-
-  // claude --resume で再開
-  const { execFileSync } = require("child_process");
-  try {
-    execFileSync("claude", [
-      "--resume", ts.sessionId,
-      "--dangerously-skip-permissions",
-      "--settings", conductorSettingsPath,
-      "--model", model,
-    ], {
-      stdio: "inherit",
-      env: process.env,
-      cwd: PROJECT_ROOT,
-    });
-  } catch (e: any) {
-    process.exit(e.status ?? 1);
-  }
-}
-
-/**
  * cmux-team spawn-master
  * Master 用 Claude Code ラッパー。proxy ポートを動的に解決して claude を exec する。
  */
@@ -2821,7 +2758,7 @@ async function cmdLaunchMaster(): Promise<void> {
   if (hasHelpFlag()) showHelp(t("help_spawn_master", { model: DEFAULT_MODEL }));
   // T175: Master の SessionStart/SessionEnd hook が `${CMUX_SURFACE}` を展開するため
   // cmux pane env 継承が壊れた経路 (cmux identify fallback) でも surface が解決されるよう
-  // Conductor (cmdConductor) と同じく defensive に明示設定する。
+  // Conductor (cmdSpawnConductor) と同じく defensive に明示設定する。
   const surface = await resolveCallerSurfaceOrExit();
 
   // T408: pre-inject UUID。`--session-id` で claude に渡し、SessionStart hook の
@@ -2876,32 +2813,6 @@ async function cmdLaunchMaster(): Promise<void> {
   } catch (e: any) {
     process.exit(e.status ?? 1);
   }
-}
-
-async function cmdSpawnConductor(): Promise<void> {
-  if (hasHelpFlag()) showHelp(t("help_spawn_conductor"));
-  const surface = process.env.CMUX_SURFACE ?? await cmux.getCallerSurface();
-
-  // T253: launchConductor は mainBranch required。env → config の順で解決し、
-  //   空なら fail-stop（cmdConductor と同じロジック）
-  const spawnConfig = await loadConfig(PROJECT_ROOT);
-  const envMainBranch = process.env.CMUX_TEAM_MAIN_BRANCH?.trim();
-  const mainBranch = envMainBranch || spawnConfig.mainBranch?.trim() || "";
-  if (!mainBranch) {
-    console.error(
-      "Error: config.mainBranch is not set and CMUX_TEAM_MAIN_BRANCH is empty. " +
-        "Run `cmux-team start` first to detect and persist the main branch, " +
-        "or set CMUX_TEAM_MAIN_BRANCH=<your-branch> explicitly.",
-    );
-    await log(
-      "spawn_conductor_main_branch_missing",
-      "reason=env_and_config_missing",
-    );
-    process.exit(1);
-  }
-
-  await launchConductor(PROJECT_ROOT, surface, { mainBranch });
-  console.log(`SURFACE=${surface}`);
 }
 
 async function cmdSpawnAgent(): Promise<void> {
@@ -4724,10 +4635,10 @@ async function cmdAbortTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 8. Conductor を再起動（session-id は cmdConductor が自己生成して daemon に通知する）
+  // 8. Conductor を再起動（session-id は cmdSpawnConductor が自己生成して daemon に通知する）
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor\n`);
+  await cmux.send(conductor.surface, `cmux-team spawn-conductor\n`);
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
@@ -4921,10 +4832,10 @@ async function cmdRestartTask(): Promise<void> {
     timestamp: new Date().toISOString(),
   });
 
-  // 6. Conductor を再起動（session-id は cmdConductor が自己生成して daemon に通知する）
+  // 6. Conductor を再起動（session-id は cmdSpawnConductor が自己生成して daemon に通知する）
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team conductor\n`);
+  await cmux.send(conductor.surface, `cmux-team spawn-conductor\n`);
 
   // 7. TASK_CREATED 通知送信（自動再割り当て用）
   await postMessage({
@@ -6040,12 +5951,6 @@ switch (command) {
     break;
   case "metrics":
     await cmdMetrics();
-    break;
-  case "conductor":
-    await cmdConductor();
-    break;
-  case "resume":
-    await cmdResume();
     break;
   case "spawn-master":
     await cmdLaunchMaster();

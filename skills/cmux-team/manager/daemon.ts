@@ -27,7 +27,7 @@ import { log, formatSurface, formatPair } from "./logger";
 import { notifyStateChanged } from "./eventBus";
 import { classifyStopPayload, DEFAULT_TAIL_BYTES } from "./classify-stop";
 import type { AgentState, ConductorState, MasterState, QueueMessage, RateLimitInfo, LayoutMode, Deliverable } from "./schema";
-import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS } from "./schema";
+import { THROTTLE_5H_THRESHOLD, LAYOUT_MAX_CONDUCTORS, isAssignableStatus } from "./schema";
 import type { Database } from "bun:sqlite";
 import { initDB, insertHookSignal, insertTaskSession, updateNotificationEnrichment } from "./trace-store";
 import type { NotificationEnrichment } from "./trace-store";
@@ -1089,10 +1089,14 @@ function restoreConductorState(c: any): ConductorState {
     // T323: token pool 用 handle（永続化されていれば復元）
     tokenHandle: typeof c.tokenHandle === "string" ? c.tokenHandle : undefined,
     // T250: broken は再起動後も保持する（明示 clear まで idle に戻さない）
+    // T421/F3: reserved も再起動後に保持する。silent に idle へ coerce すると
+    //          「pane あり、claude 未起動」が「idle」と誤表示され snapshot が嘘になる。
+    //          findIdleConductor は reserved も拾うので自動再起動経路は壊れない。
     status:
       c.status === "running" ? "running"
       : c.status === "disconnected" ? "disconnected"
       : c.status === "broken" ? "broken"
+      : c.status === "reserved" ? "reserved"
       : "idle",
   };
 }
@@ -1807,11 +1811,18 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
         // T392: 通常状態に遷移したら API エラー情報をクリア
         conductor.lastApiError = undefined;
         // n1: 既存の starting/disconnected → idle 遷移ロジックは残す
-        if (conductor.status === "starting" || conductor.status === "disconnected") {
+        // T421/F4: reserved も同じく idle へ遷移（ユーザー手動 spawn-conductor 経路）。
+        if (
+          conductor.status === "starting"
+          || conductor.status === "disconnected"
+          || conductor.status === "reserved"
+        ) {
           const prevStatus = conductor.status;
           conductor.status = "idle";
           await log(
-            prevStatus === "starting" ? "conductor_ready" : "conductor_recovered",
+            prevStatus === "starting" ? "conductor_ready"
+              : prevStatus === "disconnected" ? "conductor_recovered"
+              : "conductor_reserved_started",
             formatSurface(message.surface, "C")
           );
           // T358 §6.10: disconnected → idle 復帰のみ events.jsonl に流す
@@ -1825,11 +1836,14 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           }
           // T302-race: disconnected → idle 復帰時に即 scanTasks を発火し、
           // "ready" 状態で待機中のタスクをこの Conductor に再割り当てする。
-          if (prevStatus === "disconnected") {
+          // T421: reserved → idle (手動 spawn) 復帰時も対象タスクを拾えるよう wakeup。
+          if (prevStatus === "disconnected" || prevStatus === "reserved") {
             requestWakeup(state);
           }
         } else if (conductor.status === "assigning") {
           // T232: assignTask 実行中の /clear 完了 → SESSION_STARTED(source=clear) で running へ遷移
+          // T421/F6: kill+spawn 経路では SESSION_STARTED 到達で kill ウィンドウをクリアする
+          conductor.killInProgressUntil = undefined;
           conductor.status = "running";
           // T261: assigning → running 遷移のタイムスタンプを記録し、
           //       assigning_window_close を via=SESSION_STARTED_clear で発行する。
@@ -2217,6 +2231,20 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           await log(
             "session_ended_ignored",
             `event=${formatSurface(message.surface, "C")} current=${formatSurface(conductor.surface, "C")}`
+          );
+          break;
+        }
+        // T421/F6: kill+spawn 中の SESSION_ENDED は「正常」として suppress。
+        //   killClaudeProcess(SIGTERM) → claude が SessionEnd hook を走らせて
+        //   SESSION_ENDED を POST するが、後続で SESSION_STARTED が必ず来るので
+        //   disconnected 遷移は不要。SESSION_STARTED 到達で killInProgressUntil がクリアされる。
+        if (
+          conductor.killInProgressUntil !== undefined
+          && Date.now() < conductor.killInProgressUntil
+        ) {
+          await log(
+            "session_ended_during_kill_ignored",
+            `${formatSurface(message.surface, "C")} reason=${message.reason ?? "-"} kill_window_until=${conductor.killInProgressUntil}`
           );
           break;
         }
@@ -2727,9 +2755,30 @@ export async function handleMessage(state: DaemonState, message: QueueMessage): 
           clearInterval(conductor.pidWatcherInterval);
           conductor.pidWatcherInterval = undefined;
         }
-        // T195: /clear で旧 Claude は死ぬ。次の SESSION_STARTED で新 pid が届くまで保留
+        // T421/D5: ユーザー手動 /clear → claude を kill して reserved に戻す
+        //   （旧挙動は claude セッションを保持していたため token が解放されないバグの主因）。
+        //   1) conductor.pid を退避してから undefined に倒し、PID watcher 等が誤反応しないようにする
+        //      （T195: SESSION_CLEAR 受信で旧 claude は死ぬ前提）。
+        //   2) backend.killClaudeProcess で claude プロセスを kill（pane は保持）。
+        //   3) resetConductor で worktree / branch / agents を cleanup し reserved に倒す。
+        //      surface 不在で broken に倒れた場合は pid は既に undefined なので
+        //      killClaudeProcess は no-op（reservedTargetStatus も surface_missing で上書きされる）。
+        const killTarget = conductor.pid;
         conductor.pid = undefined;
-        await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, undefined, ccBackend(state.backend));
+        if (killTarget !== undefined) {
+          const backend = ccBackend(state.backend);
+          if (backend) {
+            try {
+              await backend.killClaudeProcess(backend.surfaceToRef(conductor.surface), killTarget);
+            } catch (e: any) {
+              await log("error", `SESSION_CLEAR killClaudeProcess failed: ${formatSurface(conductor.surface, "C")} pid=${killTarget} ${e?.message ?? e}`);
+            }
+          }
+        }
+        await resetConductor(conductor, state.projectRoot, state.workspace ?? undefined, {
+          targetStatus: "reserved",
+          reason: "user_clear",
+        }, ccBackend(state.backend));
       }
       // idle 時は何もしない（TUI チラつき防止）
       // T236: Conductor にマッチしなかった場合 Agent surface として status をリセット
@@ -3218,8 +3267,8 @@ export async function scanTasks(state: DaemonState): Promise<void> {
   }
 
   for (const task of dispatchTargets) {
-    // idle Conductor を探す
-    const idleConductor = [...state.conductors.values()].find(c => c.status === "idle");
+    // idle / reserved Conductor を探す（T421: reserved も assign 対象）
+    const idleConductor = [...state.conductors.values()].find(c => isAssignableStatus(c.status));
     if (!idleConductor) {
       await log("throttled", `task_id=${task.id} no_idle_conductor`);
       break;
@@ -3522,11 +3571,25 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
     case "session_started": {
       const conductor = findConductorByRef(event.sessionRef as string);
       if (!conductor) break;
-      if (conductor.status === "starting" || conductor.status === "disconnected") {
+      // T421/F4: reserved も starting/disconnected と同じく idle 遷移
+      if (
+        conductor.status === "starting"
+        || conductor.status === "disconnected"
+        || conductor.status === "reserved"
+      ) {
+        const prevStatus = conductor.status;
         conductor.status = "idle";
         notifyStateChanged("daemon.ts:handleRuntimeEvent:session-started");
-        await log("conductor_ready", formatSurface(conductor.surface, "C"));
+        await log(
+          prevStatus === "reserved" ? "conductor_reserved_started" : "conductor_ready",
+          `${formatSurface(conductor.surface, "C")} via=runtime_event`,
+        );
+        if (prevStatus === "reserved" || prevStatus === "disconnected") {
+          requestWakeup(state);
+        }
       } else if (conductor.status === "assigning") {
+        // T421/F6: kill+spawn 経路では SESSION_STARTED 到達で kill ウィンドウをクリアする
+        conductor.killInProgressUntil = undefined;
         conductor.status = "running";
         notifyStateChanged("daemon.ts:handleRuntimeEvent:session-started-running");
         await log("conductor_running", `${formatSurface(conductor.surface, "C")} via=runtime_event`);
@@ -3569,6 +3632,17 @@ async function handleRuntimeEvent(state: DaemonState, event: RuntimeEvent): Prom
     case "session_ended": {
       const conductor = findConductorByRef(event.sessionRef as string);
       if (conductor) {
+        // T421/F6: kill+spawn 中の session_ended は suppress（hook 経路と対称）
+        if (
+          conductor.killInProgressUntil !== undefined
+          && Date.now() < conductor.killInProgressUntil
+        ) {
+          await log(
+            "session_ended_during_kill_ignored",
+            `${formatSurface(conductor.surface, "C")} reason=${event.reason ?? "-"} via=runtime_event kill_window_until=${conductor.killInProgressUntil}`,
+          );
+          break;
+        }
         // session_ended は死亡通知なので disconnected 状態へ遷移する
         if (conductor.status !== "broken") {
           conductor.status = "disconnected";

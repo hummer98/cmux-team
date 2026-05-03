@@ -159,13 +159,12 @@ See `cmux-team --help` for the full list. Common commands:
 **Agent / Conductor**
 | Command | What it does |
 |---------|-------------|
-| `cmux-team spawn-conductor` | Spawn and register a single Conductor |
+| `cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>]` | Boot / spawn a Conductor on the current surface (proxy auto-resolved). Self-registers via CONDUCTOR_REGISTERED. T421: also handles `--resume` (replaces the deprecated `cmux-team conductor` / `cmux-team resume`) |
 | `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Spawn an Agent tab |
 | `cmux-team agents` | List running agents |
 | `cmux-team close-agent --surface <s>` | Gracefully stop an Agent |
 | `cmux-team kill-agent --surface <s>` | Force-terminate an Agent (crash) |
 | `cmux-team send-agent --surface <s> <message>` | Send a message to Agent / Conductor |
-| `cmux-team conductor` | Boot Conductor role (proxy auto-resolved) |
 | `cmux-team spawn-master` | Boot Master role (proxy auto-resolved) |
 
 **Token Pool**

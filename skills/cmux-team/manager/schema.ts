@@ -418,7 +418,10 @@ export type ConductorState = z.infer<typeof ConductorState> & {
   // cleanup 済み（worktree / branch / siblings）だが、state.conductors には残す。
   // ユーザーが `cmux-team clear-conductor` で明示的に idle に戻すまで保持される。
   // T392: "error" = StopFailure hook 受信時。次の SESSION_STARTED/IDLE で自然解除。
+  // T421: "reserved" = pane だけ作成、claude 未起動（pid/sessionId 不在）。
+  // 初回タスク assign で kill+spawn → SESSION_STARTED 到達で running へ遷移する。
   status:
+    | "reserved"
     | "starting"
     | "assigning"
     | "idle"
@@ -432,7 +435,21 @@ export type ConductorState = z.infer<typeof ConductorState> & {
    *  opencode backend では opencode session ID、claude-code では surface 文字列。
    *  handleRuntimeEvent が session ref → conductor のルックアップに使う。 */
   runtimeSessionRef?: string;
+  /** T421/F6: kill+spawn 経路で「kill 中」期間を表すデッドライン（Date.now() ms）。
+   *  この期間内の SESSION_ENDED は disconnected 遷移を skip し、observation log のみ残す。
+   *  SESSION_STARTED で `assigning → running` 遷移時にクリアされる。
+   *  ランタイム限定（永続化対象外）。 */
+  killInProgressUntil?: number;
 };
+
+/**
+ * T421: scanTasks の「次タスク割り当て対象」判定。
+ * `idle`（claude 起動済み・タスク待ち）と `reserved`（pane だけ作成・claude 未起動）
+ * の両方が対象になる（reserved は assign 時の kill+spawn で claude が起動する）。
+ */
+export function isAssignableStatus(s: ConductorState["status"]): boolean {
+  return s === "idle" || s === "reserved";
+}
 
 // --- レート制限情報 ---
 

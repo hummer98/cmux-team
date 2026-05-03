@@ -159,13 +159,12 @@ Claude: → cmux-team create-task --title "..." --status ready
 **Agent / Conductor**
 | コマンド | やること |
 |---------|---------|
-| `cmux-team spawn-conductor` | 単一 Conductor を起動・登録 |
+| `cmux-team spawn-conductor [--resume <session-id>] [--task-prompt <path>]` | 現在の surface で Conductor を起動・登録（proxy 自動解決）。CONDUCTOR_REGISTERED で自己登録。T421: `--resume` も統合（旧 `cmux-team conductor` / `cmux-team resume` を置換） |
 | `cmux-team spawn-agent --conductor-surface <s> --role <r> --prompt <p>` | Agent タブを起動 |
 | `cmux-team agents` | 稼働中エージェント一覧 |
 | `cmux-team close-agent --surface <s>` | Agent を正常終了 |
 | `cmux-team kill-agent --surface <s>` | Agent を強制停止（crash 扱い） |
 | `cmux-team send-agent --surface <s> <message>` | Agent / Conductor にメッセージ送信 |
-| `cmux-team conductor` | Conductor 起動（proxy 自動解決） |
 | `cmux-team spawn-master` | Master 起動（proxy 自動解決） |
 
 **トークンプール**

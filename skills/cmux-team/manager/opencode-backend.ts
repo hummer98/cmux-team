@@ -21,6 +21,7 @@ import type {
   PermissionRef,
   SpawnOptions,
   PermissionReply,
+  ResetOptions,
 } from "./runtime-backend";
 
 // ---------------------------------------------------------------------------
@@ -114,11 +115,13 @@ export class OpenCodeBackend implements RuntimeBackend {
   }
 
   /**
-   * セッションをリセットする（abort + delete → 新セッション作成）。
+   * セッションをリセットする（T421: abort + delete → 新セッション作成）。
    * workdir は spawn 時のキャッシュから復元する。
+   * `opts.launchCmd` は opencode の context では使わない（spawn で session API を叩くため）。
+   * `opts.pid` は opencode では PID を持たないため無視。
    * 返り値は新しい sessionRef。
    */
-  async reset(sessionRef: SessionRef, prompt: string): Promise<SessionRef> {
+  async reset(sessionRef: SessionRef, _opts: ResetOptions): Promise<SessionRef> {
     if (this.disposed) throw new Error("OpenCodeBackend: already disposed");
     const id = sessionRef as string;
     const meta = this.sessionMeta.get(id) ?? { workdir: ".", role: "agent" };
@@ -127,8 +130,10 @@ export class OpenCodeBackend implements RuntimeBackend {
     try { await this.client.session.delete({ path: { id } }); } catch { /* 削除済みなら無視 */ }
     this.sessionMeta.delete(id);
 
-    // 新しいセッションを作成
-    const newRef = await this.spawn({ role: meta.role as "master" | "conductor" | "agent", prompt, workdir: meta.workdir });
+    // 新しいセッションを作成。opencode は session.create + chat send で完結するため、
+    // T421 の launchCmd（spawn-conductor シェルコマンド）はここでは無視する。プロンプトは
+    // PoC スコープ外（TODO）として空文字で spawn する。
+    const newRef = await this.spawn({ role: meta.role as "master" | "conductor" | "agent", prompt: "", workdir: meta.workdir });
     log("opencode_session_reset", `old=${id} new=${newRef}`);
     return newRef;
   }

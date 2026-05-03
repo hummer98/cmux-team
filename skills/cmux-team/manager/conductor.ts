@@ -17,6 +17,7 @@ import { resolveWorktreeBase } from "./worktree-base";
 import { resolveFetchBeforeWorktree } from "./config";
 import type { ConductorState, LayoutMode } from "./schema";
 import { ClaudeCodeBackend } from "./claude-code-backend";
+import { shellQuote } from "./util";
 
 const execFile = promisify(execFileCb);
 
@@ -71,15 +72,21 @@ export interface ResumeAssignment {
 }
 
 /**
- * 指定 surface 上で Conductor Claude セッションを起動する。
- * - 環境変数をシェルに焼き付け
- * - `cmux-team conductor` を起動（session-id は cmdConductor が自己生成）
- *   または `opts.resumeTaskId` 指定時は `cmux-team resume <id>` を起動
- * - タブ名を設定（resume 時は呼び出し元が T<id> に rename するためスキップ）
+ * 指定 surface 上で Conductor Claude セッションを起動する（resume 経路のみ）。
  *
- * T228: 登録は `cmdConductor` / `cmdResume` の self-register に委譲。
- * ここでは pane 内に `cmux-team conductor` / `cmux-team resume` を送信するだけ。
+ * T421: 新方式では「pane 作成時に claude を起動しない」ため、本関数は **resume 経路専用**
+ * になった。通常起動は `initializeConductorSlots` が `state.conductors` に reserved entry を
+ * pre-set するだけで claude は spawn せず、初回タスク assign 時の `assignTask` 内で kill+spawn
+ * 経路（`backend.reset()`）を経由して spawn-conductor が呼ばれる。
  *
+ * resume 経路:
+ *   - 環境変数をシェルに焼き付け
+ *   - `cmux-team spawn-conductor --resume <session-id>` を起動（既存 session を復元）
+ *   - タブ名を `[N] Conductor` に設定
+ *
+ * F8: `taskState` を引数で受け取り、二重 load を回避（純粋関数化）。
+ *
+ * T228: 登録は `cmdSpawnConductor` の self-register に委譲。
  * T207: pane キャッシュ引数は廃止。pane 解決は呼び出し時には不要で、後段の
  * spawn-agent / resetConductor が `cmux.getPaneForSurface` /
  * `cmux.listSiblingSurfaces` を on-demand で呼ぶ。
@@ -87,13 +94,20 @@ export interface ResumeAssignment {
 export async function launchConductor(
   projectRoot: string,
   surface: string,
-  opts: { resumeTaskId?: string; mainBranch: string },
+  opts: {
+    resumeTaskId?: string;
+    /** T421: resume 時に session-id を直接受け取る経路（呼び出し元が resumePlan
+     *  から既に取得している場合に使う）。省略時は taskState から引く。 */
+    resumeSessionId?: string;
+    mainBranch: string;
+    taskState?: import("./task").TaskStateMap;
+  },
   backend?: ClaudeCodeBackend,
 ): Promise<import("./runtime-backend").SessionRef | undefined> {
   // 1. 環境変数をシェルに焼き付け
-  //    CMUX_SURFACE: cmdConductor / cmdResume が読み取る（必須）。hook も参照する
+  //    CMUX_SURFACE: cmdSpawnConductor が読み取る（必須）。hook も参照する
   //    CMUX_CLAUDE_HOOKS_DISABLED: 統一（旧 spawnSingleConductor のみ欠落していた）
-  //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdConductor が env → config の順で
+  //    CMUX_TEAM_MAIN_BRANCH: T213 で追加。cmdSpawnConductor が env → config の順で
   //       解決するための一次ソース（race の構造的排除）。T253 で暗黙 "main"
   //       フォールバックを削除。空文字なら fail-stop（silent failure 防止）。
   if (!opts.mainBranch.trim()) {
@@ -113,12 +127,27 @@ export async function launchConductor(
     CMUX_TEAM_SKIP_SYNC_CHECK: "1",
   };
 
-  // 2. Claude 起動
-  //    - resumeTaskId 指定時: 既存セッションを cmdResume 経由で復元
-  //    - それ以外: 通常起動（--session-id なし — cmdConductor が自己生成して daemon に通知）
-  const launchCmd = opts?.resumeTaskId
-    ? `cmux-team resume ${opts.resumeTaskId}`
-    : "cmux-team conductor";
+  // 2. Claude 起動コマンド組み立て
+  //    T421: resume 経路は session-id を直接受け取る新仕様。
+  //          task-state.json から sessionId を引いて `--resume <session-id>` 形式に変換する。
+  //    F8: taskState を引数で受け取って二重 load を避ける（呼び出し元が 1 回 load）。
+  let launchCmd: string;
+  if (opts.resumeTaskId) {
+    // 優先順: opts.resumeSessionId > opts.taskState > loadTaskState(projectRoot)
+    let sessionId: string | undefined = opts.resumeSessionId;
+    if (!sessionId) {
+      const taskState = opts.taskState ?? await loadTaskState(projectRoot);
+      sessionId = taskState[opts.resumeTaskId]?.sessionId;
+    }
+    if (!sessionId) {
+      throw new Error(
+        `launchConductor: no sessionId for task ${opts.resumeTaskId} (opts.resumeSessionId / taskState lookup both empty)`,
+      );
+    }
+    launchCmd = `cmux-team spawn-conductor --resume ${sessionId}`;
+  } else {
+    launchCmd = "cmux-team spawn-conductor";
+  }
 
   // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
   // ClaudeCodeBackend.spawn() は cmux.send を呼び出すため、
@@ -227,15 +256,19 @@ export async function initializeConductorSlots(
     const panes = await createConductorPanes(count, daemonSurface, layout);
     await log("conductor_panes_created", `count=${panes.length}`);
 
-    // Phase 2: Claude 一斉起動
-    //   resumePlan がある場合は panes の先頭から順に 1:1 で割り当てる
-    //   （resumePlan は呼び出し元で taskId 昇順 sort 済みの前提）
+    // Phase 2: Claude 起動 / 予約 entry 作成
+    //   T421: 新方式では非 resume 経路は claude を spawn せず、Manager 内部で
+    //         `state.conductors` に reserved entry を pre-set するだけ。
+    //         初回 assignTask が kill+spawn 経路で spawn-conductor を起動する。
+    //   resume 経路は従来通り launchConductor で `cmux-team spawn-conductor --resume <session-id>` を起動。
+    //         resumePlan 自体に sessionId を含むため task-state.json lookup は不要。
     await log("conductor_claude_launching", "");
     for (const [i, surface] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
       if (resumeItem) {
         await launchConductor(projectRoot, surface, {
           resumeTaskId: resumeItem.taskId,
+          resumeSessionId: resumeItem.sessionId,  // F8: resumePlan の sessionId を直接渡す
           mainBranch,
         }, backend);
         assignments.push({
@@ -246,17 +279,19 @@ export async function initializeConductorSlots(
           sessionId: resumeItem.sessionId,
           taskTitle: resumeItem.taskTitle,
         });
-      } else {
-        await launchConductor(projectRoot, surface, { mainBranch }, backend);
       }
+      // T421: 非 resume 経路は launchConductor を呼ばない。下の reserved pre-set ループで
+      //       state.conductors に reserved entry を作るだけ。タブ名設定は initial spawn 時に
+      //       `cmdSpawnConductor` 経由で `[N] Conductor` に rename される。
     }
 
     // resume 時の state pre-population: main.ts:699-718 の resume 割当反映ループが
     // state.conductors.get(r.surface) で既存エントリを mutate するため、
     // initializeLayout 完了時点で state.conductors に resume 対象 surface が
     // 同期的に存在する必要がある。
-    // 非 resume 分岐は self-register (cmdConductor → CONDUCTOR_REGISTERED POST) に
-    // 委譲したため削除（T228）。
+    // T421: 非 resume 経路は reserved entry を pre-set する（claude 未起動を表現）。
+    //       初回 assignTask の kill+spawn で spawn-conductor が起動 →
+    //       CONDUCTOR_REGISTERED で sessionId merge → SESSION_STARTED で running 遷移する。
     for (const [i, surface] of panes.entries()) {
       const resumeItem = resumePlan?.[i];
       if (resumeItem && !conductors.has(surface)) {
@@ -272,6 +307,28 @@ export async function initializeConductorSlots(
           taskTitle: resumeItem.taskTitle,
           // sessionId なし — SessionStart hook で後から設定される
         });
+      } else if (!resumeItem && !conductors.has(surface)) {
+        // T421: pane だけ作って claude 未起動の "reserved" 状態。
+        //       findIdleConductor が isAssignableStatus 経由で拾う対象。
+        await log("conductor_reserved", formatSurface(surface, "C"));
+        conductors.set(surface, {
+          surface,
+          status: "reserved",
+          startedAt: new Date().toISOString(),
+          agents: [],
+        });
+        // タブ名を `[N] Conductor` に設定（claude 未起動でも UI 上は Conductor として見せる）。
+        // 初回 assign 時に kill+spawn → cmdSpawnConductor が `CMUX_NO_RENAME_TAB=1` を立てるので
+        // ここで設定したタブ名は維持される。
+        try {
+          const num = surface.replace("surface:", "");
+          await cmux.renameTab(surface, `[${num}] Conductor`);
+        } catch (e: any) {
+          await log(
+            "error",
+            `renameTab failed (reserved): ${formatSurface(surface, "C")} ${e?.message ?? e}`,
+          );
+        }
       }
     }
 
@@ -484,60 +541,79 @@ export async function assignTask(
       throw new AssignTaskError("task", `prompt generation failed: ${e.message}`, e);
     }
 
-    // --- 4. 既存セッションをリセットして新プロンプトを送信 ---
-    // /clear + Enter でセッションリセット（Conductor は常駐セッション — /exit しない）
-    // T232: /clear 送信直前に "assigning" を立てる。daemon 自身の /clear が
-    //       遅延して SESSION_CLEAR hook を発火しても、この状態窓で早期 return して
-    //       ユーザー手動 /clear と誤認しない（race condition の根治）。
+    // --- 4. 既存 claude を kill+spawn して新セッションを起動（T421） ---
+    // T232: assigning を立てる。daemon 経路の SESSION_ENDED が kill 中に届いても
+    //       killInProgressUntil で disconnected 遷移を抑止する（F6）。
     // T265: assigning にセットした正確な時刻を記録する（formatUserClearDecision
     //       の assigning_set_at が参照する）。conductor.status と同じトランザクションで set。
+    // T421/F6: kill 中の SESSION_ENDED を suppress するための window（5s）。
+    //       SESSION_STARTED で assigning → running 遷移時にクリアされる。
     conductor.status = "assigning";
     conductor.assigningSetAt = new Date().toISOString();
+    conductor.killInProgressUntil = Date.now() + 5000;
     notifyStateChanged("conductor.ts:assignTask:assigning-set");
-    // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
-    // ClaudeCodeBackend.send() は自動的に \n を付加するため sendKey("return") は不要。
-    // ClaudeCodeBackend は内部で cmux.send を呼び出すため、テストの cmux.send spy は引き続き有効。
+
+    // T421/D7: promptFile のサニタイズ
+    //   `cmux send` で shell に投入されるため、空白・改行・shell metacharacter が
+    //   混入すると command injection になる。Manager 制御下のパスだが防御的に reject。
+    if (!promptFile.startsWith("/")) {
+      throw new AssignTaskError(
+        "task",
+        `promptFile must be absolute path: ${promptFile}`
+      );
+    }
+    if (/[\s\n]/.test(promptFile)) {
+      throw new AssignTaskError(
+        "task",
+        `promptFile must not contain whitespace/newline: ${promptFile}`
+      );
+    }
+    if (/[;|&$`()<>'"]/.test(promptFile)) {
+      throw new AssignTaskError(
+        "task",
+        `promptFile must not contain shell metacharacters: ${promptFile}`
+      );
+    }
+    const quotedPath = shellQuote(promptFile);
+    const launchCmd = `cmux-team spawn-conductor --task-prompt ${quotedPath}`;
+
+    const env: Record<string, string> = {
+      CMUX_SURFACE: conductor.surface,
+      CMUX_CLAUDE_HOOKS_DISABLED: "1",
+      CMUX_TEAM_MAIN_BRANCH: mainBranch,
+      CMUX_TEAM_SKIP_SYNC_CHECK: "1",
+    };
+
+    // T421/F5/R2: kill 前に sessionId / pid を明示クリアする。
+    //   これがないと CONDUCTOR_REGISTERED の sessionId mismatch warn が毎回出る。
+    //   pid は backend.reset の `pid` 引数に焼き付けてから undefined にする。
+    const oldPid = conductor.pid;
+    conductor.sessionId = undefined;
+    conductor.pid = undefined;
+
     const _backend = backend ?? new ClaudeCodeBackend();
     const sessionRef = _backend.surfaceToRef(conductor.surface);
     try {
-      await _backend.send(sessionRef, "/clear");
-      // T261: user_clear 判定のための snapshot フィールドを埋める。
-      //       send 成功直後に set することで、送信失敗時に stale 値を残さない。
-      conductor.clearSentAt = new Date().toISOString();
-      await log(
-        "clear_sent",
-        `${formatSurface(conductor.surface, "C")} source=daemon_assign taskRunId=${taskRunId}`
-      );
-      await log(
-        "assigning_window_open",
-        `${formatSurface(conductor.surface, "C")} task_id=${taskId} clear_sent_at=${conductor.clearSentAt}`
-      );
-      await sleep(500);
-      await sleep(2000);
-
-      // T302-race: /clear 送信後の待機中に SESSION_ENDED が先に処理され disconnected に
-      // なっていた場合、プロンプトを送っても届かない。例外として上位に伝播させ、
-      // assignTask catch ブロックが worktree を巻き戻す。タスクは "ready" のまま残り
-      // 次の idle Conductor に再割り当てされる。
-      // （TypeScript は上の代入から "assigning" に絞り込むが、await 点で他ルートが変異し得るため型アサーション）
-      if ((conductor.status as "assigning" | "disconnected") === "disconnected") {
-        throw new AssignTaskError("conductor", "session ended during assign (race: session_ended before prompt_sent)");
-      }
-
-      // 新しいプロンプトを送信
-      const promptText = `${promptFile} を読んで指示に従って作業してください。`;
-      await _backend.send(sessionRef, promptText);
-      // T261: 送信したプロンプトの時刻と byte 長を記録
+      await _backend.reset(sessionRef, {
+        launchCmd,
+        env,
+        pid: oldPid, // reserved 状態 (oldPid===undefined) のときは内部で kill skip
+      });
+      // T261: 送信したプロンプトの byte 長を記録
       //       byte 長は UTF-8 換算（D9: API レート制限の byte 感覚と揃える）。
+      //       D7 採用後は CLI 引数経由なので「TUI に send したか」は問わないが、観測ログ用に
+      //       promptSentAt / promptBytes は埋める（spec/11-metrics.md の `assign_prompt_sent` 互換）。
       conductor.promptSentAt = new Date().toISOString();
-      conductor.promptBytes = Buffer.byteLength(promptText, "utf8");
+      conductor.promptBytes = Buffer.byteLength(
+        `${promptFile} を読んで指示に従って作業してください。`,
+        "utf8"
+      );
       await log(
         "assign_prompt_sent",
-        `${formatSurface(conductor.surface, "C")} task_id=${taskId} bytes=${conductor.promptBytes} prompt_file=${promptFile}`
+        `${formatSurface(conductor.surface, "C")} task_id=${taskId} bytes=${conductor.promptBytes} prompt_file=${promptFile} via=spawn-conductor-cli`
       );
-      await sleep(500);
     } catch (e: any) {
-      throw new AssignTaskError("conductor", `cmux send failed: ${e.message}`, e);
+      throw new AssignTaskError("conductor", `kill+spawn failed: ${e.message}`, e);
     }
 
     // タスク-セッション索引に記録
@@ -624,12 +700,15 @@ export async function resetConductor(
   projectRoot: string,
   workspace?: string,
   opts?: {
-    targetStatus?: "idle" | "broken";
+    targetStatus?: "idle" | "broken" | "reserved";
     reason?: string;
     // T263: success=false && task-state=assigned 経路で worktree/branch を温存する。
     //       in-memory の ConductorState (taskRunId 等) は preserveWorktree と
     //       無関係に必ずリセットされる（Decision D7）— さもないと次タスク割当が破綻する。
     preserveWorktree?: boolean;
+    // T421/D5: true なら conductor.pid に対して claude プロセスを kill する
+    //          （pane は保持）。reserved 復帰経路 (user_clear) で使う。
+    killClaudeProcess?: boolean;
   },
   backend?: ClaudeCodeBackend,
 ): Promise<void> {
@@ -642,7 +721,7 @@ export async function resetConductor(
     //    surface 不在でも従来通り最後まで実行する。
     const pane = await cmux.getPaneForSurface(conductor.surface, workspace);
     const surfaceMissing = pane === undefined;
-    const effectiveTargetStatus: "idle" | "broken" = surfaceMissing
+    const effectiveTargetStatus: "idle" | "broken" | "reserved" = surfaceMissing
       ? "broken"
       : (opts?.targetStatus ?? "idle");
     // idle→broken 昇格時のみ surface_missing を使用する。
@@ -654,6 +733,12 @@ export async function resetConductor(
     // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
     // ClaudeCodeBackend.kill() は cmux.closeSurface を呼び出す。
     const _backend = backend ?? new ClaudeCodeBackend();
+
+    // T421/D5: killClaudeProcess=true && conductor.pid 有り の場合は claude プロセスのみ kill。
+    //          surface (pane) は保持する（reserved 復帰のための前提）。
+    if (opts?.killClaudeProcess && conductor.pid !== undefined) {
+      await _backend.killClaudeProcess(_backend.surfaceToRef(conductor.surface), conductor.pid);
+    }
 
     // 1. タブ内のサブ surface を閉じる（T207: pane キャッシュ永続化を廃止し on-demand 解決）
     //    cmux tree 1 回で Conductor の所属 pane と同 pane の全 surface を取得し、
@@ -715,13 +800,20 @@ export async function resetConductor(
     conductor.promptBytes = undefined;
     conductor.sessionStartedClearAt = undefined;
     conductor.assigningSetAt = undefined;
-    // idle に戻す経路では古い disconnectedAt をクリアする (Minor 3)。
+    // T421/F6: kill+spawn 中の SESSION_ENDED suppression window もクリア
+    conductor.killInProgressUntil = undefined;
+    // idle / reserved に戻す経路では古い disconnectedAt をクリアする (Minor 3 + T421)。
     // broken 経路では UI の「経過時間」表示のため保持する（将来 clear-conductor で
     // idle に戻す際は、上の条件に従って undefined に落ちる）。
-    if (targetStatus === "idle") {
+    if (targetStatus === "idle" || targetStatus === "reserved") {
       conductor.disconnectedAt = undefined;
     }
-    // sessionId は SessionStart hook で最新値に追従するため reset では触らない
+    // T421/D5: reserved 復帰時は sessionId / pid もクリアする（kill 後の真実）。
+    if (targetStatus === "reserved") {
+      conductor.sessionId = undefined;
+      conductor.pid = undefined;
+    }
+    // sessionId は SessionStart hook で最新値に追従するため reset では触らない（idle/broken 経路）。
     notifyStateChanged(`conductor.ts:resetConductor:status-${targetStatus}`);
 
     const reasonSuffix = effectiveReason ? ` reason=${effectiveReason}` : "";
@@ -734,8 +826,12 @@ export async function resetConductor(
       targetStatus === "broken"
         ? ` pid=${conductor.pid ?? "null"} alive=${conductor.pid !== undefined ? String(cmux.isAlive(conductor.pid)) : "unknown"}`
         : "";
+    const event =
+      targetStatus === "broken" ? "conductor_broken"
+        : targetStatus === "reserved" ? "conductor_reset_reserved"
+        : "conductor_reset";
     await log(
-      targetStatus === "broken" ? "conductor_broken" : "conductor_reset",
+      event,
       `${formatSurface(conductor.surface, "C")}${reasonSuffix}${preservedSuffix}${aliveSuffix}`,
     );
   } catch (e: any) {

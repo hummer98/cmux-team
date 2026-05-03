@@ -114,6 +114,21 @@ export type PermissionReply =
   | "always"  // 常に許可（session 内）
   | "deny";   // 拒否
 
+/**
+ * T421: RuntimeBackend.reset() のオプション。
+ *
+ * - `launchCmd`: 新セッションを起動するコマンド（Claude Code では `cmux-team spawn-conductor ...`、
+ *   opencode では opencode session create コマンド）。
+ * - `env`: optional shell 環境変数。
+ * - `pid`: optional 既存プロセスの PID。指定時は backend が kill してから spawn する。
+ *   undefined なら kill skip（reserved 状態の初回 assign）。
+ */
+export interface ResetOptions {
+  launchCmd: string;
+  env?: Record<string, string>;
+  pid?: number;
+}
+
 // ---------------------------------------------------------------------------
 // RuntimeBackend interface
 // ---------------------------------------------------------------------------
@@ -132,11 +147,21 @@ export interface RuntimeBackend {
   send(sessionRef: SessionRef, message: string): Promise<void>;
 
   /**
-   * セッションをリセットする（コンテキストクリア + 新プロンプト投入）。
-   * backend によっては既存 session を abort して新規 session を作成する。
+   * セッションをリセットする（T421: kill+spawn 方式）。
+   *
+   * 旧シグネチャ `reset(sessionRef, prompt: string)` は `/clear` + prompt 後送信を表現していたが、
+   * Claude Code backend では token プール枯渇問題（プロセス常駐で token が解放されない）に対処するため
+   * 「kill 旧 claude → 新 claude を CLI 起動コマンドで spawn」方式に変更された。opencode backend は
+   * 元々 session abort+create でもこのインタフェース（kill 旧 + spawn 新）に整合するため、シグネチャを
+   * 統一して `ResetOptions` を取る形に揃える。
+   *
+   * - `launchCmd`: 起動コマンド（プロンプトは `--task-prompt` 等の CLI 引数で atomic 注入）
+   * - `env`: optional shell 環境変数
+   * - `pid`: optional 既存プロセス PID（指定時は kill してから spawn する）
+   *
    * 返り値は（変わった場合の）新しい SessionRef。
    */
-  reset(sessionRef: SessionRef, prompt: string): Promise<SessionRef>;
+  reset(sessionRef: SessionRef, opts: ResetOptions): Promise<SessionRef>;
 
   /**
    * セッションを強制終了する。

@@ -273,7 +273,7 @@ v3.39.0〜v3.43.0 で実施された主要改善:
 ### resume / 起動フロー
 - **full_quit から worktree 削除を撤廃し resume ログ改善**
 - **worktree 作成時に `baseBranch` を start-point として使用**
-- **assigned タスクの resume は shell 側で直接実行（T174）** — Conductor ペインに `cmux-team resume` 文字列を送らない
+- **assigned タスクの resume は shell 側で直接実行（T174）** — Conductor ペインに `cmux-team spawn-conductor --resume <session-id>` 文字列を送らない（旧 `cmux-team resume` は T421 で `spawn-conductor --resume` に統合）
 
 ### i18n・テンプレート
 - **プロンプトテンプレートの i18n 対応（T159）** — `templates/{ja,en}/` で分離
