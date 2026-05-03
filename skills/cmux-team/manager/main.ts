@@ -73,7 +73,7 @@ import { loadTaskState, loadTasks, saveTaskState, createTaskProgrammatic, cascad
 import { applyTaskEvent, refreshTaskStateFromDisk } from "./state-machine/task-state-store";
 import { loadArtifacts, searchArtifacts, validateArtifact, addArtifact } from "./artifact";
 import { runPreflight, printPreflightIssues } from "./preflight";
-import { acquireOrExit, releasePidFile } from "./pidfile";
+import { acquireOrExit, installCrashHandler, releasePidFile } from "./pidfile";
 import { ensureEnvrcHookPrompt } from "./envrc-prompt";
 import { checkDirenvAllowed, formatDirenvNotAllowedMessage } from "./direnv-check";
 import type { QueueMessage, LayoutMode, AutoUpdateMode, SleepPreventionMode, SessionStartedMessage, SessionEndedMessage, NotificationMessage, StopFailureMessage, PreToolUseMessage, PostToolUseMessage, PreToolUseDeniedMessage, Deliverable } from "./schema";
@@ -530,7 +530,15 @@ async function cmdStart(): Promise<void> {
   // stale pidfile（死亡プロセス or PID 再利用）は自動的に上書きされる。
   const pidFilePath = join(PROJECT_ROOT, ".team/daemon.pid");
   await acquireOrExit(pidFilePath, PROJECT_ROOT);
-  await log("pidfile_acquired", `path=${pidFilePath} pid=${process.pid}`);
+  // T423 S4: 再発時にどの main.ts 起動か後追いできるよう argv0 を併記する
+  await log(
+    "pidfile_acquired",
+    `path=${pidFilePath} pid=${process.pid} argv0=${process.argv[1] ?? ""}`,
+  );
+  // T423 S3: 異常終了 / normal exit 時に PID-aware で pidfile を cleanup する
+  // crash handler を install。SIGINT / SIGTERM 経路は shutdown() が release を
+  // 呼ぶため対象外。reload sequence で子の pidfile を誤削除しない PID-aware 設計。
+  installCrashHandler(pidFilePath);
 
   // --- direnv allow fail-fast チェック ---
   // .envrc が未 allow のまま daemon を起動すると CLAUDE_CODE_OAUTH_TOKEN 等が
@@ -925,24 +933,14 @@ async function cmdStart(): Promise<void> {
         stopOpenCodeServer(state.openCodeServerProcess);
       }
       // T419: 古い caffeinate を確実に kill する（shutdown と同形にそろえる）。
-      // execFileSync で新 daemon を立ち上げる前に旧 assertion を解放しないと、
-      // 新 daemon が systemActive で再 spawn する際に caffeinate プロセスが二重化する。
+      // 新 daemon を立ち上げる前に旧 assertion を解放しないと、新 daemon が systemActive で
+      // 再 spawn する際に caffeinate プロセスが二重化する。
       updateCaffeinate(false);
-      // T259: 子 daemon が acquire できるよう親は execFileSync より前に pidfile を release する。
-      // 親自身は execFileSync でブロッキングするためシグナルを受け取れず、pidfile を握り
-      // 続けると子が自分自身を "alive cmux-team" と誤検知して fail-stop する。
-      await releasePidFile(pidFilePath);
-      const { execFileSync } = require("child_process");
-      try {
-        execFileSync("bun", ["run", latestMainTs, "start"], {
-          stdio: "inherit",
-          env: process.env,
-          cwd: process.cwd(),
-        });
-      } catch (e: any) {
-        await log("error", `daemon reload exec failed status=${e.status ?? 1}`);
-      }
-      process.exit(0);
+      // T423 S1: reload は `spawn + unref + 親即時 exit` で行う（旧実装は execFileSync で
+      //   親をブロックし、reload chain で bun ランタイム 1.2GB × N が累積する事故あり）。
+      //   release / spawn / log / unref / exit の順序は performDaemonReload に集約。
+      const { performDaemonReload } = await import("./reload");
+      await performDaemonReload({ pidFilePath, latestMainTs });
     },
     onQuit: () => { shutdown(); },
     onFullQuit: async () => {

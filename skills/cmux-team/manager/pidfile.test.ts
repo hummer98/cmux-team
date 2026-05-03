@@ -4,7 +4,7 @@
  * - createDummyProject で独立 tmp dir を使うため並列実行で衝突しない
  * - 実 PID（process.pid）の alive 判定は OS 依存のため、isAliveImpl / psCommandImpl を DI して決定論化する
  */
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -14,6 +14,7 @@ import {
   PidFileLockedError,
   isAlive,
   looksLikeCmuxTeamProcess,
+  installCrashHandler,
 } from "./pidfile";
 import { createDummyProject, type DummyProject } from "./test-project";
 
@@ -54,8 +55,14 @@ describe("looksLikeCmuxTeamProcess", () => {
     expect(looksLikeCmuxTeamProcess("")).toBe(false);
   });
 
-  test("main.ts を含めば true", () => {
-    expect(looksLikeCmuxTeamProcess("/usr/local/bin/bun run /path/to/main.ts start")).toBe(true);
+  // T423 S2: cmux-team フルパスでのみ true を返すよう厳密化。
+  // 旧 input は generic な main.ts だったが false にすべき → cmux-team 固有 path に修正。
+  test("cmux-team フルパスの main.ts を含めば true", () => {
+    expect(
+      looksLikeCmuxTeamProcess(
+        "/usr/local/bin/bun run /Users/foo/cmux-team/skills/cmux-team/manager/main.ts start",
+      ),
+    ).toBe(true);
   });
 
   test("cmux-team を含めば true", () => {
@@ -68,6 +75,25 @@ describe("looksLikeCmuxTeamProcess", () => {
 
   test("単なるシェル(-zsh) は false", () => {
     expect(looksLikeCmuxTeamProcess("-zsh")).toBe(false);
+  });
+
+  // T423 S2: 過寛容判定の解消を assert する新規テスト
+  test("無関係プロジェクトの main.ts は false (過寛容判定の解消)", () => {
+    expect(
+      looksLikeCmuxTeamProcess("bun run /Users/foo/other-project/main.ts"),
+    ).toBe(false);
+  });
+
+  test("cmux-team フルパスの main.ts (引数なし) は true", () => {
+    expect(
+      looksLikeCmuxTeamProcess(
+        "bun run /Users/yamamoto/cmux-team/skills/cmux-team/manager/main.ts start",
+      ),
+    ).toBe(true);
+  });
+
+  test("npm global bin の cmux-team は true", () => {
+    expect(looksLikeCmuxTeamProcess("/usr/local/bin/cmux-team start")).toBe(true);
   });
 });
 
@@ -128,7 +154,8 @@ describe("acquirePidFile - existing alive cmux-team process", () => {
       acquirePidFile(pidFilePath, testDir, {
         selfPid: 12345,
         isAliveImpl: () => true,
-        psCommandImpl: async () => "bun run /path/to/main.ts start",
+        psCommandImpl: async () =>
+          "bun run /Users/foo/cmux-team/skills/cmux-team/manager/main.ts start",
         retries: 1,
         retryIntervalMs: 1,
       }),
@@ -160,7 +187,8 @@ describe("acquirePidFile - existing alive cmux-team process", () => {
     await acquirePidFile(pidFilePath, testDir, {
       selfPid: 12345,
       isAliveImpl: () => true,
-      psCommandImpl: async () => "bun run main.ts start",
+      psCommandImpl: async () =>
+        "bun run /Users/foo/cmux-team/skills/cmux-team/manager/main.ts start",
       retries: 1,
       retryIntervalMs: 1,
     }).catch(() => {});
@@ -270,7 +298,8 @@ describe("acquirePidFile - retries exhausted with persistent alive cmux-team", (
       acquirePidFile(pidFilePath, testDir, {
         selfPid: 12345,
         isAliveImpl: () => true,
-        psCommandImpl: async () => "bun run main.ts start",
+        psCommandImpl: async () =>
+          "bun run /Users/foo/cmux-team/skills/cmux-team/manager/main.ts start",
         retries: 2,
         retryIntervalMs: 1,
       }),
@@ -282,7 +311,183 @@ describe("acquirePidFile - retries exhausted with persistent alive cmux-team", (
   });
 });
 
+// --- T423 S5: stale 判定ログ -------------------------------------------
+
+describe("acquirePidFile - stale detection logging", () => {
+  test("dead プロセス検知時は pidfile_stale_detected reason=dead をログする", async () => {
+    await writeFile(pidFilePath, "99999");
+    const logs: Array<{ event: string; detail: string }> = [];
+    await acquirePidFile(pidFilePath, testDir, {
+      selfPid: 12345,
+      isAliveImpl: () => false,
+      psCommandImpl: async () => "",
+      retries: 3,
+      retryIntervalMs: 1,
+      logImpl: async (event, detail) => {
+        logs.push({ event, detail });
+      },
+    });
+    const stale = logs.filter((l) => l.event === "pidfile_stale_detected");
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.detail).toContain("existing_pid=99999");
+    expect(stale[0]!.detail).toContain("reason=dead");
+  });
+
+  test("非数値 pidfile 検知時は pidfile_stale_detected reason=unparseable をログする", async () => {
+    await writeFile(pidFilePath, "not-a-number");
+    const logs: Array<{ event: string; detail: string }> = [];
+    await acquirePidFile(pidFilePath, testDir, {
+      selfPid: 12345,
+      isAliveImpl: () => false,
+      psCommandImpl: async () => "",
+      retries: 3,
+      retryIntervalMs: 1,
+      logImpl: async (event, detail) => {
+        logs.push({ event, detail });
+      },
+    });
+    const stale = logs.filter((l) => l.event === "pidfile_stale_detected");
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.detail).toContain("reason=unparseable");
+  });
+
+  test("PID 再利用検知時は pidfile_stale_detected reason=pid_reused と truncate された ps_output をログする", async () => {
+    await writeFile(pidFilePath, "99999");
+    const logs: Array<{ event: string; detail: string }> = [];
+    // 80 文字を超える長い ps 出力を返して truncate を検証する
+    const longPsOutput =
+      "/bin/zsh --some-very-long-arguments-that-exceed-eighty-characters-for-truncation-x".padEnd(
+        120,
+        "x",
+      );
+    await acquirePidFile(pidFilePath, testDir, {
+      selfPid: 12345,
+      isAliveImpl: () => true,
+      psCommandImpl: async () => longPsOutput,
+      retries: 3,
+      retryIntervalMs: 1,
+      logImpl: async (event, detail) => {
+        logs.push({ event, detail });
+      },
+    });
+    const stale = logs.filter((l) => l.event === "pidfile_stale_detected");
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.detail).toContain("existing_pid=99999");
+    expect(stale[0]!.detail).toContain("reason=pid_reused");
+    // 80 文字に truncate されていることを確認（ps_output= の値部分）
+    const match = stale[0]!.detail.match(/ps_output=(.*)$/);
+    expect(match).toBeTruthy();
+    expect(match![1]!.length).toBeLessThanOrEqual(80);
+  });
+});
+
 // --- 保守的な stale 判定: ps 取得失敗時は locked 扱い --------------------
+
+// --- T423 S3: installCrashHandler の PID-aware cleanup ----------------
+
+describe("installCrashHandler", () => {
+  let uninstall: (() => void) | null = null;
+  let errorSpy: ReturnType<typeof spyOn> | null = null;
+
+  beforeEach(() => {
+    // fatalHandler は console.error(err) で fatal エラーを stderr に出すが、
+    // テスト内では意図的に投げているエラーなので mock で suppress する。
+    errorSpy = spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (uninstall) {
+      uninstall();
+      uninstall = null;
+    }
+    errorSpy?.mockRestore();
+    errorSpy = null;
+  });
+
+  test("self pid が書いた pidfile は exit handler 発火時に削除する", async () => {
+    await writeFile(pidFilePath, String(process.pid));
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: () => {},
+    });
+    process.emit("exit", 0);
+    expect(existsSync(pidFilePath)).toBe(false);
+  });
+
+  test("他 pid が書いた pidfile は handler 発火時に削除しない", async () => {
+    const otherPid = process.pid + 1;
+    await writeFile(pidFilePath, String(otherPid));
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: () => {},
+    });
+    process.emit("exit", 0);
+    expect(existsSync(pidFilePath)).toBe(true);
+    const content = await readFile(pidFilePath, "utf-8");
+    expect(content).toBe(String(otherPid));
+  });
+
+  test("pidfile 不在時 (ENOENT) は no-op で例外も出さない", () => {
+    expect(existsSync(pidFilePath)).toBe(false);
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: () => {},
+    });
+    expect(() => process.emit("exit", 0)).not.toThrow();
+  });
+
+  test("uncaughtException 経路でも PID-aware ロジックで動き exit(1) する", async () => {
+    await writeFile(pidFilePath, String(process.pid));
+    const exitCalls: number[] = [];
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: (code) => {
+        exitCalls.push(code);
+      },
+    });
+    process.emit("uncaughtException", new Error("test-fatal"));
+    expect(existsSync(pidFilePath)).toBe(false);
+    expect(exitCalls).toEqual([1]);
+  });
+
+  test("uncaughtException 経路で他 pid の pidfile は削除されない", async () => {
+    const otherPid = process.pid + 1;
+    await writeFile(pidFilePath, String(otherPid));
+    const exitCalls: number[] = [];
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: (code) => {
+        exitCalls.push(code);
+      },
+    });
+    process.emit("uncaughtException", new Error("test-fatal"));
+    expect(existsSync(pidFilePath)).toBe(true);
+    expect(exitCalls).toEqual([1]);
+  });
+
+  test("unhandledRejection 経路でも PID-aware ロジックで動き exit(1) する", async () => {
+    await writeFile(pidFilePath, String(process.pid));
+    const exitCalls: number[] = [];
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: (code) => {
+        exitCalls.push(code);
+      },
+    });
+    process.emit(
+      "unhandledRejection",
+      new Error("test-rejection"),
+      Promise.resolve(),
+    );
+    expect(existsSync(pidFilePath)).toBe(false);
+    expect(exitCalls).toEqual([1]);
+  });
+
+  test("uninstall で hook が解除され exit handler が発火しない", async () => {
+    await writeFile(pidFilePath, String(process.pid));
+    uninstall = installCrashHandler(pidFilePath, {
+      exitImpl: () => {},
+    });
+    uninstall();
+    uninstall = null;
+    process.emit("exit", 0);
+    expect(existsSync(pidFilePath)).toBe(true);
+  });
+});
 
 describe("acquirePidFile - ps command failure", () => {
   test("alive で ps 出力が空なら保守的に PidFileLockedError", async () => {
