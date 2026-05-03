@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.26.0] - 2026-05-04
+
+### Added
+
+- **Conductor を kill+spawn 化、CLI を `cmux-team spawn-conductor` に統合（T421）**。タスクごとに claude を kill→spawn する方式に変更し、token プールキー枯渇問題（タスク間で固定 token / モデルが解放されない）を構造的に解消。`reset()` を `kill(pid) + env export + launchCmd` の 3 アクションに簡素化、`--task-prompt` flag による atomic prompt 注入で 5 秒固定 sleep を排除、`ConductorState` に `reserved` 状態（pane だけ作成 / claude 未起動）を追加。**後方互換なし**: 旧 `cmux-team conductor` / `cmux-team resume` は廃止、`cmux-team spawn-conductor [--resume <session-id>]` に統合
+- **`bin/cmux-team` を bash wrapper 化（T422）**。`bin/cmux-team.js`（Node ESM）を削除し、`bin/cmux-team`（bash）で `exec bun run main.ts` する単純な wrapper（30 行未満、分岐なし）に置換。`cmux-team start` で node 親プロセスが TTY を握ったまま残存する問題を解消し、5 プロジェクト常駐時に node 5 個分の RSS / PID を完全削減
+
+### Fixed
+
+- **pidfile 多重起動防止の再点検と reload chain 解消（T423）**。実機で同一プロジェクトに bun manager 4-5 個並走（5 PJ で 22 個常駐、27GB 浪費）を観測した問題に対処。TUI `r` reload を `spawn + unref + 親即時 exit` に置換（旧 `execFileSync` が親をブロックし続けて reload のたび親プロセスが累積していた問題を構造的に解消）、`looksLikeCmuxTeamProcess` を 3 パターン regex で厳密化、PID-aware `installCrashHandler` を追加（pidfile content と self pid を比較して reload race を防ぐ）、stale 判定 3 経路に `pidfile_stale_detected` ログを追加
+
 ## [4.25.0] - 2026-05-03
 
 ### Added
