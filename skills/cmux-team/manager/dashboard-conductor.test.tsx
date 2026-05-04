@@ -338,3 +338,111 @@ describe("formatConductorsSectionLabel", () => {
     expect(label).toContain("1 error");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T429: reserved (T421 で追加された 9 番目の status) は idle と同等表示
+// ─────────────────────────────────────────────────────────────────────────────
+describe("buildConductorRow: Conductor reserved (T429)", () => {
+  test("reserved の Conductor は idle と同等表示で T000 を含まない", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "reserved",
+      agents: [],
+    };
+    const json = stringifyRow(buildConductorRow(conductor, null, 0));
+
+    expect(json).toContain("○");
+    expect(json).toContain("idle");
+    expect(json).toContain("[c1]");
+    expect(json).not.toContain("T000");
+    expect(json).not.toContain("running");
+  });
+
+  test("reserved と idle は同じ JSON 構造になる", () => {
+    const base = {
+      surface: "surface:c1",
+      startedAt: "2026-05-04T12:00:00.000Z",
+      agents: [] as AgentState[],
+    };
+    const reservedJson = stringifyRow(
+      buildConductorRow(
+        { ...base, status: "reserved" } as ConductorState & {
+          agents: AgentState[];
+          status: string;
+        },
+        null,
+        0,
+      ),
+    );
+    const idleJson = stringifyRow(
+      buildConductorRow(
+        { ...base, status: "idle" } as ConductorState & {
+          agents: AgentState[];
+          status: string;
+        },
+        null,
+        0,
+      ),
+    );
+    expect(reservedJson).toBe(idleJson);
+  });
+
+  test("reserved + 残存 taskId があっても T000 表示にならない", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "reserved",
+      // 理論上は不変条件違反だが、防御的に確認
+      taskId: "123",
+      taskTitle: "stale title",
+      agents: [],
+    };
+    const json = stringifyRow(buildConductorRow(conductor, null, 0));
+    expect(json).toContain("idle");
+    expect(json).not.toContain("T000");
+    expect(json).not.toContain("T123");
+    expect(json).not.toContain("stale title");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T429: catch-all `else` 撤去 → `case "running"` 明示分岐
+// ─────────────────────────────────────────────────────────────────────────────
+describe("buildConductorRow: Conductor running 明示分岐 (T429)", () => {
+  test("running 表示は spinner + YELLOW + T-padded + elapsed を含む", () => {
+    const conductor: ConductorState & { agents: AgentState[]; status: string } = {
+      surface: "surface:c1",
+      startedAt: new Date(Date.now() - 5_000).toISOString(),
+      status: "running",
+      taskId: "42",
+      taskTitle: "demo task",
+      agents: [],
+    };
+    const json = stringifyRow(buildConductorRow(conductor, null, 0));
+
+    expect(json).toContain("[c1]");
+    expect(json).toContain("T042");
+    expect(json).toContain("demo task");
+    // running は YELLOW (≧1 箇所)
+    expect(countYellow(json)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T429: 未知 status fallback (observability)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("buildConductorRow: 未知 status fallback (T429)", () => {
+  test("型を借りた未知 status で fallback 行が出る", () => {
+    const conductor = {
+      surface: "surface:c1",
+      startedAt: new Date().toISOString(),
+      status: "unknown_future" as unknown as ConductorState["status"],
+      agents: [] as AgentState[],
+    } as ConductorState & { agents: AgentState[]; status: string };
+    const json = stringifyRow(buildConductorRow(conductor, null, 0));
+
+    expect(json).toContain("[c1]");
+    expect(json).toContain("unknown unknown_future");
+  });
+});

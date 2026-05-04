@@ -61,7 +61,7 @@ glossary には要約と一次リンクのみを置く方針を取る。
 | closed | 正常完了。`close-task` 必須引数 `--deliverable-kind` で kind を指定。auto-close 経路は `kind: "none"` を daemon が自動付与。 | [`07-state-machine.md#21-状態一覧-6-値`](07-state-machine.md#21-状態一覧-6-値), [`05-install-and-infrastructure.md#cli-サブコマンド`](05-install-and-infrastructure.md#cli-サブコマンド) | Deliverable |
 | aborted | 中止状態。`abort-task` CLI、disconnect timeout、user_clear、judgment_pending 等から遷移。`restart-task` で `ready` に戻せる。 | [`07-state-machine.md#21-状態一覧-6-値`](07-state-machine.md#21-状態一覧-6-値), [`07-state-machine.md#24-cascade-ルール-t241`](07-state-machine.md#24-cascade-ルール-t241) | cascade / restart-task |
 | deleted | 明示削除（終端）。draft / ready からのみ遷移可能。assigned は `abort-task` を使う。 | [`07-state-machine.md#21-状態一覧-6-値`](07-state-machine.md#21-状態一覧-6-値) | delete-task |
-| disconnected | （Conductor 状態だが Task と連動）Claude プロセス不在 / SessionEnd / PID 死。`DISCONNECT_TIMEOUT_SEC`（300s）超過で `broken` に遷移し、紐づくタスクは `aborted` + cascade。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値), [`07-state-machine.md#3-conductor--task-の同時遷移`](07-state-machine.md#3-conductor--task-の同時遷移) | broken / cascade |
+| disconnected | （Conductor 状態だが Task と連動）Claude プロセス不在 / SessionEnd / PID 死。`DISCONNECT_TIMEOUT_SEC`（300s）超過で `broken` に遷移し、紐づくタスクは `aborted` + cascade。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値), [`07-state-machine.md#3-conductor--task-の同時遷移`](07-state-machine.md#3-conductor--task-の同時遷移) | broken / cascade |
 
 **関連 spec**: [`07-state-machine.md`](07-state-machine.md)
 
@@ -76,17 +76,19 @@ glossary には要約と一次リンクのみを置く方針を取る。
 
 **関連 spec**: [`../../CLAUDE.md#タスク属性`](../../CLAUDE.md#タスク属性) / [`07-state-machine.md`](07-state-machine.md)
 
-## 5. Conductor FSM 状態（7 値）
+## 5. Conductor FSM 状態（9 値）
 
 | 用語 | 定義 | 一次リンク | 関連 |
 |------|------|-----------|------|
-| starting | `CONDUCTOR_REGISTERED` 直後。Claude プロセス未確認の初期状態。60 秒で disconnected へ TIMEOUT。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値) | REGISTERED |
-| idle | タスク割当可能な定常状態。Claude セッション確立済み。`SESSION_STARTED` 到達または `resetConductor` で遷移。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値) | assignTask |
-| assigning | `assignTask` で `/clear` 送信済みかつ `SESSION_STARTED` 未到達の中間状態。60 秒で disconnected。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値) | running |
-| running | タスク実行中。`SESSION_STARTED(source=clear)` または `SESSION_ACTIVE(hasTaskRunId)` で遷移。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値) | assigning / DONE |
-| asking | `AskUserQuestion` を Notification hook で受信した状態。ユーザー入力待ち（T181）。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値), [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | SESSION_ASK |
-| disconnected | Claude プロセス不在 / SessionEnd / PID 死。300 秒超過で `broken` へ遷移。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値) | PID watcher / broken |
-| broken | disconnected 300s 超過の **終端状態**。`cmux-team clear-conductor` のみで解除。 | [`07-state-machine.md#11-状態一覧-7-値`](07-state-machine.md#11-状態一覧-7-値), [`07-state-machine.md#15-不変条件`](07-state-machine.md#15-不変条件) | disconnected |
+| reserved | pane だけ作成・claude 未起動（pid/sessionId 不在）。初回タスク assign で `kill+spawn` を経て `assigning → running` へ遷移する（T421）。TUI では `idle` と同表示（T429）。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値), [`07-state-machine.md#15-内部-status--tui-表示マッピング-t429`](07-state-machine.md#15-内部-status--tui-表示マッピング-t429) | idle / kill+spawn |
+| starting | `CONDUCTOR_REGISTERED` 直後。Claude プロセス未確認の初期状態。60 秒で disconnected へ TIMEOUT。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | REGISTERED |
+| idle | タスク割当可能な定常状態。Claude セッション確立済み。`SESSION_STARTED` 到達または `resetConductor` で遷移。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | assignTask |
+| assigning | `assignTask` で `/clear` 送信済みかつ `SESSION_STARTED` 未到達の中間状態。60 秒で disconnected。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | running |
+| running | タスク実行中。`SESSION_STARTED(source=clear)` または `SESSION_ACTIVE(hasTaskRunId)` で遷移。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | assigning / DONE |
+| asking | `AskUserQuestion` を Notification hook で受信した状態。ユーザー入力待ち（T181）。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値), [`05-install-and-infrastructure.md#メッセージング`](05-install-and-infrastructure.md#メッセージング) | SESSION_ASK |
+| disconnected | Claude プロセス不在 / SessionEnd / PID 死。300 秒超過で `broken` へ遷移。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | PID watcher / broken |
+| broken | disconnected 300s 超過の **終端状態**。`cmux-team clear-conductor` のみで解除。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値), [`07-state-machine.md#16-不変条件`](07-state-machine.md#16-不変条件) | disconnected |
+| error | `StopFailure` hook 受信（API エラー確定）状態。`lastApiError` を伴う。次の `SESSION_STARTED` / `SESSION_IDLE` で自然解除される（T392）。 | [`07-state-machine.md#11-状態一覧-9-値`](07-state-machine.md#11-状態一覧-9-値) | StopFailure / lastApiError |
 
 **関連 spec**: [`07-state-machine.md`](07-state-machine.md)
 

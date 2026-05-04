@@ -17,12 +17,13 @@
 
 ## 1. Conductor FSM
 
-### 1.1 状態一覧 (8 値)
+### 1.1 状態一覧 (9 値)
 
 `schema.ts` の `ConductorState.status` に対応。
 
 | 状態 | 意味 | 入口例 |
 |------|------|-------|
+| `reserved` | pane だけ作成・claude 未起動 (pid/sessionId 不在)。初回タスク assign で `kill+spawn` を経て `assigning → running` へ遷移 (T421) | `cmdConductor` で pane 確保のみ完了 |
 | `starting` | `CONDUCTOR_REGISTERED` 直後。Claude プロセス未確認 | 初回登録 |
 | `idle` | タスク割当可能。Claude セッション確立済 | `SESSION_STARTED` 到達 / `resetConductor` |
 | `assigning` | `assignTask` が `/clear` 送信済みで SESSION_STARTED 未到達 | `scanTasks` → `assignTask` |
@@ -111,7 +112,31 @@ stateDiagram-v2
     error --> running : SESSION_STARTED / SESSION_IDLE (hasTaskRunId)
 ```
 
-### 1.5 不変条件
+### 1.5 内部 status × TUI 表示マッピング (T429)
+
+`dashboard.tsx:buildConductorRow` の表示は内部 9 status を以下にマップする。
+**`reserved` は `idle` と完全同表示**（ユーザー視点ではどちらも「タスク待機中」であり、
+内部的に claude が起動済か未起動かはユーザー操作の判断材料にならないため、
+区別を表に出さない）。
+
+| 内部 status | アイコン | ラベル | 色 | 補足 |
+|---|---|---|---|---|
+| `reserved` | `○` | `[NNN] idle` | dim | `idle` と完全同表示 |
+| `idle` | `○` | `[NNN] idle` | dim | — |
+| `starting` | `✻` (spinner) | `[NNN] starting…` | CYAN | — |
+| `assigning` | `✻` (spinner) | `[NNN] T123 タイトル assigning…` | CYAN | — |
+| `running` | `✻` (spinner) | `[NNN] T123 タイトル 5m` | YELLOW | 旧 catch-all `else` を `case "running"` に明示化 |
+| `asking` | `⚠` | `[NNN] T123 asking <elapsed>` + `? <質問本文>` | YELLOW | 質問本文は 120 char で truncate |
+| `disconnected` | `⚠` | `[NNN] T123 disconnected <elapsed>` | YELLOW | — |
+| `broken` | `⨯` | `[NNN] broken <elapsed> use clear-conductor` | RED | `cmux-team clear-conductor` のみで解除 |
+| `error` | kind 別 (⏳/🔒/💰/⚡/⚠) | `[NNN] T123 error <kind>` + 80 char message | RED | T392 |
+| (未知 status) | (なし) | `[NNN] unknown <status>` | dim | observability 用 fallback。本来到達しない |
+
+**実装上のガード**: `dashboard.tsx:buildConductorRow` は `switch (status)` + `default: const _exhaustive: never = status;` で TS exhaustive check を強制する。
+`ConductorState["status"]` ユニオンに新値を追加して dashboard 更新を忘れた瞬間に compile error が出る（T421 で `reserved` が catch-all `else` に流れて `T000` 誤表示になった事故の再発防止）。
+仮にすり抜けてランタイムに未知値が降ってきても、`default` が pane に `unknown <status>` を出力するため AI 観察箱として可視化される。
+
+### 1.6 不変条件
 
 | ID | 条件 | 監視位置 |
 |----|------|---------|
@@ -122,7 +147,7 @@ stateDiagram-v2
 
 違反は `fsm_invariant_violation` ログに出る (P1 は log only、強制修正しない)。
 
-### 1.6 sessionId pre-inject と整合性チェック (T407)
+### 1.7 sessionId pre-inject と整合性チェック (T407)
 
 Conductor / Agent の新規セッション起動時、Manager 側で UUID v4 を発行し `--session-id <UUID>` で claude を起動する。
 

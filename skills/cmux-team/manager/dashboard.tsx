@@ -684,13 +684,10 @@ export function buildConductorRow(
   repoUrl: string | null,
   spinnerFrame: number = 0,
 ) {
-  const isStarting = c.status === "starting";
-  const isAssigning = c.status === "assigning";
-  const isIdle = c.status === "idle";
-  const isDisconnected = c.status === "disconnected";
-  const isBroken = c.status === "broken";
-  const isAsking = c.status === "asking";
-  const isError = !isAsking && c.status === "error";
+  // T429: 9 値ユニオンに narrow して switch + exhaustive check で全 status を網羅する。
+  // 旧 if/else チェーンの catch-all `else` が `running` 専用ロジックを兼任していたため、
+  // T421 で追加された `reserved` が catch-all に流れて `T000` 誤表示を起こしていた。
+  const status = c.status as ConductorState["status"];
   const elapsed = formatElapsed(c.startedAt);
   const surface = c.surface.replace("surface:", "");
   // T392: lastApiError は AgentState/MasterState/ConductorState のオプション拡張。
@@ -700,137 +697,173 @@ export function buildConductorRow(
 
   // メイン行
   const dimStyle = { style: { fg: GRAY } };
-  if (isStarting) {
-    const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text(spinChar, { style: { fg: CYAN } }),
-        ui.text(`[${surface}]`, { style: { fg: CYAN } }),
-        ui.text("starting…", { style: { fg: CYAN } }),
-      ])
-    );
-  } else if (isAssigning) {
-    // T232: assigning 状態は「タスク割り当て中（/clear → SESSION_STARTED 待ち）」
-    //       starting と同じトーン（spinner + CYAN + 省略記号）で表示する。
-    const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
-    const taskParts: ReturnType<typeof ui.text>[] = [];
-    if (c.taskId) {
-      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
-    }
-    if (c.taskTitle) {
-      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
-    }
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text(spinChar, { style: { fg: CYAN } }),
-        ui.text(`[${surface}]`, { style: { fg: CYAN } }),
-        ...taskParts,
-        ui.text("assigning…", { style: { fg: CYAN } }),
-      ])
-    );
-  } else if (isIdle) {
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text("○", dimStyle),
-        ui.text(`[${surface}]`, dimStyle),
-        ui.text("idle", { dim: true }),
-      ])
-    );
-  } else if (isAsking) {
-    const taskParts: ReturnType<typeof ui.text>[] = [];
-    if (c.taskId) {
-      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
-    }
-    if (c.taskTitle) {
-      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
-    }
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text("⚠", { style: { fg: YELLOW } }),
-        ui.text(`[${surface}]`),
-        ...taskParts,
-        ui.text("asking", { style: { fg: YELLOW } }),
-        ui.text(elapsed, { dim: true }),
-      ])
-    );
-    const q = (c.askQuestion ?? "").replace(/\s+/g, " ").trim();
-    if (q) {
-      const shown = q.length > 120 ? q.slice(0, 117) + "..." : q;
+  switch (status) {
+    // T429: reserved (pane だけ作成・claude 未起動) は idle と完全同表示にする。
+    // ユーザー視点ではどちらも「タスク待機中」であり、内部の起動済 / 未起動の
+    // 区別はユーザー操作の判断材料にならないため、case fallthrough で統一する。
+    case "reserved":
+    case "idle": {
       children.push(
         ui.row({ gap: 1 }, [
-          ui.text("  ?", { style: { fg: YELLOW } }),
-          ui.text(shown, { dim: true }),
+          ui.text("○", dimStyle),
+          ui.text(`[${surface}]`, dimStyle),
+          ui.text("idle", { dim: true }),
+        ])
+      );
+      break;
+    }
+    case "starting": {
+      const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(spinChar, { style: { fg: CYAN } }),
+          ui.text(`[${surface}]`, { style: { fg: CYAN } }),
+          ui.text("starting…", { style: { fg: CYAN } }),
+        ])
+      );
+      break;
+    }
+    case "assigning": {
+      // T232: assigning 状態は「タスク割り当て中（/clear → SESSION_STARTED 待ち）」
+      //       starting と同じトーン（spinner + CYAN + 省略記号）で表示する。
+      const spinChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+      const taskParts: ReturnType<typeof ui.text>[] = [];
+      if (c.taskId) {
+        taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+      }
+      if (c.taskTitle) {
+        taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+      }
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(spinChar, { style: { fg: CYAN } }),
+          ui.text(`[${surface}]`, { style: { fg: CYAN } }),
+          ...taskParts,
+          ui.text("assigning…", { style: { fg: CYAN } }),
+        ])
+      );
+      break;
+    }
+    case "running": {
+      // T429: 旧 catch-all `else` から明示分岐に昇格。
+      const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
+      const iconChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(iconChar, { style: { fg: YELLOW } }),
+          ui.text(`[${surface}]`),
+          ui.text(taskId, { bold: true }),
+          c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
+          ui.text(elapsed, { dim: true }),
+        ])
+      );
+      break;
+    }
+    case "asking": {
+      const taskParts: ReturnType<typeof ui.text>[] = [];
+      if (c.taskId) {
+        taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+      }
+      if (c.taskTitle) {
+        taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+      }
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text("⚠", { style: { fg: YELLOW } }),
+          ui.text(`[${surface}]`),
+          ...taskParts,
+          ui.text("asking", { style: { fg: YELLOW } }),
+          ui.text(elapsed, { dim: true }),
+        ])
+      );
+      const q = (c.askQuestion ?? "").replace(/\s+/g, " ").trim();
+      if (q) {
+        const shown = q.length > 120 ? q.slice(0, 117) + "..." : q;
+        children.push(
+          ui.row({ gap: 1 }, [
+            ui.text("  ?", { style: { fg: YELLOW } }),
+            ui.text(shown, { dim: true }),
+          ])
+        );
+      }
+      break;
+    }
+    case "disconnected": {
+      const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
+      const taskParts: ReturnType<typeof ui.text>[] = [];
+      if (c.taskId) {
+        taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+      }
+      if (c.taskTitle) {
+        taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+      }
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text("⚠", { style: { fg: YELLOW } }),
+          ui.text(`[${surface}]`),
+          ...taskParts,
+          ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
+        ])
+      );
+      break;
+    }
+    case "broken": {
+      // T250: broken 状態の Conductor は RED + ⨯ で明示。disconnectedAt を経過時間として表示し、
+      //       clear-conductor CLI での明示解除を促す。
+      const brokenElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text("⨯", { style: { fg: RED } }),
+          ui.text(`[${surface}]`),
+          ui.text(`broken ${brokenElapsed}`, { style: { fg: RED } }),
+          ui.text("use clear-conductor", { dim: true }),
+        ])
+      );
+      break;
+    }
+    case "error": {
+      // T392: API エラー表示 (StopFailure hook 受信)。kind 別アイコン + RED + 80 字 truncated message。
+      const icon = apiErrorIcon(cLastApiError?.kind);
+      const truncated = truncateApiErrorMessage(cLastApiError?.message);
+      const taskParts: ReturnType<typeof ui.text>[] = [];
+      if (c.taskId) {
+        taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
+      }
+      if (c.taskTitle) {
+        taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
+      }
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(icon, { style: { fg: RED } }),
+          ui.text(`[${surface}]`),
+          ...taskParts,
+          ui.text(`error ${cLastApiError?.kind ?? ""}`.trim(), { style: { fg: RED } }),
+        ])
+      );
+      if (truncated) {
+        children.push(
+          ui.row({ gap: 1 }, [
+            ui.text("  ", { dim: true }),
+            ui.text(truncated, { style: { fg: GRAY } }),
+          ])
+        );
+      }
+      break;
+    }
+    default: {
+      // T429: ConductorState["status"] に新 status を追加して dashboard を更新し忘れた瞬間に
+      // ここで compile error になる（T421 で reserved が catch-all に流れた事故の再発防止）。
+      // ランタイムでも observability fallback として pane に "unknown <status>" を出して
+      // AI 観察箱原則に従い未知状態を可視化する（本来到達しない）。
+      const _exhaustive: never = status;
+      void _exhaustive;
+      children.push(
+        ui.row({ gap: 1 }, [
+          ui.text(`[${surface}]`, { dim: true }),
+          ui.text(`unknown ${String(status as unknown as string)}`, { dim: true }),
         ])
       );
     }
-  } else if (isError) {
-    // T392: API エラー表示 (StopFailure hook 受信)。kind 別アイコン + RED + 80 字 truncated message。
-    const icon = apiErrorIcon(cLastApiError?.kind);
-    const truncated = truncateApiErrorMessage(cLastApiError?.message);
-    const taskParts: ReturnType<typeof ui.text>[] = [];
-    if (c.taskId) {
-      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
-    }
-    if (c.taskTitle) {
-      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
-    }
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text(icon, { style: { fg: RED } }),
-        ui.text(`[${surface}]`),
-        ...taskParts,
-        ui.text(`error ${cLastApiError?.kind ?? ""}`.trim(), { style: { fg: RED } }),
-      ])
-    );
-    if (truncated) {
-      children.push(
-        ui.row({ gap: 1 }, [
-          ui.text("  ", { dim: true }),
-          ui.text(truncated, { style: { fg: GRAY } }),
-        ])
-      );
-    }
-  } else if (isDisconnected) {
-    const disconnectedElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
-    const taskParts: ReturnType<typeof ui.text>[] = [];
-    if (c.taskId) {
-      taskParts.push(ui.text(`T${c.taskId.padStart(3, "0")}`, { bold: true }));
-    }
-    if (c.taskTitle) {
-      taskParts.push(buildTitleWithLinks(c.taskTitle, repoUrl));
-    }
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text("⚠", { style: { fg: YELLOW } }),
-        ui.text(`[${surface}]`),
-        ...taskParts,
-        ui.text(`disconnected ${disconnectedElapsed}`, { style: { fg: YELLOW } }),
-      ])
-    );
-  } else if (isBroken) {
-    // T250: broken 状態の Conductor は RED + ⨯ で明示。disconnectedAt を経過時間として表示し、
-    //       clear-conductor CLI での明示解除を促す。
-    const brokenElapsed = c.disconnectedAt ? formatElapsed(c.disconnectedAt) : "";
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text("⨯", { style: { fg: RED } }),
-        ui.text(`[${surface}]`),
-        ui.text(`broken ${brokenElapsed}`, { style: { fg: RED } }),
-        ui.text("use clear-conductor", { dim: true }),
-      ])
-    );
-  } else {
-    const taskId = `T${(c.taskId ?? "").padStart(3, "0")}`;
-    const iconChar = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
-    children.push(
-      ui.row({ gap: 1 }, [
-        ui.text(iconChar, { style: { fg: YELLOW } }),
-        ui.text(`[${surface}]`),
-        ui.text(taskId, { bold: true }),
-        c.taskTitle ? buildTitleWithLinks(c.taskTitle, repoUrl) : null,
-        ui.text(elapsed, { dim: true }),
-      ])
-    );
   }
 
   // Agent サブツリー
