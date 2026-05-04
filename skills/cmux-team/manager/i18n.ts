@@ -1024,7 +1024,7 @@ Rate-limit exhaustion exits 4.`,
   // T415: Web ダッシュボード URL 行 + O キーヘルプ
   metrics_url_label: "Open dashboard",
   metrics_url_not_running: "Web dashboard: not running",
-  metrics_open_browser_hint: "open browser",
+  metrics_open_browser_hint: "Open in browser",
 };
 
 const ja: typeof en = {
@@ -2004,23 +2004,23 @@ Flags:
 
   // ── T307: dashboard Metrics タブ ──────────────────────────────────────────────
   metrics_tab_title: "Metrics",
-  metrics_section_rate_limit_projection: "枯渇予測",
+  metrics_section_rate_limit_projection: "Rate Limit Projection",
   metrics_section_pool_tokens: "Pool Tokens (selectable: {count})",
   metrics_long_term: "long-term",
   metrics_recent_15m: "recent 15m",
-  metrics_before_reset: "リセットまで",
-  metrics_pool_no_selectable: "(selectable な token なし)",
-  metrics_pool_no_data: "データなし",
-  metrics_pool_marker_legend: "(* = reset 通過済みで実質クリア)",
+  metrics_before_reset: "before reset",
+  metrics_pool_no_selectable: "(no selectable tokens)",
+  metrics_pool_no_data: "no data",
+  metrics_pool_marker_legend: "(* = reset passed, effectively cleared)",
   metrics_label_risk: "RISK",
-  metrics_label_no_data: "データなし",
+  metrics_label_no_data: "no data",
   metrics_label_idle: "idle",
-  metrics_loading: "メトリクスを読み込み中…",
-  metrics_caption_from: "from: {role}/{surface} ({age}秒前)",
-  metrics_proxy_idle: "proxy idle? last seen {age}秒前",
-  metrics_url_label: "Web ダッシュボード",
-  metrics_url_not_running: "Web ダッシュボード: 未起動",
-  metrics_open_browser_hint: "ブラウザで開く",
+  metrics_loading: "loading metrics…",
+  metrics_caption_from: "from: {role}/{surface} ({age}s ago)",
+  metrics_proxy_idle: "proxy idle? last seen {age}s ago",
+  metrics_url_label: "Open dashboard",
+  metrics_url_not_running: "Web dashboard: not running",
+  metrics_open_browser_hint: "Open in browser",
 };
 
 const messages = { en, ja };

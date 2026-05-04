@@ -11,6 +11,7 @@ import {
   type DashboardServerHandle,
 } from "./dashboard-server";
 import { createDummyProject, type DummyProject } from "./test-project";
+import { initDB } from "./trace-store";
 
 describe("dashboard-server: Step 1 /api/health", () => {
   let project: DummyProject;
@@ -322,6 +323,116 @@ describe("dashboard-server: Step 4 GET / HTML 配信", () => {
     expect(html).toContain("var uPlot=function()");
     // SPA app.js が埋め込まれている
     expect(html).toContain("renderOverview");
+  });
+});
+
+describe("dashboard-server: 500 経路の log 詳細 (T433)", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-500-",
+      subdirs: ["logs", "traces"],
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("aggregator が throw すると stack + method + path + query が log される", async () => {
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+      aggregators: {
+        overview: () => Promise.reject(new Error("synthetic explosion")),
+      },
+    });
+    const res = await fetch(
+      `${handle.url}/api/overview?from=2026-04-01T00:00:00Z`,
+    );
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as any;
+    expect(body.error).toBe("internal");
+    expect(body.message).toContain("synthetic explosion");
+
+    const logPath = `${project.root}/.team/logs/manager.log`;
+    const tail = await Bun.file(logPath).text();
+    const last = tail
+      .trim()
+      .split("\n")
+      .reverse()
+      .find((l) => l.includes("dashboard_server_error"));
+    expect(last).toBeDefined();
+    expect(last!).toContain("method=GET");
+    expect(last!).toContain("path=/api/overview");
+    expect(last!).toContain("query=?from=2026-04-01T00:00:00Z");
+    expect(last!).toContain("synthetic explosion");
+    expect(last!).toMatch(/stack=/);
+  });
+});
+
+describe("dashboard-server: 壊れた payload_json でも /api/overview は 200 (T433 root cause)", () => {
+  let project: DummyProject;
+  let handle: DashboardServerHandle;
+
+  beforeEach(async () => {
+    project = await createDummyProject({
+      prefix: "cmux-team-dashboard-broken-payload-",
+      subdirs: ["logs", "traces"],
+    });
+  });
+
+  afterEach(async () => {
+    handle.stop();
+    await project.dispose();
+  });
+
+  test("hook_signals に 64KB truncate 済みの壊れた POST_TOOL_USE があっても 500 にならない", async () => {
+    const db = initDB(project.root);
+    // 1 件の valid な PRE_TOOL_USE と 1 件の壊れた POST_TOOL_USE を入れる。
+    // 壊れた payload は 64KB ぴったりに切れたケースを再現する形 — 末尾が " で閉じない
+    // ことで `JSON_EXTRACT` が `SQLiteError: malformed JSON` を投げる。
+    const insert = db.prepare(`
+      INSERT INTO hook_signals (timestamp, type, payload_json)
+      VALUES ($ts, $type, $payload)
+    `);
+    const now = new Date().toISOString();
+    insert.run({
+      $ts: now,
+      $type: "PRE_TOOL_USE",
+      $payload: JSON.stringify({ payload: { tool_name: "Bash" } }),
+    });
+    // 末尾が中途半端な文字列で切れた壊れた JSON
+    insert.run({
+      $ts: now,
+      $type: "POST_TOOL_USE",
+      $payload:
+        '{"type":"POST_TOOL_USE","payload":{"tool_response":{"success":false,"error":"truncated at 64KB and then',
+    });
+
+    handle = await startDashboardServer({
+      projectRoot: project.root,
+      db,
+    });
+
+    const res = await fetch(`${handle.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(Array.isArray(body.toolFailureRate)).toBe(true);
+    // 壊れた POST は失敗判定に乗らないため failures は 0
+    const totalFailures = body.toolFailureRate.reduce(
+      (acc: number, r: any) => acc + (r.failures ?? 0),
+      0,
+    );
+    expect(totalFailures).toBe(0);
+    // PRE は集計される
+    const totalPre = body.toolFailureRate.reduce(
+      (acc: number, r: any) => acc + (r.pre_total ?? 0),
+      0,
+    );
+    expect(totalPre).toBeGreaterThanOrEqual(1);
   });
 });
 

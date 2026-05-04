@@ -577,12 +577,15 @@ function aggregateToolFailureTimeline(
   sinceIso: string,
   untilIso: string,
 ): Array<{ bucket: string; pre_total: number; failures: number; rate: number }> {
+  // T433: json_valid ガード — payload_json が 64KB truncate 等で壊れた行は SQLite の
+  //       JSON_EXTRACT が `SQLiteError: malformed JSON` を throw する。AND の short-circuit
+  //       で壊れた行を skip し、失敗判定は valid な POST のみで行う（pre_total には影響しない）。
   const stmt = db.prepare(`
     SELECT
       substr(timestamp, 1, 13) AS bucket,
       SUM(CASE WHEN type = 'PRE_TOOL_USE' THEN 1 ELSE 0 END) AS pre_total,
       SUM(
-        CASE WHEN type = 'POST_TOOL_USE' AND (
+        CASE WHEN type = 'POST_TOOL_USE' AND json_valid(payload_json) AND (
           JSON_EXTRACT(payload_json, '$.payload.tool_response.success') = 0
           OR JSON_EXTRACT(payload_json, '$.payload.tool_response.error') IS NOT NULL
         ) THEN 1 ELSE 0 END
@@ -614,6 +617,7 @@ function aggregateBashFailureTimeline(
   sinceIso: string,
   untilIso: string,
 ): Array<{ bucket: string; bash: number; other: number }> {
+  // T433: json_valid ガード — 同上の理由で壊れた payload を skip。
   const stmt = db.prepare(`
     SELECT
       substr(timestamp, 1, 13) AS bucket,
@@ -622,6 +626,7 @@ function aggregateBashFailureTimeline(
     FROM hook_signals
     WHERE type = 'POST_TOOL_USE'
       AND timestamp >= $sinceIso AND timestamp <= $untilIso
+      AND json_valid(payload_json)
       AND (
         JSON_EXTRACT(payload_json, '$.payload.tool_response.success') = 0
         OR JSON_EXTRACT(payload_json, '$.payload.tool_response.error') IS NOT NULL
@@ -851,10 +856,27 @@ export async function startDashboardServer(
         try {
           return await fetchHandler(req);
         } catch (e: any) {
-          await log(
-            "dashboard_server_error",
-            `${req.method} ${req.url} ${e?.message ?? e}`,
-          );
+          // T433: stack + method + path + query を log に含めて 500 経路の経路特定を可能にする。
+          // request body は GET のため空。stack は 1 行に詰めて 4KB で truncate する。
+          let pathname = "(unparsed)";
+          let search = "(unparsed)";
+          try {
+            const u = new URL(req.url);
+            pathname = u.pathname;
+            search = u.search || "(none)";
+          } catch {
+            // URL parse 失敗時は "(unparsed)" を残す。req.url の生値も raw_url に含める。
+          }
+          const stackOneLine = String(e?.stack ?? "").replace(/\n/g, " | ");
+          const detail = [
+            `method=${req.method}`,
+            `path=${pathname}`,
+            `query=${search}`,
+            `raw_url=${req.url}`,
+            `error=${e?.message ?? String(e)}`,
+            `stack=${truncateUtf8(stackOneLine, 4096)}`,
+          ].join(" ");
+          await log("dashboard_server_error", detail);
           return errorResponse(500, {
             error: "internal",
             message: e?.message ?? String(e),

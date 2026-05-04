@@ -1286,6 +1286,7 @@ export function failureRateByTask(
       COUNT(*) AS total,
       SUM(
         CASE
+          WHEN NOT json_valid(h.payload_json) THEN 0
           WHEN JSON_EXTRACT(h.payload_json, '$.payload.tool_response.success') = 0 THEN 1
           WHEN JSON_EXTRACT(h.payload_json, '$.payload.tool_response.error') IS NOT NULL THEN 1
           ELSE 0
@@ -1409,6 +1410,7 @@ export function failureRateByTool(
       COUNT(*) AS total,
       SUM(
         CASE
+          WHEN NOT json_valid(payload_json) THEN 0
           WHEN JSON_EXTRACT(payload_json, '$.payload.tool_response.success') = 0 THEN 1
           WHEN JSON_EXTRACT(payload_json, '$.payload.tool_response.error') IS NOT NULL THEN 1
           ELSE 0
