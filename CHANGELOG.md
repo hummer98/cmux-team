@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.26.1] - 2026-05-04
+
+### Fixed
+
+- **`bin/cmux-team` bash wrapper の `PROJECT_ROOT` 上書きで別 repo の `.team/` が破壊される問題を修正**。v4.26.0 で `bin/cmux-team` を bash wrapper 化（T422）した際、wrapper 内のローカル変数名が `PROJECT_ROOT` になっており、親プロセス（Master 等）が `PROJECT_ROOT=<repo cwd>` を export 済みで wrapper を起動すると、wrapper 内の代入が既存 export を上書きして子 `bun run` プロセスにインストール先パス（`node_modules/@hummer98/cmux-team`）が伝播。`main.ts:findProjectRoot()` は `process.env.PROJECT_ROOT` を最優先するため、`create-task` が npm グローバル設置先の `.team/tasks/` にタスクを書き込み、Manager 側 `task-state.json` には反映されず Conductor が永遠に `reserved` のまま起動できない事象が発生していた。wrapper のローカル変数を `INSTALL_ROOT` にリネームして親プロセスの env を保護
+
 ## [4.26.0] - 2026-05-04
 
 ### Added
