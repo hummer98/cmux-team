@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.26.4] - 2026-05-05
+
+### Fixed
+
+- **dashboard `/api/overview` の 500 エラーと Metrics 画面のラベルを修正（T433）**。`hook_signals.payload_json` の 64KB truncation で生じた壊れた行（156 件）を SQLite `JSON_EXTRACT` が `malformed JSON` として throw していた 4 経路すべてに `json_valid()` ガードを追加し、`/api/overview` を 200 で返るようにした。同時に Metrics 画面の `i18n.ts` ja 側 12 キーを英語化し、英日でラベルを揃えた。`dashboard-server.ts` の outermost catch も改修し、500 経路で `method/path/query/raw_url/error/stack` を 1 行 detail に出力（response body には stack を含めない）
+- **reserved Conductor のタブ名が「[N] Claude Code」に上書きされる問題を修正（T432）**。`launchConductor()` の env に `CMUX_NO_RENAME_TAB=1` を追加。Master / Agent / spawn 経由 Conductor では設定済みだったが reserved → launch 経路では未設定で、Claude 起動時に using-cmux SessionStart hook がタブ名を上書きしていた。今後は `[N] Conductor` のまま維持される
+
 ## [4.26.3] - 2026-05-04
 
 ### Fixed
