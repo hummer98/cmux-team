@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.26.3] - 2026-05-04
+
+### Fixed
+
+- **dashboard で reserved Conductor が `T000 0s` と誤表示される問題を修正（T429）**。`startedAt` をフォールバックする catch-all ブランチが reserved 状態（pane だけ作成 / claude 未起動、`startedAt` 未設定）の Conductor にも 0 秒経過 + `T000` を吐いていた。catch-all を廃止し、reserved は明示的に `Reserved` バッジ表示にして経過時間を出さないようにした
+- **`pidfile.ts` の unlink 失敗と `reload.ts` の spawn 失敗を `manager.log` に記録するよう修正（T425）**。これまで黙って握り潰されていた pidfile cleanup エラー / reload spawn エラーを構造化ログに残すことで、daemon の異常終了・reload 失敗を事後追跡できるようにした
+
 ## [4.26.2] - 2026-05-04
 
 ### Changed
