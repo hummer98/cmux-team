@@ -19,9 +19,13 @@ while [ -L "$SOURCE" ]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
-PROJECT_ROOT="$( cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd )"
+# 注意: ここで `PROJECT_ROOT=...` と代入しないこと。Master プロセスが
+# `PROJECT_ROOT=<repo cwd>` を export 済みで来る場合があり、上書きすると
+# `exec` で子プロセス（bun → main.ts:findProjectRoot）にインストール先が
+# 伝播してしまい、別 repo の `.team/` を破壊する。別名を使う。
+INSTALL_ROOT="$( cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd )"
 
-MAIN_TS="$PROJECT_ROOT/skills/cmux-team/manager/main.ts"
+MAIN_TS="$INSTALL_ROOT/skills/cmux-team/manager/main.ts"
 
 # bun に exec で置き換える（bash 自体を bun プロセスに replace、親 PID を増やさない）
 exec bun run "$MAIN_TS" "$@"
