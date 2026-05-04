@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **BREAKING (T435): TUI ダッシュボードのキーボードショートカットを Vim ベースに統一**。
+  - 追加: `?` (help overlay), `gg` / `ge` (top / bottom — Vim chord), `gt` / `gp` (next / prev tab), `Ctrl+d` / `Ctrl+u` (half page), `o` (Enter と同じく開く), `Ctrl+o` (ブラウザで開く — 旧 `B` / `O` の統合), `Ctrl+s` (issues sync — 旧 `Ctrl+R` から移動), `j` / `k` (Up / Down)
+  - 維持: `1`-`6` (タブ direct jump), `Tab` (次タブ巡回), `Enter` (open), `Esc` (cancel/back), `q` / `Ctrl+q` (quit / full quit), `Ctrl+r` (reload), `s` (artifacts sort), `f` (artifacts filter), `y` / `n` (full-quit confirm modal)
+  - **Deprecated** (v.next で削除予定): `T J L A I M B O`。当面は alias として動作するが、押下時に `deprecated_key_used` イベントを `manager.log` に記録する
+  - **完全廃止** (alias なし): 単発 `g` (旧 top jump) は rezi-ui C5 制約 (chord prefix conflict) により `gg`/`ge`/`gt`/`gp` と共存不可のため alias 化不能。`Ctrl+G` (旧 bottom jump) は本リファクタで `ge` に統一
+  - 構造改善: binding / status bar / help overlay を `dashboard-keymap.ts` の `DASHBOARD_BINDINGS` registry に集約 (SSOT 化)。`createDashboardBindings(deps)` factory で依存注入、起動時に `validateRegistry` で chord prefix 衝突 (rezi-ui C5) と id 重複を detect
+  - rezi-ui 制約への対応: 単発 `g` と chord `g g` は共存不可 (chordMatcher.js:178-184) のため `g` を chord prefix 専用に変更、`?` / `Esc` の help overlay は state flag 駆動で view 全置換 (printable text が overlay 中ブロックされる C6 制約回避)
+
 ## [4.26.4] - 2026-05-05
 
 ### Fixed

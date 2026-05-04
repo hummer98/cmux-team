@@ -63,6 +63,15 @@ import { openDashboardUrlInBrowser } from "./browser-open";
 import { buildPoolHeaderDisplay } from "./pool-header-display";
 import type { PoolSummary } from "./pool-summary";
 import { hasPoolHeadroomFromSummary } from "./pool-throttle";
+// T435: dashboard キーバインド SSOT
+import {
+  createDashboardBindings,
+  buildAppKeys,
+  buildStatusBarItems,
+  buildHelpOverlayRows,
+  validateRegistry,
+  type KeymapDeps,
+} from "./dashboard-keymap";
 
 const LOG_VISIBLE_LINES = 30;
 const TASK_VISIBLE_LINES = 5;
@@ -590,6 +599,9 @@ export interface AppState {
   metricsScrollOffset: number;
   /** T415: O キー押下時の no-op / open 失敗通知。次の loadMetricsData で自動クリア */
   metricsStatusMessage: string | null;
+  // ── T435: help overlay ────────────────────────────────────────────
+  /** ? キーで開閉する help overlay。real overlay は rezi-ui C6 制約で使えないため state flag で view 全置換 */
+  showHelp: boolean;
 }
 
 // --- スピナー定義 ---
@@ -1485,7 +1497,9 @@ export async function startDashboard(
   opts?: { version?: string; onReload?: () => void; onQuit?: () => void; onFullQuit?: () => void }
 ): Promise<{ scheduleRefresh: () => void }> {
   const daemonState = getState();
-  let confirmingFullQuit = false;
+  // T435: registry は app.keys 配線時に確定するが、buildViewWithApp 内の status bar が
+  // 参照するため forward declaration として let で宣言する。
+  let dashboardBindings: ReadonlyArray<import("./dashboard-keymap").BindingSpec> = [];
 
   // T354: dashboard 内で参照する config の cache。startDashboard 起動時に 1 回だけ
   // loadConfig し、Settings タブの reload で更新する（Metrics の interval / poolTokens
@@ -1533,11 +1547,69 @@ export async function startDashboard(
       metricsLastLoadedMs: 0,
       metricsScrollOffset: 0,
       metricsStatusMessage: null,
+      showHelp: false,
     },
     config: { executionMode: "inline" },
   });
 
+  function buildHelpView(state: AppState) {
+    // T435 S7: state.showHelp=true 時に view を全置換するヘルプ画面。
+    // C6 制約により real overlay は使えないため page 単位で全置換する。
+    const rows = buildHelpOverlayRows(dashboardBindings);
+    const grouped = new Map<string, typeof rows[number][]>();
+    for (const r of rows) {
+      const key = r.deprecated ? "deprecated" : r.category;
+      const arr = grouped.get(key) ?? [];
+      arr.push(r);
+      grouped.set(key, arr);
+    }
+    const sectionTitleFor = (key: string) => {
+      switch (key) {
+        case "system": return t("help_category_system");
+        case "navigation": return t("help_category_navigation");
+        case "tab": return t("help_category_tab");
+        case "open": return t("help_category_open");
+        case "action": return t("help_category_action");
+        case "deprecated": return "Deprecated (will be removed in next major)";
+        default: return key;
+      }
+    };
+    const ORDER = ["system", "navigation", "tab", "open", "action", "deprecated"];
+    const children: any[] = [];
+    children.push(
+      ui.row({ gap: 1 }, [
+        ui.text(`─ ${t("help_overlay_title")} `, { bold: true }),
+        ui.text(HR_FILL, { dim: true }),
+      ]),
+    );
+    children.push(ui.text(""));
+    for (const cat of ORDER) {
+      const items = grouped.get(cat);
+      if (!items || items.length === 0) continue;
+      children.push(ui.text(sectionTitleFor(cat), { bold: true }));
+      for (const r of items) {
+        const parts: any[] = [
+          ui.kbd(r.key),
+          ui.text(r.text),
+          ui.text(`(${r.scopeLabel})`, { dim: true }),
+        ];
+        if (r.deprecated && r.replacement) {
+          parts.push(ui.text(`→ ${r.replacement}`, { dim: true }));
+        }
+        children.push(ui.row({ gap: 1 }, parts));
+      }
+      children.push(ui.text(""));
+    }
+    children.push(ui.text(t("help_overlay_hint_close"), { dim: true }));
+    void state;
+    return ui.page({
+      body: ui.column({ gap: 0 }, children),
+    });
+  }
+
   function buildViewWithApp(state: AppState) {
+    // T435: help overlay は state flag 駆動で view 全置換 (C6 制約)
+    if (state.showHelp) return buildHelpView(state);
     const { daemon, repoUrl } = state;
     const conductorsSectionLabel = formatConductorsSectionLabel([...daemon.conductors.values()]);
     const assignedTaskIds = new Set([...daemon.conductors.values()].map(c => c.taskId));
@@ -1749,88 +1821,22 @@ export async function startDashboard(
       footer: ui.statusBar({
         left: state.confirmingFullQuit
           ? [
-              ui.text("Full quit: close all surfaces and shut down?", { bold: true }),
+              ui.text(t("key_modal_full_quit_prompt"), { bold: true }),
               ui.kbd("Y"),
-              ui.text("yes"),
+              ui.text(t("key_modal_confirm")),
               ui.kbd("n"),
-              ui.text("cancel"),
+              ui.text(t("key_modal_cancel")),
             ]
-          : state.focusedArea === "tasks"
-          ? [
-              ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("Enter"), ui.text("open"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.focusedArea === "journal"
-          ? [
-              ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.focusedArea === "log"
-          ? [
-              ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.focusedArea === "artifacts"
-          ? [
-              ui.kbd("↑/↓"), ui.text("select"),
-              ui.kbd("Enter"), ui.text("open"),
-              ui.kbd("s"), ui.text(`sort:${state.artifactSort}`),
-              ui.kbd("f"), ui.text(state.artifactTypeFilter ? `type:${state.artifactTypeFilter}` : "filter"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.focusedArea === "settings"
-          ? [
-              ui.kbd("↑/↓"), ui.text("select"),
-              ui.kbd("Enter"), ui.text("open"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.activeTab === "issues"
-          ? [
-              ui.kbd("↑/↓"), ui.text("select"),
-              ui.kbd("Enter/O"), ui.text("view"),
-              ui.kbd("Ctrl+R"), ui.text("sync"),
-              ui.kbd("B"), ui.text("browser"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : state.focusedArea === "metrics"
-          ? [
-              ui.kbd("↑/↓"), ui.text("scroll"),
-              ui.kbd("g/Ctrl+G"), ui.text("top/bottom"),
-              ui.kbd("O"), ui.text(t("metrics_open_browser_hint")),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("I"), ui.text("issues"),
-              ui.kbd("ESC"), ui.text("back"),
-            ]
-          : [ // global
-              ui.kbd("T"), ui.text("tasks"),
-              ui.kbd("J"), ui.text("journal"),
-              ui.kbd("L"), ui.text("log"),
-              ui.kbd("A"), ui.text("artifacts"),
-              ui.kbd("4"), ui.text("settings"),
-              ui.kbd("5"), ui.text("issues"),
-              ui.kbd("M"), ui.text("metrics"),
-              ui.kbd("r"), ui.text("reload"),
-              ui.kbd("q"), ui.text("quit"),
-              ui.kbd("Ctrl+Q"), ui.text("full quit"),
-            ],
+          : (() => {
+              // T435: registry-driven status bar (旧 8 分岐の手書き定義は廃止)
+              const items = buildStatusBarItems(dashboardBindings, state);
+              const out: any[] = [];
+              for (const it of items) {
+                out.push(ui.kbd(it.key));
+                out.push(ui.text(it.text));
+              }
+              return out;
+            })(),
       }),
     });
   }
@@ -1870,284 +1876,235 @@ export async function startDashboard(
     } catch {}
   }
 
-  // キーバインド
-  app.keys({
-    Up: () => app.update((s) => {
-      switch (s.focusedArea) {
-        case "tasks":
-          return { ...s, taskCursor: Math.max(s.taskCursor - 1, 0) };
-        case "journal": {
-          // Up = 新しい方へ（offset 減少）
-          const newOffset = Math.max(s.journalScrollOffset - 1, 0);
-          return { ...s, journalScrollOffset: newOffset, journalAutoScroll: newOffset === 0 };
-        }
-        case "log": {
-          // Up = 新しい方へ（offset 減少）
-          const newOffset = Math.max(s.logScrollOffset - 1, 0);
-          return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
-        }
-        case "artifacts": {
-          return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
-        }
-        case "settings": {
-          // section 項目はスキップ（preview が出ないので cursor を合わせる意味がない）
-          let c = s.settingsCursor - 1;
-          while (c >= 0 && s.settingsItems[c]?.kind === "section") c--;
-          return { ...s, settingsCursor: Math.max(c, 0) };
-        }
-        case "issues": {
-          return { ...s, issueCursor: Math.max(s.issueCursor - 1, 0) };
-        }
-        case "metrics": {
-          return { ...s, metricsScrollOffset: Math.max(s.metricsScrollOffset - 1, 0) };
-        }
-        default:
-          return s;
-      }
-    }),
-    Down: () => app.update((s) => {
-      switch (s.focusedArea) {
-        case "tasks":
-          return { ...s, taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)) };
-        case "journal": {
-          // Down = 古い方へ（offset 増加）
-          const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
-          return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + 1, maxOffset), journalAutoScroll: false };
-        }
-        case "log": {
-          // Down = 古い方へ（offset 増加）
-          const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
-          return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
-        }
-        case "artifacts": {
-          const filtered = getFilteredArtifacts(s);
-          return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
-        }
-        case "settings": {
-          const max = s.settingsItems.length - 1;
-          let c = s.settingsCursor + 1;
-          while (c <= max && s.settingsItems[c]?.kind === "section") c++;
-          return { ...s, settingsCursor: Math.min(c, max) };
-        }
-        case "issues": {
-          const max = Math.max(s.issueItems.length - 1, 0);
-          return { ...s, issueCursor: Math.min(s.issueCursor + 1, max) };
-        }
-        case "metrics": {
-          // T354 S11: maxOffset で clamp（buildMetricsRows は dashboard.tsx 側で保持する
-          // metricsData/metricsError から都度組み立てて長さを推定する）。
-          const rows = buildMetricsRows(
-            s.metricsData,
-            s.metricsError,
-            s.metricsStatusMessage,
-          );
-          const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
-          return {
-            ...s,
-            metricsScrollOffset: Math.min(s.metricsScrollOffset + 1, maxOffset),
-          };
-        }
-        default:
-          return s;
-      }
-    }),
-    "1": () => switchTab("journal"),
-    "2": () => switchTab("artifacts"),
-    "3": () => switchTab("log"),
-    "4": () => switchTab("settings"),
-    "5": () => switchTab("issues"),
-    "6": () => switchTab("metrics"),
-    Tab: (ctx) => {
-      const tabs: AppState["activeTab"][] = ["journal", "artifacts", "log", "settings", "issues", "metrics"];
-      const idx = tabs.indexOf(ctx.state.activeTab);
-      const next = tabs[(idx + 1) % tabs.length]!;
-      switchTab(next);
-    },
-    T: () => app.update((s) => ({ ...s, focusedArea: "tasks" })),
-    J: () => switchTab("journal"),
-    L: () => switchTab("log"),
-    A: () => switchTab("artifacts"),
-    I: () => switchTab("issues"),
-    M: () => switchTab("metrics"),
-    "ctrl+r": (ctx) => {
-      if (ctx.state.activeTab !== "issues") return;
-      syncIssuesFromGh().catch((e: any) => {
-        log("issues_sync_error", e?.message ?? String(e)).catch(() => {});
-      });
-    },
-    B: (ctx) => {
-      if (ctx.state.activeTab !== "issues") return;
-      const item = ctx.state.issueItems[ctx.state.issueCursor];
-      if (!item?.issue.html_url) return;
-      try {
-        Bun.spawn(["open", item.issue.html_url], { stdio: ["ignore", "ignore", "ignore"] });
-      } catch (e: any) {
-        log("issues_open_browser_failed", e?.message ?? String(e)).catch(() => {});
-      }
-    },
-    O: (ctx) => {
-      // T415: Issues タブと Metrics タブで共有される大文字 O キー。activeTab で分岐。
-      if (ctx.state.activeTab === "issues") {
-        openSelectedIssueInViewer(ctx.state).catch((e: any) => {
-          log("viewer_error", e?.message ?? String(e)).catch(() => {});
-        });
-        return;
-      }
-      if (ctx.state.activeTab === "metrics") {
-        const url = ctx.state.metricsData?.dashboardServerUrl ?? null;
-        const r = openDashboardUrlInBrowser(url);
-        if (!r.ok) {
-          const msg =
-            r.reason === "no_url"
-              ? t("metrics_url_not_running")
-              : `open failed: ${r.reason ?? ""}`;
-          log(
-            "metrics_open_browser_failed",
-            `reason=${r.reason ?? ""} url=${url ?? ""}`,
-          ).catch(() => {});
-          app.update((s) => ({ ...s, metricsStatusMessage: msg }));
-        }
-        return;
-      }
-    },
-    // Artifacts タブ専用キー
-    Enter: (ctx) => {
-      const currentState = ctx.state;
-      // tasks タブ: 選択中タスクをビューアで開く
-      if (currentState.focusedArea === "tasks") {
-        const { taskList } = currentState.daemon;
-        const selected = taskList[currentState.taskCursor];
-        if (!selected?.filePath) return;
+  // ── T435: registry-driven keybindings ────────────────────────────────────
+  // 旧 app.keys インライン定義 (T J L A I M B O / 単発 g / Ctrl+G / Ctrl+R(issues)) は
+  // dashboard-keymap.ts の DASHBOARD_BINDINGS に集約。Up/Down は単一 binding 内で
+  // focusedArea で分岐する (F2 (a) 戦略)。
 
-        openArtifactInViewer(
-          app,
-          selected.filePath,
-          () => {
-            dashboardActive = true;
-            spinnerInterval = setInterval(() => {
-              try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
-            }, SPINNER_INTERVAL);
-            refresh();
-          },
-        ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
-        return;
+  // Up/Down の純粋関数 (focusedArea で分岐)
+  const navigateUpPure = (s: AppState): AppState => {
+    switch (s.focusedArea) {
+      case "tasks":
+        return { ...s, taskCursor: Math.max(s.taskCursor - 1, 0) };
+      case "journal": {
+        const newOffset = Math.max(s.journalScrollOffset - 1, 0);
+        return { ...s, journalScrollOffset: newOffset, journalAutoScroll: newOffset === 0 };
       }
-      // settings タブ: 選択中 overlay をビューアで開く
-      if (currentState.focusedArea === "settings") {
-        const item = currentState.settingsItems[currentState.settingsCursor];
-        if (!item || item.kind !== "overlay" || !item.exists) return;
-
-        openArtifactInViewer(
-          app,
-          item.filePath,
-          () => {
-            dashboardActive = true;
-            spinnerInterval = setInterval(() => {
-              try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
-            }, SPINNER_INTERVAL);
-            refresh();
-          },
-        ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
-        return;
+      case "log": {
+        const newOffset = Math.max(s.logScrollOffset - 1, 0);
+        return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
       }
-      // issues タブ: 選択中 issue を formatIssueShow でビューアに表示
-      if (currentState.focusedArea === "issues") {
-        openSelectedIssueInViewer(currentState).catch((e: any) => {
-          log("viewer_error", e?.message ?? String(e)).catch(() => {});
-        });
-        return;
+      case "artifacts":
+        return { ...s, artifactCursor: Math.max(s.artifactCursor - 1, 0) };
+      case "settings": {
+        let c = s.settingsCursor - 1;
+        while (c >= 0 && s.settingsItems[c]?.kind === "section") c--;
+        return { ...s, settingsCursor: Math.max(c, 0) };
       }
-
-      if (currentState.focusedArea !== "artifacts") return;
-      const filtered = getFilteredArtifacts(currentState);
-      if (filtered.length === 0) return;
-      const selected = filtered[currentState.artifactCursor];
-      if (!selected) return;
-
-      openArtifactInViewer(
-        app,
-        selected.filePath,
-        () => {
-          dashboardActive = true;
-          spinnerInterval = setInterval(() => {
-            try { app.update((s) => ({ ...s, spinnerFrame: s.spinnerFrame + 1 })); } catch {}
-          }, SPINNER_INTERVAL);
-          refresh();
-        },
-      ).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
-    },
-    g: () => app.update((s) => {
-      // g = 先頭（最新）へ、autoScroll ON
-      if (s.focusedArea === "journal") {
-        return { ...s, journalScrollOffset: 0, journalAutoScroll: true };
-      }
-      if (s.focusedArea === "log") {
-        return { ...s, logScrollOffset: 0, logAutoScroll: true };
-      }
-      if (s.focusedArea === "metrics") {
-        return { ...s, metricsScrollOffset: 0 };
-      }
-      return s;
-    }),
-    "ctrl+g": () => app.update((s) => {
-      // G = 末尾（最古）へ、autoScroll OFF
-      if (s.focusedArea === "journal") {
+      case "issues":
+        return { ...s, issueCursor: Math.max(s.issueCursor - 1, 0) };
+      case "metrics":
+        return { ...s, metricsScrollOffset: Math.max(s.metricsScrollOffset - 1, 0) };
+      default:
+        return s;
+    }
+  };
+  const navigateDownPure = (s: AppState): AppState => {
+    switch (s.focusedArea) {
+      case "tasks":
+        return { ...s, taskCursor: Math.min(s.taskCursor + 1, Math.max(s.daemon.taskList.length - 1, 0)) };
+      case "journal": {
         const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
-        return { ...s, journalScrollOffset: maxOffset, journalAutoScroll: false };
+        return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + 1, maxOffset), journalAutoScroll: false };
       }
-      if (s.focusedArea === "log") {
+      case "log": {
         const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
-        return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
+        return { ...s, logScrollOffset: Math.min(s.logScrollOffset + 1, maxOffset), logAutoScroll: false };
       }
-      if (s.focusedArea === "metrics") {
-        const rows = buildMetricsRows(
-          s.metricsData,
-          s.metricsError,
-          s.metricsStatusMessage,
-        );
+      case "artifacts": {
+        const filtered = getFilteredArtifacts(s);
+        return { ...s, artifactCursor: Math.min(s.artifactCursor + 1, filtered.length - 1) };
+      }
+      case "settings": {
+        const max = s.settingsItems.length - 1;
+        let c = s.settingsCursor + 1;
+        while (c <= max && s.settingsItems[c]?.kind === "section") c++;
+        return { ...s, settingsCursor: Math.min(c, max) };
+      }
+      case "issues": {
+        const max = Math.max(s.issueItems.length - 1, 0);
+        return { ...s, issueCursor: Math.min(s.issueCursor + 1, max) };
+      }
+      case "metrics": {
+        const rows = buildMetricsRows(s.metricsData, s.metricsError, s.metricsStatusMessage);
         const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
-        return { ...s, metricsScrollOffset: maxOffset };
+        return { ...s, metricsScrollOffset: Math.min(s.metricsScrollOffset + 1, maxOffset) };
       }
-      return s;
-    }),
-    s: () => app.update((s) => {
-      if (s.focusedArea !== "artifacts") return s;
-      const sorts: AppState["artifactSort"][] = ["id", "created", "updated"];
-      const idx = sorts.indexOf(s.artifactSort);
-      return { ...s, artifactSort: sorts[(idx + 1) % sorts.length]!, artifactCursor: 0 };
-    }),
-    f: () => app.update((s) => {
-      if (s.focusedArea !== "artifacts") return s;
-      const types = [null, "research", "decision", "session", "spec", "report"];
-      const idx = types.indexOf(s.artifactTypeFilter);
-      return { ...s, artifactTypeFilter: types[(idx + 1) % types.length]!, artifactCursor: 0 };
-    }),
-    r: (ctx) => { if (ctx.state.focusedArea === "global") opts?.onReload?.(); },
-    q: (ctx) => {
-      if (ctx.state.focusedArea !== "global") return;
+      default:
+        return s;
+    }
+  };
+  const navigateTopPure = (s: AppState): AppState => {
+    if (s.focusedArea === "journal") return { ...s, journalScrollOffset: 0, journalAutoScroll: true };
+    if (s.focusedArea === "log") return { ...s, logScrollOffset: 0, logAutoScroll: true };
+    if (s.focusedArea === "metrics") return { ...s, metricsScrollOffset: 0 };
+    return s;
+  };
+  const navigateBottomPure = (s: AppState): AppState => {
+    if (s.focusedArea === "journal") {
+      const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
+      return { ...s, journalScrollOffset: maxOffset, journalAutoScroll: false };
+    }
+    if (s.focusedArea === "log") {
+      const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+      return { ...s, logScrollOffset: maxOffset, logAutoScroll: false };
+    }
+    if (s.focusedArea === "metrics") {
+      const rows = buildMetricsRows(s.metricsData, s.metricsError, s.metricsStatusMessage);
+      const maxOffset = Math.max(0, rows.length - getMetricsVisibleLines());
+      return { ...s, metricsScrollOffset: maxOffset };
+    }
+    return s;
+  };
+  const halfPageStep = (visible: number) => Math.max(1, Math.floor(visible / 2));
+  const navigateHalfPageDownPure = (s: AppState): AppState => {
+    if (s.focusedArea === "journal") {
+      const step = halfPageStep(JOURNAL_VISIBLE_LINES);
+      const maxOffset = Math.max(0, s.journalEntries.length - JOURNAL_VISIBLE_LINES);
+      return { ...s, journalScrollOffset: Math.min(s.journalScrollOffset + step, maxOffset), journalAutoScroll: false };
+    }
+    if (s.focusedArea === "log") {
+      const step = halfPageStep(LOG_VISIBLE_LINES);
+      const maxOffset = Math.max(0, s.logLines.length - LOG_VISIBLE_LINES);
+      return { ...s, logScrollOffset: Math.min(s.logScrollOffset + step, maxOffset), logAutoScroll: false };
+    }
+    if (s.focusedArea === "metrics") {
+      const visible = getMetricsVisibleLines();
+      const step = halfPageStep(visible);
+      const rows = buildMetricsRows(s.metricsData, s.metricsError, s.metricsStatusMessage);
+      const maxOffset = Math.max(0, rows.length - visible);
+      return { ...s, metricsScrollOffset: Math.min(s.metricsScrollOffset + step, maxOffset) };
+    }
+    return s;
+  };
+  const navigateHalfPageUpPure = (s: AppState): AppState => {
+    if (s.focusedArea === "journal") {
+      const step = halfPageStep(JOURNAL_VISIBLE_LINES);
+      const newOffset = Math.max(s.journalScrollOffset - step, 0);
+      return { ...s, journalScrollOffset: newOffset, journalAutoScroll: newOffset === 0 };
+    }
+    if (s.focusedArea === "log") {
+      const step = halfPageStep(LOG_VISIBLE_LINES);
+      const newOffset = Math.max(s.logScrollOffset - step, 0);
+      return { ...s, logScrollOffset: newOffset, logAutoScroll: newOffset === 0 };
+    }
+    if (s.focusedArea === "metrics") {
+      const visible = getMetricsVisibleLines();
+      const step = halfPageStep(visible);
+      return { ...s, metricsScrollOffset: Math.max(s.metricsScrollOffset - step, 0) };
+    }
+    return s;
+  };
+  const cycleArtifactSortPure = (s: AppState): AppState => {
+    if (s.focusedArea !== "artifacts") return s;
+    const sorts: AppState["artifactSort"][] = ["id", "created", "updated"];
+    const idx = sorts.indexOf(s.artifactSort);
+    return { ...s, artifactSort: sorts[(idx + 1) % sorts.length]!, artifactCursor: 0 };
+  };
+  const cycleArtifactFilterPure = (s: AppState): AppState => {
+    if (s.focusedArea !== "artifacts") return s;
+    const types = [null, "research", "decision", "session", "spec", "report"];
+    const idx = types.indexOf(s.artifactTypeFilter);
+    return { ...s, artifactTypeFilter: types[(idx + 1) % types.length]!, artifactCursor: 0 };
+  };
+
+  const openTaskInViewerImpl = (s: AppState) => {
+    const selected = s.daemon.taskList[s.taskCursor];
+    if (!selected?.filePath) return;
+    openArtifactInViewer(app, selected.filePath, () => {
+      dashboardActive = true;
+      spinnerInterval = setInterval(() => {
+        try { app.update((st) => ({ ...st, spinnerFrame: st.spinnerFrame + 1 })); } catch {}
+      }, SPINNER_INTERVAL);
+      refresh();
+    }).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+  };
+  const openSettingsItemInViewerImpl = (s: AppState) => {
+    const item = s.settingsItems[s.settingsCursor];
+    if (!item || item.kind !== "overlay" || !item.exists) return;
+    openArtifactInViewer(app, item.filePath, () => {
+      dashboardActive = true;
+      spinnerInterval = setInterval(() => {
+        try { app.update((st) => ({ ...st, spinnerFrame: st.spinnerFrame + 1 })); } catch {}
+      }, SPINNER_INTERVAL);
+      refresh();
+    }).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+  };
+  const openSelectedArtifactInViewerImpl = (s: AppState) => {
+    const filtered = getFilteredArtifacts(s);
+    if (filtered.length === 0) return;
+    const selected = filtered[s.artifactCursor];
+    if (!selected) return;
+    openArtifactInViewer(app, selected.filePath, () => {
+      dashboardActive = true;
+      spinnerInterval = setInterval(() => {
+        try { app.update((st) => ({ ...st, spinnerFrame: st.spinnerFrame + 1 })); } catch {}
+      }, SPINNER_INTERVAL);
+      refresh();
+    }).catch((e: any) => { log("viewer_error", e?.message ?? String(e)).catch(() => {}); });
+  };
+  const openSelectedIssueInBrowserImpl = (s: AppState) => {
+    const item = s.issueItems[s.issueCursor];
+    if (!item?.issue.html_url) return;
+    try {
+      Bun.spawn(["open", item.issue.html_url], { stdio: ["ignore", "ignore", "ignore"] });
+    } catch (e: any) {
+      log("issues_open_browser_failed", e?.message ?? String(e)).catch(() => {});
+    }
+  };
+  const openMetricsDashboardInBrowserImpl = (s: AppState) => {
+    const url = s.metricsData?.dashboardServerUrl ?? null;
+    const r = openDashboardUrlInBrowser(url);
+    if (!r.ok) {
+      const msg = r.reason === "no_url"
+        ? t("metrics_url_not_running")
+        : `open failed: ${r.reason ?? ""}`;
+      log("metrics_open_browser_failed", `reason=${r.reason ?? ""} url=${url ?? ""}`).catch(() => {});
+      app.update((st) => ({ ...st, metricsStatusMessage: msg }));
+    }
+  };
+
+  const keymapDeps: KeymapDeps = {
+    switchTab,
+    syncIssuesFromGh,
+    openSelectedIssueInViewer,
+    openTaskInViewer: openTaskInViewerImpl,
+    openSettingsItemInViewer: openSettingsItemInViewerImpl,
+    openSelectedArtifactInViewer: openSelectedArtifactInViewerImpl,
+    openMetricsDashboardInBrowser: openMetricsDashboardInBrowserImpl,
+    openSelectedIssueInBrowser: openSelectedIssueInBrowserImpl,
+    navigateUp: navigateUpPure,
+    navigateDown: navigateDownPure,
+    navigateTop: navigateTopPure,
+    navigateBottom: navigateBottomPure,
+    navigateHalfPageDown: navigateHalfPageDownPure,
+    navigateHalfPageUp: navigateHalfPageUpPure,
+    cycleArtifactSort: cycleArtifactSortPure,
+    cycleArtifactFilter: cycleArtifactFilterPure,
+    reload: () => opts?.onReload?.(),
+    quit: () => { cleanup(); opts?.onQuit?.(); },
+    fullQuit: () => {
+      // when guard で state.confirmingFullQuit === true のときだけ呼ばれる。
+      // closure mirror への依存は廃止 (rezi-ui に getState/subscribe API が無いため)。
       cleanup();
-      opts?.onQuit?.();
+      opts?.onFullQuit?.();
     },
-    "ctrl+q": (ctx) => {
-      if (ctx.state.focusedArea !== "global") return;
-      confirmingFullQuit = true;
-      app.update((s) => ({ ...s, confirmingFullQuit: true }));
-    },
-    Y: () => {
-      if (confirmingFullQuit) {
-        cleanup();
-        opts?.onFullQuit?.();
-      }
-    },
-    n: () => {
-      confirmingFullQuit = false;
-      app.update((s) => ({ ...s, confirmingFullQuit: false }));
-    },
-    Escape: () => {
-      confirmingFullQuit = false;
-      app.update((s) => ({ ...s, confirmingFullQuit: false, focusedArea: "global" }));
-    },
-  });
+    log: (event, detail) => { log(event, detail).catch(() => {}); },
+  };
+
+  dashboardBindings = createDashboardBindings(keymapDeps);
+  validateRegistry(dashboardBindings);
+  app.keys(buildAppKeys(dashboardBindings));
 
   appInstance = app;
 

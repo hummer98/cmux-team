@@ -67,6 +67,7 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     metricsLastLoadedMs: 0,
     metricsScrollOffset: 0,
     metricsStatusMessage: null,
+    showHelp: false,
     ...overrides,
   };
 }

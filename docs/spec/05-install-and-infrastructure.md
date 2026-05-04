@@ -205,7 +205,9 @@ daemon 停止時に `cmux clear-status` でクリアする。
 - React + ink ベースのフルスクリーン TUI
 - セクション: ヘッダー（ステータス・PID・稼働時間・proxy ポート・5h/7d unified 使用率）、Conductor 一覧、タスクリスト、ログ/Journal タブ
 - 起動時は `bootPhase` を導入してプロキシ起動直後から TUI を表示
-- キーボードショートカット: `r` = リロード、`q` = 終了、Tasks タブで Enter = タスクドキュメントをフルスクリーン表示
+- キーボードショートカット (T435 で Vim ベースに統一): `?` = ヘルプ overlay、`Ctrl+r` = リロード、`q` = 終了、`Ctrl+q` = 完全終了、`Esc` = キャンセル / グローバル focus に戻る、Tab 切替 = `1`-`6` (journal/artifacts/log/settings/issues/metrics) または `Tab`/`gt`/`gp`、ナビ = `↑/↓` / `j/k`、上下端 = `gg`/`ge` (Vim chord)、半画面 = `Ctrl+d`/`Ctrl+u`、開く = `Enter`/`o`、ブラウザで開く = `Ctrl+o`、issues 同期 = `Ctrl+s`。詳細は help overlay (`?`) を参照。
+- 旧キー (`T J L A I M B O`) は v.next で削除予定の deprecated alias として残置 (T435)
+- 単発 `g` (旧 top jump) と `Ctrl+G` (旧 bottom jump) は **alias なしの完全廃止**。理由: 単発 `g` は rezi-ui C5 制約 (chord prefix conflict) により `gg`/`ge`/`gt`/`gp` と共存不可、`Ctrl+G` は本リファクタで `ge` に統一 (T435)
 - フォーカスシステム / カーソル / フッターを備え、Tasks 行はクリック可能（行全体がボタン）
 - 5h レート制限スロットリング時にダッシュボードにリセット残り時間を表示
 - Tasks の並び順は open 上位 + createdAt 降順、5件制限は撤廃
