@@ -125,6 +125,7 @@ export async function launchConductor(
     CMUX_CLAUDE_HOOKS_DISABLED: "1",
     CMUX_TEAM_MAIN_BRANCH: mainBranchEnv,
     CMUX_TEAM_SKIP_SYNC_CHECK: "1",
+    CMUX_NO_RENAME_TAB: "1",
   };
 
   // 2. Claude 起動コマンド組み立て
