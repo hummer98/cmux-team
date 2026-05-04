@@ -5,7 +5,7 @@
  * - 実 PID（process.pid）の alive 判定は OS 依存のため、isAliveImpl / psCommandImpl を DI して決定論化する
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
-import { writeFile, readFile } from "fs/promises";
+import { writeFile, readFile, unlink as realUnlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import {
@@ -378,6 +378,104 @@ describe("acquirePidFile - stale detection logging", () => {
     const match = stale[0]!.detail.match(/ps_output=(.*)$/);
     expect(match).toBeTruthy();
     expect(match![1]!.length).toBeLessThanOrEqual(80);
+  });
+});
+
+// --- T425 minor #1: unlink 失敗ログ ------------------------------------
+
+describe("acquirePidFile - unlink failure logging (T425 minor #1)", () => {
+  test("EBUSY 等の unlink エラーは pidfile_unlink_failed をログする (dead 経路)", async () => {
+    await writeFile(pidFilePath, "99999");
+    const logs: Array<{ event: string; detail: string }> = [];
+    const ebusyError = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    await expect(
+      acquirePidFile(pidFilePath, testDir, {
+        selfPid: 12345,
+        isAliveImpl: () => false, // dead 判定 → unlink path 141
+        psCommandImpl: async () => "",
+        retries: 1,
+        retryIntervalMs: 1,
+        logImpl: async (event, detail) => {
+          logs.push({ event, detail });
+        },
+        unlinkImpl: async () => {
+          throw ebusyError;
+        },
+      }),
+    ).rejects.toBeInstanceOf(PidFileLockedError); // 全 retry 失敗で locked 扱い
+    const failed = logs.filter((l) => l.event === "pidfile_unlink_failed");
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+    expect(failed[0]!.detail).toContain("error_code=EBUSY");
+    expect(failed[0]!.detail).toContain("path=" + pidFilePath);
+  });
+
+  test("ENOENT は pidfile_unlink_failed をログしない（既存挙動の保持）", async () => {
+    await writeFile(pidFilePath, "99999");
+    const logs: Array<{ event: string; detail: string }> = [];
+    const enoentError = Object.assign(new Error("no such file"), { code: "ENOENT" });
+    let callCount = 0;
+    await acquirePidFile(pidFilePath, testDir, {
+      selfPid: 12345,
+      isAliveImpl: () => false,
+      psCommandImpl: async () => "",
+      retries: 3,
+      retryIntervalMs: 1,
+      logImpl: async (event, detail) => {
+        logs.push({ event, detail });
+      },
+      unlinkImpl: async (p) => {
+        callCount++;
+        if (callCount === 1) throw enoentError; // 1 回目だけ ENOENT
+        await realUnlink(p); // 2 回目以降は real
+      },
+    });
+    expect(logs.filter((l) => l.event === "pidfile_unlink_failed").length).toBe(0);
+  });
+
+  test("unparseable 経路 (line 133) でも EBUSY → pidfile_unlink_failed", async () => {
+    await writeFile(pidFilePath, "not-a-number");
+    const logs: Array<{ event: string; detail: string }> = [];
+    const ebusyError = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    await expect(
+      acquirePidFile(pidFilePath, testDir, {
+        selfPid: 12345,
+        isAliveImpl: () => false,
+        psCommandImpl: async () => "",
+        retries: 1,
+        retryIntervalMs: 1,
+        logImpl: async (event, detail) => {
+          logs.push({ event, detail });
+        },
+        unlinkImpl: async () => {
+          throw ebusyError;
+        },
+      }),
+    ).rejects.toBeInstanceOf(PidFileLockedError);
+    const failed = logs.filter((l) => l.event === "pidfile_unlink_failed");
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("pid_reused 経路 (line 160) でも EBUSY → pidfile_unlink_failed", async () => {
+    await writeFile(pidFilePath, "99999");
+    const logs: Array<{ event: string; detail: string }> = [];
+    const ebusyError = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    await expect(
+      acquirePidFile(pidFilePath, testDir, {
+        selfPid: 12345,
+        isAliveImpl: () => true, // alive
+        psCommandImpl: async () => "-zsh", // cmux-team でない → pid_reused
+        retries: 1,
+        retryIntervalMs: 1,
+        logImpl: async (event, detail) => {
+          logs.push({ event, detail });
+        },
+        unlinkImpl: async () => {
+          throw ebusyError;
+        },
+      }),
+    ).rejects.toBeInstanceOf(PidFileLockedError);
+    const failed = logs.filter((l) => l.event === "pidfile_unlink_failed");
+    expect(failed.length).toBeGreaterThanOrEqual(1);
   });
 });
 

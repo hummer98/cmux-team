@@ -13,7 +13,7 @@
  *   - ps 取得失敗（空文字）時は保守的に "alive cmux-team" 扱いとし fail-stop
  *     （誤って稼働中の daemon を潰さないため）
  */
-import { writeFile, unlink, readFile, mkdir } from "fs/promises";
+import { writeFile, unlink as realUnlink, readFile, mkdir } from "fs/promises";
 import { readFileSync, unlinkSync } from "fs";
 import { dirname } from "path";
 import { execFile } from "child_process";
@@ -46,6 +46,26 @@ export interface AcquireOptions {
   isAliveImpl?: (pid: number) => boolean;
   // T423 S5: stale 判定の事後追跡用にログ DI を追加（既存 DI パターンと一貫）
   logImpl?: (event: string, detail: string) => Promise<void>;
+  // T425 minor #1: stale unlink の異常系を観測可能にするためテスト用 DI
+  unlinkImpl?: (path: string) => Promise<void>;
+}
+
+// T425 minor #1: stale 削除の共通ヘルパ。ENOENT は並行 unlink 想定で silent return、
+// それ以外（EBUSY / EPERM 等）は error_code 付きで pidfile_unlink_failed をログする。
+async function removeStalePidFile(
+  path: string,
+  unlinkImpl: (path: string) => Promise<void>,
+  logImpl: (event: string, detail: string) => Promise<void>,
+): Promise<void> {
+  try {
+    await unlinkImpl(path);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return;
+    await logImpl(
+      "pidfile_unlink_failed",
+      `path=${path} error_code=${e?.code ?? ""} error=${e?.message ?? e}`,
+    );
+  }
 }
 
 export async function psCommand(pid: number): Promise<string> {
@@ -104,6 +124,7 @@ export async function acquirePidFile(
   const psImpl = opts?.psCommandImpl ?? psCommand;
   const aliveImpl = opts?.isAliveImpl ?? realIsAlive;
   const logImpl = opts?.logImpl ?? log;
+  const unlinkImpl = opts?.unlinkImpl ?? realUnlink;
 
   // T287: pidfile の格納先（通常は <workspace>/.team/）が存在しない場合に備えて
   // 先に recursive mkdir する。新規フォルダ（git init 直後で .team/ 未作成）で
@@ -130,7 +151,7 @@ export async function acquirePidFile(
           "pidfile_stale_detected",
           `existing_pid=unparseable reason=unparseable`,
         );
-        try { await unlink(path); } catch { /* ENOENT 等は無視 */ }
+        await removeStalePidFile(path, unlinkImpl, logImpl);
       } else if (!aliveImpl(existingPid)) {
         // 死亡プロセス → stale → 削除 → リトライ
         // T423 S5: 事後追跡用に reason 付きでログする
@@ -138,7 +159,7 @@ export async function acquirePidFile(
           "pidfile_stale_detected",
           `existing_pid=${existingPid} reason=dead`,
         );
-        try { await unlink(path); } catch { /* ENOENT 等は無視 */ }
+        await removeStalePidFile(path, unlinkImpl, logImpl);
       } else {
         // 生きている → cmux-team らしさを ps で判定
         const psOutput = await psImpl(existingPid).catch(() => "");
@@ -157,7 +178,7 @@ export async function acquirePidFile(
           "pidfile_stale_detected",
           `existing_pid=${existingPid} reason=pid_reused ps_output=${truncatedPs}`,
         );
-        try { await unlink(path); } catch { /* ENOENT 等は無視 */ }
+        await removeStalePidFile(path, unlinkImpl, logImpl);
       }
 
       lastLockedPid = existingPid ?? lastLockedPid;
@@ -172,7 +193,7 @@ export async function acquirePidFile(
 
 export async function releasePidFile(path: string): Promise<void> {
   try {
-    await unlink(path);
+    await realUnlink(path);
   } catch (e: any) {
     if (e?.code === "ENOENT") return;
     await log("pidfile_release_failed", `path=${path} error=${e?.message ?? e}`);

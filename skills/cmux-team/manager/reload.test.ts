@@ -127,13 +127,25 @@ describe("performDaemonReload", () => {
     expect(reloadLog!.detail).toContain(`latestMainTs=${h.latestMainTs}`);
   });
 
-  test("child.pid が undefined でも log に NaN を入れず 'unknown' を出力する (defensive)", async () => {
+  test("spawn が pid=undefined を返したら daemon_reload_spawn_failed をログし exit(1) する (T425 minor #2)", async () => {
     const h = makeHarness({ spawnPidUndefined: true });
     await h.run();
-    const reloadLog = h.logs.find((l) => l.event === "daemon_reload_spawned");
-    expect(reloadLog).toBeDefined();
-    expect(reloadLog!.detail).toContain("child_pid=unknown");
-    expect(reloadLog!.detail).not.toContain("NaN");
+    // 新挙動: release → spawn → log:spawn_failed → exit:1（unref / spawned log は無し）
+    expect(h.events).toEqual([
+      "release",
+      "spawn",
+      "log:daemon_reload_spawn_failed",
+      "exit:1",
+    ]);
+    const failedLog = h.logs.find((l) => l.event === "daemon_reload_spawn_failed");
+    expect(failedLog).toBeDefined();
+    expect(failedLog!.detail).toContain("child_pid_undefined");
+    // spawned ログは出ない
+    expect(h.logs.find((l) => l.event === "daemon_reload_spawned")).toBeUndefined();
+    // unref は呼ばれない
+    expect(h.unrefCount).toBe(0);
+    // exit code は 1
+    expect(h.exitCalls).toEqual([1]);
   });
 
   test("unref は spawn 後・exit 前にちょうど 1 回呼ばれる", async () => {

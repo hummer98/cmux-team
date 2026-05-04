@@ -63,13 +63,23 @@ export async function performDaemonReload(
     },
   );
 
-  // child.pid は spawn が ENOENT 等で失敗した直後に undefined になり得る。
-  // defensive に "unknown" を入れてログを残す。
-  const childPid = child.pid ?? "unknown";
+  // T425 minor #2: spawn 直後 sync で child.pid が undefined の場合は spawn 失敗
+  // （bun 不在 ENOENT 等）。silent failure を回避するため exit(1) で early return する。
+  // child.on("error") + setImmediate で errno を取る案は親即時 exit の不変条件
+  // (T423 S1 reload chain 防止) を弱めるため採用しない（plan.md §2.3 参照）。
+  if (!child.pid) {
+    await logImpl(
+      "daemon_reload_spawn_failed",
+      `cmd=bun args=${absoluteMainTs} reason=child_pid_undefined`,
+    );
+    exitImpl(1);
+    return;
+  }
+
   // spawn 直後・親 exit 前にログを flush して TTY ハンドオーバー前にログを残す。
   await logImpl(
     "daemon_reload_spawned",
-    `child_pid=${childPid} latestMainTs=${absoluteMainTs}`,
+    `child_pid=${child.pid} latestMainTs=${absoluteMainTs}`,
   );
 
   // 親の event loop 参照を切る → 子が detached で生き続けても親はすぐ exit できる。
