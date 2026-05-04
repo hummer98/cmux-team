@@ -15,7 +15,7 @@ Issue #30 (Epic: Runtime backend abstraction) の Milestone M1 成果物。
 
 ## ファイル別分類
 
-### runtime-agnostic（24 ファイル）
+### runtime-agnostic（29 ファイル）
 
 | ファイル | 主な責務 |
 |---|---|
@@ -42,6 +42,7 @@ Issue #30 (Epic: Runtime backend abstraction) の Milestone M1 成果物。
 | `paths.ts` | surface 名のパス正規化 |
 | `rate-limit-display.ts` | rate limit 情報を dashboard UI に整形 |
 | `rate-limit-persistence.ts` | rate limit 情報の永続化・復元・stale 判定 |
+| `reload.ts` | TUI `r` 押下時の daemon 自己再起動 helper（spawn + unref + 親即時 exit、T423） |
 | `task.ts` | タスクメタデータ解析・依存解決・state 管理 |
 | `template.ts` | プロンプトテンプレート変数展開 |
 | `test-project.ts` | テスト用ダミープロジェクト helper |
@@ -78,11 +79,11 @@ Issue #30 (Epic: Runtime backend abstraction) の Milestone M1 成果物。
 
 | 分類 | ファイル数 | 割合 |
 |---|---|---|
-| runtime-agnostic | 28 | 65.1% |
-| runtime-specific | 5 | 11.6% |
-| boundary | 3 | 7.0% |
-| （型定義のみ / 境界グレー） | 7 | 16.3% |
-| 合計 | 43 | 100% |
+| runtime-agnostic | 29 | 65.9% |
+| runtime-specific | 5 | 11.4% |
+| boundary | 3 | 6.8% |
+| （型定義のみ / 境界グレー） | 7 | 15.9% |
+| 合計 | 44 | 100% |
 
 ---
 
@@ -132,4 +133,4 @@ Claude Code hook signal → 正規化イベントの対応:
 
 ---
 
-*更新: 2026-04-24（Issue #30 M1 棚卸し完了）*
+*更新: 2026-04-24（Issue #30 M1 棚卸し完了） / 2026-05-04（T423 で `reload.ts` を新設したため runtime-agnostic に追加）*

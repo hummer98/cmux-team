@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.26.2] - 2026-05-04
+
+### Changed
+
+- **`docs/spec/08-runtime-boundary.md` を T423 で新設された `reload.ts` に対応**。TUI `r` 押下時の daemon 自己再起動 helper（`spawn + unref + 親即時 exit`）を runtime-agnostic 分類に追記し、集計サマリ表を 28/43 → 29/44 に更新。コード変更は無く、ドキュメント同期のみのリリース
+
 ## [4.26.1] - 2026-05-04
 
 ### Fixed
