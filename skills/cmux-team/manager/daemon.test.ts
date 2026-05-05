@@ -1670,6 +1670,51 @@ describe("updateTeamJson: layout 反映 (T176)", () => {
   });
 });
 
+// T437: updateTeamJson の tmp ファイル ENOENT race を防ぐ。固定 tmp 名 (team.json.tmp) では
+// 並行呼び出しで先勝ち rename 後に後続 writeFile/rename が ENOENT で失敗する。
+// ユニーク tmp 名 + rename 失敗時 unlink クリーンアップで解消する。
+describe("updateTeamJson: 並行呼び出しと atomic write (T437)", () => {
+  test("N=20 並列呼び出しで ENOENT が発生せず、最終 team.json が valid JSON である", async () => {
+    const state = await createDaemon(testDir, "wide");
+
+    const N = 20;
+    const results = await Promise.allSettled(
+      Array.from({ length: N }, () => updateTeamJson(state)),
+    );
+
+    // updateTeamJson は内部で error をログするだけで throw しない構造のため、
+    // 全 promise が fulfilled になる。代わりに manager.log に updateTeamJson_failed
+    // が出ていないことで race が起きていないことを確認する。
+    for (const r of results) {
+      expect(r.status).toBe("fulfilled");
+    }
+
+    const logPath = join(testDir, ".team/logs/manager.log");
+    const logContent = existsSync(logPath) ? await readFile(logPath, "utf-8") : "";
+    // 旧コードでは ENOENT (rename の no such file or directory) が出る。
+    // 新コードでは出てはいけない。
+    expect(logContent).not.toContain("updateTeamJson failed");
+    expect(logContent).not.toContain("ENOENT");
+
+    // 最終の team.json が valid JSON である
+    const finalContent = await readFile(join(testDir, ".team/team.json"), "utf-8");
+    expect(() => JSON.parse(finalContent)).not.toThrow();
+  });
+
+  test("並行呼び出し後に team.json.*.tmp 残骸が残らない", async () => {
+    const state = await createDaemon(testDir, "wide");
+
+    const N = 10;
+    await Promise.all(Array.from({ length: N }, () => updateTeamJson(state)));
+
+    const entries = await readdir(join(testDir, ".team"));
+    const tmpLeftovers = entries.filter(
+      (name) => name.startsWith("team.json") && name.endsWith(".tmp"),
+    );
+    expect(tmpLeftovers).toEqual([]);
+  });
+});
+
 describe("loadVersion (T192)", () => {
   test('ルート package.json から "vX.Y.Z" 形式の文字列を返す', async () => {
     const { loadVersion } = await import("./daemon");

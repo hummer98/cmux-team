@@ -1,7 +1,7 @@
 /**
  * Daemon — メインループ + surface 管理
  */
-import { readdir, readFile, writeFile, mkdir, watch, rename } from "fs/promises";
+import { readdir, readFile, writeFile, mkdir, watch, rename, unlink } from "fs/promises";
 import { existsSync, openSync, readSync, closeSync, fstatSync } from "fs";
 import { join, dirname } from "path";
 import {
@@ -4255,6 +4255,14 @@ async function handleConductorDone(
   }
 }
 
+// T437: 並行呼び出しでも tmp ファイルが衝突しないようにユニーク名を生成する。
+// pid + base36 random の組み合わせで衝突確率は実用上ゼロ。
+// metrics-snapshot.ts:randomTmpName と同じパターン。
+function teamJsonTmpPath(teamJsonPath: string): string {
+  const r = Math.random().toString(36).slice(2, 10);
+  return `${teamJsonPath}.${process.pid}.${r}.tmp`;
+}
+
 export async function updateTeamJson(state: DaemonState): Promise<void> {
   const teamJsonPath = join(state.projectRoot, ".team/team.json");
   try {
@@ -4314,10 +4322,20 @@ export async function updateTeamJson(state: DaemonState): Promise<void> {
         tokenHandle: a.tokenHandle,
       })),
     }));
-    // アトミック書き込み: tmp → rename で中途半端な書き込みを防止
-    const tmpPath = teamJsonPath + ".tmp";
-    await writeFile(tmpPath, JSON.stringify(teamJson, null, 2) + "\n");
-    await rename(tmpPath, teamJsonPath);
+    // アトミック書き込み: tmp → rename で中途半端な書き込みを防止。
+    // T437: ユニーク tmp 名 + rename 失敗時の unlink で並行呼び出しの ENOENT race を防ぐ。
+    const tmpPath = teamJsonTmpPath(teamJsonPath);
+    try {
+      await writeFile(tmpPath, JSON.stringify(teamJson, null, 2) + "\n");
+      await rename(tmpPath, teamJsonPath);
+    } catch (e) {
+      try {
+        await unlink(tmpPath);
+      } catch {
+        // tmp が無いケースは無視（writeFile 失敗で未作成 / rename 成功後の rollback 等）
+      }
+      throw e;
+    }
   } catch (e: any) {
     await log("error", `updateTeamJson failed: ${e.message}`);
   }
