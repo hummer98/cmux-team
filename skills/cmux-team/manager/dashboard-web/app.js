@@ -45,6 +45,21 @@ function fmtNum(n) {
   return String(Math.round(n));
 }
 
+function fmtAxis(n) {
+  if (n == null || Number.isNaN(n)) return "";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    const v = n / 1_000_000;
+    return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)) + "M";
+  }
+  if (abs >= 1000) {
+    const v = n / 1000;
+    return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)) + "K";
+  }
+  if (abs >= 1 || abs === 0) return String(Math.round(n));
+  return n.toFixed(2);
+}
+
 function fmtPct(r) {
   if (r == null || Number.isNaN(r)) return "—";
   return (r * 100).toFixed(1) + "%";
@@ -140,7 +155,12 @@ function plotTimeSeries(elt, data, opts) {
     scales: { x: { time: true }, y: { auto: true } },
     axes: [
       { stroke: cssVar("--fg-dim") },
-      { stroke: cssVar("--fg-dim"), grid: { stroke: cssVar("--border") } },
+      {
+        stroke: cssVar("--fg-dim"),
+        grid: { stroke: cssVar("--border") },
+        values: (_self, splits) => splits.map(fmtAxis),
+        size: 44,
+      },
     ],
     series: [{ label: "time" }, ...series],
   };
