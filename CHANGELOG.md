@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [4.27.0] - 2026-05-05
+
+### Fixed
+
+- **dashboard-web の TOKENS チャート Y 軸ラベルが切れる問題を修正**。uPlot のデフォルトフォーマッタが `100,000` のような桁区切り表記で描画してカード幅を超え左端が切り落とされていた。`>=1M → "1.5M"` / `>=1K → "100K"` / `0<|n|<1 → "0.05"` の整形関数 `fmtAxis()` を導入し、`size:44` を組み合わせることで TOKENS のほか throughput / failure rate / spawn timeline / tasks tokens など全 time-series チャートで Y 軸ラベルが収まるようにした（反映には daemon 再起動が必要）
 
 ### Changed
 
