@@ -26,6 +26,8 @@ This matters more than it might seem. When AI agents work invisibly, two problem
 
 cmux-team is an **AI observatory**, not another automation black box. The terminal panes aren't decoration — they're the product. A 10-second glance at a Conductor pane is often enough to catch a problem that would otherwise only surface at the end.
 
+To peek into another project's runtime state without leaving your shell: `cmux-team status --project-root /path/to/other` (read-only by default; cross-project writes require `--project-root-confirm` or `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1`).
+
 The design principle: *reduce cognitive load by making the process **visible**, not by hiding it.*
 
 **What you do**: Give Claude instructions in natural language.

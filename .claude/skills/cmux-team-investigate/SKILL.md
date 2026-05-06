@@ -29,6 +29,21 @@ cmux surface の画面を相関させて、原因を切り分ける。
   `update-task`, `close-task` 等）を対象 CWD で実行してはならない
 - 修正が必要と判断した場合は、適切なリポジトリで別タスクとして起票する（Master が直接コードを書かない原則は維持）
 
+### `--project-root` flag の利用（推奨、Task 440）
+
+`cmux-team` CLI には `--project-root <path>` flag が用意されており、cd せずに別プロジェクトの状態を読める。
+
+```bash
+# read 系（status / agents / events / metrics / trace-task / trace-hooks）は確認不要
+cmux-team status --project-root "$TARGET"
+cmux-team trace-task <id> --project-root "$TARGET"
+cmux-team trace-hooks --project-root "$TARGET" --type SESSION_ENDED --limit 20
+```
+
+write 系コマンドを cwd と異なる project に対して実行すると確認 prompt がかかる（TTY なし環境では `--project-root-confirm` または `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` で skip 可能）。投資調査では write 系を対象に使わないこと。
+
+env 経路（`PROJECT_ROOT=<path> cmux-team ...`）も従来どおり機能するが、flag が指定されたら env は無視される。strict 検証として、flag で指定した path が存在しない / `.team/` を含まない場合は exit 1 する。
+
 ## Step 1: 対象リポジトリの特定
 
 ```bash

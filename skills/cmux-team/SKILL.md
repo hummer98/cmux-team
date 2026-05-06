@@ -340,3 +340,14 @@ cmux-team await-task --task-id 108
 - `--exclusive` ↔ 非排他 `--run-after-all` は共存不可（どちら側から起票しても `RUN_AFTER_ALL_CONFLICT`）
 - 非排他 `--run-after-all` 同士は 1 つまで（従来通り）
 - `--run-after-all` と `--exclusive` を同時指定すると警告のみで処理継続
+
+## 6. 他プロジェクトを覗く
+
+cmux-team は AI 観察箱として、**他プロジェクトの runtime 状態を読む**ことを中核ユースケースの 1 つとしている。`--project-root` flag で対象を指定できる。
+
+| 用途 | 例 |
+|------|----|
+| read 系（status / agents / events / metrics 等） | `cmux-team status --project-root /path/to/other` |
+| write 系（create-task / start / spawn-* 等） | cwd と異なる project への書き込みは確認 prompt が出る。TTY なし環境では `--project-root-confirm` または `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` env で skip |
+
+env 経路 `PROJECT_ROOT=...` も引き続きサポート（flag が指定されたら env は無視される）。flag で指定した path が存在しない / `.team/` を含まない場合は exit 1（strict 検証）。

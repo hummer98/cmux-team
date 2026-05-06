@@ -147,6 +147,45 @@ skills/cmux-team/manager/
 | `send-agent` | Agent/Conductor surface へメッセージ送信（`--surface`, positional message, `--no-return`）。Conductor → 他 surface 操作の唯一の入口 |
 | `trace-task` | 特定タスクのセッション履歴を分析 |
 
+### Project root 解決（Task 440）
+
+すべての CLI コマンドは module-level で project root を解決してから dispatch する。
+解決順位は次の 4 段で、上位ほど strict（不在で exit 1）になる。
+
+| 優先 | source | 振る舞い |
+|------|--------|---------|
+| 1 | `--project-root <path>` flag | 最優先 + strict。path 不在 → exit 1 (`error: project root not found: <path>`)。`<path>/.team/` 不在 → exit 1 (`error: not a cmux-team project: <path>`)。flag が指定されたら env は無視される |
+| 2 | `PROJECT_ROOT` env | 後方互換。path 不在は黙ってフォールバック（warn のみ）。throw しない |
+| 3 | cwd up-walk（最大 10 階層） | `.team/` を含む最近接 dir を採用 |
+| 4 | `process.cwd()` fallback | 最後の手段 |
+
+flag 経由で resolve した場合、`process.env.PROJECT_ROOT` も flag 由来値で再上書きされ、
+子プロセス（spawn-conductor / spawn-master / spawn-agent）にも継承される。
+
+#### Write gate（cross-project 書き込み防止）
+
+`--project-root` で指定した root が cwd-walk 結果と異なる状態で write 系コマンド
+（`start`, `create-task`, `update-task`, `close-task`, `abort-task`, `restart-task`, `delete-task`,
+`spawn-conductor`, `spawn-agent`, `spawn-master`, `send`, `send-agent`, `kill-agent`, `close-agent`,
+`clear-conductor`, `set-agent-instructions`, `delete-agent-instructions`, `artifacts add`,
+`token add|remove|rotate|set-plan|promote|migrate-subscription`）を実行すると、
+事故防止の確認 gate が発火する。
+
+判定: target / cwd を `realpathSync` で正規化した strict 文字列比較（symlink 差を吸収）。
+
+| 状況 | 振る舞い |
+|------|---------|
+| TTY なし（pipe stdin / CI） | exit 1 + stderr に `error: --project-root differs from cwd` |
+| TTY あり | `WARNING: writing to <target> (different from cwd). continue? (y/N)` を表示 |
+
+bypass 経路:
+- `--project-root-confirm` flag（一回限り、shell 履歴で意図的と判定可能）
+- `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` env（CI / 自動化向け、子プロセスに継承される）
+
+read 系コマンド（`status`, `agents`, `events`, `metrics`, `trace-task`, `trace-hooks`,
+`await-task`, `await-agent`, `get-agent-instructions`, `list-agent-instructions`,
+`pool status`, `gh`, `issue`, `pr` 等）は gate 対象外。
+
 ### メインループ
 
 ```

@@ -23,8 +23,9 @@
  *   ./main.ts trace-hooks [--type <T>] [--surface <s>] [--task-run <id>] [--role <r>] [--task-id <id>] [--limit <N>] [--json]
  */
 
-import { join, dirname, basename } from "path";
-import { existsSync, writeFileSync, mkdirSync, watch } from "fs";
+import { join, dirname, basename, resolve } from "path";
+import { existsSync, writeFileSync, mkdirSync, watch, realpathSync } from "fs";
+import { createInterface } from "node:readline/promises";
 import { homedir } from "os";
 import { readFile, readdir, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { execFile } from "child_process";
@@ -150,13 +151,38 @@ import { buildPoolHeaderLines } from "./pool-status-header";
 import { loadPoolSummary } from "./pool-summary";
 
 // --- プロジェクトルート検出 ---
-function findProjectRoot(): string {
-  // 環境変数（削除済み tmpdir を指している場合は無視してフォールバック）
+
+/**
+ * Task 440: `--project-root` flag 経路で path 不在 / `.team/` 不在を検出した場合に
+ * throw する error。flag 経路でのみ throw され、library import 経路（`opts` 未指定 /
+ * `opts.flag === undefined`）では従来どおり fall-through を維持する。
+ */
+export class ProjectRootError extends Error {
+  constructor(message: string, public kind: "not_found" | "not_a_project") {
+    super(message);
+    this.name = "ProjectRootError";
+  }
+}
+
+export function findProjectRoot(opts?: { flag?: string }): string {
+  // 1. --project-root flag（最優先、strict 検証あり、throw する）
+  //    library import 経路（flag 未指定）は throw しないので、現行 fall-through を維持する
+  if (opts?.flag !== undefined) {
+    const abs = resolve(process.cwd(), opts.flag);
+    if (!existsSync(abs)) {
+      throw new ProjectRootError(`project root not found: ${opts.flag}`, "not_found");
+    }
+    if (!existsSync(join(abs, ".team"))) {
+      throw new ProjectRootError(`not a cmux-team project: ${abs}`, "not_a_project");
+    }
+    return abs;
+  }
+  // 2. 環境変数（削除済み tmpdir を指している場合は無視してフォールバック）
   if (process.env.PROJECT_ROOT && existsSync(process.env.PROJECT_ROOT)) {
     return process.env.PROJECT_ROOT;
   }
 
-  // .team/ を含むディレクトリを探す
+  // 3. .team/ を含むディレクトリを探す
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     if (existsSync(join(dir, ".team"))) return dir;
@@ -165,6 +191,7 @@ function findProjectRoot(): string {
     dir = parent;
   }
 
+  // 4. fallback
   return process.cwd();
 }
 
@@ -174,6 +201,123 @@ function findProjectRoot(): string {
  */
 export function formatUptimeFromStartedAt(startedAtIso: string, now: number = Date.now()): number {
   return Math.max(0, Math.floor((now - new Date(startedAtIso).getTime()) / 1000));
+}
+
+// --- Task 440: write gate（cwd と異なる project root への書き込み防止） ---
+
+/**
+ * write 系コマンドの一覧。`true` は command 全体が write 系、`Set<string>` はその
+ * subcommand のみ write 系（残りは read 扱い）であることを表す。
+ *
+ * 列挙にないコマンドは read 扱い（gh / issue / pr / status / agents / events / metrics /
+ * trace-task / trace-hooks / await-task / get-agent-instructions / list-agent-instructions /
+ * pool status 等）。新規 write 系コマンドを追加するときは必ずここに登録すること。
+ */
+const WRITE_COMMANDS: Record<string, true | Set<string>> = {
+  start: true,
+  send: true, // SHUTDOWN / TASK_CREATED 等を queue に push する
+  "spawn-conductor": true,
+  "spawn-agent": true,
+  "spawn-master": true,
+  "send-agent": true,
+  "create-task": true,
+  "update-task": true,
+  "close-task": true,
+  "abort-task": true,
+  "restart-task": true,
+  "delete-task": true,
+  "kill-agent": true,
+  "close-agent": true,
+  "clear-conductor": true,
+  "set-agent-instructions": true,
+  "delete-agent-instructions": true,
+  artifacts: new Set(["add"]),
+  token: new Set(["add", "remove", "rotate", "set-plan", "promote", "migrate-subscription"]),
+};
+
+function isWriteCommand(command: string | undefined, subCmd: string | undefined): boolean {
+  if (!command) return false;
+  const v = WRITE_COMMANDS[command];
+  if (v === true) return true;
+  if (v instanceof Set) return subCmd !== undefined && v.has(subCmd);
+  return false;
+}
+
+export interface RunWriteGateOpts {
+  /** `--project-root-confirm` flag 同等の bypass */
+  confirmFlag?: boolean;
+  /** `CMUX_TEAM_PROJECT_ROOT_CONFIRM` env 同等の bypass */
+  confirmEnv?: string;
+  /** isTTY のテスト時 override（default: process.stdin.isTTY） */
+  isTty?: boolean;
+  /** readline factory のテスト時 override */
+  rlFactory?: () => { question(prompt: string): Promise<string>; close(): void };
+  /** exit handler のテスト時 override（default: process.exit） */
+  exit?: (code: number) => never;
+  /** stderr writer のテスト時 override（default: process.stderr.write） */
+  stderr?: (chunk: string) => void;
+}
+
+/**
+ * `--project-root` で指定された path が cwd-walk 結果と異なる場合に発火する write gate。
+ *
+ * - confirmFlag / confirmEnv が立っていれば即 return（bypass）
+ * - target と cwd を `realpathSync` で正規化して同一なら gate skip
+ * - TTY なし → stderr に error メッセージを出して exit(1)
+ * - TTY あり → confirmation prompt（y/N）を出し、yes 以外で exit(1)
+ */
+export async function runWriteGate(
+  targetRoot: string,
+  cwdRoot: string,
+  opts: RunWriteGateOpts = {},
+): Promise<void> {
+  const confirmFlag = opts.confirmFlag ?? hasFlag("project-root-confirm");
+  const confirmEnv = opts.confirmEnv ?? process.env.CMUX_TEAM_PROJECT_ROOT_CONFIRM;
+  const isTty = opts.isTty ?? Boolean(process.stdin.isTTY);
+  const exit = opts.exit ?? ((code: number) => { process.exit(code); }) as (code: number) => never;
+  const stderr = opts.stderr ?? ((s: string) => { process.stderr.write(s); });
+
+  if (confirmFlag || confirmEnv === "1") return;
+
+  // realpath で正規化して symlink 差を吸収（D4）
+  let targetReal: string;
+  let cwdReal: string;
+  try {
+    targetReal = realpathSync(targetRoot);
+  } catch {
+    targetReal = targetRoot;
+  }
+  try {
+    cwdReal = realpathSync(cwdRoot);
+  } catch {
+    cwdReal = cwdRoot;
+  }
+  if (targetReal === cwdReal) return;
+
+  if (!isTty) {
+    stderr(
+      `error: --project-root differs from cwd; use --project-root-confirm to bypass\n` +
+      `  target: ${targetRoot}\n` +
+      `  cwd:    ${cwdRoot}\n`,
+    );
+    exit(1);
+    return;
+  }
+
+  const rl = opts.rlFactory
+    ? opts.rlFactory()
+    : createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(
+      `WARNING: writing to ${targetRoot} (different from cwd). continue? (y/N) `,
+    );
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      exit(1);
+      return;
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 /** 最新の main.ts を検索（npm グローバル → ローカル → 自分自身） */
@@ -195,31 +339,10 @@ function findLatestMainTs(): string {
   return process.argv[1] || import.meta.path;
 }
 
-// T292: `main.ts` を CLI として起動された時のみ chdir する。
-// テストコードから library として import された場合は副作用を発生させない
-// （import 時に `PROJECT_ROOT` env が別テストの tmp dir を指している瞬間に
-//   chdir してしまい、その tmp dir が削除されると以降の cwd が無効になる事故を防ぐ）。
-const PROJECT_ROOT = findProjectRoot();
-process.env.PROJECT_ROOT = PROJECT_ROOT;
-if (import.meta.main) {
-  try {
-    process.chdir(PROJECT_ROOT);
-  } catch (e: any) {
-    console.error(`[cmux-team] chdir "${PROJECT_ROOT}" 失敗: ${e.message}`);
-    process.exit(1);
-  }
-}
-
-const execFileAsync = promisify(execFile);
-
-// --- config ---
-const DEFAULT_MODEL = "opus";
-
-function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
-  return cliOverride ?? config.models?.[role] ?? DEFAULT_MODEL;
-}
-
 // --- サブコマンド ---
+// Task 440: PROJECT_ROOT ブロックで `getArg("project-root")` を呼ぶため、args / getArg /
+// hasFlag の定義を PROJECT_ROOT 計算の前に置く。実行時の評価順序: args → command →
+// PROJECT_ROOT 計算（CLI モードのみ flag peek）→ chdir。
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -240,6 +363,59 @@ function requireArg(name: string): string {
 /** --<name> （値なし）フラグの有無を判定 */
 function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
+}
+
+// T292: `main.ts` を CLI として起動された時のみ chdir する。
+// テストコードから library として import された場合は副作用を発生させない
+// （import 時に `PROJECT_ROOT` env が別テストの tmp dir を指している瞬間に
+//   chdir してしまい、その tmp dir が削除されると以降の cwd が無効になる事故を防ぐ）。
+//
+// Task 440: `--project-root <path>` flag の優先化と write gate を追加。
+// - module-level: env / cwd-walk のみで暫定 resolve（test-project 隔離を壊さない）
+// - module-level の `process.env.PROJECT_ROOT = PROJECT_ROOT` は残す（library 互換性 100% 維持）
+// - CLI モード + flag 指定時のみ：
+//   1. 元 cwd の cwd-walk 結果を CWD_ROOT_FOR_GATE に snapshot（chdir / env 上書き前）
+//   2. flag 由来で resolve（throw を catch → exit 1）
+//   3. env を flag 由来値で再上書き
+let PROJECT_ROOT = findProjectRoot();
+process.env.PROJECT_ROOT = PROJECT_ROOT;
+
+/** Task 440: write gate 用の snapshot。flag 経路でのみ設定される。 */
+let CWD_ROOT_FOR_GATE: string | undefined;
+
+if (import.meta.main) {
+  const flagRoot = getArg("project-root");
+  if (flagRoot !== undefined) {
+    // ① 元 cwd の cwd-walk 結果を snapshot（chdir / env 上書き前）
+    CWD_ROOT_FOR_GATE = findProjectRoot();
+    // ② flag 由来で resolve（throw を catch）
+    try {
+      PROJECT_ROOT = findProjectRoot({ flag: flagRoot });
+    } catch (e: any) {
+      if (e instanceof ProjectRootError) {
+        console.error(`error: ${e.message}`);
+        process.exit(1);
+      }
+      throw e;
+    }
+    // ③ env を flag 由来値で再上書き
+    process.env.PROJECT_ROOT = PROJECT_ROOT;
+  }
+  try {
+    process.chdir(PROJECT_ROOT);
+  } catch (e: any) {
+    console.error(`[cmux-team] chdir "${PROJECT_ROOT}" 失敗: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+const execFileAsync = promisify(execFile);
+
+// --- config ---
+const DEFAULT_MODEL = "opus";
+
+function getModelForRole(config: TeamConfig, role: "master" | "conductor" | "agent", cliOverride?: string): string {
+  return cliOverride ?? config.models?.[role] ?? DEFAULT_MODEL;
 }
 
 /**
@@ -331,9 +507,9 @@ async function readStdin(): Promise<string> {
   });
 }
 
-/** ヘルプテキストを表示して正常終了 */
+/** ヘルプテキストを表示して正常終了。Task 440: 全コマンドで共通オプションを末尾に append する */
 function showHelp(text: string): never {
-  console.log(text.trim());
+  console.log(text.trim() + "\n\n" + t("help_common_options").trim());
   process.exit(0);
 }
 
@@ -5882,6 +6058,16 @@ if (args[0] === "--version" || args[0] === "-v") {
     console.log("cmux-team (version unknown)");
   }
   process.exit(0);
+}
+// Task 440: write 系コマンドで `--project-root` と cwd が一致しない場合は確認 gate を発火。
+// CWD_ROOT_FOR_GATE は flag 指定時のみ（chdir / env 上書き前の cwd-walk 結果として）設定される。
+{
+  const flagRoot = getArg("project-root");
+  if (flagRoot !== undefined && CWD_ROOT_FOR_GATE !== undefined) {
+    if (isWriteCommand(command, args[1])) {
+      await runWriteGate(PROJECT_ROOT, CWD_ROOT_FOR_GATE);
+    }
+  }
 }
 switch (command) {
   case "start":

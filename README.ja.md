@@ -26,6 +26,8 @@ Claude Code の組み込みサブエージェントは便利ですが、**中で
 
 cmux-team は **AI 観察箱** です。自動化ブラックボックスではありません。ターミナルペインは飾りではなく、それ自体がプロダクトです。Conductor ペインを 10 秒斜め読みするだけで、最終結果まで気づけなかった問題をその場で検出できます。
 
+シェルから離れずに別プロジェクトの runtime 状態を覗くなら `cmux-team status --project-root /path/to/other`（read 系はデフォルト許可。cross-project の write 系は `--project-root-confirm` または `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` で skip 可能）。
+
 設計原則：認知負荷を下げるのは「プロセスを隠す」ことではなく、**「プロセスを見やすくする」** ことで。
 
 **あなたがやること**: Claude に自然言語で指示するだけ。

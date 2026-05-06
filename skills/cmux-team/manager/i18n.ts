@@ -80,6 +80,16 @@ const en = {
   e2e_scenario1_tasks: "  Task 1 (research) → Task 2 (design) → Task 3 (impl)\n",
 
   // ── ヘルプテキスト ────────────────────────────────────────────────────────────
+  /**
+   * Task 440: 全 help_<cmd> の末尾に showHelp() で append される共通オプション。
+   * read 系・write 系で同じ文字列を使い、`--project-root-confirm` は write 系コマンドで
+   * のみ有効である旨を文中に明示する。
+   */
+  help_common_options: `Common options:
+  --project-root <path>      override project root (read by default; writes require confirmation)
+  --project-root-confirm     bypass cross-project write gate (write commands only;
+                             also: CMUX_TEAM_PROJECT_ROOT_CONFIRM=1 env)`,
+
   help_start: `
 cmux-team start -- launch daemon + spawn Master + show dashboard
 
@@ -941,6 +951,11 @@ Usage:
   cmux-team list-agent-instructions                 list overlay status per role (10 roles)
   cmux-team pool status                            show token pool dashboard (T323)
 
+Common options:
+  --project-root <path>      override project root (read-only by default; writes require confirmation)
+  --project-root-confirm     bypass the cross-project write gate (use with care)
+                             also: CMUX_TEAM_PROJECT_ROOT_CONFIRM=1 env
+
 For details on each command: cmux-team <command> --help`,
 
   // ── gh-cache (T272) ───────────────────────────────────────────────────────
@@ -1124,6 +1139,16 @@ const ja: typeof en = {
   e2e_scenario1_tasks: "  Task 1 (調査) → Task 2 (設計) → Task 3 (実装)\n",
 
   // ── ヘルプテキスト ────────────────────────────────────────────────────────────
+  /**
+   * Task 440: 全 help_<cmd> の末尾に showHelp() で append される共通オプション。
+   * read 系・write 系で同じ文字列を使い、`--project-root-confirm` は write 系コマンドで
+   * のみ有効である旨を文中に明示する。
+   */
+  help_common_options: `共通オプション:
+  --project-root <path>      project root を上書き（read はデフォルト許可、write は確認 prompt）
+  --project-root-confirm     cross-project write gate を skip（write コマンド限定。
+                             env: CMUX_TEAM_PROJECT_ROOT_CONFIRM=1 でも可）`,
+
   help_start: `
 cmux-team start -- daemon 起動 + Master spawn + ダッシュボード表示
 
@@ -1983,6 +2008,11 @@ Usage:
   cmux-team delete-agent-instructions --role <role> overlay を削除
   cmux-team list-agent-instructions                 ロールごとの overlay 有無を一覧（10 ロール）
   cmux-team pool status                            token pool ダッシュボード表示 (T323)
+
+共通オプション:
+  --project-root <path>      project root を上書き（read はデフォルト許可、write は確認 prompt）
+  --project-root-confirm     cross-project write gate を skip（write コマンド限定）
+                             env: CMUX_TEAM_PROJECT_ROOT_CONFIRM=1 でも可
 
 各コマンドの詳細: cmux-team <command> --help`,
 
