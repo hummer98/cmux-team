@@ -172,13 +172,20 @@ Claude: → cmux-team create-task --title "..." --status ready
 **トークンプール**
 | コマンド | やること |
 |---------|---------|
-| `cmux-team token add` | Claude OAuth トークンを対話式で登録 |
+| `cmux-team token add` | manual API key を対話式で登録（トークンを貼り付け） |
+| `cmux-team token add --subscription <handle> [--plan max-x20] [--tags any]` | Claude Max / subscription トークンを登録（keychain snapshot を取らず Claude Code 管理の OAuth に委ねる） |
 | `cmux-team token list` | 登録済みトークンと 5h/7d 使用率を表示 |
 | `cmux-team token remove --handle <h>` | トークンを削除 |
 | `cmux-team token rotate --handle <h>` | credential を再取得して auth hash を更新 |
 | `cmux-team token set-plan --handle <h> --plan <p>` | plan / ratio を手動設定 |
 | `cmux-team token promote --handle <h>` | auto-discover トークンを selectable に昇格 |
+| `cmux-team token migrate-subscription` | subscription row 用の cmux-team-token keychain エントリを一括削除（冪等） |
 | `cmux-team pool status` | pool capacity ダッシュボードを表示 |
+
+#### manual と subscription の違い
+
+- **`manual`** — 永続的な API key。cmux-team が macOS keychain（service `cmux-team-token`）にトークンを保存し、spawn したエージェントへ `CLAUDE_CODE_OAUTH_TOKEN` を inject する。
+- **`--subscription`** — Claude Max などの subscription。Claude Code 本体が `~/.claude/.credentials.json` で OAuth を管理し、必要に応じてトークンを refresh する。cmux-team は keychain snapshot を持たず、agent にトークンを inject しない — 認証は Claude Code に委ね、proxy 経由でリクエストを観測して使用率を追跡するのみ。subscription 由来の handle はすべてこちらを使う。
 
 **診断・補助**
 | コマンド | やること |
@@ -366,10 +373,15 @@ overlay の最大サイズは 100 KB。dashboard TUI の `Settings` タブ（`4`
 
 または環境変数: `CMUX_TEAM_TOKEN_POOL=1`。
 
-**トークン登録**（macOS Keychain 必須）:
+**トークン登録**（`manual` は macOS Keychain 必須。`subscription` は keychain を使わない）:
 
 ```bash
-cmux-team token add      # 対話式 — ~/.claude/.credentials.json を読むか手動入力
+# Manual API key（対話式、keychain に保存）
+cmux-team token add
+
+# Claude Max subscription（keychain を使わず、認証は Claude Code 管理）
+cmux-team token add --subscription @tayo --plan max-x20 --tags any
+
 cmux-team token list     # 5h/7d 使用率とともに全トークンを表示
 ```
 
