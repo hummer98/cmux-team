@@ -122,6 +122,8 @@ cmux-team delete-task --task-id 42 --journal "理由"
 
 各コマンドの詳細は `cmux-team <command> --help` で確認可能。
 
+**他プロジェクトを覗く（T440）:** 全コマンドに `--project-root <path>` フラグを追加可能。読み系（`status` / `agents` / `events` / `metrics` / `trace-task` 等）は無条件で受理される。書き込み系（`start` / `create-task` / `update-task` / `close-task` / `spawn-*` / `send` 等）は cwd と異なる root への書き込みを confirmation gate で防ぐ。bypass は `--project-root-confirm` フラグまたは `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` env で可能（CI / 自動化向け）。詳細は `docs/spec/05-install-and-infrastructure.md` の「Project root 解決」を参照。
+
 ## 5. スラッシュコマンド（Claude 内で使用）
 
 | コマンド | 説明 |
@@ -147,27 +149,25 @@ cmux-team delete-task --task-id 42 --journal "理由"
 - **Issues タブ:** GitHub issues 一覧（`Ctrl+R` で gh sync）
 - **Metrics タブ:** 集計サマリと Web dashboard URL（`O` でブラウザ起動。詳細は `docs/spec/12-web-dashboard.md`）
 
-**キーボードショートカット:**
+**キーボードショートカット (T435 で Vim ベースに統一):**
 
 | キー | 動作 |
 |------|------|
-| `T` | Tasks パネルにフォーカス |
-| `J` | Journal タブに切り替え |
-| `A` | Artifacts タブに切り替え |
-| `L` | Log タブに切り替え |
-| `I` | Issues タブに切り替え |
-| `M` | Metrics タブに切り替え |
-| `↑/↓` | スクロール / カーソル移動 |
-| `g` / `Ctrl+G` | リスト先頭 / 末尾へジャンプ |
-| `Enter` | 選択アイテムを Markdown ビューアで開く |
-| `O` | Issues タブ: GitHub viewer で開く / Metrics タブ: Web dashboard をブラウザで開く（T415） |
-| `B` | Issues タブで GitHub をブラウザで開く |
-| `Ctrl+R` | Issues タブで gh から再同期 |
-| `r` | リロード |
+| `?` | ヘルプ overlay 表示（全キー一覧） |
+| `1`〜`6` / `Tab` / `gt` / `gp` | タブ切替（Journal/Artifacts/Log/Settings/Issues/Metrics） |
+| `↑/↓` / `j/k` | カーソル移動 |
+| `gg` / `ge` | リスト先頭 / 末尾へジャンプ（Vim chord） |
+| `Ctrl+d` / `Ctrl+u` | 半画面スクロール |
+| `Enter` / `o` | 選択アイテムを開く（Artifacts は `mado` or `cat`） |
+| `c c` | Artifacts タブ: 選択中 artifact の絶対パスを `pbcopy` でクリップボードコピー（500ms 以内に 2 回目の `c`、別キーでキャンセル、成功/失敗 toast 表示。T439） |
+| `Ctrl+o` | ブラウザで開く（Issues / Metrics） |
+| `Ctrl+s` | Issues タブで gh から再同期 |
+| `Ctrl+r` | リロード |
 | `q` | TUI 終了（daemon は続行） |
-| `Q` | Full quit（全 surface を閉じてシャットダウン） |
-| `1/2/3/4/5/6` | タブ切り替え（Journal/Artifacts/Log/Settings/Issues/Metrics） |
-| `Tab` | タブを順に切り替え |
+| `Ctrl+q` | Full quit（全 surface を閉じてシャットダウン） |
+| `Esc` | キャンセル / グローバル focus に戻る |
+
+> 旧キー (`T J L A I M B O` / `r` / `Q` / `Ctrl+R`) は v.next で削除予定の deprecated alias として残置。単発 `g` と `Ctrl+G` は alias なしで完全廃止（chord prefix conflict のため）。詳細は `?` で表示される overlay を参照。
 
 **進捗確認の真のソース:**
 
@@ -192,6 +192,8 @@ cmux-team artifacts add file.md  # ファイルを追加
 
 **タイプ:** research, decision, session, spec, report
 **保存先:** `.team/artifacts/Axxx-<slug>.md`
+
+**Markdown viewer の解決順 (T439):** `CMUX_TEAM_MD_VIEWER` env → `mado`（yamamoto/mado、Electrobun ベース GUI viewer。検出時は detached 起動して即 return）→ `cat`（TUI を一時停止）。dashboard の Artifacts タブから `Enter` でも同じ経路。`pbcopy` で絶対パスをクリップボードにコピーしたい場合は `c c` chord を使う。
 
 スラッシュコマンド `/artifact` でも作成・表示可能。
 

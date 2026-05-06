@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.28.0] - 2026-05-07
+
+### Added
+
+- **CLI に `--project-root <path>` フラグを追加し、別プロジェクトの runtime 状態を覗けるようにした（T440）**。read 系コマンド（`status` / `tasks` / `artifacts list` / `metrics` 等）は無条件で受理し、cwd と異なる project root を指定すれば他プロジェクトの `.team/` を観測できる。write 系コマンド（`create-task` / `update-task` / `close-task` / `artifacts add` 等）は cwd と異なる resolved root への書き込みを confirmation gate で防ぐ。bypass は `--project-root-confirm` フラグまたは `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` 環境変数。`realpathSync` で symlink 差を吸収するため `~/git/foo` と `/Users/.../git/foo` のような表記揺れも同一視される
+- **TUI ダッシュボードの Artifacts タブで `c c` chord による絶対パスコピーを追加（T439）**。Artifacts focus 時に `c` を 500ms 以内に 2 回押すと選択中 artifact の絶対パスを `pbcopy` でクリップボードに送る。失敗時は stderr を toast で表示。pbcopy 不在の OS（Linux など）では専用メッセージを出す。chord pending 中は footer に `c-` インジケータを表示し、別キー押下で自動キャンセル
+- **TUI ダッシュボードに 1 行 toast 通知を追加（T439）**。footer 直上に成功・失敗メッセージを 2 秒間表示し自動消去。terminal width に応じて truncate される。`c c` コピーの結果通知に使われる
+
+### Changed
+
+- **TUI ダッシュボードの Markdown viewer を `mo` から `mado` に置き換え（T439）**。Artifacts / 各種仕様書を開く際のビューアが `mado` になり、detached spawn + `proc.unref()` で起動するため Manager セッションをブロックしない。`CMUX_TEAM_MD_VIEWER` 環境変数 → `mado` → `cat` の順で解決される。`cmux browser` 連携（`findExistingBrowserSurface()`）は `mo` サポートと共に削除された
+- **`docs/spec/01-skill-cmux-team.md` と `skills/cmux-team-guide/SKILL.md` を T435/T439/T440 に合わせて更新**。CLI 共通オプション節、他プロジェクト peek の節、Vim ベースのキーボードショートカット表、Markdown viewer 解決順を追記
+
 ## [4.27.1] - 2026-05-06
 
 ### Fixed

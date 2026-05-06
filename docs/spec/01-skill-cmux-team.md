@@ -92,6 +92,8 @@ description: >
 
 > `cmux-team stop` は v4.3.0 で廃止（T286）。cmux セッション終了で daemon が自動停止するため不要。手動停止は `kill <pid>`（`.team/daemon.pid`）で行う。
 
+**共通オプション (T440)**: 全コマンドに `--project-root <path>` / `--project-root-confirm` を指定可能。`--project-root` で別プロジェクトの runtime 状態を覗ける（read 系は無条件で受理、write 系は cwd と異なる root への書き込みを confirmation gate で防ぐ）。bypass: `--project-root-confirm` flag または `CMUX_TEAM_PROJECT_ROOT_CONFIRM=1` env。詳細は `05-install-and-infrastructure.md#project-root-解決task-440` を参照。
+
 ### 1a. プロジェクト固有の追加指示（agent instructions overlay、T247 / T342）
 
 プロジェクトルート直下に `.team/agent-instructions/<role>.md` を置くと、対応する prompt の `{{PROJECT_INSTRUCTIONS}}` プレースホルダがその内容で置換される。
