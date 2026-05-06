@@ -425,12 +425,14 @@ pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%
 
 ### 計算式（forecast.ts）
 
-各 selectable アカウント i の per-hour rate:
+各 selectable アカウント i の per-hour rate（T444 で BLOCKER_7D 反映に変更）:
 
 ```
+remaining_i = max(BLOCKER_7D - util_7d_i, 0)   # T444 で blocker 上限反映
+
 rate_i(t) =
-  t < hoursToReset_i  → (1 - util_7d_i) / hoursToReset_i        # reset 前: 残量 / 残時間
-  t >= hoursToReset_i → 1 / 168                                  # reset 後: sustainable pace
+  t < hoursToReset_i  → remaining_i / hoursToReset_i              # reset 前: blocker 残量 / 残時間
+  t >= hoursToReset_i → BLOCKER_7D / 168                          # reset 後: blocker 比 sustainable pace
 ```
 
 bin = `[a, b]` における allocation 積分:
@@ -438,13 +440,19 @@ bin = `[a, b]` における allocation 積分:
 ```
 alloc_i([a, b]) =
   b <= reset_i      : (b - a) * rate_pre_i
-  a >= reset_i      : (b - a) / 168
-  bin straddles     : (reset - a) * rate_pre + (b - reset) / 168
+  a >= reset_i      : (b - a) * BLOCKER_7D / 168
+  bin straddles     : (reset - a) * rate_pre + (b - reset) * BLOCKER_7D / 168
 
 pool(d)  = Σ alloc_i(bin_d) * plan_ratio_i
-denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i
-bar(d)   = pool(d) / denom(d) * 100   # 100% = sustainable pace
+denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i           # 変更なし（numerator 側で BLOCKER_7D 反映）
+bar(d)   = pool(d) / denom(d) * 100   # 100% = (BLOCKER_7D を上限とした) sustainable pace
 ```
+
+> **T444:** 旧式 `(1 - util_7d) / 1` は selectToken の `effUtil7d > BLOCKER_7D` exclude
+> （token-store.ts L1259）と整合せず、spark が 100% でも 5% しか余白がない楽観的表示になっていた。
+> numerator 側で `remaining = max(BLOCKER_7D - util_7d, 0)` / post_rate = `BLOCKER_7D / 168`
+> に変更し、denom は維持。「100% = sustainable pace」の semantics は保たれる
+> （実用上、BLOCKER_7D 比 sustainable pace を 100% として読む）。
 
 ### bin 切り出し
 

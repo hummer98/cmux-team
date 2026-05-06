@@ -380,7 +380,7 @@ cmux-team token list     # 5h/7d 使用率とともに全トークンを表示
 3. 以下の順で admit: `projectDefault` 一致 → `include` リスト → `isOss` フラグ → tag マッチ（`"any"`）
 4. スコア = `0.3 × util_5h + 0.7 × util_7d` — 最小値を選択
 
-TUI dashboard ヘッダーには **7 日 forecast スパークライン**（Day 0..6 の日次割当、100% = sustainable pace）と次に spawn-agent が選ぶ **next 候補** を表示します:
+TUI dashboard ヘッダーには **7 日 forecast スパークライン**（Day 0..6 の日次割当、100% = BLOCKER_7D (=0.95) を上限とした sustainable pace）と次に spawn-agent が選ぶ **next 候補** を表示します:
 
 ```
 pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%

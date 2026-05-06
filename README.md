@@ -324,7 +324,7 @@ cmux-team token list     # show all tokens with 5h/7d utilization
 3. Admit by: `projectDefault` match → `include` list → `isOss` flag → tag match (`"any"`)
 4. Score = `0.3 × util_5h + 0.7 × util_7d` — pick the lowest
 
-The TUI dashboard header shows the **7-day forecast sparkline** (Day 0..6 daily allocation, 100% = sustainable pace) and the **next account** the agent spawn will pick:
+The TUI dashboard header shows the **7-day forecast sparkline** (Day 0..6 daily allocation, 100% = sustainable pace under the BLOCKER_7D=0.95 cap) and the **next account** the agent spawn will pick:
 
 ```
 pool 7d  ██▇▅▅▆█   next: @kddi 5h:65%

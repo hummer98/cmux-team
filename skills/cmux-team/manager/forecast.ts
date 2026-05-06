@@ -4,20 +4,26 @@
  * 今後 7 日（Day 0..6）の pool capacity 日次割当 forecast を bin 毎の bar 配列で返す純関数。
  * dashboard / status header のスパークライン表示に使う。
  *
- * 計算式は A024 §計算式 と一致:
+ * 計算式は A024 §計算式 と一致（T444 で BLOCKER_7D 反映に変更）:
+ *
+ *   remaining_i = max(BLOCKER_7D - util_7d_i, 0)   # T444: blocker 上限を反映
  *
  *   rate_i(t) =
- *     t < hoursToReset_i  → (1 - util_7d_i) / hoursToReset_i        # reset 前: 残量 / 残時間
- *     t >= hoursToReset_i → 1 / 168                                  # reset 後: sustainable pace
+ *     t < hoursToReset_i  → remaining_i / hoursToReset_i              # reset 前: blocker 残量 / 残時間
+ *     t >= hoursToReset_i → BLOCKER_7D / 168                          # reset 後: blocker 比 sustainable pace
  *
  *   alloc_i([a, b]) =
  *     b <= reset_i      : (b - a) * rate_pre_i
- *     a >= reset_i      : (b - a) / 168
- *     bin straddles     : (reset - a) * rate_pre + (b - reset) / 168
+ *     a >= reset_i      : (b - a) * BLOCKER_7D / 168
+ *     bin straddles     : (reset - a) * rate_pre + (b - reset) * BLOCKER_7D / 168
  *
  *   pool(d)  = Σ alloc_i(bin_d) * plan_ratio_i
- *   denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i
- *   bar(d)   = pool(d) / denom(d) * 100   # 100% = sustainable pace
+ *   denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i             # 変更なし（numerator 側で BLOCKER_7D 反映）
+ *   bar(d)   = pool(d) / denom(d) * 100   # 100% = (BLOCKER_7D を上限とした) sustainable pace
+ *
+ * T444: 旧式 (1 - util_7d) / 1 は selectToken の `effUtil7d > BLOCKER_7D` exclude と整合せず
+ * spark が 100% でも 5% しか余白がなかった問題を numerator 側を BLOCKER_7D に揃えて解消。
+ * denom(d) は変更しない（numerator 側で BLOCKER_7D を反映するだけで bar が縮む）。
  *
  * Day 0 の bin は `[now, 今日 24:00 (local)]` の残り時間のみ（可変幅）。Day 1..6 は固定 24h。
  *
@@ -26,12 +32,12 @@
  * test 側は `"UTC"` 等を直接注入できる。
  */
 
-import { parseResetEpochMs } from "./token-store";
+import { BLOCKER_7D, parseResetEpochMs } from "./token-store";
 
 export const FORECAST_DAYS = 7 as const;
 export const FULL_WEEK_HOURS = 168 as const;
 
-/** Day 0..6 の bar 高さ（0..∞、% 単位）。100 で sustainable pace 同等、>100 は cap 表現で頭打ちに使う。 */
+/** Day 0..6 の bar 高さ（0..∞、% 単位）。100 で BLOCKER_7D 上限の sustainable pace 同等、>100 は cap 表現で頭打ちに使う。 */
 export interface Pool7dForecast {
   /** 長さ FORECAST_DAYS。NaN や負値は出さない */
   bars: number[];
@@ -129,8 +135,10 @@ function integrateBin(
   binEnd: number,
 ): number {
   const reset = t.hoursToReset;
-  const remaining = 1 - t.util_7d;
-  const postRate = 1 / FULL_WEEK_HOURS;
+  // T444: blocker 上限を反映。util_7d > BLOCKER_7D は 0 にクランプ。
+  const remaining = Math.max(BLOCKER_7D - t.util_7d, 0);
+  // T444: post-reset rate も BLOCKER_7D 比 sustainable pace に変更。
+  const postRate = BLOCKER_7D / FULL_WEEK_HOURS;
 
   if (binStart >= reset) {
     // case 2: 完全に post-reset

@@ -182,3 +182,67 @@ A019 §TUI 表示にあった `Master [969] @pers <5h:10%/7d:30%> cap:100%` 形�
 4. `pool-next-reset.ts` の去就決定（残すか削除するか）
 5. `docs/spec/09-token-pool.md` の表示仕様セクション更新
 6. CHANGELOG / README 更新
+
+## T444 update: BLOCKER_7D 反映へ計算式変更（2026-05-07）
+
+旧式 `(1 - util_7d) / 1` は selectToken の `effUtil7d > BLOCKER_7D` exclude
+（token-store.ts L1259）と整合せず、spark が 100% でも 5% しか余白がない楽観的表示になっていた。
+numerator 側で `remaining = max(BLOCKER_7D - util_7d, 0)` / post_rate = `BLOCKER_7D / 168`
+に変更し、denom は維持。「100% = sustainable pace」の semantics は保たれる
+（実用上、BLOCKER_7D 比 sustainable pace を 100% として読む）。
+
+### 新計算式
+
+```
+remaining_i = max(BLOCKER_7D - util_7d_i, 0)   # T444 で blocker 上限反映
+
+rate_i(t) =
+  t < hoursToReset_i  → remaining_i / hoursToReset_i              # reset 前: blocker 残量 / 残時間
+  t >= hoursToReset_i → BLOCKER_7D / 168                          # reset 後: blocker 比 sustainable pace
+
+alloc_i([a, b]) =
+  b <= reset_i      : (b - a) * rate_pre_i
+  a >= reset_i      : (b - a) * BLOCKER_7D / 168
+  bin straddles     : (reset - a) * rate_pre + (b - reset) * BLOCKER_7D / 168
+
+pool(d)  = Σ alloc_i(bin_d) * plan_ratio_i
+denom(d) = (bin_hours_d / 168) * Σ plan_ratio_i           # 変更なし
+bar(d)   = pool(d) / denom(d) * 100   # 100% = (BLOCKER_7D を上限とした) sustainable pace
+```
+
+### 検証ケース（新仕様 BLOCKER_7D=0.95 反映後）
+
+#### Case 1（now = 00:00、Day 0 = 24h フル）
+
+A: util=0.5, hours_to_reset=48h → pre_rate = (0.95-0.5)/48 = 0.009375
+B: util=0.7, hours_to_reset=120h → pre_rate = (0.95-0.7)/120 = 0.002083
+post_rate = 0.95/168 = 0.005655
+
+| Day | A alloc | B alloc | pool | bar |
+|---|---|---|---|---|
+| 0 | 0.225 | 0.05 | 0.275 | **96%** |
+| 1 | 0.225 | 0.05 | 0.275 | **96%** |
+| 2 | 0.1357 (post) | 0.05 | 0.186 | **65%** |
+| 3 | 0.1357 | 0.05 | 0.186 | **65%** |
+| 4 | 0.1357 | 0.05 | 0.186 | **65%** |
+| 5 | 0.1357 | 0.1357 (post) | 0.271 | **95%** |
+| 6 | 0.1357 | 0.1357 | 0.271 | **95%** |
+
+旧 `[108, 108, 71, 71, 71, 100, 100]` → 新 `[96, 96, 65, 65, 65, 95, 95]`
+
+#### Case 2（now = 18:00、Day 0 = 6h、bin straddle）
+
+A: util=0.5, hours_to_reset=40h → pre_rate = 0.45/40 = 0.01125
+B: util=0.7, hours_to_reset=120h → pre_rate = 0.25/120 = 0.002083
+
+| Day | bin (h) | A alloc | B alloc | pool | bar |
+|---|---|---|---|---|---|
+| 0 | [0, 6] | 0.0675 | 0.0125 | 0.080 | **112%** |
+| 1 | [6, 30] | 0.27 | 0.05 | 0.32 | **112%** |
+| 2 | [30, 54] | 0.1917 (straddle) | 0.05 | 0.242 | **85%** |
+| 3 | [54, 78] | 0.1357 | 0.05 | 0.186 | **65%** |
+| 4 | [78, 102] | 0.1357 | 0.05 | 0.186 | **65%** |
+| 5 | [102, 126] | 0.1357 | 0.0714 (straddle) | 0.207 | **72%** |
+| 6 | [126, 150] | 0.1357 | 0.1357 | 0.271 | **95%** |
+
+旧 `[126, 126, 94, 71, 71, 78, 100]` → 新 `[112, 112, 85, 65, 65, 72, 95]`

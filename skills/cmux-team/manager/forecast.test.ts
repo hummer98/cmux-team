@@ -37,7 +37,8 @@ describe("computePool7dForecast", () => {
         selectable: true,
       },
     ];
-    const expected = [108, 108, 71, 71, 71, 100, 100];
+    // T444: BLOCKER_7D=0.95 反映後の expected 値（旧: [108, 108, 71, 71, 71, 100, 100]）
+    const expected = [96, 96, 65, 65, 65, 95, 95];
 
     it("returns 7-element bars within ±1% of expected", () => {
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
@@ -52,8 +53,8 @@ describe("computePool7dForecast", () => {
       // R5 / m6: token A は reset がちょうど bin 境界に一致するケース
       // integrateBin の case 1 (binEnd <= reset) と case 2 (binStart >= reset) の等号包含を検証
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
-      expect(Math.abs(f.bars[1]! - 108)).toBeLessThanOrEqual(1); // Day 1: pre-reset 全幅
-      expect(Math.abs(f.bars[2]! - 71)).toBeLessThanOrEqual(1); // Day 2: post-reset 全幅
+      expect(Math.abs(f.bars[1]! - 96)).toBeLessThanOrEqual(1); // Day 1: pre-reset 全幅
+      expect(Math.abs(f.bars[2]! - 65)).toBeLessThanOrEqual(1); // Day 2: post-reset 全幅
     });
   });
 
@@ -78,7 +79,8 @@ describe("computePool7dForecast", () => {
         selectable: true,
       },
     ];
-    const expected = [126, 126, 94, 71, 71, 78, 100];
+    // T444: BLOCKER_7D=0.95 反映後の expected 値（旧: [126, 126, 94, 71, 71, 78, 100]）
+    const expected = [112, 112, 85, 65, 65, 72, 95];
 
     it("returns 7-element bars within ±1% of expected", () => {
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
@@ -112,7 +114,9 @@ describe("computePool7dForecast", () => {
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
       expect(f.contributingTokens).toBe(1);
-      // 単独 A: Day 0 alloc=0.25, denom=24/168*1=0.143, bar=175%（B が denom に入らない）
+      // T444: 単独 A: pre_rate = (0.95 - 0.5)/48 = 0.009375
+      // Day 0 alloc = 24 * 0.009375 = 0.225, denom = 24/168 * 1 = 0.143, bar ≈ 158%
+      // （B が denom に入らない、旧 175% → 新 158%）
       expect(f.bars[0]).toBeGreaterThan(150);
     });
 
@@ -146,7 +150,7 @@ describe("computePool7dForecast", () => {
       expect(f.bars).toEqual([0, 0, 0, 0, 0, 0, 0]);
     });
 
-    it("reset が過去なら post-reset rate (1/168) を全 bin に適用", () => {
+    it("reset が過去なら post-reset rate (BLOCKER_7D/168) を全 bin に適用", () => {
       const tokens: ForecastTokenInput[] = [
         {
           handle: "@a",
@@ -158,9 +162,9 @@ describe("computePool7dForecast", () => {
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
       expect(f.contributingTokens).toBe(1);
-      // post rate 全適用 → bar = ((bin_h * 1/168) * 1) / ((bin_h/168) * 1) = 1 = 100%
+      // T444: post rate 全適用 → bar = ((bin_h * BLOCKER_7D/168) * 1) / ((bin_h/168) * 1) = BLOCKER_7D = 0.95 → 95%
       for (let i = 0; i < FORECAST_DAYS; i++) {
-        expect(f.bars[i]).toBeCloseTo(100, 0);
+        expect(f.bars[i]).toBeCloseTo(95, 0);
       }
     });
 
@@ -176,10 +180,10 @@ describe("computePool7dForecast", () => {
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
       expect(f.contributingTokens).toBe(1);
-      // pre rate = (1 - 0.5) / (17 * 24) = 0.5 / 408 = 0.001225
-      // alloc per Day = 24 * 0.001225 = 0.02941
+      // T444: pre rate = (0.95 - 0.5) / (17 * 24) = 0.45 / 408 = 0.001103
+      // alloc per Day = 24 * 0.001103 = 0.02647
       // denom = 24/168 = 0.143
-      // bar = 0.02941 / 0.143 = 20.6%
+      // bar ≈ 18.5%（旧: 20.6%）
       for (let i = 0; i < FORECAST_DAYS; i++) {
         expect(f.bars[i]).toBeLessThan(25);
         expect(f.bars[i]).toBeGreaterThan(15);
@@ -218,8 +222,8 @@ describe("computePool7dForecast", () => {
         },
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
-      // pre rate = 1/48 = 0.0208/h, Day 0 alloc = 24 * 0.0208 = 0.5
-      // denom = 24/168 = 0.143, bar = 350%
+      // T444: pre rate = 0.95/48 = 0.01979/h, Day 0 alloc = 24 * 0.01979 = 0.475
+      // denom = 24/168 = 0.143, bar ≈ 332.5%（旧: 350%）
       expect(f.bars[0]).toBeGreaterThan(300);
     });
 
@@ -242,8 +246,8 @@ describe("computePool7dForecast", () => {
         },
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
-      // Case 1 と同じ結果になるはず
-      const expected = [108, 108, 71, 71, 71, 100, 100];
+      // Case 1 と同じ結果になるはず（T444: BLOCKER_7D 反映後）
+      const expected = [96, 96, 65, 65, 65, 95, 95];
       for (let i = 0; i < FORECAST_DAYS; i++) {
         expect(Math.abs(f.bars[i]! - expected[i]!)).toBeLessThanOrEqual(1);
       }
@@ -327,12 +331,102 @@ describe("computePool7dForecast", () => {
         },
       ];
       const f = computePool7dForecast(tokens, NOW_ISO, TZ);
-      // A と B は同じ rate なので、weighted average も同じ rate を反映する
-      // alloc_a = 24 * 0.5/48 = 0.25, alloc_b = 同じ = 0.25
-      // pool = 0.25 * 1 + 0.25 * 4 = 1.25
+      // T444: A と B は同じ rate なので、weighted average も同じ rate を反映する
+      // pre_rate = (0.95 - 0.5) / 48 = 0.009375
+      // alloc_a = 24 * 0.009375 = 0.225, alloc_b = 同じ = 0.225
+      // pool = 0.225 * 1 + 0.225 * 4 = 1.125
       // denom = 24/168 * (1+4) = 0.714
-      // bar = 1.25 / 0.714 = 175%
-      expect(f.bars[0]).toBeCloseTo(175, 0);
+      // bar = 1.125 / 0.714 ≈ 158%（旧: 175%）
+      expect(f.bars[0]).toBeCloseTo(158, 0);
+    });
+  });
+
+  describe("T444: BLOCKER_7D 反映", () => {
+    const NOW_ISO = "2026-04-28T00:00:00.000Z";
+    const TZ = "UTC";
+
+    it("util_7d=0 のとき pre_rate = BLOCKER_7D / hoursToReset", () => {
+      // A: util=0, reset=48h → pre_rate = 0.95 / 48 = 0.01979
+      // Day 0 alloc = 24 × 0.01979 = 0.475, denom = 24/168 = 0.143
+      // bar ≈ 332.5%
+      const f = computePool7dForecast(
+        [
+          {
+            handle: "@a",
+            plan_ratio: 1,
+            util_7d: 0,
+            reset_7d_at: "2026-04-30T00:00:00.000Z",
+            selectable: true,
+          },
+        ],
+        NOW_ISO,
+        TZ,
+      );
+      expect(f.bars[0]!).toBeGreaterThan(330);
+      expect(f.bars[0]!).toBeLessThan(335);
+    });
+
+    it("util_7d > BLOCKER_7D のとき remaining=0 にクランプ（pre-reset alloc=0）", () => {
+      // A: util=0.97 (>0.95), reset=48h → remaining=0 → pre alloc=0
+      // Day 0/1: pre 全幅 → bar=0
+      // Day 2 以降: post_rate × 24 / (24/168) = 0.95 × 100 = 95%
+      const f = computePool7dForecast(
+        [
+          {
+            handle: "@a",
+            plan_ratio: 1,
+            util_7d: 0.97,
+            reset_7d_at: "2026-04-30T00:00:00.000Z",
+            selectable: true,
+          },
+        ],
+        NOW_ISO,
+        TZ,
+      );
+      expect(f.bars[0]!).toBeCloseTo(0, 1);
+      expect(f.bars[1]!).toBeCloseTo(0, 1);
+      expect(f.bars[2]!).toBeCloseTo(95, 0);
+      expect(f.bars[6]!).toBeCloseTo(95, 0);
+    });
+
+    it("全 token util_7d=0 で reset 過去 → bar=BLOCKER_7D×100=95% (Day 0..6)", () => {
+      // post_rate 全 bin → bar = BLOCKER_7D × 100
+      const f = computePool7dForecast(
+        [
+          {
+            handle: "@a",
+            plan_ratio: 1,
+            util_7d: 0,
+            reset_7d_at: "2026-04-20T00:00:00.000Z",
+            selectable: true,
+          },
+        ],
+        NOW_ISO,
+        TZ,
+      );
+      for (let i = 0; i < FORECAST_DAYS; i++) {
+        expect(f.bars[i]!).toBeCloseTo(95, 0);
+      }
+    });
+
+    it("sustainable rate post-reset が BLOCKER_7D / 168", () => {
+      // util=0.99 reset 過去（pre 経路に入らない）→ post_rate のみで全 bin が 95%
+      const f = computePool7dForecast(
+        [
+          {
+            handle: "@a",
+            plan_ratio: 1,
+            util_7d: 0.99,
+            reset_7d_at: "2026-04-20T00:00:00.000Z",
+            selectable: true,
+          },
+        ],
+        NOW_ISO,
+        TZ,
+      );
+      for (let i = 0; i < FORECAST_DAYS; i++) {
+        expect(f.bars[i]!).toBeCloseTo(95, 0); // BLOCKER_7D × 100
+      }
     });
   });
 });
