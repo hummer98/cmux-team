@@ -47,6 +47,9 @@ function makeDeps(overrides: Partial<KeymapDeps> = {}): KeymapDeps {
     quit: () => {},
     fullQuit: () => {},
     log: () => {},
+    handleCopyChord: () => {},
+    cancelChord: () => {},
+    schedule: () => () => {},
     ...overrides,
   };
 }
@@ -86,6 +89,8 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     metricsScrollOffset: 0,
     metricsStatusMessage: null,
     showHelp: false,
+    toast: null,
+    cChordPending: null,
     ...overrides,
   };
 }

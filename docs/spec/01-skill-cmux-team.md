@@ -84,7 +84,7 @@ description: >
 | `cmux-team spawn-master` | Master 用 Claude Code を起動する。起動時に自身を daemon に self-register（`MASTER_REGISTERED` POST）する（T230）。daemon 不在 / proxy-port 破損時は fail-fast（exit 1）。任意の pane から実行でき、`cmux-team start` で立ち上がる 1 つ目以外にも Master を追加可能（複数 Master 並行運用） |
 | `cmux-team artifacts` | アーティファクト一覧・検索 |
 | `cmux-team artifacts add` | ファイルをアーティファクトとして登録（`<file>` 必須、`--type`, `--title`, `--task`, `--tags` 任意） |
-| `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mo` → `cat` の順で決定） |
+| `cmux-team artifacts open` | Markdown ビューアでアーティファクトを開く（`<id>` 必須。ビューア: `CMUX_TEAM_MD_VIEWER` → `mado` → `cat` の順で決定。`mado` 検出時は GUI window で起動するため CLI は即 return する） |
 | `cmux-team get-agent-instructions` | overlay ロールの project-local overlay を表示（`--role` 必須。`.team/agent-instructions/<role>.md` に相当。overlay 不在時は何も出力せず exit 0。T342: master / conductor も受け付ける） |
 | `cmux-team set-agent-instructions` | overlay ロールの overlay を書き込み（`--role` 必須。`--body <text>` / `--from-file <path>` / `--from-stdin` のいずれか必須。100 KB 超で exit 1。未知 role で exit 1。T342: master / conductor も受け付ける） |
 | `cmux-team delete-agent-instructions` | overlay ロールの overlay を削除（`--role` 必須。存在しなくても exit 0 — 冪等。T342: master / conductor も受け付ける） |
@@ -123,6 +123,15 @@ description: >
 **i18n**: 見出し文字列は `project_instructions_heading` キーで管理（ja: 「プロジェクト固有の追加指示」/ en: "Project-Specific Instructions"）。`tFor(locale, key)` で explicit locale lookup する。Master / Conductor も同じ見出しを流用する。
 
 **Dashboard Settings タブ**: `4` キーで overlay 10 ロール + config 抜粋を read-only プレビュー表示。Enter で該当 overlay ファイルをビューアで開く。
+
+**Dashboard Artifacts タブのキー (T435 / T439)**:
+
+| キー | 動作 |
+|------|------|
+| `Enter` / `o` | 選択中 artifact を Markdown ビューア (`mado` or `cat`) で開く |
+| `s` | ソート順切替（id / created / updated） |
+| `f` | type filter 切替（all / research / decision / session / spec / report） |
+| `c c` | 選択中 artifact の絶対パスを clipboard (`pbcopy`) にコピー (T439)。1 回目押下後 500ms 以内に再度 `c` で確定。途中で別キーを押すとキャンセル。待機中は status bar の `cc` 表示が `c-` に切り替わる。成功/失敗は body 末尾に 2 秒間 toast 表示（成功: 緑 `✓ Copied: <path>`、失敗: 赤 `✗ <stderr 1 行目>`）。`pbcopy` 不在時は失敗 toast |
 
 ### 2. トレーサビリティ
 
@@ -191,7 +200,7 @@ dashboard ヘッダー右端に `5h: X% ████░░░░░░` / `7d: Y
 | `CMUX_SURFACE_ID` | 現在のサーフェスID |
 | `CMUX_SURFACE` | cmux-team が設定。`surface:N` 形式。これが設定されていれば cmux-team 管理下 |
 | `CMUX_CLAUDE_HOOKS_DISABLED` | `1` に設定すると cmux ラッパーの hook を無効化。Conductor・Agent・Master 起動時に自動設定 |
-| `CMUX_TEAM_MD_VIEWER` | `artifacts open` で使用する Markdown ビューアのコマンド名。未設定時は `mo` → `cat` にフォールバック |
+| `CMUX_TEAM_MD_VIEWER` | `artifacts open` で使用する Markdown ビューアのコマンド名。未設定時は `mado` → `cat` にフォールバック。`mado` (yamamoto/mado) は Electrobun ベース GUI viewer で、検出時は detached 起動して即 return する（TUI を一時停止しない）。`cat` fallback は TUI を一時停止する |
 
 **workspace 分離（重要）:**
 

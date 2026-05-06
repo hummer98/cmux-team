@@ -39,6 +39,15 @@ npm install -g @hummer98/cmux-team
 
 Conductor・Agent・Master 起動時は環境変数 `CMUX_CLAUDE_HOOKS_DISABLED=1` で cmux ラッパー側の hook を無効化し、Manager が生成する `conductor-settings.json` を `claude --settings` 経由で動的に注入する（hook 設定の優先順位問題への対応）。Agent spawn 時は `spawn-agent` CLI 内で、Master 起動時は `spawn-master` CLI 内でそれぞれ設定される。これが authoritative な注入経路であり、`cmux-team` 経由の spawn では `.envrc` / `direnv` への依存は不要。
 
+### 3. オプション依存ツール
+
+| ツール | 用途 | 未インストール時の挙動 |
+|---|---|---|
+| `mado` | `cmux-team artifacts open` の Markdown viewer (T439)。Electrobun ベース GUI viewer (yamamoto/mado) | `cat` にフォールバック（TUI 一時停止）。dashboard の Artifacts タブから `Enter` でも同経路 |
+| `pbcopy` | Artifacts タブの `c c` チョードによる絶対パスコピー (T439)。macOS 標準ツール | dashboard 上で失敗 toast `✗ pbcopy not available` を表示。Linux 環境では未対応 |
+
+`CMUX_TEAM_MD_VIEWER` env を設定すると `mado` 検出をバイパスして任意のコマンドを viewer として使える（GUI 想定で detached 起動。TUI viewer を使いたい場合は `cat` を指定する）。
+
 ---
 
 ## npm パッケージ構成

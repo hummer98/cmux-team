@@ -68,6 +68,8 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     metricsScrollOffset: 0,
     metricsStatusMessage: null,
     showHelp: false,
+    toast: null,
+    cChordPending: null,
     ...overrides,
   };
 }

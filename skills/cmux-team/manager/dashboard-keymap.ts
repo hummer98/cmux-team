@@ -19,6 +19,13 @@ import { parseKeySequence } from "@rezi-ui/core";
 import { t } from "./i18n";
 import type { AppState } from "./dashboard";
 
+/**
+ * T439: c c chord binding の id 定数。`withChordCancellation` の自身判定で
+ * 文字列リテラル一致のミス（typo で silent に handler 直通）を防ぐため
+ * 定数として共有する（design-review m_new1 反映）。
+ */
+export const COPY_CHORD_BINDING_ID = "artifacts.copy-path";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 型定義
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,6 +101,23 @@ export type KeymapDeps = Readonly<{
   /** "Y" 確定時に呼ばれる。state.confirmingFullQuit が true の前提 */
   fullQuit: () => void;
   log: (event: string, detail: string) => void;
+  /**
+   * T439: c c chord 用の handler（artifacts.copy-path binding 専用）。
+   * 1 回目: cChordPending を立て、500ms の auto-clear schedule。
+   * 2 回目: pending クリア + 該当 timer cancel + clipboard コピー実行。
+   */
+  handleCopyChord: (ctx: KeyContext<AppState>) => void;
+  /**
+   * T439: chord 待機中に別キーが押されたとき、または timeout / tab 切替時に呼ぶ。
+   * pending クリア + timer cancel を行う。
+   */
+  cancelChord: (ctx: KeyContext<AppState>) => void;
+  /**
+   * T439: setTimeout を testable にするための DI。
+   * 戻り値の cancel 関数を呼ぶと予約された cb は実行されない。
+   * chord auto-clear と toast auto-clear で共用する単一 IF。
+   */
+  schedule: (ms: number, cb: () => void) => () => void;
 }>;
 
 export function createDashboardBindings(deps: KeymapDeps): ReadonlyArray<BindingSpec> {
@@ -353,6 +377,18 @@ export function createDashboardBindings(deps: KeymapDeps): ReadonlyArray<Binding
       // T435 D10: binding 予約のみ。handler 実装は別タスクに切り出し
     },
   });
+  // T439: c c chord で artifact 絶対パスを clipboard コピー
+  // statusBarKey: "cc" は通常時の表示。dashboard.tsx の status bar 描画で
+  // state.cChordPending != null のとき "c-" indicator に置換する（D8）
+  bindings.push({
+    id: COPY_CHORD_BINDING_ID,
+    keys: ["c"],
+    scope: { kind: "focus", areas: ["artifacts"] },
+    category: "action",
+    description: "key_artifact_copy_path",
+    statusBarKey: "cc",
+    handler: (ctx) => deps.handleCopyChord(ctx),
+  });
   bindings.push({
     id: "issues.sync",
     keys: ["ctrl+s"],
@@ -485,7 +521,36 @@ export function createDashboardBindings(deps: KeymapDeps): ReadonlyArray<Binding
     },
   });
 
-  return bindings;
+  // T439: 全 binding を withChordCancellation で wrap して、c chord 待機中に
+  // 別キーが押されたら pending クリア + timer cancel が走るようにする（C1 採用案）。
+  // copy chord 自身は wrap 内で noop とし、handleCopyChord 側で pending を進める。
+  return bindings.map((b) => ({
+    ...b,
+    handler: withChordCancellation(b.handler, b, deps),
+  }));
+}
+
+/**
+ * T439: handler を chord cancel 機能つきにラップする純粋関数。
+ *
+ * 仕様:
+ *   - 自分が copy chord binding (`COPY_CHORD_BINDING_ID`) → noop（handler に直通）
+ *   - その他 binding で `state.cChordPending != null` → `deps.cancelChord(ctx)` 呼んでから handler 実行
+ *
+ * これにより chord 待機中の別キー押下で pending が確実にクリアされる
+ * （focus=artifacts 内の j/k/Enter/s/f、tab 切替、help 等すべて）。
+ */
+export function withChordCancellation<H extends BindingHandler>(
+  handler: H,
+  binding: BindingSpec,
+  deps: Pick<KeymapDeps, "cancelChord">,
+): H {
+  return ((ctx: KeyContext<AppState>) => {
+    if (binding.id !== COPY_CHORD_BINDING_ID && ctx.state.cChordPending != null) {
+      deps.cancelChord(ctx);
+    }
+    return handler(ctx);
+  }) as H;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

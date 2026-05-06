@@ -44,6 +44,9 @@ function makeDeps(overrides: Partial<KeymapDeps> = {}): KeymapDeps {
     quit: () => {},
     fullQuit: () => {},
     log: () => {},
+    handleCopyChord: () => {},
+    cancelChord: () => {},
+    schedule: () => () => {},
     ...overrides,
   };
 }
@@ -83,6 +86,8 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     metricsScrollOffset: 0,
     metricsStatusMessage: null,
     showHelp: false,
+    toast: null,
+    cChordPending: null,
     ...overrides,
   };
 }
@@ -343,5 +348,68 @@ describe("S8: full-quit confirm flow", () => {
     const { ctx } = makeCtx(makeState({ confirmingFullQuit: false }));
     yKey(ctx);
     expect(fullQuitCount).toBe(0);
+  });
+});
+
+describe("T439: c key dispatch", () => {
+  test("focus=artifacts で c → handleCopyChord が呼ばれる", () => {
+    let copyChordCalled = 0;
+    const bindings = createDashboardBindings(makeDeps({
+      handleCopyChord: () => { copyChordCalled++; },
+    }));
+    const map = buildAppKeys(bindings);
+    const cKey = (map as any)["c"];
+    expect(typeof cKey).toBe("function");
+    const { ctx } = makeCtx(makeState({ focusedArea: "artifacts" }));
+    cKey(ctx);
+    expect(copyChordCalled).toBe(1);
+  });
+
+  test("focus=journal で c → 何もしない（scope 違反で binding が match しない）", () => {
+    let copyChordCalled = 0;
+    const bindings = createDashboardBindings(makeDeps({
+      handleCopyChord: () => { copyChordCalled++; },
+    }));
+    const map = buildAppKeys(bindings);
+    const cKey = (map as any)["c"];
+    const { ctx } = makeCtx(makeState({ focusedArea: "journal" }));
+    cKey(ctx);
+    expect(copyChordCalled).toBe(0);
+  });
+
+  test("focus=artifacts で pending 中、k 押下 → cancelChord 呼ばれてから navigateUp", () => {
+    let cancelCalled = 0;
+    let navigateCalled = 0;
+    const bindings = createDashboardBindings(makeDeps({
+      cancelChord: () => { cancelCalled++; },
+      navigateUp: (s) => { navigateCalled++; return s; },
+    }));
+    const map = buildAppKeys(bindings);
+    const kKey = (map as any)["k"];
+    const { ctx } = makeCtx(makeState({
+      focusedArea: "artifacts",
+      cChordPending: { startedAtMs: 100 },
+    }));
+    kKey(ctx);
+    expect(cancelCalled).toBe(1);
+    expect(navigateCalled).toBe(1);
+  });
+
+  test("focus=artifacts で pending 中、c 押下 → cancelChord は呼ばれず handleCopyChord が呼ばれる（自身は noop）", () => {
+    let cancelCalled = 0;
+    let copyChordCalled = 0;
+    const bindings = createDashboardBindings(makeDeps({
+      cancelChord: () => { cancelCalled++; },
+      handleCopyChord: () => { copyChordCalled++; },
+    }));
+    const map = buildAppKeys(bindings);
+    const cKey = (map as any)["c"];
+    const { ctx } = makeCtx(makeState({
+      focusedArea: "artifacts",
+      cChordPending: { startedAtMs: 100 },
+    }));
+    cKey(ctx);
+    expect(cancelCalled).toBe(0);
+    expect(copyChordCalled).toBe(1);
   });
 });

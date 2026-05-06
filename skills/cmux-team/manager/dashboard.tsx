@@ -94,6 +94,7 @@ export const RESERVED_LINES = 14;
 export function computeMetricsVisibleLines(
   stdoutRows: number | undefined,
   envOverride: string | undefined,
+  toastVisible: boolean = false,
 ): number {
   // 環境変数が最優先（NaN / 0 / 負は無視して通常パスへ落とす）
   if (envOverride !== undefined && envOverride !== "") {
@@ -102,17 +103,19 @@ export function computeMetricsVisibleLines(
       return Math.max(8, Math.min(80, parsed));
     }
   }
+  const reserved = RESERVED_LINES + (toastVisible ? 1 : 0);
   const total = typeof stdoutRows === "number" && Number.isFinite(stdoutRows)
     ? stdoutRows
-    : 30 + RESERVED_LINES;
-  const candidate = total - RESERVED_LINES;
+    : 30 + reserved;
+  const candidate = total - reserved;
   return Math.max(8, Math.min(80, candidate));
 }
 
-function getMetricsVisibleLines(): number {
+function getMetricsVisibleLines(toastVisible: boolean = false): number {
   return computeMetricsVisibleLines(
     process.stdout.rows,
     process.env.CMUX_TEAM_METRICS_VISIBLE_LINES,
+    toastVisible,
   );
 }
 
@@ -202,15 +205,21 @@ function buildTitleWithLinks(
 
 /**
  * Markdown ビューアコマンドを解決する
- * 優先順: CMUX_TEAM_MD_VIEWER → mo → cat
+ * 優先順: CMUX_TEAM_MD_VIEWER → mado → cat
+ *
+ * mado は yamamoto/mado の Electrobun ベース GUI viewer。検出時は GUI window
+ * として detached 起動するため、TUI を一時停止しない。未インストール時は cat
+ * fallback で TUI を一時停止して表示する。
+ *
+ * `which` 引数で `Bun.which` を DI 化（テストから差し替え可能）。
  */
-export async function resolveMarkdownViewer(): Promise<string> {
+export async function resolveMarkdownViewer(
+  which: (cmd: string) => string | null = (cmd) => Bun.which(cmd),
+): Promise<string> {
   const envViewer = process.env.CMUX_TEAM_MD_VIEWER;
   if (envViewer) return envViewer;
 
-  // mo が利用可能か確認
-  const moPath = Bun.which("mo");
-  if (moPath) return "mo";
+  if (which("mado")) return "mado";
 
   return "cat";
 }
@@ -602,6 +611,11 @@ export interface AppState {
   // ── T435: help overlay ────────────────────────────────────────────
   /** ? キーで開閉する help overlay。real overlay は rezi-ui C6 制約で使えないため state flag で view 全置換 */
   showHelp: boolean;
+  // ── T439: artifacts c c chord + toast ───────────────────────────
+  /** body 末尾に表示する一時通知。2 秒後に自動 clear */
+  toast: { kind: "success" | "error"; message: string; expiresAt: number } | null;
+  /** c 単発押下後の chord 待機状態。500ms 以内に再度 c で確定、別キーで cancel */
+  cChordPending: { startedAtMs: number } | null;
 }
 
 // --- スピナー定義 ---
@@ -1403,35 +1417,94 @@ function buildSettingsRows(state: AppState): any[] {
 }
 
 /**
- * 選択中の artifact を外部ビューアで開く
- * mo ビューア: TUI を停止せずバックグラウンドで起動し cmux browser open で表示
- * cat フォールバック: TUI を一時停止し、終了後に復帰する
+ * T439: c chord state machine の純粋関数化。
+ *
+ * 1 回目押下: cChordPending = { startedAtMs: now }、firstPress=true 返す
+ * 2 回目押下（pending 中）: cChordPending = null、firstPress=false 返す
+ *
+ * テストではこの関数を直接呼んで状態遷移を検証する。
  */
-/** 既存のブラウザ surface を検索して ref を返す（なければ null） */
-async function findExistingBrowserSurface(): Promise<string | null> {
-  const workspace = process.env.CMUX_WORKSPACE_ID;
-  const args = ["cmux", "tree", "--json"];
-  if (workspace) args.push("--workspace", workspace);
-
-  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "ignore" });
-  const output = await new Response(proc.stdout).text();
-  await proc.exited;
-
-  try {
-    const tree = JSON.parse(output);
-    for (const w of tree.windows ?? []) {
-      for (const ws of w.workspaces ?? []) {
-        for (const p of ws.panes ?? []) {
-          for (const s of p.surfaces ?? []) {
-            if (s.type === "browser") return s.ref;
-          }
-        }
-      }
-    }
-  } catch {}
-  return null;
+export function reduceCKeyPress(
+  state: AppState,
+  now: number,
+): { next: AppState; firstPress: boolean } {
+  if (state.cChordPending == null) {
+    return {
+      next: { ...state, cChordPending: { startedAtMs: now } },
+      firstPress: true,
+    };
+  }
+  return {
+    next: { ...state, cChordPending: null },
+    firstPress: false,
+  };
 }
 
+export function reduceClearChord(state: AppState): AppState {
+  if (state.cChordPending == null) return state;
+  return { ...state, cChordPending: null };
+}
+
+export function reduceShowToast(
+  state: AppState,
+  kind: "success" | "error",
+  message: string,
+  now: number,
+  durationMs: number = 2000,
+): AppState {
+  return {
+    ...state,
+    toast: { kind, message, expiresAt: now + durationMs },
+  };
+}
+
+export function reduceClearToast(state: AppState): AppState {
+  if (state.toast == null) return state;
+  return { ...state, toast: null };
+}
+
+/**
+ * T439: toast を 1 行 truncate して表示用テキストを生成する純粋関数。
+ *
+ * 想定 columns: `process.stdout.columns ?? 80`。上限 = `columns - 12`
+ * （アイコン "✓ Copied: " 等の prefix 分を確保）。
+ * 長すぎるパスは末尾優先 truncate（先頭側に "..." を付ける）。
+ */
+export function formatToastMessage(
+  toast: { kind: "success" | "error"; message: string },
+  columns: number,
+): { icon: string; label: string; body: string } {
+  const icon = toast.kind === "success" ? "✓" : "✗";
+  const label = toast.kind === "success" ? t("toast_copy_success") : t("toast_copy_failed");
+  const prefixLen = icon.length + 1 + label.length + 2; // "✓ Copied: "
+  const max = Math.max(8, columns - prefixLen);
+  let body = toast.message;
+  if (body.length > max) {
+    body = "…" + body.slice(body.length - (max - 1));
+  }
+  return { icon, label, body };
+}
+
+function renderToastRow(toast: { kind: "success" | "error"; message: string }): any {
+  const cols = (typeof process.stdout.columns === "number" && process.stdout.columns > 0)
+    ? process.stdout.columns
+    : 80;
+  const { icon, label, body } = formatToastMessage(toast, cols);
+  const color = toast.kind === "success" ? GREEN : RED;
+  return ui.row({ gap: 1 }, [
+    ui.text(icon, { style: { fg: color, bold: true } }),
+    ui.text(`${label}:`, { style: { fg: color } }),
+    ui.text(body, { style: { fg: color } }),
+  ]);
+}
+
+/**
+ * 選択中の artifact を外部ビューアで開く
+ *
+ * - cat fallback: TUI を一時停止し、終了後に復帰する（inherit 経路）
+ * - それ以外（mado など GUI viewer）: detached 起動して即 return（TUI 維持）。
+ *   `proc.unref()` で manager daemon kill 時に道連れ閉鎖されないようにする。
+ */
 async function openArtifactInViewer(
   app: NodeApp<AppState>,
   filePath: string,
@@ -1439,47 +1512,37 @@ async function openArtifactInViewer(
 ): Promise<void> {
   const viewer = await resolveMarkdownViewer();
 
-  if (viewer === "mo") {
-    // mo をバックグラウンドで起動し、--json で file-specific URL を取得
-    const moProc = Bun.spawn(["mo", filePath, "--json"], { stdout: "pipe", stderr: "ignore" });
-    const moOutput = await new Response(moProc.stdout).text();
-    await moProc.exited;
+  if (viewer === "cat") {
+    // cat フォールバック: TUI を一時停止して実行
+    dashboardActive = false;
+    if (spinnerInterval) { clearInterval(spinnerInterval); spinnerInterval = null; }
+    await app.stop();
 
-    // JSON から file-specific URL を取得（フォールバック付き）
-    let viewerUrl = "http://localhost:6275";
     try {
-      const parsed = JSON.parse(moOutput);
-      if (parsed.files?.[0]?.url) {
-        viewerUrl = parsed.files[0].url;
-      }
-    } catch {}
-
-    // 既存ブラウザ surface を再利用（なければ新規作成）
-    const browserSurface = await findExistingBrowserSurface();
-    if (browserSurface) {
-      Bun.spawn(["cmux", "browser", browserSurface, "goto", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
-    } else {
-      Bun.spawn(["cmux", "browser", "open", viewerUrl], { stdio: ["ignore", "ignore", "ignore"] });
+      const proc = Bun.spawn(["cat", filePath], {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      await proc.exited;
+    } catch (e: any) {
+      log("viewer_cat_failed", e?.message ?? String(e)).catch(() => {});
     }
+
+    await app.start();
+    onResumed();
     return;
   }
 
-  // cat フォールバック: TUI を一時停止して実行
-  dashboardActive = false;
-  if (spinnerInterval) { clearInterval(spinnerInterval); spinnerInterval = null; }
-  await app.stop();
-
+  // GUI viewer (mado / env override): detached 起動 + unref で道連れ閉鎖を回避
   try {
-    const proc = Bun.spawn(["cat", filePath], {
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
+    const proc = Bun.spawn([viewer, filePath], {
+      stdio: ["ignore", "ignore", "ignore"],
     });
-    await proc.exited;
-  } catch {}
-
-  await app.start();
-  onResumed();
+    proc.unref();
+  } catch (e: any) {
+    log("viewer_spawn_failed", `viewer=${viewer} message=${e?.message ?? String(e)}`).catch(() => {});
+  }
 }
 
 // --- アプリインスタンス管理 ---
@@ -1548,6 +1611,8 @@ export async function startDashboard(
       metricsScrollOffset: 0,
       metricsStatusMessage: null,
       showHelp: false,
+      toast: null,
+      cChordPending: null,
     },
     config: { executionMode: "inline" },
   });
@@ -1800,7 +1865,7 @@ export async function startDashboard(
                   state.metricsStatusMessage,
                 );
                 const total = rows.length;
-                const visible = getMetricsVisibleLines();
+                const visible = getMetricsVisibleLines(state.toast != null);
                 const startIdx = Math.min(
                   state.metricsScrollOffset,
                   Math.max(0, total - visible),
@@ -1817,6 +1882,10 @@ export async function startDashboard(
                 return buildLogRows(reversed.slice(startIdx, endIdx));
               })()
         ),
+        // T439: toast 行（body 末尾、footer の直上）。色は GREEN/RED、長すぎるパスは末尾優先 truncate
+        ...(state.toast
+          ? [renderToastRow(state.toast)]
+          : []),
       ]),
       footer: ui.statusBar({
         left: state.confirmingFullQuit
@@ -1829,10 +1898,14 @@ export async function startDashboard(
             ]
           : (() => {
               // T435: registry-driven status bar (旧 8 分岐の手書き定義は廃止)
+              // T439: state.cChordPending != null のとき "cc" を "c-" に置換 (D8)
               const items = buildStatusBarItems(dashboardBindings, state);
               const out: any[] = [];
               for (const it of items) {
-                out.push(ui.kbd(it.key));
+                const keyLabel = it.key === "cc" && state.cChordPending != null
+                  ? t("chord_pending_indicator")
+                  : it.key;
+                out.push(ui.kbd(keyLabel));
                 out.push(ui.text(it.text));
               }
               return out;
@@ -1858,7 +1931,17 @@ export async function startDashboard(
   function switchTab(tab: TabId) {
     try {
       currentActiveTab = tab;
-      app.update((s) => ({ ...s, activeTab: tab, focusedArea: FOCUSED_AREA_FOR_TAB[tab] }));
+      // T439 D17: タブ切替時は chord pending を二重防御でクリア
+      if (chordTimerCancel) {
+        chordTimerCancel();
+        chordTimerCancel = null;
+      }
+      app.update((s) => ({
+        ...s,
+        activeTab: tab,
+        focusedArea: FOCUSED_AREA_FOR_TAB[tab],
+        cChordPending: null,
+      }));
       // settings に切り替えた直後は即時ロード
       if (tab === "settings") {
         refresh().catch(() => {});
@@ -2074,6 +2157,123 @@ export async function startDashboard(
     }
   };
 
+  // ── T439: c c chord + toast ─────────────────────────────────────────────
+  // closure scope に各 timer の cancel 関数を保持。複数発火時は前 cancel → 新 schedule。
+  let chordTimerCancel: (() => void) | null = null;
+  let toastTimerCancel: (() => void) | null = null;
+  const TOAST_DURATION_MS = 2000;
+  const CHORD_TIMEOUT_MS = 500;
+
+  // 本番実装の schedule: setTimeout をラップして cancel 関数を返す（D10 / D18）
+  const scheduleImpl = (ms: number, cb: () => void): (() => void) => {
+    const id = setTimeout(cb, ms);
+    return () => clearTimeout(id);
+  };
+
+  function showToast(kind: "success" | "error", message: string): void {
+    if (toastTimerCancel) {
+      toastTimerCancel();
+      toastTimerCancel = null;
+    }
+    try {
+      app.update((s) => reduceShowToast(s, kind, message, Date.now(), TOAST_DURATION_MS));
+    } catch {}
+    toastTimerCancel = scheduleImpl(TOAST_DURATION_MS, () => {
+      toastTimerCancel = null;
+      try {
+        app.update((s) => reduceClearToast(s));
+      } catch {}
+    });
+  }
+
+  async function copyArtifactPath(s: AppState): Promise<void> {
+    const filtered = getFilteredArtifacts(s);
+    if (filtered.length === 0) return; // 空のときは何もしない（toast も出さない）
+    const cursor = Math.min(Math.max(s.artifactCursor, 0), filtered.length - 1);
+    const selected = filtered[cursor];
+    if (!selected) return;
+    const filePath = selected.filePath;
+
+    if (!Bun.which("pbcopy")) {
+      showToast("error", t("toast_pbcopy_unavailable"));
+      log("artifact_copy_path_failed", "pbcopy not available").catch(() => {});
+      return;
+    }
+
+    try {
+      const proc = Bun.spawn(["pbcopy"], {
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      proc.stdin.write(filePath);
+      await proc.stdin.end();
+      const exitCode = await proc.exited;
+      if (exitCode === 0) {
+        showToast("success", filePath);
+        log("artifact_copy_path_succeeded", `path=${filePath}`).catch(() => {});
+      } else {
+        const stderr = await new Response(proc.stderr).text();
+        const firstLine = stderr.split(/\r?\n/)[0]?.trim() ?? `exit ${exitCode}`;
+        showToast("error", firstLine);
+        log("artifact_copy_path_failed", `exit=${exitCode} stderr=${stderr}`).catch(() => {});
+      }
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      showToast("error", msg);
+      log("artifact_copy_path_failed", `exception=${msg}`).catch(() => {});
+    }
+  }
+
+  function handleCopyChord(_ctx: any): void {
+    // 1 回目: cChordPending を立てて 500ms auto-clear schedule
+    // 2 回目: pending クリア + timer cancel + clipboard コピー
+    let firstPress = false;
+    let stateAtPress: AppState | null = null;
+    try {
+      app.update((s) => {
+        stateAtPress = s;
+        const r = reduceCKeyPress(s, Date.now());
+        firstPress = r.firstPress;
+        return r.next;
+      });
+    } catch {}
+
+    if (firstPress) {
+      if (chordTimerCancel) {
+        chordTimerCancel();
+      }
+      chordTimerCancel = scheduleImpl(CHORD_TIMEOUT_MS, () => {
+        chordTimerCancel = null;
+        try {
+          app.update((s) => reduceClearChord(s));
+        } catch {}
+      });
+      return;
+    }
+
+    // 2 回目: copy 実行
+    if (chordTimerCancel) {
+      chordTimerCancel();
+      chordTimerCancel = null;
+    }
+    if (stateAtPress) {
+      void copyArtifactPath(stateAtPress).catch((e: any) => {
+        log("artifact_copy_path_error", e?.message ?? String(e)).catch(() => {});
+      });
+    }
+  }
+
+  function cancelChord(_ctx: any): void {
+    if (chordTimerCancel) {
+      chordTimerCancel();
+      chordTimerCancel = null;
+    }
+    try {
+      app.update((s) => reduceClearChord(s));
+    } catch {}
+  }
+
   const keymapDeps: KeymapDeps = {
     switchTab,
     syncIssuesFromGh,
@@ -2100,6 +2300,9 @@ export async function startDashboard(
       opts?.onFullQuit?.();
     },
     log: (event, detail) => { log(event, detail).catch(() => {}); },
+    handleCopyChord,
+    cancelChord,
+    schedule: scheduleImpl,
   };
 
   dashboardBindings = createDashboardBindings(keymapDeps);
