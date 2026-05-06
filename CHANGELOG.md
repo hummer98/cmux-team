@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.27.1] - 2026-05-06
+
+### Fixed
+
+- **`updateTeamJson` の tmp ファイル並行レース修正（T437）**。固定 tmp ファイル名（`team.json.tmp`）と並行呼び出しで `rename ENOENT` が頻発していた問題を修正。`metrics-snapshot.ts:atomicWriteJson` と同じ shape（pid + random サフィックス + try/catch + unlink）に揃え、N=20 並列で 19/20 件 ENOENT を再現したうえで修正後 0 件になることを実証。`task.ts:saveTaskState` / `rate-limit-persistence.ts:persistRateLimit` は同種の race を持つがフォローアップ別タスクで対応予定
+
 ## [4.27.0] - 2026-05-05
 
 ### Fixed
