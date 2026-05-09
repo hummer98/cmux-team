@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { mkdir, writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -7,9 +7,11 @@ import {
   deleteMasterFile,
   listMasterFiles,
   normalizeSurfaceForPath,
+  spawnMaster,
 } from "./master";
 import type { MasterState } from "./schema";
 import { createDummyProject, type DummyProject } from "./test-project";
+import * as cmux from "./cmux";
 
 // テスト用の一時ディレクトリ
 let project: DummyProject;
@@ -177,5 +179,44 @@ describe("normalizeSurfaceForPath", () => {
   test("想定外文字も _ に正規化される（防御的動作）", () => {
     expect(normalizeSurfaceForPath("surface:12 test")).toBe("surface_12_test");
     expect(normalizeSurfaceForPath("foo/bar")).toBe("foo_bar");
+  });
+});
+
+// --- spawnMaster launch 文字列 assertion（task 446）---
+
+describe("spawnMaster launch 文字列", () => {
+  let newSplitSpy: ReturnType<typeof spyOn>;
+  let sendSpy: ReturnType<typeof spyOn>;
+  let renameTabSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    newSplitSpy = spyOn(cmux, "newSplit").mockImplementation(async () => "surface:999");
+    sendSpy = spyOn(cmux, "send").mockImplementation(async () => {});
+    renameTabSpy = spyOn(cmux, "renameTab").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    newSplitSpy.mockRestore();
+    sendSpy.mockRestore();
+    renameTabSpy.mockRestore();
+  });
+
+  test("projectRoot が cd '<root>' && cmux-team spawn-master の形式で送信される", async () => {
+    await spawnMaster("/abs/project/root");
+    expect(sendSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const launchCall = sendSpy.mock.calls[0]?.[1] as string;
+    expect(launchCall).toBe("cd '/abs/project/root' && cmux-team spawn-master\n");
+  });
+
+  test("path に空白を含む projectRoot も正しく single-quote で包まれる", async () => {
+    await spawnMaster("/home/user/my project");
+    const launchCall = sendSpy.mock.calls[0]?.[1] as string;
+    expect(launchCall).toBe("cd '/home/user/my project' && cmux-team spawn-master\n");
+  });
+
+  test("path に単一引用符を含む projectRoot は '\\'\\'' で escape される", async () => {
+    await spawnMaster("/has' quote/root");
+    const launchCall = sendSpy.mock.calls[0]?.[1] as string;
+    expect(launchCall).toBe("cd '/has'\\'' quote/root' && cmux-team spawn-master\n");
   });
 });

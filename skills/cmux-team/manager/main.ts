@@ -49,6 +49,7 @@ import { start as startProxy } from "./proxy";
 import { startDashboardServer } from "./dashboard-server";
 import { getDashboardHtml } from "./dashboard-web-bundle";
 import { launchConductor, resetConductor } from "./conductor";
+import { buildLaunchCommand } from "./util";
 import { ClaudeCodeBackend } from "./claude-code-backend";
 import { OpenCodeBackend } from "./opencode-backend";
 import { spawnOpenCodeAgent, killOpenCodeAgent, parseOcSurface, startOpenCodeServer, stopOpenCodeServer } from "./opencode-agent";
@@ -4812,7 +4813,7 @@ async function cmdAbortTask(): Promise<void> {
   // 8. Conductor を再起動（session-id は cmdSpawnConductor が自己生成して daemon に通知する）
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team spawn-conductor\n`);
+  await cmux.send(conductor.surface, buildLaunchCommand(PROJECT_ROOT, "cmux-team spawn-conductor") + "\n");
 
   console.log(`OK aborted ${taskId} (conductor ${conductor.surface} restarting)`);
 }
@@ -5009,7 +5010,7 @@ async function cmdRestartTask(): Promise<void> {
   // 6. Conductor を再起動（session-id は cmdSpawnConductor が自己生成して daemon に通知する）
   await cmux.send(conductor.surface, `export CMUX_SURFACE=${conductor.surface} CMUX_CLAUDE_HOOKS_DISABLED=1\n`);
   await sleep(500);
-  await cmux.send(conductor.surface, `cmux-team spawn-conductor\n`);
+  await cmux.send(conductor.surface, buildLaunchCommand(PROJECT_ROOT, "cmux-team spawn-conductor") + "\n");
 
   // 7. TASK_CREATED 通知送信（自動再割り当て用）
   await postMessage({

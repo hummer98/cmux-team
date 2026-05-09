@@ -8,6 +8,7 @@ import { log, formatSurface } from "./logger";
 import { normalizeSurfaceForPath } from "./paths";
 import type { MasterState } from "./schema";
 import { MasterStateSchema } from "./schema";
+import { buildLaunchCommand } from "./util";
 
 // T234: normalizeSurfaceForPath は paths.ts に集約した。旧 master.ts 版は
 // `replaceAll(":", "_")` で実装されていたが、`surface:NNN` 形式では daemon.ts 版
@@ -104,6 +105,7 @@ export async function listMasterFiles(
  * `persistMasterFile` を行う（D3 — boot 時復元以外の state mutation は handler 経由に統一）。
  */
 export async function spawnMaster(
+  projectRoot: string,
   daemonSurface?: string,
 ): Promise<{ surface: string } | null> {
   try {
@@ -114,7 +116,8 @@ export async function spawnMaster(
     );
 
     // cmux-team spawn-master ラッパー経由で起動（proxy ポートを動的解決）
-    await cmux.send(surface, `cmux-team spawn-master\n`);
+    // cd で cwd を project root に揃えることで direnv / shell 初期 cwd に依存しない（task 446）。
+    await cmux.send(surface, buildLaunchCommand(projectRoot, "cmux-team spawn-master") + "\n");
 
     // タブ名設定
     const num = surface.replace("surface:", "");

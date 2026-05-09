@@ -217,6 +217,20 @@ T421 以降、Conductor は「pane に常駐し `/clear` で再利用」する�
 
 `spawn-conductor --resume <session-id>` は `claude --resume <sessionId>` でセッションを再開する。設定は通常起動と同等（`--dangerously-skip-permissions`, `--settings`, `--model`）。作業ディレクトリは `worktreePath` を使用。
 
+#### launch command 不変条件（task 446）
+
+Master / Conductor を spawn する際に shell に投入する文字列は、**ペイン shell の現在 cwd に依らず project root から `cmux-team spawn-{master,conductor} [args]` を実行する**形に構造的に保証される。
+
+```
+cd '<PROJECT_ROOT>' && cmux-team spawn-{master,conductor} [args]
+```
+
+**背景**: cmux で split した新ペインの初期 cwd は親ペインのカレントディレクトリに依存する。親ペインが `~/git` など project root の外にいると、ペイン側の `direnv` が別の `.envrc` をロードし `PROJECT_ROOT` 環境変数が汚染される。これにより `findProjectRoot()` が誤った path を返し daemon 接続に失敗する（`carta` workspace で確認された障害）。
+
+**実装**: `skills/cmux-team/manager/util.ts` の `buildLaunchCommand(projectRoot, command)` が `cd '<root>' && <command>` 形式の文字列を生成する。`projectRoot` は絶対パス必須（非絶対パスは throw）。`shellQuote` により path 中の `'` は POSIX `'\''` escape で安全に処理される。
+
+**適用箇所**: `master.ts:spawnMaster` / `conductor.ts:launchConductor` (resume + 新規 2 経路) / `conductor.ts:assignTask` / `main.ts:cmdAbortTask` / `main.ts:cmdRestartTask` の全送信経路が `buildLaunchCommand` を経由する。`claude-code-backend.ts` は launchCmd を透過する adapter であり project root を持たない（責務分離）。
+
 #### サイドバーステータスのリアルタイム更新
 
 メインループの各 tick で `cmux set-status` / `cmux clear-status` を通じてサイドバーにステータスを表示する。差分抑制（前回値と同一なら API 呼び出しスキップ）を行う。

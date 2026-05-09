@@ -17,7 +17,7 @@ import { resolveWorktreeBase } from "./worktree-base";
 import { resolveFetchBeforeWorktree } from "./config";
 import type { ConductorState, LayoutMode } from "./schema";
 import { ClaudeCodeBackend } from "./claude-code-backend";
-import { shellQuote } from "./util";
+import { shellQuote, buildLaunchCommand } from "./util";
 
 const execFile = promisify(execFileCb);
 
@@ -145,9 +145,9 @@ export async function launchConductor(
         `launchConductor: no sessionId for task ${opts.resumeTaskId} (opts.resumeSessionId / taskState lookup both empty)`,
       );
     }
-    launchCmd = `cmux-team spawn-conductor --resume ${sessionId}`;
+    launchCmd = buildLaunchCommand(projectRoot, `cmux-team spawn-conductor --resume ${sessionId}`);
   } else {
-    launchCmd = "cmux-team spawn-conductor";
+    launchCmd = buildLaunchCommand(projectRoot, "cmux-team spawn-conductor");
   }
 
   // backend が渡されない場合はデフォルトの ClaudeCodeBackend を使う（後方互換）。
@@ -576,7 +576,7 @@ export async function assignTask(
       );
     }
     const quotedPath = shellQuote(promptFile);
-    const launchCmd = `cmux-team spawn-conductor --task-prompt ${quotedPath}`;
+    const launchCmd = buildLaunchCommand(projectRoot, `cmux-team spawn-conductor --task-prompt ${quotedPath}`);
 
     const env: Record<string, string> = {
       CMUX_SURFACE: conductor.surface,

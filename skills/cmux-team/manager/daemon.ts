@@ -1006,7 +1006,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
     // close 済み Master の数だけ再 spawn する
     for (let i = 0; i < respawnCount; i++) {
       await log("master_spawning");
-      const spawned = await spawnMaster(daemonSurface);
+      const spawned = await spawnMaster(state.projectRoot, daemonSurface);
       if (!spawned) {
         await log("master_spawn_failed");
       }
@@ -1019,7 +1019,7 @@ export async function startMaster(state: DaemonState, daemonSurface?: string): P
   //   restoreMasters と MASTER_REGISTERED handler の 2 箇所のみ）。
   if (restored === 0) {
     await log("master_spawning");
-    const spawned = await spawnMaster(daemonSurface);
+    const spawned = await spawnMaster(state.projectRoot, daemonSurface);
     if (!spawned) {
       await log("master_spawn_failed");
     }
