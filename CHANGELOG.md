@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.28.2] - 2026-05-09
+
+### Fixed
+
+- **Master / Conductor の launch コマンドを cwd 非依存にした（T446）**。新ペインの初期 cwd や direnv による `PROJECT_ROOT` 環境変数の影響で `findProjectRoot()` が誤った root を返し `spawn-master` が失敗するケース（特に carta workspace で `~/git/.envrc` が `PROJECT_ROOT=~/git` を export している環境）を構造的に解消。`buildLaunchCommand(projectRoot, command)` を新設し、Master / Conductor / spawn 経路の launchCmd を `cd '<project-root>' && <cmd>` の形に統一することで、shell の現在 cwd に依存せず確実にプロジェクトルートで起動するようにした。`spawnMaster(projectRoot, ...)` は projectRoot を required 化（内部 API の breaking change）
+
 ## [4.28.1] - 2026-05-07
 
 ### Fixed
