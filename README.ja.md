@@ -278,6 +278,14 @@ daemon は依存が解決されたタスクのみ Conductor に割り当てま�
 | daemon → Master | なし（Master が `manager.log` / `task-state.json` を直接参照） |
 | daemon → 外部 reader | events stream（`.team/logs/events.jsonl`、JSONL append-only）— opt-in。`cmux-team events --follow` / Master `/cmux-team:watch` が購読 |
 
+### Master の責務（origin sync）
+
+`merged` deliverable のタスクが closed になった直後、Master は `git fetch origin <base>` /
+`git pull --ff-only origin <base>` / `git push origin <base>` を実行して共有 origin を
+同期する責務を負う。Conductor / Agent は worktree 内に閉じているため、Master だけが
+この `git push` を許される。詳細フロー（await-task 連携・並行 merged の直列化・失敗時の
+rescue 委譲）は `skills/cmux-team/templates/ja/master.md` §「Deliverable sync プロトコル」を参照。
+
 ### エージェントロール
 
 | ロール | 担当 | 出力例 |

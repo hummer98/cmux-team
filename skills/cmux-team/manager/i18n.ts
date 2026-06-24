@@ -424,6 +424,8 @@ Options:
 
 Examples:
   # local ff-only merge (the most common case)
+  # NOTE: After this exits, Master is expected to fetch/pull/push origin/<base>
+  #       via the await-task flow (see master.md "Deliverable sync protocol").
   cmux-team close-task --task-id 035 --deliverable-kind merged \\
     --merged-into task-035/task --merge-sha $(git rev-parse task-035/task) \\
     --journal "Implementation complete, tests passed"
@@ -1482,6 +1484,8 @@ Options:
 
 Examples:
   # ローカル ff-only マージ（最も多いパターン）
+  # 注: クローズ後の origin への fetch/pull/push は Master が
+  #     await-task フローで担当します（master.md「Deliverable sync プロトコル」参照）。
   cmux-team close-task --task-id 035 --deliverable-kind merged \\
     --merged-into task-035/task --merge-sha $(git rev-parse task-035/task) \\
     --journal "実装完了、テストパス"

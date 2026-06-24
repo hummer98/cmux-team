@@ -268,6 +268,15 @@ depends_on: [10, 11, 12]  # waits for all to complete
 | Conductor ← Agent | `cmux-team await-agent` (fs.watch on Agent done marker) |
 | daemon → external readers | events stream (`.team/logs/events.jsonl`, JSONL append-only) — opt-in, consumed by `cmux-team events --follow` and Master `/cmux-team:watch` |
 
+### Master responsibilities (origin sync)
+
+After a `merged` deliverable closes, Master is responsible for `git fetch origin <base>`,
+`git pull --ff-only origin <base>`, and `git push origin <base>` to keep the shared origin
+in sync. Conductors and Agents are scoped to their worktree, so this is the one `git push`
+Master is allowed to run. See `skills/cmux-team/templates/en/master.md`
+§"Deliverable sync protocol" for the full flow (await-task wiring, serialization across
+concurrent merged tasks, and rescue delegation on failure).
+
 ## Project-Specific Agent Instructions
 
 You can give each overlay role (10 in total: researcher / architect / planner / design-reviewer / implementer / inspector / dockeeper / task-manager / **master / conductor**) a project-local overlay by writing `.team/agent-instructions/<role>.md`. The overlay content is injected into the corresponding prompt:
